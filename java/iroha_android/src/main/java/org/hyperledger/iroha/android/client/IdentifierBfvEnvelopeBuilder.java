@@ -10,19 +10,32 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import org.bouncycastle.crypto.engines.ChaChaEngine;
+import org.bouncycastle.crypto.params.KeyParameter;
+import org.bouncycastle.crypto.params.ParametersWithIV;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /** Builds framed Norito BFV identifier ciphertext envelopes from client-side input. */
 final class IdentifierBfvEnvelopeBuilder {
   private static final String SCHEMA_NAME =
       "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
+  private static final byte[] RUST_ENCRYPT_DOMAIN =
+      "iroha.crypto.fhe.bfv.encrypt.v1".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] RUST_SLOT_DOMAIN =
+      "iroha.crypto.fhe.bfv.identifier.slot.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] PRG_DOMAIN =
       "iroha.sdk.identifier.bfv.prg.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] SLOT_DOMAIN =
       "iroha.sdk.identifier.bfv.slot.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] U_DOMAIN =
       "iroha.sdk.identifier.bfv.u.v1".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] E1_DOMAIN =
+      "iroha.sdk.identifier.bfv.e1.v1".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] E2_DOMAIN =
+      "iroha.sdk.identifier.bfv.e2.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] NORITO_MAGIC = {'N', 'R', 'T', '0'};
+  private static final int NORITO_COMPACT_LEN_FLAG = 0x02;
   private static final long CRC64_POLY = 0xC96C5795D7870F42L;
   private static final long[] CRC64_TABLE = buildCrc64Table();
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -55,7 +68,9 @@ final class IdentifierBfvEnvelopeBuilder {
     for (int index = 0; index < scalars.size(); index++) {
       slots.add(encryptScalar(params, scalars.get(index), seed, index));
     }
-    return bytesToHex(frameNorito(encodeEnvelopePayload(slots)));
+    return bytesToHex(
+        frameNorito(encodeEnvelopePayload(slots, params.useCompactNoritoLengths),
+            params.useCompactNoritoLengths));
   }
 
   private static byte[] randomSeed() {
@@ -112,11 +127,22 @@ final class IdentifierBfvEnvelopeBuilder {
             "BFV public-key coefficient exceeds ciphertextModulus");
       }
     }
+    final String rawLengthEncoding = publicParameters.noritoLengthEncoding();
+    final String lengthEncoding = rawLengthEncoding == null ? null : rawLengthEncoding.trim();
+    final boolean useCompactNoritoLengths;
+    if (lengthEncoding == null || lengthEncoding.isEmpty() || "u64-v1".equals(lengthEncoding)) {
+      useCompactNoritoLengths = false;
+    } else if ("compact-v1".equals(lengthEncoding)) {
+      useCompactNoritoLengths = true;
+    } else {
+      throw new IllegalArgumentException("BFV noritoLengthEncoding must be u64-v1 or compact-v1");
+    }
     return new ValidatedParameters(
         polynomialDegree,
         plaintextModulus,
         ciphertextModulus,
         maxInputBytes,
+        useCompactNoritoLengths,
         a,
         b);
   }
@@ -135,6 +161,11 @@ final class IdentifierBfvEnvelopeBuilder {
 
   private static CiphertextSlot encryptScalar(
       final ValidatedParameters params, final long scalar, final byte[] seed, final int slotIndex) {
+    if (params.useCompactNoritoLengths) {
+      final byte[] slotSeed =
+          irohaHash(RUST_SLOT_DOMAIN, seed, littleEndianUInt64(slotIndex & 0xffff_ffffL));
+      return encryptScalarRust(params, scalar, slotSeed);
+    }
     final byte[] slotSeed =
         sha512(
             SLOT_DOMAIN,
@@ -142,8 +173,28 @@ final class IdentifierBfvEnvelopeBuilder {
             littleEndianUInt64(slotIndex & 0xffff_ffffL));
     final BigInteger[] u =
         sampleSmallPolynomial(params, new DeterministicStream(slotSeed, U_DOMAIN));
-    final BigInteger[] e1 = zeroPolynomial(params.polynomialDegree);
-    final BigInteger[] e2 = zeroPolynomial(params.polynomialDegree);
+    final BigInteger[] e1 =
+        sampleErrorPolynomial(params, new DeterministicStream(slotSeed, E1_DOMAIN));
+    final BigInteger[] e2 =
+        sampleErrorPolynomial(params, new DeterministicStream(slotSeed, E2_DOMAIN));
+    final BigInteger[] encoded = zeroPolynomial(params.polynomialDegree);
+    encoded[0] = BigInteger.valueOf(scalar).mod(params.plaintextModulus);
+    return new CiphertextSlot(
+        addPolynomialMod(
+            addPolynomialMod(
+                multiplyPolynomialMod(params, params.publicKeyB, u), e1, params.ciphertextModulus),
+            encoded,
+            params.ciphertextModulus),
+        addPolynomialMod(
+            multiplyPolynomialMod(params, params.publicKeyA, u), e2, params.ciphertextModulus));
+  }
+
+  private static CiphertextSlot encryptScalarRust(
+      final ValidatedParameters params, final long scalar, final byte[] seed) {
+    final RustChaCha20Rng rng = new RustChaCha20Rng(irohaHash(RUST_ENCRYPT_DOMAIN, seed));
+    final BigInteger[] u = sampleSmallPolynomialRust(params, rng);
+    final BigInteger[] e1 = sampleErrorPolynomialRust(params, rng);
+    final BigInteger[] e2 = sampleErrorPolynomialRust(params, rng);
     final BigInteger[] encoded = zeroPolynomial(params.polynomialDegree);
     encoded[0] = BigInteger.valueOf(scalar).mod(params.plaintextModulus);
     return new CiphertextSlot(
@@ -174,6 +225,80 @@ final class IdentifierBfvEnvelopeBuilder {
       }
     }
     return output;
+  }
+
+  private static BigInteger[] sampleErrorPolynomial(
+      final ValidatedParameters params, final DeterministicStream stream) {
+    final BigInteger[] output = new BigInteger[params.polynomialDegree];
+    for (int index = 0; index < output.length; index++) {
+      final int sample = stream.nextByte() & 0xff;
+      switch (sample % 3) {
+        case 0:
+          output[index] = BigInteger.ZERO;
+          break;
+        case 1:
+          output[index] = params.plaintextModulus;
+          break;
+        default:
+          output[index] = params.ciphertextModulus.subtract(params.plaintextModulus);
+          break;
+      }
+    }
+    return output;
+  }
+
+  private static BigInteger[] sampleSmallPolynomialRust(
+      final ValidatedParameters params, final RustChaCha20Rng rng) {
+    final BigInteger[] output = new BigInteger[params.polynomialDegree];
+    for (int index = 0; index < output.length; index++) {
+      switch (rustRandomRange0To2(rng)) {
+        case 0:
+          output[index] = BigInteger.ZERO;
+          break;
+        case 1:
+          output[index] = BigInteger.ONE;
+          break;
+        default:
+          output[index] = params.ciphertextModulus.subtract(BigInteger.ONE);
+          break;
+      }
+    }
+    return output;
+  }
+
+  private static BigInteger[] sampleErrorPolynomialRust(
+      final ValidatedParameters params, final RustChaCha20Rng rng) {
+    final BigInteger[] output = new BigInteger[params.polynomialDegree];
+    for (int index = 0; index < output.length; index++) {
+      switch (rustRandomRange0To2(rng)) {
+        case 0:
+          output[index] = BigInteger.ZERO;
+          break;
+        case 1:
+          output[index] = params.plaintextModulus;
+          break;
+        default:
+          output[index] = params.ciphertextModulus.subtract(params.plaintextModulus);
+          break;
+      }
+    }
+    return output;
+  }
+
+  private static int rustRandomRange0To2(final RustChaCha20Rng rng) {
+    final long range = 3L;
+    final long sample = rng.nextUInt32();
+    final long product = sample * range;
+    int result = (int) (product >>> 32);
+    final long low = product & 0xffff_ffffL;
+    final long biasedThreshold = (1L << 32) - range;
+    if (low > biasedThreshold) {
+      final long retryHigh = (rng.nextUInt32() * range) >>> 32;
+      if (low + retryHigh > 0xffff_ffffL) {
+        result += 1;
+      }
+    }
+    return result;
   }
 
   private static BigInteger[] zeroPolynomial(final int degree) {
@@ -211,42 +336,44 @@ final class IdentifierBfvEnvelopeBuilder {
     return output;
   }
 
-  private static byte[] encodeEnvelopePayload(final List<CiphertextSlot> slots) {
+  private static byte[] encodeEnvelopePayload(
+      final List<CiphertextSlot> slots, final boolean compact) {
     final ByteArrayOutputStream payload = new ByteArrayOutputStream();
-    writeField(payload, encodeVecSlots(slots));
+    writeField(payload, encodeVecSlots(slots, compact), compact);
     return payload.toByteArray();
   }
 
-  private static byte[] encodeVecSlots(final List<CiphertextSlot> slots) {
+  private static byte[] encodeVecSlots(
+      final List<CiphertextSlot> slots, final boolean compact) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     writeUInt64(out, slots.size());
     for (final CiphertextSlot slot : slots) {
-      final byte[] payload = encodeSlot(slot);
-      writeUInt64(out, payload.length);
+      final byte[] payload = encodeSlot(slot, compact);
+      writeLength(out, payload.length, compact);
       out.writeBytes(payload);
     }
     return out.toByteArray();
   }
 
-  private static byte[] encodeSlot(final CiphertextSlot slot) {
+  private static byte[] encodeSlot(final CiphertextSlot slot, final boolean compact) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
-    writeField(out, encodeVecU64(slot.c0));
-    writeField(out, encodeVecU64(slot.c1));
+    writeField(out, encodeVecU64(slot.c0, compact), compact);
+    writeField(out, encodeVecU64(slot.c1, compact), compact);
     return out.toByteArray();
   }
 
-  private static byte[] encodeVecU64(final BigInteger[] values) {
+  private static byte[] encodeVecU64(final BigInteger[] values, final boolean compact) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     writeUInt64(out, values.length);
     for (final BigInteger value : values) {
       final byte[] payload = littleEndianUInt64(toUnsignedLong(value));
-      writeUInt64(out, payload.length);
+      writeLength(out, payload.length, compact);
       out.writeBytes(payload);
     }
     return out.toByteArray();
   }
 
-  private static byte[] frameNorito(final byte[] payload) {
+  private static byte[] frameNorito(final byte[] payload, final boolean compact) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.writeBytes(NORITO_MAGIC);
     out.write(0);
@@ -256,14 +383,32 @@ final class IdentifierBfvEnvelopeBuilder {
     out.write(0);
     out.writeBytes(littleEndianUInt64(payload.length));
     out.writeBytes(littleEndianUInt64(crc64(payload)));
-    out.write(0);
+    out.write(compact ? NORITO_COMPACT_LEN_FLAG : 0);
     out.writeBytes(payload);
     return out.toByteArray();
   }
 
-  private static void writeField(final ByteArrayOutputStream out, final byte[] payload) {
-    writeUInt64(out, payload.length);
+  private static void writeField(
+      final ByteArrayOutputStream out, final byte[] payload, final boolean compact) {
+    writeLength(out, payload.length, compact);
     out.writeBytes(payload);
+  }
+
+  private static void writeLength(
+      final ByteArrayOutputStream out, final long value, final boolean compact) {
+    if (!compact) {
+      writeUInt64(out, value);
+      return;
+    }
+    long remaining = value;
+    do {
+      int valueByte = (int) (remaining & 0x7fL);
+      remaining >>>= 7;
+      if (remaining != 0L) {
+        valueByte |= 0x80;
+      }
+      out.write(valueByte);
+    } while (remaining != 0L);
   }
 
   private static void writeUInt64(final ByteArrayOutputStream out, final long value) {
@@ -326,6 +471,14 @@ final class IdentifierBfvEnvelopeBuilder {
     }
   }
 
+  private static byte[] irohaHash(final byte[]... parts) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    for (final byte[] part : parts) {
+      out.writeBytes(part);
+    }
+    return IrohaHash.prehash(out.toByteArray());
+  }
+
   private static String bytesToHex(final byte[] bytes) {
     final StringBuilder builder = new StringBuilder(bytes.length * 2);
     for (final byte value : bytes) {
@@ -361,11 +514,37 @@ final class IdentifierBfvEnvelopeBuilder {
     }
   }
 
+  private static final class RustChaCha20Rng {
+    private final ChaChaEngine engine = new ChaChaEngine(20);
+
+    private RustChaCha20Rng(final byte[] seed) {
+      engine.init(
+          true,
+          new ParametersWithIV(new KeyParameter(Arrays.copyOf(seed, seed.length)), new byte[8]));
+    }
+
+    private long nextUInt32() {
+      final byte[] bytes = nextBytes(4);
+      return (bytes[0] & 0xffL)
+          | ((bytes[1] & 0xffL) << 8)
+          | ((bytes[2] & 0xffL) << 16)
+          | ((bytes[3] & 0xffL) << 24);
+    }
+
+    private byte[] nextBytes(final int length) {
+      final byte[] input = new byte[length];
+      final byte[] output = new byte[length];
+      engine.processBytes(input, 0, input.length, output, 0);
+      return output;
+    }
+  }
+
   private static final class ValidatedParameters {
     private final int polynomialDegree;
     private final BigInteger plaintextModulus;
     private final BigInteger ciphertextModulus;
     private final int maxInputBytes;
+    private final boolean useCompactNoritoLengths;
     private final BigInteger[] publicKeyA;
     private final BigInteger[] publicKeyB;
 
@@ -374,12 +553,14 @@ final class IdentifierBfvEnvelopeBuilder {
         final BigInteger plaintextModulus,
         final BigInteger ciphertextModulus,
         final int maxInputBytes,
+        final boolean useCompactNoritoLengths,
         final BigInteger[] publicKeyA,
         final BigInteger[] publicKeyB) {
       this.polynomialDegree = polynomialDegree;
       this.plaintextModulus = plaintextModulus;
       this.ciphertextModulus = ciphertextModulus;
       this.maxInputBytes = maxInputBytes;
+      this.useCompactNoritoLengths = useCompactNoritoLengths;
       this.publicKeyA = publicKeyA;
       this.publicKeyB = publicKeyB;
     }

@@ -514,9 +514,10 @@ fn load_genesis_key(
     match (private_key_hex, seed) {
         (Some(hex), None) => {
             let sk = PrivateKey::from_hex(algorithm, hex).wrap_err("decode genesis private key")?;
-            Ok(KeyPair::from(sk))
+            KeyPair::from_private_key(sk).wrap_err("derive genesis key pair from private key")
         }
-        (None, Some(seed)) => Ok(KeyPair::from_seed(seed.as_bytes().to_vec(), algorithm)),
+        (None, Some(seed)) => KeyPair::try_from_seed(seed.as_bytes().to_vec(), algorithm)
+            .wrap_err("derive seeded genesis key pair"),
         (None, None) => Err(eyre!(
             "genesis signing requires a private key; pass --private-key or --seed"
         )),

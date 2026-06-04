@@ -7763,9 +7763,11 @@ Invariants:
 - `PreCommitPhasesHaveNoCommitVotes`
 - `PrePreparePhasesHaveNoPrepareVotes`
 - `LivePrepareVotesStayInHandoff`
+- `PrepareVoteGateMatchesProposalEvidence`
 - `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
 - `LiveCommitVotesRequirePrepareQuorum`
+- `CommitVoteGateMatchesPrepareEvidence`
 - `LiveCommitVotesStayInCommitHandoff`
 - `CommitImpliesPrepareQuorum`
 - `CommitEvidenceMatchesVoteCounters`
@@ -8708,6 +8710,10 @@ Temporal properties:
   counters remain confined to prepare, commit-vote, or committed phases, and
   any handoff beyond prepare is backed by prepare quorum rather than partial
   prepare evidence.
+- `PrepareVoteGateNeverBypassesProposalEvidence` proves that the live prepare
+  vote gate is enabled exactly while a proposal-backed prepare phase is below
+  prepare quorum and roster budget, with NewView counters cleared, no stale
+  commit-vote state, and view-change evidence installed for nonzero views.
 - `CommitEvidenceNeverPartial` proves that latched commit-certificate
   vote/stake evidence is either absent or quorum-complete, never a partial
   certificate artifact.
@@ -8717,6 +8723,10 @@ Temporal properties:
   counter or signed-stake evidence can only appear in commit-vote or committed
   phases after prepare quorum, ruling out stale live commit votes leaking across
   view changes or earlier phases.
+- `CommitVoteGateNeverBypassesPrepareEvidence` proves that the live commit-vote
+  gate is enabled exactly while a prepare-backed commit-vote phase is below the
+  honest roster budget, with NewView counters cleared, no stale finality
+  artifacts, and view-change evidence installed for nonzero views.
 - `LiveCommitVotesNeverBypassCommitHandoff` proves that live commit-vote and
   signed-stake evidence stays confined to commit-vote or committed phases, and
   cannot cross into finality unless both vote and stake quorum are already met.

@@ -752,6 +752,18 @@ LivePrepareVotesStayInHandoff ==
     /\ phase \in {"Prepare", "CommitVote", "Committed"}
     /\ (phase # "Prepare" => prepareVotes >= CommitQuorum)
 
+PrepareVoteGateMatchesProposalEvidence ==
+  HonestPrepareVoteEnabled <=>
+    /\ phase = "Prepare"
+    /\ prepareVotes < CommitQuorum
+    /\ prepareVotes < N - F
+    /\ newViewVotes = 0
+    /\ commitVotesHonest = 0
+    /\ commitVotesByz = 0
+    /\ stakeSigned = 0
+    /\ ~committed
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+
 CommitImpliesViewQuorumEvidence ==
   committed => (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
 
@@ -762,6 +774,19 @@ LiveCommitVotesRequirePrepareQuorum ==
   (commitVotesHonest + commitVotesByz > 0 \/ stakeSigned > 0) =>
     /\ phase \in {"CommitVote", "Committed"}
     /\ prepareVotes >= CommitQuorum
+
+CommitVoteGateMatchesPrepareEvidence ==
+  HonestCommitVoteEnabled <=>
+    /\ phase = "CommitVote"
+    /\ prepareVotes >= CommitQuorum
+    /\ commitVotesHonest < N - F
+    /\ commitVotesByz <= F
+    /\ newViewVotes = 0
+    /\ ~committed
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceStake = 0
+    /\ commitView = 0
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
 
 LiveCommitVotesStayInCommitHandoff ==
   (commitVotesHonest + commitVotesByz > 0 \/ stakeSigned > 0) =>
@@ -931,6 +956,9 @@ PrePrepareVotesNeverCarryAcrossViews ==
 LivePrepareVotesNeverBypassPrepareHandoff ==
   [] LivePrepareVotesStayInHandoff
 
+PrepareVoteGateNeverBypassesProposalEvidence ==
+  [] PrepareVoteGateMatchesProposalEvidence
+
 CommitEvidenceNeverPartial ==
   [] CommitEvidenceIsCompleteOrEmpty
 
@@ -939,6 +967,9 @@ CommitPhasesNeverBypassPrepareQuorum ==
 
 LiveCommitVotesNeverBypassPrepareQuorum ==
   [] LiveCommitVotesRequirePrepareQuorum
+
+CommitVoteGateNeverBypassesPrepareEvidence ==
+  [] CommitVoteGateMatchesPrepareEvidence
 
 LiveCommitVotesNeverBypassCommitHandoff ==
   [] LiveCommitVotesStayInCommitHandoff

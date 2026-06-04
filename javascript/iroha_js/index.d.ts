@@ -4362,6 +4362,8 @@ export interface EthereumMainnetBeaconFinalityEvidenceInput {
   finalizedSlot?: string | number | bigint;
   finalized_slot?: string | number | bigint;
   slot?: string | number | bigint;
+  finalityBranch?: readonly string[];
+  finality_branch?: readonly string[];
   syncCommitteeBits?: string;
   sync_committee_bits?: string;
   syncCommitteeSignature?: string;
@@ -4383,6 +4385,7 @@ export interface EthereumMainnetBeaconFinalityEvidence
   readonly finalizedHeaderRoot?: string;
   readonly syncCommitteeRoot?: string;
   readonly beaconSlot?: string;
+  readonly finalityBranch?: readonly string[];
   readonly syncCommitteeBits?: string;
   readonly syncCommitteeSignature?: string;
   readonly syncSignatureSlot?: string;

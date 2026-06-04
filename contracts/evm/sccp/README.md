@@ -54,7 +54,9 @@ any proof family other than `stark-fri-v1`. It requires the verifier contract
 to expose the expected immutable verifying-key hash via `verifyingKeyHash()`
 and rejects empty verifier-backend/proof-family labels, a zero network id, a
 non-SORA source domain, a target domain outside ETH/BSC, and same-domain
-deployments.
+deployments. ETH-targeted deployments must use the bytes32 EIP-155 chain-id
+word for Ethereum mainnet (`1`), and BSC-targeted deployments must use the
+bytes32 EIP-155 chain-id word for BNB Smart Chain mainnet (`56`).
 The wrapper enforces the expected source/target domains, rejects zero SCCP
 statement/public-input fields before calling the verifier, and checks the
 returned `messageId` and `commitmentRoot` against the supplied public inputs.

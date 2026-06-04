@@ -131,6 +131,7 @@ const ERR_VERIFYING_KEY_ID: c_int = -403;
 const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
 const ERR_IDENTIFIER_RECEIPT: c_int = -406;
+const ERR_CONNECT_KEYPAIR: c_int = -407;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -2457,7 +2458,10 @@ pub unsafe extern "C" fn connect_norito_connect_generate_keypair(
             return -1;
         }
         let scheme = iroha_crypto::kex::X25519Sha256::new();
-        let (pk, sk) = scheme.keypair(KeyGenOption::Random);
+        let (pk, sk) = match scheme.try_keypair(KeyGenOption::Random) {
+            Ok(keypair) => keypair,
+            Err(_) => return ERR_CONNECT_KEYPAIR,
+        };
         ptr::copy_nonoverlapping(pk.as_bytes().as_ptr(), out_pk, 32);
         ptr::copy_nonoverlapping(sk.to_bytes().as_ref().as_ptr(), out_sk, 32);
         0

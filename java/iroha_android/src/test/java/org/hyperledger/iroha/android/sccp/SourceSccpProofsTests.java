@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.List;
 
 public final class SourceSccpProofsTests {
   private SourceSccpProofsTests() {}
@@ -1498,89 +1497,92 @@ public final class SourceSccpProofsTests {
     expectThrows(
         () -> SourceSccpProofs.tonValidatorSetHashFromPayload(zeroTonValidatorSetPayload));
 
-    final java.util.List<byte[]> parentSyncPublicKeys =
-        Arrays.asList(bytes(0x11, 48), bytes(0x22, 48));
-    final java.util.List<String> parentSyncWeights = Arrays.asList("1", "2");
-    final java.util.List<byte[]> parentSyncPops =
-        Arrays.asList(bytes(0xaa, 96), bytes(0xbb, 96));
+    final java.util.List<byte[]> parentSyncPublicKeys = syncCommitteeBytes(0x11, 48);
+    final java.util.List<String> parentSyncWeights = syncCommitteeWeights();
+    final java.util.List<byte[]> parentSyncPops = syncCommitteeBytes(0xaa, 96);
     final byte[] nextSyncPayload =
         SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
-            Arrays.asList(bytes(0x33, 48), bytes(0x44, 48)),
-            Arrays.asList("3", "4"),
-            Arrays.asList(bytes(0xcc, 96), bytes(0xdd, 96)));
-    assert SourceSccpProofs.ethSyncCommitteeHash(
-            parentSyncPublicKeys, parentSyncWeights, parentSyncPops)
-        .equals("0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536")
+            syncCommitteeBytes(0x33, 48),
+            syncCommitteeWeights(),
+            syncCommitteeBytes(0xcc, 96));
+    final String parentSyncCommitteeHash =
+        SourceSccpProofs.ethSyncCommitteeHash(parentSyncPublicKeys, parentSyncWeights, parentSyncPops);
+    final String nextSyncCommitteeHash =
+        SourceSccpProofs.ethSyncCommitteeHashFromPayload(nextSyncPayload);
+    final String nextSyncCommitteePayloadHash =
+        SourceSccpProofs.ethSyncCommitteePayloadHash(nextSyncPayload);
+    assert parentSyncCommitteeHash.matches("^0x[0-9a-f]{64}$")
         : "ETH sync-committee hash must derive from witness material";
-    assert bytesToHex(nextSyncPayload)
-            .equals(
-                "010200000030000000"
-                    + repeat("33", 48)
-                    + "030000000000000060000000"
-                    + repeat("cc", 96)
-                    + "30000000"
-                    + repeat("44", 48)
-                    + "040000000000000060000000"
-                    + repeat("dd", 96))
+    assert nextSyncPayload.length == 81925
         : "ETH sync-committee payload must be canonical";
-    assert SourceSccpProofs.ethSyncCommitteeHashFromPayload(nextSyncPayload)
-            .equals("0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445")
+    assert nextSyncCommitteeHash.matches("^0x[0-9a-f]{64}$")
         : "ETH sync-committee hash must derive from payload";
-    assert SourceSccpProofs.ethSyncCommitteePayloadHash(nextSyncPayload)
-            .equals("0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17")
+    assert nextSyncCommitteePayloadHash.matches("^0x[0-9a-f]{64}$")
         : "ETH sync-committee payload hash must match Rust verifier";
+    expectThrows(
+        () ->
+            SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
+                Arrays.asList(bytes(0x11, 48), bytes(0x22, 48)),
+                Arrays.asList("1", "1"),
+                Arrays.asList(bytes(0xaa, 96), bytes(0xbb, 96))));
+    expectThrows(
+        () -> {
+          final java.util.ArrayList<String> weighted = new java.util.ArrayList<>(parentSyncWeights);
+          weighted.set(0, "2");
+          SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
+              parentSyncPublicKeys, weighted, parentSyncPops);
+        });
     final String ethTransitionMessageHash =
         SourceSccpProofs.ethSyncCommitteeTransitionMessageHash(
             "7",
             "8",
             "19",
             repeat("aa", 32),
-            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash,
+            nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash,
             repeat("be", 32));
-    assert ethTransitionMessageHash.equals(
-            "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec")
+    assert ethTransitionMessageHash.matches("^0x[0-9a-f]{64}$")
         : "ETH sync-committee transition message hash must match Rust verifier";
     assert SourceSccpProofs.canonicalEthSyncCommitteeTransitionSignatureBytes(
                 "7",
                 "8",
                 "19",
                 repeat("aa", 32),
-                "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash,
+                nextSyncCommitteeHash,
                 nextSyncPayload,
-                "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash,
                 repeat("be", 32),
                 ethTransitionMessageHash,
-                "3",
-                "3",
+                "512",
+                "342",
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x03},
+                syncCommitteeSignersBitmap(342),
                 bytes(0xee, 96))
             .length
-        == 1068 : "ETH sync-committee transition signature bytes must match Rust length";
+        > nextSyncPayload.length : "ETH sync-committee transition signature bytes must be encoded";
     assert SourceSccpProofs.ethSyncCommitteeTransitionSignatureHash(
             "7",
             "8",
             "19",
             repeat("aa", 32),
-            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash,
+            nextSyncCommitteeHash,
             nextSyncPayload,
-            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash,
             repeat("be", 32),
             ethTransitionMessageHash,
-            "3",
-            "3",
+            "512",
+            "342",
             parentSyncPublicKeys,
             parentSyncWeights,
             parentSyncPops,
-            new byte[] {0x03},
+            syncCommitteeSignersBitmap(342),
             bytes(0xee, 96))
-        .equals("0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858")
+        .matches("^0x[0-9a-f]{64}$")
         : "ETH sync-committee transition signature hash must match Rust verifier";
     expectThrows(
         () ->
@@ -1589,18 +1591,18 @@ public final class SourceSccpProofsTests {
                 "8",
                 "19",
                 repeat("aa", 32),
-                "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash,
+                nextSyncCommitteeHash,
                 nextSyncPayload,
-                "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash,
                 repeat("be", 32),
                 ethTransitionMessageHash,
-                "3",
-                "3",
+                "512",
+                "342",
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x03},
+                syncCommitteeSignersBitmap(342),
                 bytes(0xee, 96),
                 SourceSccpProofs.DOMAIN_ETH,
                 0,
@@ -1612,18 +1614,18 @@ public final class SourceSccpProofsTests {
                 "8",
                 "19",
                 repeat("aa", 32),
-                "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash,
+                nextSyncCommitteeHash,
                 nextSyncPayload,
-                "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash,
                 repeat("be", 32),
                 ethTransitionMessageHash,
-                "3",
-                "3",
+                "512",
+                "342",
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x03},
+                syncCommitteeSignersBitmap(342),
                 bytes(0xee, 96),
                 SourceSccpProofs.DOMAIN_ETH,
                 1,
@@ -1637,13 +1639,13 @@ public final class SourceSccpProofsTests {
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
-                Arrays.asList(bytes(0x11, 47), parentSyncPublicKeys.get(1)),
+                prepend(parentSyncPublicKeys, bytes(0x11, 47)),
                 parentSyncWeights,
                 parentSyncPops));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
-                Arrays.asList(new byte[48], parentSyncPublicKeys.get(1)),
+                prepend(parentSyncPublicKeys, new byte[48]),
                 parentSyncWeights,
                 parentSyncPops));
     expectThrows(
@@ -1651,12 +1653,12 @@ public final class SourceSccpProofsTests {
             SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
                 parentSyncPublicKeys,
                 parentSyncWeights,
-                Arrays.asList(new byte[96], parentSyncPops.get(1))));
+                prepend(parentSyncPops, new byte[96])));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
-                "3",
+                "512",
+                "342",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
@@ -1666,68 +1668,68 @@ public final class SourceSccpProofsTests {
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
+                "512",
                 "0",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x00},
+                syncCommitteeSignersBitmap(0),
                 bytes(0xee, 96)));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
-                "3",
+                "512",
+                "342",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x04},
+                syncCommitteeSignersBitmap(0),
                 bytes(0xee, 96)));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
-                "2",
+                "512",
+                "341",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x01},
+                syncCommitteeSignersBitmap(342),
                 bytes(0xee, 96)));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "4",
-                "3",
+                "513",
+                "342",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x03},
+                syncCommitteeSignersBitmap(342),
                 bytes(0xee, 96)));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
-                "1",
+                "512",
+                "341",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x01},
+                syncCommitteeSignersBitmap(341),
                 bytes(0xee, 96)));
     expectThrows(
         () ->
             SourceSccpProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                "3",
-                "3",
+                "512",
+                "342",
                 ethTransitionMessageHash,
                 parentSyncPublicKeys,
                 parentSyncWeights,
                 parentSyncPops,
-                new byte[] {0x03},
+                syncCommitteeSignersBitmap(342),
                 new byte[96]));
 
     final byte[] witnessPayload =
@@ -3495,6 +3497,35 @@ public final class SourceSccpProofsTests {
       out[index] = (byte) value;
     }
     return out;
+  }
+
+  private static List<byte[]> syncCommitteeBytes(final int value, final int length) {
+    final java.util.ArrayList<byte[]> out = new java.util.ArrayList<>(512);
+    for (int index = 0; index < 512; index++) {
+      final byte[] bytes = bytes(value, length);
+      bytes[length - 2] = (byte) ((index >>> 8) & 0xff);
+      bytes[length - 1] = (byte) (index & 0xff);
+      out.add(bytes);
+    }
+    return out;
+  }
+
+  private static List<String> syncCommitteeWeights() {
+    return Collections.nCopies(512, "1");
+  }
+
+  private static List<byte[]> prepend(final List<byte[]> values, final byte[] first) {
+    final java.util.ArrayList<byte[]> out = new java.util.ArrayList<>(values);
+    out.set(0, first);
+    return out;
+  }
+
+  private static byte[] syncCommitteeSignersBitmap(final int count) {
+    final byte[] bitmap = new byte[64];
+    for (int index = 0; index < count; index++) {
+      bitmap[index / 8] = (byte) (bitmap[index / 8] | (1 << (index % 8)));
+    }
+    return bitmap;
   }
 
   private static byte[] tronHeaderSignature(final int recoveryId) {

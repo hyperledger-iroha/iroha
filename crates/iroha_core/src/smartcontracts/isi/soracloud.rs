@@ -8,10 +8,13 @@ use std::{
 use iroha_crypto::{
     Hash,
     fhe_bfv::{
-        BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters,
-        add_ciphertexts, bootstrap_ciphertext, multiply_ciphertexts, multiply_plain_scalar,
-        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
-        registered_bfv_rns_modulus_chain_digest, rotate_ciphertext_slots_left,
+        BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvEvaluationPlan,
+        BfvIdentifierCiphertext, BfvParameters, add_ciphertexts_rns_exact,
+        bootstrap_ciphertext_rns_exact_round, multiply_ciphertexts_rns_exact,
+        multiply_plain_scalar, ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
+        registered_bfv_rns_modulus_chain, registered_bfv_rns_modulus_chain_digest,
+        rotate_ciphertext_slots_left_rns_exact,
+        rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact,
         validate_registered_bfv_parameters,
     },
 };
@@ -25,14 +28,15 @@ use iroha_data_model::{
     nexus::PublicLaneValidatorStatus,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobOperationV1,
-        FheJobSpecV1, FheParamSetV1, FheSchemeV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-        SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
-        SORA_APP_INFRA_STATE_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
-        SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-        SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-        SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        BfvBootstrapRefreshTranscriptV1, BfvEvaluationKeyRefreshTranscriptV1,
+        BfvRotationRefreshTranscriptV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
+        FheExecutionPolicyV1, FheJobOperationV1, FheJobSpecV1, FheParamSetV1, FheSchemeV1,
+        SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+        SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
+        SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+        SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+        SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
+        SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
         SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
         SORA_MODEL_ARTIFACT_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
@@ -724,6 +728,7 @@ fn verify_fhe_job_run_provenance(
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -739,6 +744,7 @@ fn verify_fhe_job_run_provenance(
         policy,
         param_set,
         evaluation_keys,
+        evaluation_key_refresh_transcript,
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode fhe job provenance: {err}")))?;
@@ -4952,23 +4958,122 @@ fn fold_fhe_slots(
     Ok(BfvIdentifierCiphertext { slots })
 }
 
+fn fold_fhe_slots_balanced(
+    params: &BfvParameters,
+    inputs: &[BfvIdentifierCiphertext],
+    mut combine: impl FnMut(
+        &BfvCiphertext,
+        &BfvCiphertext,
+    ) -> Result<BfvCiphertext, InstructionExecutionError>,
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    let slot_count = ensure_matching_fhe_slots(inputs)?;
+    if inputs.len() < 2 {
+        return Err(invalid_parameter(
+            "fhe balanced fold requires at least two input envelopes",
+        ));
+    }
+
+    let mut output_slots = Vec::with_capacity(slot_count);
+    for slot_index in 0..slot_count {
+        let mut level = inputs
+            .iter()
+            .map(|envelope| envelope.slots[slot_index].clone())
+            .collect::<Vec<_>>();
+        while level.len() > 1 {
+            let mut next_level = Vec::with_capacity(level.len().div_ceil(2));
+            for pair in level.chunks(2) {
+                let combined = match pair {
+                    [lhs, rhs] => combine(lhs, rhs)?,
+                    [single] => single.clone(),
+                    _ => unreachable!("chunks(2) never yields an empty slice"),
+                };
+                next_level.push(combined);
+            }
+            level = next_level;
+        }
+        output_slots.push(level.pop().expect("non-empty level is maintained"));
+    }
+
+    for slot in &output_slots {
+        multiply_plain_scalar(params, slot, 1)
+            .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext slot: {err}")))?;
+    }
+    Ok(BfvIdentifierCiphertext {
+        slots: output_slots,
+    })
+}
+
+fn validate_soracloud_fhe_evaluation_budget(
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+) -> Result<(), InstructionExecutionError> {
+    let budget = BfvEvaluationBudget::exact_evaluator_v1();
+    let plan = match job.operation {
+        FheJobOperationV1::Add => BfvEvaluationPlan::add(inputs.len())
+            .map_err(|err| invalid_parameter(format!("invalid FHE add plan: {err}")))?,
+        FheJobOperationV1::Multiply => {
+            let plan = BfvEvaluationPlan::balanced_multiply(inputs.len())
+                .map_err(|err| invalid_parameter(format!("invalid FHE multiply plan: {err}")))?;
+            if job.requested_multiplication_depth < plan.ciphertext_multiplication_depth {
+                return Err(invalid_parameter(format!(
+                    "requested_multiplication_depth {} under-declares balanced BFV multiplication depth {}",
+                    job.requested_multiplication_depth, plan.ciphertext_multiplication_depth
+                )));
+            }
+            plan
+        }
+        FheJobOperationV1::RotateLeft => BfvEvaluationPlan::rotate_left(inputs.len())
+            .map_err(|err| invalid_parameter(format!("invalid FHE rotate plan: {err}")))?,
+        FheJobOperationV1::Bootstrap => {
+            BfvEvaluationPlan::bootstrap_refresh(inputs.len(), job.bootstrap_count)
+                .map_err(|err| invalid_parameter(format!("invalid FHE bootstrap plan: {err}")))?
+        }
+    };
+    budget
+        .validate_plan(plan)
+        .map_err(|err| invalid_parameter(format!("FHE evaluation budget exceeded: {err}")))
+}
+
 fn execute_soracloud_fhe_job(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    let rns_chain = registered_bfv_rns_modulus_chain(params)
+        .map_err(|err| invalid_parameter(format!("invalid registered BFV RNS chain: {err}")))?;
+    validate_soracloud_fhe_evaluation_budget(job, inputs)?;
     match job.operation {
         FheJobOperationV1::Add => fold_fhe_slots(params, inputs, |lhs, rhs| {
-            add_ciphertexts(params, lhs, rhs)
+            add_ciphertexts_rns_exact(params, &rns_chain, lhs, rhs)
                 .map_err(|err| invalid_parameter(format!("FHE add failed: {err}")))
         }),
-        FheJobOperationV1::Multiply => fold_fhe_slots(params, inputs, |lhs, rhs| {
-            multiply_ciphertexts(params, &evaluation_keys.relinearization_key, lhs, rhs)
-                .map_err(|err| invalid_parameter(format!("FHE multiply failed: {err}")))
+        FheJobOperationV1::Multiply => fold_fhe_slots_balanced(params, inputs, |lhs, rhs| {
+            multiply_ciphertexts_rns_exact(
+                params,
+                &rns_chain,
+                &evaluation_keys.relinearization_key,
+                lhs,
+                rhs,
+            )
+            .map_err(|err| invalid_parameter(format!("FHE multiply failed: {err}")))
         }),
         FheJobOperationV1::RotateLeft => {
             ensure_matching_fhe_slots(inputs)?;
+            let slots = &inputs.first().expect("input presence checked above").slots;
+            if slots.len() == 1 {
+                let rotated = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+                    params,
+                    &rns_chain,
+                    &evaluation_keys.galois_keys,
+                    &slots[0],
+                    job.rotation_steps,
+                )
+                .map_err(|err| invalid_parameter(format!("FHE packed rotate failed: {err}")))?;
+                return Ok(BfvIdentifierCiphertext {
+                    slots: vec![rotated],
+                });
+            }
             let rotation_key = evaluation_keys
                 .rotation_keys
                 .iter()
@@ -4979,9 +5084,9 @@ fn execute_soracloud_fhe_job(
                         job.rotation_steps
                     ))
                 })?;
-            let slots = &inputs.first().expect("input presence checked above").slots;
-            let slots = rotate_ciphertext_slots_left(params, rotation_key, slots)
-                .map_err(|err| invalid_parameter(format!("FHE rotate failed: {err}")))?;
+            let slots =
+                rotate_ciphertext_slots_left_rns_exact(params, &rns_chain, rotation_key, slots)
+                    .map_err(|err| invalid_parameter(format!("FHE rotate failed: {err}")))?;
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
@@ -5002,11 +5107,15 @@ fn execute_soracloud_fhe_job(
                 .iter()
                 .map(|slot| {
                     let mut refreshed = slot.clone();
-                    for _ in 0..job.bootstrap_count {
-                        refreshed = bootstrap_ciphertext(params, bootstrap_key, &refreshed)
-                            .map_err(|err| {
-                                invalid_parameter(format!("FHE bootstrap failed: {err}"))
-                            })?;
+                    for round_index in 0..job.bootstrap_count {
+                        refreshed = bootstrap_ciphertext_rns_exact_round(
+                            params,
+                            &rns_chain,
+                            bootstrap_key,
+                            &refreshed,
+                            round_index,
+                        )
+                        .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))?;
                     }
                     Ok::<BfvCiphertext, InstructionExecutionError>(refreshed)
                 })
@@ -5027,6 +5136,23 @@ fn verify_soracloud_fhe_evaluation_key_digest(
     if actual != policy.evaluation_key_digest {
         return Err(invalid_parameter(
             "fhe evaluation-key digest does not match the execution policy",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_soracloud_fhe_refresh_transcript_digest(
+    params: &BfvParameters,
+    policy: &FheExecutionPolicyV1,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    transcript: &BfvEvaluationKeyRefreshTranscriptV1,
+) -> Result<(), InstructionExecutionError> {
+    let actual = transcript
+        .digest_for_evaluation_keys(params, evaluation_keys)
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    if actual != policy.evaluation_key_refresh_transcript_digest {
+        return Err(invalid_parameter(
+            "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
     Ok(())
@@ -5893,6 +6019,7 @@ impl Execute for isi::RunSoracloudFheJob {
             self.policy.clone(),
             self.param_set.clone(),
             self.evaluation_keys.clone(),
+            self.evaluation_key_refresh_transcript.clone(),
             self.governance_tx_hash,
             &self.provenance,
         )?;
@@ -5913,6 +6040,12 @@ impl Execute for isi::RunSoracloudFheJob {
             &bfv_params,
             &self.policy,
             &self.evaluation_keys,
+        )?;
+        verify_soracloud_fhe_refresh_transcript_digest(
+            &bfv_params,
+            &self.policy,
+            &self.evaluation_keys,
+            &self.evaluation_key_refresh_transcript,
         )?;
         let input_envelopes = load_soracloud_fhe_inputs(
             state_transaction,
@@ -10613,10 +10746,13 @@ mod tests {
         fhe_bfv::{
             BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext,
             BfvIdentifierPublicParameters, apply_galois_automorphism_ciphertext,
+            bfv_balanced_multiplication_depth, bootstrap_ciphertext_rns_exact_round,
             bootstrap_key_from_seed, bootstrap_key_with_max_refresh_rounds_from_seed,
-            decode_packed_plaintext_slots, decrypt, decrypt_identifier, encode_packed_plaintext_slots,
-            encrypt_from_seed, encrypt_identifier_from_seed, galois_key_from_seed,
-            keygen_from_seed, packed_galois_slot_permutation, registered_bfv_rns_modulus_chain,
+            decode_packed_plaintext_slots, decrypt, decrypt_identifier,
+            encode_packed_plaintext_slots, encrypt_from_seed, encrypt_identifier_from_seed,
+            galois_key_from_seed, keygen_from_seed, packed_galois_slot_permutation,
+            packed_left_rotation_galois_automorphism_power,
+            packed_left_rotation_galois_automorphism_powers, registered_bfv_rns_modulus_chain,
             rotation_key_from_seed,
         },
     };
@@ -11240,6 +11376,10 @@ mod tests {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
             keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let packed_half_rotation = u32::from(params.polynomial_degree) / 2;
+        let packed_half_rotation_power =
+            packed_left_rotation_galois_automorphism_power(&params, packed_half_rotation)
+                .expect("registered packed half-rotation must be one Galois automorphism");
         BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: vec![
@@ -11249,6 +11389,13 @@ mod tests {
             galois_keys: vec![
                 galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
                     .expect("Galois key"),
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    packed_half_rotation_power,
+                    b"soracloud-fhe-packed-rotate-galois-key",
+                )
+                .expect("packed rotation Galois key"),
             ],
             bootstrap_key: Some(
                 bootstrap_key_with_max_refresh_rounds_from_seed(
@@ -11268,6 +11415,31 @@ mod tests {
         sample_bfv_evaluation_key_bundle()
             .digest(&params)
             .expect("sample evaluation-key digest")
+    }
+
+    fn sample_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key,
+            rotation_transcripts: vec![BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 1,
+                seed: b"soracloud-fhe-rotation-key".to_vec(),
+            }],
+            bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
+                key_id: "bootstrap-test-key".to_string(),
+                max_refresh_rounds: 2,
+                seed: b"soracloud-fhe-bootstrap-key".to_vec(),
+            }),
+        }
+    }
+
+    fn sample_bfv_refresh_transcript_digest() -> Hash {
+        let params = ram_lfe_bfv_parameters_v1();
+        sample_bfv_refresh_transcript()
+            .digest_for_evaluation_keys(&params, &sample_bfv_evaluation_key_bundle())
+            .expect("sample refresh transcript digest")
     }
 
     fn sample_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
@@ -11317,6 +11489,7 @@ mod tests {
             param_set: "bfv-default".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(1).expect("nonzero"),
             evaluation_key_digest: sample_bfv_evaluation_key_digest(),
+            evaluation_key_refresh_transcript_digest: sample_bfv_refresh_transcript_digest(),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -11575,13 +11748,15 @@ mod tests {
         let rhs = chain
             .decompose_polynomial(params, &rhs_coefficients)
             .expect("decompose fixture rhs polynomial");
+        let lhs_reconstructed = u64_coefficients_to_u128(&lhs_coefficients);
+        let rhs_reconstructed = u64_coefficients_to_u128(&rhs_coefficients);
         assert_rns_polynomial_fixture(
             fixture_get(polynomial_fixture, "lhs"),
             "lhs",
             params,
             &chain,
             &lhs,
-            &lhs_coefficients,
+            &lhs_reconstructed,
         );
         assert_rns_polynomial_fixture(
             fixture_get(polynomial_fixture, "rhs"),
@@ -11589,7 +11764,7 @@ mod tests {
             params,
             &chain,
             &rhs,
-            &rhs_coefficients,
+            &rhs_reconstructed,
         );
 
         let added = chain
@@ -11597,10 +11772,7 @@ mod tests {
             .expect("add fixture RNS polynomials");
         let reconstructed_add = chain
             .reconstruct_polynomial(params, &added)
-            .expect("reconstruct fixture RNS sum")
-            .into_iter()
-            .map(|coefficient| u64::try_from(coefficient).expect("sum coefficient fits u64"))
-            .collect::<Vec<_>>();
+            .expect("reconstruct fixture RNS sum");
         assert_rns_polynomial_fixture(
             fixture_get(polynomial_fixture, "sum"),
             "sum",
@@ -11615,10 +11787,7 @@ mod tests {
             .expect("multiply fixture RNS polynomials");
         let reconstructed_product = chain
             .reconstruct_polynomial(params, &multiplied)
-            .expect("reconstruct fixture RNS product")
-            .into_iter()
-            .map(|coefficient| u64::try_from(coefficient).expect("product coefficient fits u64"))
-            .collect::<Vec<_>>();
+            .expect("reconstruct fixture RNS product");
         assert_rns_polynomial_fixture(
             fixture_get(polynomial_fixture, "negacyclic_product"),
             "negacyclic product",
@@ -11635,7 +11804,7 @@ mod tests {
         params: &BfvParameters,
         chain: &iroha_crypto::fhe_bfv::BfvRnsModulusChain,
         polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
-        reconstructed: &[u64],
+        reconstructed: &[u128],
     ) {
         assert_eq!(
             fixture_u64(fixture, "coefficient_count"),
@@ -11644,7 +11813,7 @@ mod tests {
         );
         assert_eq!(
             fixture_str(fixture, "reconstructed_sha256"),
-            coefficient_vector_sha256_hex(reconstructed),
+            coefficient_u128_vector_sha256_hex(reconstructed),
             "{label} reconstructed coefficient SHA-256"
         );
         let limb_hashes = fixture_str_array(fixture, "residue_limb_sha256");
@@ -11875,6 +12044,46 @@ mod tests {
             params,
             &bootstrap_key.zero_refresh,
         );
+        let round_refresh_fixtures = fixture_array(bootstrap_fixture, "round_refreshes");
+        assert_eq!(
+            round_refresh_fixtures.len(),
+            usize::from(bootstrap_key.max_refresh_rounds),
+            "bootstrap round-refresh fixture count"
+        );
+        assert_eq!(
+            round_refresh_fixtures.len(),
+            bootstrap_key.round_refreshes.len(),
+            "bootstrap round-refresh key count"
+        );
+        for (round_index, (fixture, refresh)) in round_refresh_fixtures
+            .iter()
+            .zip(&bootstrap_key.round_refreshes)
+            .enumerate()
+        {
+            assert_eq!(
+                fixture_u64(fixture, "round_index"),
+                u64::try_from(round_index).expect("round index fits u64"),
+                "bootstrap round-refresh index"
+            );
+            let encoded_refresh =
+                norito::to_bytes(refresh).expect("encode bootstrap round refresh");
+            assert_eq!(
+                fixture_u64(fixture, "expected_refresh_bytes"),
+                u64::try_from(encoded_refresh.len()).expect("refresh length fits u64"),
+                "bootstrap round-refresh byte length"
+            );
+            assert_eq!(
+                fixture_str(fixture, "expected_refresh_sha256"),
+                sha256_hex(&encoded_refresh),
+                "bootstrap round-refresh SHA-256"
+            );
+            assert_ciphertext_component_fixture(
+                fixture_get(fixture, "components"),
+                "bootstrap round-refresh",
+                params,
+                refresh,
+            );
+        }
     }
 
     fn assert_bfv_galois_switch_vectors(
@@ -12066,6 +12275,7 @@ mod tests {
             .bootstrap_key
             .as_ref()
             .expect("fixture bootstrap key");
+        let rns_chain = registered_bfv_rns_modulus_chain(params).expect("registered RNS chain");
         for vector in vectors {
             assert_eq!(
                 fixture_str(vector, "key_id"),
@@ -12103,9 +12313,15 @@ mod tests {
             );
 
             let mut refreshed = input;
-            for _ in 0..refresh_rounds {
-                refreshed = bootstrap_ciphertext(params, bootstrap_key, &refreshed)
-                    .expect("fixture bootstrap refresh must apply");
+            for round_index in 0..refresh_rounds {
+                refreshed = bootstrap_ciphertext_rns_exact_round(
+                    params,
+                    &rns_chain,
+                    bootstrap_key,
+                    &refreshed,
+                    round_index,
+                )
+                .expect("fixture bootstrap refresh must apply");
             }
             let encoded_output = norito::to_bytes(&refreshed).expect("encode bootstrap output");
             assert_eq!(
@@ -12244,6 +12460,45 @@ mod tests {
         fixture_array(vector, "inputs")
             .iter()
             .map(|input| {
+                if input.get("packed_slots").is_some() {
+                    let packed_slots = fixture_u64_array(input, "packed_slots");
+                    let packed_plaintext =
+                        encode_packed_plaintext_slots(&public_parameters.parameters, &packed_slots)
+                            .expect("fixture packed input must encode");
+                    assert_eq!(
+                        fixture_str(input, "expected_packed_plaintext_sha256"),
+                        coefficient_vector_sha256_hex(&packed_plaintext),
+                        "{} input {} packed plaintext digest",
+                        fixture_str(vector, "name"),
+                        fixture_str(input, "seed_utf8")
+                    );
+                    let ciphertext = encrypt_from_seed(
+                        &public_parameters.parameters,
+                        &public_parameters.public_key,
+                        &packed_plaintext,
+                        fixture_str(input, "seed_utf8").as_bytes(),
+                    )
+                    .expect("fixture packed input must encrypt");
+                    let envelope = BfvIdentifierCiphertext {
+                        slots: vec![ciphertext],
+                    };
+                    let encoded = norito::to_bytes(&envelope).expect("encode packed fixture input");
+                    assert_eq!(
+                        fixture_u64(input, "expected_ciphertext_bytes"),
+                        u64::try_from(encoded.len()).expect("encoded input length fits u64"),
+                        "{} input {} byte length",
+                        fixture_str(vector, "name"),
+                        fixture_str(input, "seed_utf8")
+                    );
+                    assert_eq!(
+                        fixture_str(input, "expected_ciphertext_sha256"),
+                        sha256_hex(&encoded),
+                        "{} input {} digest",
+                        fixture_str(vector, "name"),
+                        fixture_str(input, "seed_utf8")
+                    );
+                    return envelope;
+                }
                 let input_bytes =
                     hex::decode(fixture_str(input, "input_hex")).expect("fixture input_hex");
                 let ciphertext = encrypt_identifier_from_seed(
@@ -12280,7 +12535,9 @@ mod tests {
             }
             "Multiply" => {
                 job.operation = FheJobOperationV1::Multiply;
-                job.requested_multiplication_depth = 1;
+                job.requested_multiplication_depth =
+                    u16::try_from(fixture_u64(vector, "requested_multiplication_depth"))
+                        .expect("fixture requested_multiplication_depth must fit u16");
             }
             "RotateLeft" => {
                 job.operation = FheJobOperationV1::RotateLeft;
@@ -12323,6 +12580,18 @@ mod tests {
     fn coefficient_vector_sha256_hex(values: &[u64]) -> String {
         let encoded = norito::to_bytes(&values.to_vec()).expect("encode coefficient vector");
         sha256_hex(&encoded)
+    }
+
+    fn coefficient_u128_vector_sha256_hex(values: &[u128]) -> String {
+        let mut encoded = Vec::with_capacity(values.len() * 16);
+        for value in values {
+            encoded.extend_from_slice(&value.to_le_bytes());
+        }
+        sha256_hex(&encoded)
+    }
+
+    fn u64_coefficients_to_u128(values: &[u64]) -> Vec<u128> {
+        values.iter().copied().map(u128::from).collect()
     }
 
     fn assert_ciphertext_component_fixture(
@@ -12394,23 +12663,20 @@ mod tests {
             .collect()
     }
 
-    fn reconstruct_rns_polynomial_u64(
+    fn reconstruct_rns_polynomial(
         params: &BfvParameters,
         chain: &iroha_crypto::fhe_bfv::BfvRnsModulusChain,
         polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
-    ) -> Vec<u64> {
+    ) -> Vec<u128> {
         chain
             .reconstruct_polynomial(params, polynomial)
             .expect("reconstruct RNS fixture polynomial")
-            .into_iter()
-            .map(|coefficient| u64::try_from(coefficient).expect("RNS coefficient fits u64"))
-            .collect()
     }
 
     fn rns_polynomial_fixture_json(
         params: &BfvParameters,
         polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
-        reconstructed: &[u64],
+        reconstructed: &[u128],
     ) -> String {
         let limb_hashes = polynomial
             .residues_by_limb
@@ -12421,7 +12687,7 @@ mod tests {
             "{{\"coefficient_count\":{},\"residue_limb_sha256\":[{}],\"reconstructed_sha256\":\"{}\"}}",
             params.polynomial_degree,
             string_json_array(&limb_hashes),
-            coefficient_vector_sha256_hex(reconstructed)
+            coefficient_u128_vector_sha256_hex(reconstructed)
         )
     }
 
@@ -12441,8 +12707,10 @@ mod tests {
         let product = chain
             .multiply_rns_polynomials_negacyclic(params, &lhs, &rhs)
             .expect("multiply RNS fixture polynomials");
-        let reconstructed_sum = reconstruct_rns_polynomial_u64(params, &chain, &sum);
-        let reconstructed_product = reconstruct_rns_polynomial_u64(params, &chain, &product);
+        let reconstructed_lhs = u64_coefficients_to_u128(&lhs_coefficients);
+        let reconstructed_rhs = u64_coefficients_to_u128(&rhs_coefficients);
+        let reconstructed_sum = reconstruct_rns_polynomial(params, &chain, &sum);
+        let reconstructed_product = reconstruct_rns_polynomial(params, &chain, &product);
 
         format!(
             "{{\"moduli\":[{}],\"product\":\"{}\",\"expected_digest_hex\":\"{}\",\"sample_polynomials\":{{\"lhs_coefficients\":[{}],\"rhs_coefficients\":[{}],\"lhs\":{},\"rhs\":{},\"sum\":{},\"negacyclic_product\":{}}}}}",
@@ -12452,8 +12720,8 @@ mod tests {
                 .expect("registered BFV RNS chain digest"),
             u64_json_array(&lhs_coefficients),
             u64_json_array(&rhs_coefficients),
-            rns_polynomial_fixture_json(params, &lhs, &lhs_coefficients),
-            rns_polynomial_fixture_json(params, &rhs, &rhs_coefficients),
+            rns_polynomial_fixture_json(params, &lhs, &reconstructed_lhs),
+            rns_polynomial_fixture_json(params, &rhs, &reconstructed_rhs),
             rns_polynomial_fixture_json(params, &sum, &reconstructed_sum),
             rns_polynomial_fixture_json(params, &product, &reconstructed_product)
         )
@@ -12478,8 +12746,55 @@ mod tests {
         let (params, public_parameters, secret_key, evaluation_keys) =
             bfv_operation_material(operation_vectors);
         let mut seen_digests = BTreeSet::new();
+        let galois_key_powers = evaluation_keys
+            .galois_keys
+            .iter()
+            .map(|key| key.automorphism_power)
+            .collect::<BTreeSet<_>>();
 
         for vector in fixture_array(operation_vectors, "vectors") {
+            let expected_depth = if fixture_str(vector, "operation") == "Multiply" {
+                bfv_balanced_multiplication_depth(fixture_array(vector, "inputs").len())
+                    .expect("fixture multiply input count must produce a BFV depth plan")
+            } else {
+                0
+            };
+            assert_eq!(
+                fixture_u64(vector, "requested_multiplication_depth"),
+                u64::from(expected_depth),
+                "{} requested multiplication depth",
+                fixture_str(vector, "name")
+            );
+            if vector.get("automorphism_powers").is_some() {
+                let rotation_steps = u32::try_from(fixture_u64(vector, "rotation_steps"))
+                    .expect("fixture rotation_steps must fit u32");
+                let automorphism_powers = fixture_u64_array(vector, "automorphism_powers")
+                    .into_iter()
+                    .map(|power| {
+                        u32::try_from(power)
+                            .expect("fixture Galois automorphism power must fit u32")
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    automorphism_powers.len() > 1,
+                    "{} Galois schedule must use multiple powers",
+                    fixture_str(vector, "name")
+                );
+                assert_eq!(
+                    automorphism_powers,
+                    packed_left_rotation_galois_automorphism_powers(&params, rotation_steps)
+                        .expect("fixture rotation schedule must derive"),
+                    "{} Galois schedule",
+                    fixture_str(vector, "name")
+                );
+                for power in &automorphism_powers {
+                    assert!(
+                        galois_key_powers.contains(power),
+                        "{} Galois schedule power {power} is missing from evaluation keys",
+                        fixture_str(vector, "name")
+                    );
+                }
+            }
             let output =
                 execute_operation_vector(&params, &public_parameters, &evaluation_keys, vector);
             let encoded_output = norito::to_bytes(&output).expect("encode fixture output");
@@ -12500,12 +12815,42 @@ mod tests {
                 seen_digests.insert(digest.clone()),
                 "operation fixture output digests must be unique: {digest}"
             );
-            assert_eq!(
-                expected_plaintext_slots(vector),
-                output_plaintext_slots(&params, &secret_key, &output),
-                "{} plaintext slots",
-                fixture_str(vector, "name")
-            );
+            if vector.get("expected_packed_slots").is_some() {
+                assert_eq!(
+                    output.slots.len(),
+                    1,
+                    "{} packed output must contain one ciphertext",
+                    fixture_str(vector, "name")
+                );
+                let plaintext =
+                    decrypt(&params, &secret_key, &output.slots[0]).expect("decrypt packed output");
+                assert_eq!(
+                    fixture_str(vector, "expected_plaintext_coefficients_sha256"),
+                    coefficient_vector_sha256_hex(&plaintext),
+                    "{} packed plaintext coefficient digest",
+                    fixture_str(vector, "name")
+                );
+                assert_eq!(
+                    fixture_u64_array(vector, "expected_packed_slots"),
+                    decode_packed_plaintext_slots(&params, &plaintext)
+                        .expect("decode packed output slots"),
+                    "{} packed output slots",
+                    fixture_str(vector, "name")
+                );
+                assert_ciphertext_component_fixture(
+                    fixture_get(vector, "output_components"),
+                    fixture_str(vector, "name"),
+                    &params,
+                    &output.slots[0],
+                );
+            } else {
+                assert_eq!(
+                    expected_plaintext_slots(vector),
+                    output_plaintext_slots(&params, &secret_key, &output),
+                    "{} plaintext slots",
+                    fixture_str(vector, "name")
+                );
+            }
             if let Some(expected_utf8) = vector
                 .get("expected_output_utf8")
                 .and_then(norito::json::Value::as_str)
@@ -12690,6 +13035,46 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let policy = sample_fhe_policy();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let transcript = sample_bfv_refresh_transcript();
+        verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &policy,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect("sample policy must pin the sample refresh transcript");
+
+        let mut wrong_transcript = transcript.clone();
+        wrong_transcript.rotation_transcripts[0]
+            .seed
+            .extend_from_slice(b"-wrong");
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &policy,
+            &evaluation_keys,
+            &wrong_transcript,
+        )
+        .expect_err("wrong transcript material must not satisfy the policy digest");
+        assert_invalid_parameter_contains(err, "refresh transcript");
+
+        let mut wrong_policy = policy;
+        wrong_policy.evaluation_key_refresh_transcript_digest =
+            Hash::new(b"wrong-soracloud-fhe-refresh-transcript");
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &wrong_policy,
+            &evaluation_keys,
+            &sample_bfv_refresh_transcript(),
+        )
+        .expect_err("wrong policy digest must reject the correct refresh transcript");
+        assert_invalid_parameter_contains(err, "refresh transcript digest");
+    }
+
+    #[test]
     fn soracloud_bfv_operation_vectors_reject_tampered_refresh_material() {
         let root = shared_bfv_fixture();
         let operation_vectors = fixture_operation_vectors(&root);
@@ -12741,6 +13126,7 @@ mod tests {
     #[ignore = "prints refreshed Soracloud BFV operation-vector fixture rows"]
     fn print_soracloud_bfv_operation_vectors() {
         let params = ram_lfe_bfv_parameters_v1();
+        let rns_chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
         let (secret_key, public_key, relinearization_key) =
             keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
         let public_parameters = BfvIdentifierPublicParameters {
@@ -12780,21 +13166,53 @@ mod tests {
             "rns-modulus-chain-json: {}",
             rns_modulus_chain_fixture_json(&params)
         );
+        let packed_half_rotation = u32::from(params.polynomial_degree) / 2;
+        let packed_half_rotation_power =
+            packed_left_rotation_galois_automorphism_power(&params, packed_half_rotation)
+                .expect("registered packed half-rotation must be one Galois automorphism");
+        let packed_schedule_rotation = 1_u32;
+        let packed_schedule_powers =
+            packed_left_rotation_galois_automorphism_powers(&params, packed_schedule_rotation)
+                .expect("registered packed one-step rotation must have a Galois schedule");
+        let mut seen_galois_powers = BTreeSet::new();
+        let mut galois_key_specs = Vec::<(u32, String)>::new();
+        for (power, seed) in [
+            (3, "soracloud-fhe-galois-key".to_string()),
+            (
+                packed_half_rotation_power,
+                "soracloud-fhe-packed-rotate-galois-key".to_string(),
+            ),
+        ] {
+            seen_galois_powers.insert(power);
+            galois_key_specs.push((power, seed));
+        }
+        for power in &packed_schedule_powers {
+            if seen_galois_powers.insert(*power) {
+                galois_key_specs.push((
+                    *power,
+                    format!("soracloud-fhe-packed-rotate-schedule-galois-key-{power}"),
+                ));
+            }
+        }
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: vec![
                 rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
                     .expect("rotation key"),
             ],
-            galois_keys: vec![
-                galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
-                    .expect("Galois key"),
-            ],
+            galois_keys: galois_key_specs
+                .iter()
+                .map(|(power, seed)| {
+                    galois_key_from_seed(&params, &secret_key, *power, seed.as_bytes())
+                        .expect("Galois key")
+                })
+                .collect(),
             bootstrap_key: Some(
-                bootstrap_key_from_seed(
+                bootstrap_key_with_max_refresh_rounds_from_seed(
                     &params,
                     &public_key,
                     "bootstrap-test-key",
+                    2,
                     b"soracloud-fhe-bootstrap-key",
                 )
                 .expect("bootstrap key"),
@@ -12837,11 +13255,12 @@ mod tests {
                 coefficient_vector_sha256_hex(&entry.a)
             );
         }
-        for key in &evaluation_keys.galois_keys {
+        for (key, (_power, seed)) in evaluation_keys.galois_keys.iter().zip(&galois_key_specs) {
             println!(
-                "galois-key: power={} seed=soracloud-fhe-galois-key entry_count={}",
+                "galois-key: power={} seed={} entry_count={}",
                 key.automorphism_power,
-                key.entries.len()
+                seed,
+                key.entries.len(),
             );
             for (index, entry) in key.entries.iter().enumerate() {
                 println!(
@@ -12983,6 +13402,19 @@ mod tests {
             coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c0),
             coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c1)
         );
+        for (round_index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
+            let encoded_refresh =
+                norito::to_bytes(refresh).expect("encode bootstrap round refresh");
+            println!(
+                "bootstrap-key-round-json: {{\"round_index\":{},\"expected_refresh_bytes\":{},\"expected_refresh_sha256\":\"{}\",\"components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+                round_index,
+                encoded_refresh.len(),
+                sha256_hex(&encoded_refresh),
+                refresh.c0.len(),
+                coefficient_vector_sha256_hex(&refresh.c0),
+                coefficient_vector_sha256_hex(&refresh.c1)
+            );
+        }
         let bootstrap_input_plaintext = vec![9, 8, 7, 6, 5, 4, 3, 2];
         let bootstrap_input = encrypt_from_seed(
             &params,
@@ -12993,8 +13425,14 @@ mod tests {
         .expect("encrypt bootstrap refresh input");
         let encoded_bootstrap_input =
             norito::to_bytes(&bootstrap_input).expect("encode bootstrap refresh input");
-        let bootstrap_output = bootstrap_ciphertext(&params, bootstrap_key, &bootstrap_input)
-            .expect("apply bootstrap refresh");
+        let bootstrap_output = bootstrap_ciphertext_rns_exact_round(
+            &params,
+            &rns_chain,
+            bootstrap_key,
+            &bootstrap_input,
+            0,
+        )
+        .expect("apply bootstrap refresh");
         let encoded_bootstrap_output =
             norito::to_bytes(&bootstrap_output).expect("encode bootstrap refresh output");
         let bootstrap_plaintext = decrypt(&params, &secret_key, &bootstrap_output)
@@ -13012,9 +13450,14 @@ mod tests {
             coefficient_vector_sha256_hex(&bootstrap_output.c0),
             coefficient_vector_sha256_hex(&bootstrap_output.c1)
         );
-        let second_bootstrap_output =
-            bootstrap_ciphertext(&params, bootstrap_key, &bootstrap_output)
-                .expect("apply second bootstrap refresh");
+        let second_bootstrap_output = bootstrap_ciphertext_rns_exact_round(
+            &params,
+            &rns_chain,
+            bootstrap_key,
+            &bootstrap_output,
+            1,
+        )
+        .expect("apply second bootstrap refresh");
         let encoded_second_bootstrap_output =
             norito::to_bytes(&second_bootstrap_output).expect("encode second bootstrap output");
         let second_bootstrap_plaintext = decrypt(&params, &secret_key, &second_bootstrap_output)
@@ -13124,6 +13567,16 @@ mod tests {
                 "rotation_steps".to_string(),
                 norito::json::Value::from(rotation_steps),
             );
+            let requested_multiplication_depth = if operation == "Multiply" {
+                bfv_balanced_multiplication_depth(inputs.len())
+                    .expect("fixture multiply input count must produce a BFV depth plan")
+            } else {
+                0
+            };
+            vector.insert(
+                "requested_multiplication_depth".to_string(),
+                norito::json::Value::from(u64::from(requested_multiplication_depth)),
+            );
             vector.insert(
                 "bootstrap_count".to_string(),
                 norito::json::Value::from(bootstrap_count),
@@ -13141,6 +13594,134 @@ mod tests {
                 sha256_hex(&encoded_output)
             );
         }
+        let packed_rotate_input_slots = (0..usize::from(params.polynomial_degree))
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_rotate_plaintext =
+            encode_packed_plaintext_slots(&params, &packed_rotate_input_slots)
+                .expect("encode packed RotateLeft input");
+        let packed_rotate_input_ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_rotate_plaintext,
+            b"soracloud-fhe-packed-rotate-input",
+        )
+        .expect("encrypt packed RotateLeft input");
+        let packed_rotate_input = BfvIdentifierCiphertext {
+            slots: vec![packed_rotate_input_ciphertext],
+        };
+        let encoded_packed_rotate_input =
+            norito::to_bytes(&packed_rotate_input).expect("encode packed RotateLeft input");
+        let packed_rotate_job = FheJobSpecV1 {
+            schema_version: iroha_data_model::soracloud::FHE_JOB_SPEC_VERSION_V1,
+            job_id: "packed-rotate-job".to_string(),
+            policy_name: "analytics".parse().expect("valid name"),
+            param_set: "bfv-default".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(1).expect("nonzero"),
+            operation: FheJobOperationV1::RotateLeft,
+            inputs: vec![sample_fhe_input_ref(
+                "/state/private/packed-rotate-input",
+                &encoded_packed_rotate_input,
+            )],
+            output_state_key: "/state/private/packed-rotate-output".to_string(),
+            requested_multiplication_depth: 0,
+            rotation_steps: packed_half_rotation,
+            bootstrap_count: 0,
+        };
+        let packed_rotate_output = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &packed_rotate_job,
+            &[packed_rotate_input],
+        )
+        .expect("execute packed RotateLeft fixture");
+        let encoded_packed_rotate_output =
+            norito::to_bytes(&packed_rotate_output).expect("encode packed RotateLeft output");
+        let packed_rotate_plaintext_output =
+            decrypt(&params, &secret_key, &packed_rotate_output.slots[0])
+                .expect("decrypt packed RotateLeft output");
+        let mut packed_rotate_expected_slots = packed_rotate_input_slots.clone();
+        packed_rotate_expected_slots
+            .rotate_left(usize::try_from(packed_half_rotation).expect("rotation fits usize"));
+        println!(
+            "packed-rotate-vector: {{\"name\":\"soracloud-packed-rotate-left-output\",\"purpose\":\"Soracloud runtime packed-slot RotateLeft output backed by BFV Galois key-switching\",\"operation\":\"RotateLeft\",\"inputs\":[{{\"packed_slots\":[{}],\"seed_utf8\":\"soracloud-fhe-packed-rotate-input\",\"expected_packed_plaintext_sha256\":\"{}\",\"expected_ciphertext_bytes\":{},\"expected_ciphertext_sha256\":\"{}\"}}],\"rotation_steps\":{},\"requested_multiplication_depth\":0,\"automorphism_power\":{},\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_coefficients_sha256\":\"{}\",\"expected_packed_slots\":[{}],\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            u64_json_array(&packed_rotate_input_slots),
+            coefficient_vector_sha256_hex(&packed_rotate_plaintext),
+            encoded_packed_rotate_input.len(),
+            sha256_hex(&encoded_packed_rotate_input),
+            packed_half_rotation,
+            packed_half_rotation_power,
+            encoded_packed_rotate_output.len(),
+            sha256_hex(&encoded_packed_rotate_output),
+            coefficient_vector_sha256_hex(&packed_rotate_plaintext_output),
+            u64_json_array(&packed_rotate_expected_slots),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&packed_rotate_output.slots[0].c0),
+            coefficient_vector_sha256_hex(&packed_rotate_output.slots[0].c1)
+        );
+        let packed_schedule_input_ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_rotate_plaintext,
+            b"soracloud-fhe-packed-rotate-schedule-input",
+        )
+        .expect("encrypt packed RotateLeft schedule input");
+        let packed_schedule_input = BfvIdentifierCiphertext {
+            slots: vec![packed_schedule_input_ciphertext],
+        };
+        let encoded_packed_schedule_input =
+            norito::to_bytes(&packed_schedule_input).expect("encode packed RotateLeft input");
+        let packed_schedule_job = FheJobSpecV1 {
+            schema_version: iroha_data_model::soracloud::FHE_JOB_SPEC_VERSION_V1,
+            job_id: "packed-rotate-schedule-job".to_string(),
+            policy_name: "analytics".parse().expect("valid name"),
+            param_set: "bfv-default".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(1).expect("nonzero"),
+            operation: FheJobOperationV1::RotateLeft,
+            inputs: vec![sample_fhe_input_ref(
+                "/state/private/packed-rotate-schedule-input",
+                &encoded_packed_schedule_input,
+            )],
+            output_state_key: "/state/private/packed-rotate-schedule-output".to_string(),
+            requested_multiplication_depth: 0,
+            rotation_steps: packed_schedule_rotation,
+            bootstrap_count: 0,
+        };
+        let packed_schedule_output = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &packed_schedule_job,
+            &[packed_schedule_input],
+        )
+        .expect("execute packed RotateLeft schedule fixture");
+        let encoded_packed_schedule_output =
+            norito::to_bytes(&packed_schedule_output).expect("encode packed RotateLeft output");
+        let packed_schedule_plaintext_output =
+            decrypt(&params, &secret_key, &packed_schedule_output.slots[0])
+                .expect("decrypt packed RotateLeft output");
+        let mut packed_schedule_expected_slots = packed_rotate_input_slots.clone();
+        packed_schedule_expected_slots
+            .rotate_left(usize::try_from(packed_schedule_rotation).expect("rotation fits usize"));
+        let packed_schedule_powers_u64 = packed_schedule_powers
+            .iter()
+            .map(|power| u64::from(*power))
+            .collect::<Vec<_>>();
+        println!(
+            "packed-rotate-vector: {{\"name\":\"soracloud-packed-rotate-left-schedule-output\",\"purpose\":\"Soracloud runtime packed-slot RotateLeft output backed by a BFV Galois mask-and-sum key schedule\",\"operation\":\"RotateLeft\",\"inputs\":[{{\"packed_slots\":[{}],\"seed_utf8\":\"soracloud-fhe-packed-rotate-schedule-input\",\"expected_packed_plaintext_sha256\":\"{}\",\"expected_ciphertext_bytes\":{},\"expected_ciphertext_sha256\":\"{}\"}}],\"rotation_steps\":{},\"requested_multiplication_depth\":0,\"automorphism_powers\":[{}],\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_coefficients_sha256\":\"{}\",\"expected_packed_slots\":[{}],\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            u64_json_array(&packed_rotate_input_slots),
+            coefficient_vector_sha256_hex(&packed_rotate_plaintext),
+            encoded_packed_schedule_input.len(),
+            sha256_hex(&encoded_packed_schedule_input),
+            packed_schedule_rotation,
+            u64_json_array(&packed_schedule_powers_u64),
+            encoded_packed_schedule_output.len(),
+            sha256_hex(&encoded_packed_schedule_output),
+            coefficient_vector_sha256_hex(&packed_schedule_plaintext_output),
+            u64_json_array(&packed_schedule_expected_slots),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&packed_schedule_output.slots[0].c0),
+            coefficient_vector_sha256_hex(&packed_schedule_output.slots[0].c1)
+        );
     }
 
     #[test]
@@ -13208,7 +13789,8 @@ mod tests {
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
         let mut job = sample_fhe_job(Vec::new());
         job.operation = FheJobOperationV1::Multiply;
-        job.requested_multiplication_depth = 1;
+        job.requested_multiplication_depth =
+            bfv_balanced_multiplication_depth(inputs.len()).expect("three-input depth plan");
 
         let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
             .expect("execute three-input FHE multiply job");
@@ -13234,6 +13816,24 @@ mod tests {
             plaintext_slots[3..].iter().all(|slot| *slot == 0),
             "unused slots remain zero after three-input multiply: {plaintext_slots:?}"
         );
+    }
+
+    #[test]
+    fn soracloud_multi_input_multiply_rejects_underdeclared_depth() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let inputs = [
+            sample_fhe_envelope(b"\x02\x03", b"soracloud-fhe-depth-left"),
+            sample_fhe_envelope(b"\x04\x05", b"soracloud-fhe-depth-middle"),
+            sample_fhe_envelope(b"\x06\x07", b"soracloud-fhe-depth-right"),
+        ];
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Multiply;
+        job.requested_multiplication_depth = 1;
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
+            .expect_err("underdeclared multiply depth must fail before evaluation");
+        assert_invalid_parameter_contains(err, "under-declares balanced BFV multiplication depth");
     }
 
     #[test]
@@ -13320,6 +13920,25 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_bootstrap_rejects_refresh_count_above_key_capacity() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("sample bootstrap key")
+            .max_refresh_rounds
+            .saturating_add(1);
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-over-capacity");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("bootstrap must reject counts above the key capacity");
+        assert_invalid_parameter_contains(err, "max_refresh_rounds");
+    }
+
+    #[test]
     fn soracloud_rotate_left_uses_rotation_key_refresh() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
@@ -13372,6 +13991,214 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_rotate_left_rejects_outer_slot_full_cycle_noop() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-rotate-full-cycle-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes: 4,
+        };
+        let input = encrypt_identifier_from_seed(
+            &public_parameters,
+            b"ab",
+            b"soracloud-rotate-full-cycle-input",
+        )
+        .expect("encrypt input");
+        let full_cycle_steps = u32::try_from(input.slots.len()).expect("slot count fits u32");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![
+                rotation_key_from_seed(
+                    &params,
+                    &public_key,
+                    full_cycle_steps,
+                    b"soracloud-rotate-full-cycle-refresh",
+                )
+                .expect("rotation key"),
+            ],
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/input",
+            &norito::to_bytes(&input).expect("encode input"),
+        )]);
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = full_cycle_steps;
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("full-cycle outer-slot RotateLeft must fail before output emission");
+        assert_invalid_parameter_contains(err, "full slot cycle");
+    }
+
+    #[test]
+    fn soracloud_packed_rotate_left_uses_galois_key_switch() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-packed-rotate-keygen").expect("keygen");
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let degree = usize::from(params.polynomial_degree);
+        let automorphism_power =
+            packed_left_rotation_galois_automorphism_power(&params, half_rotation)
+                .expect("fixture packed rotation must be representable");
+        let input_slots = (0..degree)
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &input_slots).expect("encode packed slots");
+        let packed_ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"soracloud-packed-rotate-input",
+        )
+        .expect("encrypt packed input");
+        let input = BfvIdentifierCiphertext {
+            slots: vec![packed_ciphertext],
+        };
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: vec![
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    automorphism_power,
+                    b"soracloud-packed-rotate-galois-key",
+                )
+                .expect("Galois key"),
+            ],
+            bootstrap_key: None,
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/packed-input",
+            &norito::to_bytes(&input).expect("encode packed input"),
+        )]);
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = half_rotation;
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect("execute packed rotate job");
+        assert_eq!(output.slots.len(), 1);
+        let plaintext =
+            decrypt(&params, &secret_key, &output.slots[0]).expect("decrypt packed output");
+        let output_slots =
+            decode_packed_plaintext_slots(&params, &plaintext).expect("decode packed output");
+        let mut expected_slots = input_slots;
+        expected_slots.rotate_left(usize::try_from(half_rotation).expect("rotation fits usize"));
+        assert_eq!(output_slots, expected_slots);
+    }
+
+    #[test]
+    fn soracloud_packed_rotate_left_supports_galois_mask_schedule() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-packed-rotate-schedule-keygen").expect("keygen");
+        let degree = usize::from(params.polynomial_degree);
+        let input_slots = (0..degree)
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &input_slots).expect("encode packed slots");
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &packed_plaintext,
+                    b"soracloud-packed-rotate-schedule-input",
+                )
+                .expect("encrypt packed input"),
+            ],
+        };
+        let powers = packed_left_rotation_galois_automorphism_powers(&params, 1)
+            .expect("one-step packed rotation schedule");
+        assert!(powers.len() > 1);
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: powers
+                .into_iter()
+                .map(|power| {
+                    galois_key_from_seed(
+                        &params,
+                        &secret_key,
+                        power,
+                        b"soracloud-packed-rotate-schedule-galois-key",
+                    )
+                    .expect("Galois key")
+                })
+                .collect(),
+            bootstrap_key: None,
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/packed-input",
+            &norito::to_bytes(&input).expect("encode packed input"),
+        )]);
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 1;
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect("execute packed schedule rotate job");
+        assert_eq!(output.slots.len(), 1);
+        let plaintext =
+            decrypt(&params, &secret_key, &output.slots[0]).expect("decrypt packed output");
+        let output_slots =
+            decode_packed_plaintext_slots(&params, &plaintext).expect("decode packed output");
+        let mut expected_slots = input_slots;
+        expected_slots.rotate_left(1);
+        assert_eq!(output_slots, expected_slots);
+    }
+
+    #[test]
+    fn soracloud_packed_rotate_left_rejects_missing_galois_key_without_outer_fallback() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-packed-rotate-missing-keygen").expect("keygen");
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let degree = usize::from(params.polynomial_degree);
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &vec![0; degree]).expect("encode packed slots");
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &packed_plaintext,
+                    b"soracloud-packed-rotate-missing-input",
+                )
+                .expect("encrypt packed input"),
+            ],
+        };
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![
+                rotation_key_from_seed(
+                    &params,
+                    &public_key,
+                    half_rotation,
+                    b"soracloud-packed-rotate-outer-fallback-key",
+                )
+                .expect("outer rotation key"),
+            ],
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/packed-input",
+            &norito::to_bytes(&input).expect("encode packed input"),
+        )]);
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = half_rotation;
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("packed rotation must not fall back to outer-slot rotation keys");
+        assert_invalid_parameter_contains(err, "missing BFV Galois key");
+    }
+
+    #[test]
     fn soracloud_rotate_left_rejects_missing_rotation_key() {
         let params = ram_lfe_bfv_parameters_v1();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
@@ -13420,6 +14247,55 @@ mod tests {
         let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[])
             .expect_err("FHE jobs must reject missing input envelopes");
         assert_invalid_parameter_contains(err, "at least one input envelope");
+    }
+
+    #[test]
+    fn soracloud_fhe_job_rejects_operation_shape_bypasses_before_evaluation() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let lhs = sample_fhe_envelope(b"alice", b"soracloud-fhe-shape-left");
+        let rhs = sample_fhe_envelope(b"bob", b"soracloud-fhe-shape-right");
+
+        let add_job = sample_fhe_job(Vec::new());
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &add_job,
+            std::slice::from_ref(&lhs),
+        )
+        .expect_err("single-input add plans must fail before evaluation");
+        assert_invalid_parameter_contains(err, "invalid FHE add plan");
+
+        let mut rotate_job = sample_fhe_job(Vec::new());
+        rotate_job.operation = FheJobOperationV1::RotateLeft;
+        rotate_job.rotation_steps = 1;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &rotate_job,
+            &[lhs.clone(), rhs.clone()],
+        )
+        .expect_err("multi-input rotate plans must fail before evaluation");
+        assert_invalid_parameter_contains(err, "invalid FHE rotate plan");
+
+        let mut multi_input_bootstrap_job = sample_fhe_job(Vec::new());
+        multi_input_bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+        multi_input_bootstrap_job.bootstrap_count = 1;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &multi_input_bootstrap_job,
+            &[lhs.clone(), rhs],
+        )
+        .expect_err("multi-input bootstrap plans must fail before evaluation");
+        assert_invalid_parameter_contains(err, "invalid FHE bootstrap plan");
+
+        let mut bootstrap_job = sample_fhe_job(Vec::new());
+        bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_job.bootstrap_count = 0;
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &bootstrap_job, &[lhs])
+            .expect_err("zero-round bootstrap plans must fail before evaluation");
+        assert_invalid_parameter_contains(err, "invalid FHE bootstrap plan");
     }
 
     #[test]
@@ -13569,6 +14445,7 @@ mod tests {
         policy: FheExecutionPolicyV1,
         param_set: FheParamSetV1,
         evaluation_keys: BfvEvaluationKeyBundle,
+        evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
         governance_tx_hash: Hash,
     ) -> ManifestProvenance {
         let payload = encode_fhe_job_run_provenance_payload(
@@ -13578,6 +14455,7 @@ mod tests {
             policy,
             param_set,
             evaluation_keys,
+            evaluation_key_refresh_transcript,
             governance_tx_hash,
         )
         .expect("fhe job payload");
@@ -17078,6 +17956,7 @@ mod tests {
         let policy = sample_fhe_policy();
         let param_set = sample_fhe_param_set();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
         let governance_tx_hash = Hash::new(b"gov-fhe");
         iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
             service_name: service_name.clone(),
@@ -17086,6 +17965,7 @@ mod tests {
             policy: policy.clone(),
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -17094,6 +17974,7 @@ mod tests {
                 policy.clone(),
                 param_set.clone(),
                 evaluation_keys,
+                evaluation_key_refresh_transcript,
                 governance_tx_hash,
             ),
         })

@@ -169,7 +169,8 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .wrap_err("failed to generate wizard BLS key pair")?;
         let trusted_pops = resolve_trusted_peers_pop(&self, &answers, &keypair)?;
 
         tui::status("Generating config and genesis files");

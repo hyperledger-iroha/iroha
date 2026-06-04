@@ -7970,6 +7970,8 @@ pub mod isi {
             evm_route_canary_receipt_block_hash: configured
                 .evm_route_canary_receipt_block_hash
                 .clone(),
+            evm_route_canary_receipt_block_finalized: configured
+                .evm_route_canary_receipt_block_finalized,
             evm_route_canary_block_receipts_root: configured
                 .evm_route_canary_block_receipts_root
                 .clone(),
@@ -15687,6 +15689,7 @@ pub mod isi {
                     0,
                     10_000 + u64::from(domain),
                     [0xd5u8.wrapping_add(domain as u8); 32],
+                    true,
                     [0xd6u8.wrapping_add(domain as u8); 32],
                     [0xd0u8.wrapping_add(domain as u8); 32],
                     [0xd1u8.wrapping_add(domain as u8); 32],
@@ -15958,6 +15961,8 @@ pub mod isi {
                 evm_route_canary_receipt_block_hash: allowlist
                     .evm_route_canary_receipt_block_hash
                     .clone(),
+                evm_route_canary_receipt_block_finalized: allowlist
+                    .evm_route_canary_receipt_block_finalized,
                 evm_route_canary_block_receipts_root: allowlist
                     .evm_route_canary_block_receipts_root
                     .clone(),
@@ -16206,6 +16211,10 @@ pub mod isi {
                 Some(10_000 + u64::from(iroha_sccp::SCCP_DOMAIN_ETH))
             );
             assert!(eth_route.evm_route_canary_receipt_block_hash.is_some());
+            assert_eq!(
+                eth_route.evm_route_canary_receipt_block_finalized,
+                Some(true)
+            );
             assert!(eth_route.evm_route_canary_block_receipts_root.is_some());
             assert!(eth_route.evm_route_canary_call_data_sha256.is_some());
             assert!(eth_route.evm_route_canary_payload_hash.is_some());
@@ -16268,6 +16277,7 @@ pub mod isi {
             eth_route.evm_route_canary_log_index = None;
             eth_route.evm_route_canary_receipt_block_number = None;
             eth_route.evm_route_canary_receipt_block_hash = None;
+            eth_route.evm_route_canary_receipt_block_finalized = None;
             eth_route.evm_route_canary_block_receipts_root = None;
             eth_route.evm_route_canary_call_data_sha256 = None;
             eth_route.evm_route_canary_message_id = None;
@@ -16283,6 +16293,26 @@ pub mod isi {
 
             let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
                 .expect_err("EVM route canary must preserve transaction transcript fields");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 1")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_evm_non_finalized_route_canary() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
+                .expect("configured ETH route");
+            eth_route.evm_route_canary_receipt_block_finalized = Some(false);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("EVM route canary must come from finalized receipt block evidence");
             let err = format!("{err:?}");
             assert!(
                 err.contains("production-ready lane material for domain 1")

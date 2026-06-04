@@ -93,6 +93,14 @@ const BFV_IDENTIFIER_U_DOMAIN = Buffer.from(
   "iroha.sdk.identifier.bfv.u.v1",
   "utf8",
 );
+const BFV_IDENTIFIER_E1_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e1.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_E2_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e2.v1",
+  "utf8",
+);
 const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
@@ -21933,6 +21941,19 @@ function sampleSmallPoly(params, stream) {
   });
 }
 
+function sampleErrorPoly(params, stream) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const sample = Number(stream.nextBytes(1)[0] % 3);
+    if (sample === 0) {
+      return 0n;
+    }
+    if (sample === 1) {
+      return params.plaintextModulus;
+    }
+    return params.ciphertextModulus - params.plaintextModulus;
+  });
+}
+
 function rustHashDerivedRng(domain, seed) {
   return new IdentifierBfvRustChaCha20Rng(irohaHashBytes([domain, seed]));
 }
@@ -21955,6 +21976,19 @@ function sampleSmallPolyRust(params, rng) {
       return 1n;
     }
     return params.ciphertextModulus - 1n;
+  });
+}
+
+function sampleErrorPolyRust(params, rng) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const reduced = rustRandomRangeU8Inclusive0To2(rng);
+    if (reduced === 0) {
+      return 0n;
+    }
+    if (reduced === 1) {
+      return params.plaintextModulus;
+    }
+    return params.ciphertextModulus - params.plaintextModulus;
   });
 }
 
@@ -21994,8 +22028,14 @@ function encryptIdentifierScalar(params, scalar, seed) {
     params,
     new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_U_DOMAIN),
   );
-  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
-  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e1 = sampleErrorPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E1_DOMAIN),
+  );
+  const e2 = sampleErrorPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E2_DOMAIN),
+  );
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
   encoded[0] = scalar % params.plaintextModulus;
   return {
@@ -22011,8 +22051,8 @@ function encryptIdentifierScalar(params, scalar, seed) {
 function encryptIdentifierScalarRust(params, scalar, seed) {
   const rng = rustHashDerivedRng(BFV_RUST_ENCRYPT_DOMAIN, seed);
   const u = sampleSmallPolyRust(params, rng);
-  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
-  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e1 = sampleErrorPolyRust(params, rng);
+  const e2 = sampleErrorPolyRust(params, rng);
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
   encoded[0] = scalar % params.plaintextModulus;
   return {

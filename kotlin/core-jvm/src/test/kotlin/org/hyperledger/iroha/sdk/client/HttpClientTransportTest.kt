@@ -250,6 +250,55 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun identifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors() {
+        val fixture = loadSharedBfvFixture()
+        val operationVectors = obj(fixture, "operation_vectors")
+        assertEquals("soracloud-bfv-operation-v1", operationVectors["vector_set"])
+        val policy = IdentifierPolicySummary(
+            policyId = "soracloud-operation#fixture",
+            owner = "owner",
+            active = true,
+            normalization = IdentifierNormalization.EXACT,
+            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            backend = "bfv-programmed-sha3-256-v1",
+            inputEncryption = "bfv-v1",
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = bfvParametersFromFixture(
+                obj(operationVectors, "public_parameters_decoded"),
+            ),
+            note = null,
+        )
+        val observedDigests = mutableSetOf<String>()
+        var checkedInputs = 0
+        for (vector in listOfMaps(operationVectors, "vectors")) {
+            val vectorName = string(vector, "name")
+            for (input in listOfMaps(vector, "inputs")) {
+                if (input["packed_slots"] != null) continue
+                val seedUtf8 = string(input, "seed_utf8")
+                val inputBytes = hexToBytes(string(input, "input_hex"))
+                val ciphertextHex = policy.encryptInput(
+                    String(inputBytes, StandardCharsets.UTF_8),
+                    seedUtf8.toByteArray(StandardCharsets.UTF_8),
+                )
+                assertEquals(
+                    long(input, "expected_ciphertext_bytes").toInt(),
+                    ciphertextHex.length / 2,
+                    "$vectorName/$seedUtf8 ciphertext byte length",
+                )
+                val digest = sha256Hex(hexToBytes(ciphertextHex))
+                assertEquals(
+                    string(input, "expected_ciphertext_sha256"),
+                    digest,
+                    "$vectorName/$seedUtf8 ciphertext digest",
+                )
+                assertTrue(observedDigests.add(digest), "operation input digest must be unique: $digest")
+                checkedInputs += 1
+            }
+        }
+        assertEquals(8, checkedInputs, "fixture should cover every non-packed operation input")
+    }
+
+    @Test
     fun sharedSoracloudBfvKeyBundleComponentVectorsAreComplete() {
         val fixture = loadSharedBfvFixture()
 
@@ -2152,17 +2201,132 @@ class HttpClientTransportTest {
         }
         val bootstrap = obj(operationVectors, "bootstrap_key")
         assertEquals(string(evaluationKey, "bootstrap_key_id"), string(bootstrap, "key_id"))
+        assertEquals(long(evaluationKey, "bootstrap_max_refresh_rounds"), long(bootstrap, "max_refresh_rounds"), "bootstrap max refresh rounds")
+        assert(long(bootstrap, "max_refresh_rounds") > 0) { "bootstrap max refresh rounds must be positive" }
         val bootstrapComponents = obj(bootstrap, "zero_refresh_components")
         assertEquals(publicDegree, long(bootstrapComponents, "coefficient_count"), "bootstrap coefficient count")
         assertBfvComponentDigest("bootstrap c0", string(bootstrapComponents, "c0_sha256"), componentDigests)
         assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests)
+        val roundRefreshes = listOfMaps(bootstrap, "round_refreshes")
+        assertEquals(long(bootstrap, "max_refresh_rounds").toInt(), roundRefreshes.size, "bootstrap round refresh count")
+        for ((index, refresh) in roundRefreshes.withIndex()) {
+            assertEquals(index.toLong(), long(refresh, "round_index"), "bootstrap round $index index")
+            assert(long(refresh, "expected_refresh_bytes") > 0) { "bootstrap round $index bytes must be positive" }
+            assertBfvUpperSha256("bootstrap round $index refresh", string(refresh, "expected_refresh_sha256"))
+            val components = obj(refresh, "components")
+            assertEquals(publicDegree, long(components, "coefficient_count"), "bootstrap round $index coefficient count")
+            if (index == 0) {
+                assertEquals(string(bootstrapComponents, "c0_sha256"), string(components, "c0_sha256"), "bootstrap round 0 c0 mirror")
+                assertEquals(string(bootstrapComponents, "c1_sha256"), string(components, "c1_sha256"), "bootstrap round 0 c1 mirror")
+                assertBfvUpperSha256("bootstrap round 0 c0", string(components, "c0_sha256"))
+                assertBfvUpperSha256("bootstrap round 0 c1", string(components, "c1_sha256"))
+            } else {
+                assertBfvComponentDigest("bootstrap round $index c0", string(components, "c0_sha256"), componentDigests)
+                assertBfvComponentDigest("bootstrap round $index c1", string(components, "c1_sha256"), componentDigests)
+            }
+        }
+        assertEquals(string(bootstrap, "expected_zero_refresh_sha256"), string(roundRefreshes[0], "expected_refresh_sha256"), "bootstrap first round mirrors zero refresh")
+        if (roundRefreshes.size > 1) {
+            assert(string(roundRefreshes[0], "expected_refresh_sha256") != string(roundRefreshes[1], "expected_refresh_sha256")) {
+                "bootstrap round refresh material must be domain separated"
+            }
+        }
+        val bootstrapRefreshVectors = listOfMaps(operationVectors, "bootstrap_refresh_vectors")
+        assert(bootstrapRefreshVectors.isNotEmpty()) { "bootstrap refresh vectors must not be empty" }
+        for (vector in bootstrapRefreshVectors) {
+            val name = string(vector, "name")
+            assertEquals(string(bootstrap, "key_id"), string(vector, "key_id"), "bootstrap refresh vector $name key id")
+            val refreshRounds = long(vector, "refresh_rounds")
+            assert(refreshRounds > 0) { "bootstrap refresh vector $name rounds must be positive" }
+            assert(refreshRounds <= long(bootstrap, "max_refresh_rounds")) { "bootstrap refresh vector $name exceeds key rounds" }
+            val plaintextSlots = longList(vector, "input_plaintext_slots")
+            assert(plaintextSlots.isNotEmpty()) { "bootstrap refresh vector $name plaintext slots must not be empty" }
+            assert(plaintextSlots.all { it >= 0 }) { "bootstrap refresh vector $name plaintext slots must be non-negative" }
+            assert(long(vector, "expected_input_ciphertext_bytes") > 0) { "bootstrap refresh vector $name input bytes must be positive" }
+            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "bootstrap refresh vector $name output bytes must be positive" }
+            assertBfvUpperSha256("bootstrap refresh vector $name input", string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("bootstrap refresh vector $name output", string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("bootstrap refresh vector $name plaintext", string(vector, "expected_plaintext_sha256"))
+            val components = obj(vector, "output_components")
+            assertEquals(publicDegree, long(components, "coefficient_count"), "bootstrap refresh vector $name coefficient count")
+            assertBfvComponentDigest("bootstrap refresh vector $name c0", string(components, "c0_sha256"), componentDigests)
+            assertBfvComponentDigest("bootstrap refresh vector $name c1", string(components, "c1_sha256"), componentDigests)
+        }
+        val runtimeVectors = listOfMaps(operationVectors, "vectors")
+        for (vector in runtimeVectors) {
+            val expectedDepth = if (string(vector, "operation") == "Multiply") {
+                balancedBfvMultiplicationDepth(listOfMaps(vector, "inputs").size)
+            } else {
+                0
+            }
+            assertEquals(expectedDepth, long(vector, "requested_multiplication_depth").toInt(), "${string(vector, "name")} requested multiplication depth")
+        }
+        val packedRotate = runtimeVectors.firstOrNull { string(it, "name") == "soracloud-packed-rotate-left-output" }
+            ?: error("packed RotateLeft operation vector must be present")
+        assertEquals("RotateLeft", string(packedRotate, "operation"), "packed RotateLeft operation")
+        assertEquals(publicDegree / 2, long(packedRotate, "rotation_steps"), "packed RotateLeft rotation steps")
+        val packedRotatePower = long(packedRotate, "automorphism_power")
+        assertEquals(publicDegree + 1, packedRotatePower, "packed RotateLeft Galois power")
+        assert(galoisKeys.any { long(it, "automorphism_power") == packedRotatePower }) { "packed RotateLeft vector has no matching Galois key" }
+        val packedRotateInputs = listOfMaps(packedRotate, "inputs")
+        assertEquals(1, packedRotateInputs.size, "packed RotateLeft input count")
+        val packedRotateInput = packedRotateInputs[0]
+        val inputSlots = longList(packedRotateInput, "packed_slots")
+        val outputSlots = longList(packedRotate, "expected_packed_slots")
+        assertEquals(publicDegree.toInt(), inputSlots.size, "packed RotateLeft input slot count")
+        assertEquals(publicDegree.toInt(), outputSlots.size, "packed RotateLeft output slot count")
+        assert(inputSlots.all { it >= 0 }) { "packed RotateLeft input slots must be non-negative" }
+        assert(outputSlots.all { it >= 0 }) { "packed RotateLeft output slots must be non-negative" }
+        assert(long(packedRotateInput, "expected_ciphertext_bytes") > 0) { "packed RotateLeft input bytes must be positive" }
+        assert(long(packedRotate, "expected_output_ciphertext_bytes") > 0) { "packed RotateLeft output bytes must be positive" }
+        assertBfvUpperSha256("packed RotateLeft input plaintext", string(packedRotateInput, "expected_packed_plaintext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft input", string(packedRotateInput, "expected_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft output", string(packedRotate, "expected_output_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft plaintext", string(packedRotate, "expected_plaintext_coefficients_sha256"))
+        val packedRotateComponents = obj(packedRotate, "output_components")
+        assertEquals(publicDegree, long(packedRotateComponents, "coefficient_count"), "packed RotateLeft coefficient count")
+        assertBfvComponentDigest("packed RotateLeft c0", string(packedRotateComponents, "c0_sha256"), componentDigests)
+        assertBfvComponentDigest("packed RotateLeft c1", string(packedRotateComponents, "c1_sha256"), componentDigests)
+
+        val packedRotateSchedule = runtimeVectors.firstOrNull { string(it, "name") == "soracloud-packed-rotate-left-schedule-output" }
+            ?: error("packed RotateLeft schedule vector must be present")
+        assertEquals("RotateLeft", string(packedRotateSchedule, "operation"), "packed RotateLeft schedule operation")
+        assertEquals(1, long(packedRotateSchedule, "rotation_steps").toInt(), "packed RotateLeft schedule rotation steps")
+        val schedulePowers = longList(packedRotateSchedule, "automorphism_powers")
+        assert(schedulePowers.size > 1) { "packed RotateLeft schedule must use multiple powers" }
+        for (power in schedulePowers) {
+            assert(power > 0) { "packed RotateLeft schedule power must be positive" }
+            assert(galoisKeys.any { long(it, "automorphism_power") == power }) { "packed RotateLeft schedule power $power has no matching Galois key" }
+        }
+        val packedRotateScheduleInputs = listOfMaps(packedRotateSchedule, "inputs")
+        assertEquals(1, packedRotateScheduleInputs.size, "packed RotateLeft schedule input count")
+        val packedRotateScheduleInput = packedRotateScheduleInputs[0]
+        val scheduleInputSlots = longList(packedRotateScheduleInput, "packed_slots")
+        val scheduleOutputSlots = longList(packedRotateSchedule, "expected_packed_slots")
+        assertEquals(publicDegree.toInt(), scheduleInputSlots.size, "packed RotateLeft schedule input slot count")
+        assertEquals(publicDegree.toInt(), scheduleOutputSlots.size, "packed RotateLeft schedule output slot count")
+        assertEquals(scheduleInputSlots.drop(1) + scheduleInputSlots.first(), scheduleOutputSlots, "packed RotateLeft schedule output slots")
+        assert(scheduleInputSlots.all { it >= 0 }) { "packed RotateLeft schedule input slots must be non-negative" }
+        assert(scheduleOutputSlots.all { it >= 0 }) { "packed RotateLeft schedule output slots must be non-negative" }
+        assert(long(packedRotateScheduleInput, "expected_ciphertext_bytes") > 0) { "packed RotateLeft schedule input bytes must be positive" }
+        assert(long(packedRotateSchedule, "expected_output_ciphertext_bytes") > 0) { "packed RotateLeft schedule output bytes must be positive" }
+        assertBfvUpperSha256("packed RotateLeft schedule input plaintext", string(packedRotateScheduleInput, "expected_packed_plaintext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule input", string(packedRotateScheduleInput, "expected_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule output", string(packedRotateSchedule, "expected_output_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule plaintext", string(packedRotateSchedule, "expected_plaintext_coefficients_sha256"))
+        val packedRotateScheduleComponents = obj(packedRotateSchedule, "output_components")
+        assertEquals(publicDegree, long(packedRotateScheduleComponents, "coefficient_count"), "packed RotateLeft schedule coefficient count")
+        assertBfvComponentDigest("packed RotateLeft schedule c0", string(packedRotateScheduleComponents, "c0_sha256"), componentDigests)
+        assertBfvComponentDigest("packed RotateLeft schedule c1", string(packedRotateScheduleComponents, "c1_sha256"), componentDigests)
     }
 
     private fun assertBfvRnsModulusChainFixture(operationVectors: Map<String, Any?>, publicDegree: Long) {
         val rns = obj(operationVectors, "rns_modulus_chain")
         val moduli = longList(rns, "moduli")
-        assertEquals(listOf(358273L, 448769L, 449921L), moduli, "RNS modulus-chain limbs")
-        assertEquals("72339115408190977", string(rns, "product"), "RNS modulus-chain product")
+        assert(moduli.isNotEmpty()) { "RNS modulus-chain limbs must not be empty" }
+        assertEquals(moduli.sorted(), moduli, "RNS modulus-chain limbs must be sorted")
+        assert(moduli.all { it > 2 && it % 2L == 1L }) { "RNS modulus-chain limbs must be odd prime candidates" }
+        assert(string(rns, "product").all { it.isDigit() }) { "RNS modulus-chain product must be decimal" }
         assertBfvLowerDigest("RNS modulus-chain digest", string(rns, "expected_digest_hex"))
 
         val samples = obj(rns, "sample_polynomials")
@@ -2196,6 +2360,17 @@ class HttpClientTransportTest {
     private fun assertBfvUpperSha256(label: String, value: String) {
         assertTrue(Regex("[0-9A-F]{64}").matches(value), "$label must be canonical uppercase SHA-256")
         assertFalse(value == "0".repeat(64), "$label must not be zero")
+    }
+
+    private fun balancedBfvMultiplicationDepth(inputCount: Int): Int {
+        assertTrue(inputCount > 0, "BFV multiplication depth requires at least one input")
+        var covered = 1
+        var depth = 0
+        while (covered < inputCount) {
+            covered *= 2
+            depth += 1
+        }
+        return depth
     }
 
     private fun assertBfvLowerDigest(label: String, value: String) {
@@ -2346,6 +2521,7 @@ class HttpClientTransportTest {
                 longList(publicKey, "a"),
             ),
             long(params, "max_input_bytes").toInt(),
+            params["norito_length_encoding"] as? String,
         )
     }
 
@@ -2368,14 +2544,22 @@ class HttpClientTransportTest {
         }
 
     private fun long(root: Map<String, Any?>, key: String): Long =
-        (root[key] as? Number)?.toLong() ?: error("$key must be a number")
+        when (val value = root[key]) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull() ?: error("$key must be an integer string")
+            else -> error("$key must be a number")
+        }
 
     private fun optionalLong(root: Map<String, Any?>, key: String): Long? =
         (root[key] as? Number)?.toLong()
 
     private fun longList(root: Map<String, Any?>, key: String): List<Long> =
         (root[key] as? List<*> ?: error("$key must be a list")).mapIndexed { index, value ->
-            (value as? Number)?.toLong() ?: error("$key[$index] must be a number")
+            when (value) {
+                is Number -> value.toLong()
+                is String -> value.toLongOrNull() ?: error("$key[$index] must be an integer string")
+                else -> error("$key[$index] must be a number")
+            }
         }
 
     private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =

@@ -4233,6 +4233,8 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_receipt_block_number: Option<u64>,
     /// Hex-encoded EVM block hash for the route canary receipt block.
     pub evm_route_canary_receipt_block_hash: Option<String>,
+    /// Whether the EVM route canary receipt block was read through finalized state.
+    pub evm_route_canary_receipt_block_finalized: Option<bool>,
     /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
     pub evm_route_canary_block_receipts_root: Option<String>,
     /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
@@ -4328,6 +4330,7 @@ impl SccpRouteAllowlist {
             evm_route_canary_log_index: self.evm_route_canary_log_index,
             evm_route_canary_receipt_block_number: self.evm_route_canary_receipt_block_number,
             evm_route_canary_receipt_block_hash: self.evm_route_canary_receipt_block_hash,
+            evm_route_canary_receipt_block_finalized: self.evm_route_canary_receipt_block_finalized,
             evm_route_canary_block_receipts_root: self.evm_route_canary_block_receipts_root,
             evm_route_canary_call_data_sha256: self.evm_route_canary_call_data_sha256,
             evm_route_canary_message_id: self.evm_route_canary_message_id,
@@ -4576,7 +4579,7 @@ pub struct Zk {
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
     /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    #[config(env = "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS", default = "false")]
+    #[config(default = "false")]
     pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     #[config(default = "Vec::new()")]

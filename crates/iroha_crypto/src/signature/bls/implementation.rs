@@ -10,13 +10,17 @@ use std::{
 
 use blake2::{Blake2b, digest::consts::U32};
 use hkdf::HkdfExtract;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryRngCore;
 use sha2::Digest as _;
 use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
     Signature as BlsSignature,
 };
-use zeroize::Zeroize as _;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::{normal::NormalConfiguration, small::SmallConfiguration};
 
@@ -24,6 +28,8 @@ pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
+#[cfg(feature = "rand")]
+const BLS_RNG_SEED_LEN: usize = 32;
 
 #[doc(hidden)]
 pub struct PreparedPublicKeyCache<E: EngineBLS> {
@@ -194,7 +200,10 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         #[cfg(feature = "rand")]
         {
-            Ok(guard.sign(&msg, os_rng()).to_bytes())
+            let seed = checked_os_entropy("signing key split", BLS_RNG_SEED_LEN)
+                .map_err(|err| Error::Signing(err.to_string()))?;
+            let rng = crate::rng::rng_from_seed(seed.as_slice().to_vec());
+            Ok(guard.sign(&msg, rng).to_bytes())
         }
         #[cfg(not(feature = "rand"))]
         {
@@ -220,9 +229,16 @@ impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
     }
 }
 
-#[cfg(feature = "rand")]
-use crate::rng::os_rng;
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
+
+#[cfg(feature = "rand")]
+fn checked_os_entropy(context: &str, len: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut seed = Zeroizing::new(vec![0u8; len]);
+    OsRng
+        .try_fill_bytes(seed.as_mut_slice())
+        .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
+    Ok(seed)
+}
 
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     let mut seen = BTreeSet::new();
@@ -257,9 +273,11 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         let private_key = match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
-                let mut rng = os_rng();
-                let secret_vt = SecretKeyVT::<C::Engine>::generate(&mut rng);
-                let secret = secret_vt.into_split(&mut rng);
+                let seed = checked_os_entropy("key generation", C::Engine::SECRET_KEY_SIZE)?;
+                let split_seed = checked_os_entropy("key split", BLS_RNG_SEED_LEN)?;
+                let split_rng = crate::rng::rng_from_seed(split_seed.as_slice().to_vec());
+                let secret =
+                    SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
                 ManagedSecretKey::new(&secret)
             }
             KeyGenOption::UseSeed(ref mut seed) => {
@@ -596,6 +614,28 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     }
 }
 
+struct MultiMessageBatch<E: EngineBLS> {
+    signature: BlsSignature<E>,
+    messages: Vec<w3f_bls::Message>,
+    public_keys: Vec<PublicKey<E>>,
+}
+
+impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
+    type E = E;
+    type M = &'a w3f_bls::Message;
+    type PKG = &'a PublicKey<E>;
+    type PKnM =
+        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
+
+    fn signature(&self) -> BlsSignature<E> {
+        BlsSignature(self.signature.0)
+    }
+
+    fn messages_and_publickeys(self) -> Self::PKnM {
+        self.messages.iter().zip(self.public_keys.iter())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,27 +678,5 @@ mod tests {
     fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
         assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
         assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
-    }
-}
-
-struct MultiMessageBatch<E: EngineBLS> {
-    signature: BlsSignature<E>,
-    messages: Vec<w3f_bls::Message>,
-    public_keys: Vec<PublicKey<E>>,
-}
-
-impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
-    type E = E;
-    type M = &'a w3f_bls::Message;
-    type PKG = &'a PublicKey<E>;
-    type PKnM =
-        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
-
-    fn signature(&self) -> BlsSignature<E> {
-        BlsSignature(self.signature.0)
-    }
-
-    fn messages_and_publickeys(self) -> Self::PKnM {
-        self.messages.iter().zip(self.public_keys.iter())
     }
 }

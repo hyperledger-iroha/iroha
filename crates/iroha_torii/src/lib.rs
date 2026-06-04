@@ -58803,10 +58803,10 @@ mod tests {
     use iroha_crypto::{
         BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, BfvParameters, Hash, KeyPair,
         RamLfeBackend, RamLfeVerificationMode, SignatureOf, bfv_affine_policy_commitment,
-        bfv_programmed_policy_commitment_with_program,
-        bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
+        bfv_programmed_policy_commitment_with_program, default_bfv_programmed_hidden_program,
         derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
         ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+        try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
         ChainId, Identifiable, Registrable, ValidationFail,
@@ -59065,13 +59065,15 @@ mod tests {
                     galois_keys: Vec::new(),
                     bootstrap_key: None,
                 };
-                let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
-                    public_parameters,
-                    evaluation_keys,
-                    &hidden_program,
-                    RamLfeVerificationMode::Signed,
-                    None,
-                );
+                let programmed_public_parameters =
+                    try_bfv_programmed_public_parameters_with_program(
+                        public_parameters,
+                        evaluation_keys,
+                        &hidden_program,
+                        RamLfeVerificationMode::Signed,
+                        None,
+                    )
+                    .expect("build programmed BFV public parameters");
                 let encoded_public_parameters = norito::to_bytes(&programmed_public_parameters)
                     .expect("encode programmed BFV parameters");
                 RamLfeProgramPolicy::new(
@@ -59227,13 +59229,14 @@ mod tests {
             galois_keys: Vec::new(),
             bootstrap_key: None,
         };
-        let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+        let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
             public_parameters.clone(),
             evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
-        );
+        )
+        .expect("build programmed BFV public parameters");
         let encoded_public_parameters =
             norito::to_bytes(&programmed_public_parameters).expect("encode BFV parameters");
         let program_policy = RamLfeProgramPolicy::new(

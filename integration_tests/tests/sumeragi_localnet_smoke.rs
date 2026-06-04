@@ -60,9 +60,10 @@ use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{
     BfvEvaluationKeyBundle, BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf, bfv_programmed_policy_commitment_with_program,
-    bfv_programmed_public_parameters_with_program, decode_bfv_programmed_public_parameters,
-    default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-    identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+    decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
+    derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
+    ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+    try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -686,15 +687,17 @@ fn realistic_ram_lfe_email_policy_bundle(
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
+        galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+    let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
         public_parameters,
         evaluation_keys,
         &hidden_program,
         RamLfeVerificationMode::Signed,
         None,
-    );
+    )
+    .expect("build programmed BFV public parameters");
     let encoded_public_parameters =
         norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
     let commitment = bfv_programmed_policy_commitment_with_program(

@@ -2,9 +2,10 @@
 //!
 //! This module implements an exact plaintext-lift evaluator over the negacyclic
 //! ring `Z_q[x] / (x^n + 1)` with `q` divisible by the plaintext modulus `t`.
-//! The first-release RAM-LFE profile uses zero error terms so ciphertext
-//! Add/Multiply/SelectEqZero remain exact through the published hidden-program
-//! depth while evaluators stay secret-key free. The API surface includes:
+//! The first-release RAM-LFE profile uses deterministic plaintext-modulus
+//! multiple error terms so ciphertext Add/Multiply/SelectEqZero remain exact
+//! through the published hidden-program depth while evaluators stay secret-key
+//! free. The API surface includes:
 //! - seeded key generation,
 //! - public-key encryption / secret-key decryption,
 //! - ciphertext addition,
@@ -12,9 +13,9 @@
 //! - ciphertext-by-ciphertext multiplication with relinearization,
 //! - and a compact affine-circuit evaluator over scalar ciphertext inputs.
 //!
-//! TODO: Replace the exact zero-error plaintext-lift profile with the planned
-//! BFV-RNS modulus-chain, bounded-noise, and bootstrapping engine before calling
-//! this a security-complete BFV implementation.
+//! TODO: Replace the exact plaintext-multiple error profile with the planned
+//! BFV-RNS modulus-chain, bounded RLWE noise, and bootstrapping engine before
+//! calling this a security-complete BFV implementation.
 //!
 //! The implementation keeps a deterministic scalar fallback for every path.
 //! When the `bfv-accel` feature is enabled, polynomial multiplication switches
@@ -22,12 +23,12 @@
 //! the linear product back into the negacyclic BFV ring. This keeps observable
 //! outputs identical across hardware while substantially reducing the cost of
 //! ciphertext multiplication for the parameter sets used by identifier lookup.
-//! The registered first-release RNS chain is currently a representation and
-//! release-vector corridor: it covers the ciphertext modulus for coefficient
-//! storage and fixture arithmetic, while separate guarded exact-q operations
-//! keep product-ring arithmetic from being used as a ciphertext-modulus
-//! evaluator unless the caller supplies a sufficiently wide chain. The full
-//! BFV-RNS evaluator and basis-extension key-switching path is still pending.
+//! The registered first-release RNS chain covers the exact `Z_q` addition and
+//! negacyclic product bounds used by the deterministic evaluator bridge, while
+//! separate guards keep product-ring arithmetic from being used as
+//! ciphertext-modulus arithmetic unless the chain is wide enough. The full
+//! bounded-noise BFV-RNS evaluator and basis-extension key-switching path is
+//! still pending.
 
 use std::{fmt, string::String, vec::Vec};
 
@@ -44,10 +45,13 @@ use crate::Hash;
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
 const GALOIS_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.galois_keygen.v1";
+const BOOTSTRAP_REFRESH_ROUND_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.v1";
 const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen.v1";
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
 const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_digest.v1";
 const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
+const BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.refresh_transcript_digest.v1";
 const BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.rns_modulus_chain_digest.v1";
 const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
@@ -56,6 +60,12 @@ const BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS: u16 = 1_024;
 const BFV_EVALUATION_KEY_MAX_ROTATION_KEYS: usize = 64;
 const BFV_EVALUATION_KEY_MAX_GALOIS_KEYS: usize = 64;
 const BFV_RNS_MODULUS_CHAIN_MAX_LIMBS: usize = 8;
+const BFV_ERROR_MULTIPLE_BOUND: u8 = 1;
+
+/// First-release multiplicative-depth budget for compact profile descriptors.
+pub const BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8: u8 = 16;
+/// First-release multiplicative-depth budget for the exact BFV evaluator bridge.
+pub const BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH: u16 = 16;
 
 /// Registered RAM-LFE BFV plaintext modulus.
 ///
@@ -71,11 +81,186 @@ pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * 
 /// The limbs are odd primes, strictly increasing, pairwise coprime, and
 /// congruent to `1 mod 2n` for the registered `n = 64` RAM-LFE profile so NTT
 /// roots exist for negacyclic multiplication. Their product covers the current
-/// exact-lift ciphertext modulus while remaining inside the first-release
-/// deterministic scalar overflow bound.
-pub const RAM_LFE_BFV_RNS_MODULI_V1: [u64; 3] = [358_273, 448_769, 449_921];
+/// exact `Z_q[x] / (x^n + 1)` negacyclic product bound while fitting in `u128`.
+pub const RAM_LFE_BFV_RNS_MODULI_V1: [u64; 8] = [
+    30_593, 30_977, 31_489, 31_873, 32_257, 33_409, 35_201, 35_969,
+];
 
 type Polynomial = Vec<u64>;
+
+/// Public operation budget for the first-release exact BFV evaluator bridge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BfvEvaluationBudget {
+    /// Maximum ciphertext-ciphertext multiplicative depth.
+    pub max_multiplicative_depth: u16,
+    /// Maximum public bootstrap refresh rounds.
+    pub max_bootstrap_refresh_rounds: u16,
+}
+
+impl BfvEvaluationBudget {
+    /// Return the budget used by the first-release exact BFV evaluator bridge.
+    #[must_use]
+    pub const fn exact_evaluator_v1() -> Self {
+        Self {
+            max_multiplicative_depth: BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH,
+            max_bootstrap_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
+        }
+    }
+
+    /// Validate a planned BFV evaluation against this budget.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the plan exceeds the published evaluator
+    /// budget.
+    pub fn validate_plan(self, plan: BfvEvaluationPlan) -> Result<(), BfvError> {
+        if plan.input_ciphertexts == 0 {
+            return Err(BfvError::InvalidParameters(
+                "BFV evaluation plan requires at least one input ciphertext".to_owned(),
+            ));
+        }
+        if plan.ciphertext_multiplication_depth > 0 && plan.input_ciphertexts < 2 {
+            return Err(BfvError::InvalidParameters(
+                "BFV multiplicative depth requires at least two input ciphertexts".to_owned(),
+            ));
+        }
+        if plan.bootstrap_refresh_rounds > 0 && plan.input_ciphertexts != 1 {
+            return Err(BfvError::InvalidParameters(
+                "BFV bootstrap refresh requires exactly one input ciphertext".to_owned(),
+            ));
+        }
+        if plan.ciphertext_multiplication_depth > self.max_multiplicative_depth {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV evaluation multiplicative depth {} exceeds budget {}",
+                plan.ciphertext_multiplication_depth, self.max_multiplicative_depth
+            )));
+        }
+        if plan.bootstrap_refresh_rounds > self.max_bootstrap_refresh_rounds {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV bootstrap refresh rounds {} exceed budget {}",
+                plan.bootstrap_refresh_rounds, self.max_bootstrap_refresh_rounds
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Planned BFV operation shape admitted before ciphertext evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BfvEvaluationPlan {
+    /// Number of ciphertext input envelopes.
+    pub input_ciphertexts: u16,
+    /// Balanced ciphertext-ciphertext multiplicative depth.
+    pub ciphertext_multiplication_depth: u16,
+    /// Public bootstrap refresh rounds consumed by the operation.
+    pub bootstrap_refresh_rounds: u16,
+}
+
+impl BfvEvaluationPlan {
+    /// Build a plan for ciphertext addition over at least two inputs.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the input count is below the addition arity or
+    /// exceeds the supported plan range.
+    pub fn add(input_count: usize) -> Result<Self, BfvError> {
+        if input_count < 2 {
+            return Err(BfvError::InvalidParameters(
+                "BFV addition requires at least two input ciphertexts".to_owned(),
+            ));
+        }
+        Ok(Self {
+            input_ciphertexts: checked_plan_input_count(input_count)?,
+            ciphertext_multiplication_depth: 0,
+            bootstrap_refresh_rounds: 0,
+        })
+    }
+
+    /// Build a plan for a balanced ciphertext multiplication tree.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the input count is zero or exceeds the
+    /// supported plan range.
+    pub fn balanced_multiply(input_count: usize) -> Result<Self, BfvError> {
+        Ok(Self {
+            input_ciphertexts: checked_plan_input_count(input_count)?,
+            ciphertext_multiplication_depth: bfv_balanced_multiplication_depth(input_count)?,
+            bootstrap_refresh_rounds: 0,
+        })
+    }
+
+    /// Build a plan for one ciphertext rotation.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the operation does not have exactly one input.
+    pub fn rotate_left(input_count: usize) -> Result<Self, BfvError> {
+        if input_count != 1 {
+            return Err(BfvError::InvalidParameters(
+                "BFV rotation requires exactly one input ciphertext".to_owned(),
+            ));
+        }
+        Ok(Self {
+            input_ciphertexts: 1,
+            ciphertext_multiplication_depth: 0,
+            bootstrap_refresh_rounds: 0,
+        })
+    }
+
+    /// Build a plan for public bootstrap refresh rounds over exactly one input.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the operation does not have exactly one input
+    /// or no refresh rounds are requested.
+    pub fn bootstrap_refresh(input_count: usize, rounds: u16) -> Result<Self, BfvError> {
+        if input_count != 1 {
+            return Err(BfvError::InvalidParameters(
+                "BFV bootstrap refresh requires exactly one input ciphertext".to_owned(),
+            ));
+        }
+        if rounds == 0 {
+            return Err(BfvError::InvalidParameters(
+                "BFV bootstrap refresh requires at least one round".to_owned(),
+            ));
+        }
+        Ok(Self {
+            input_ciphertexts: 1,
+            ciphertext_multiplication_depth: 0,
+            bootstrap_refresh_rounds: rounds,
+        })
+    }
+}
+
+fn checked_plan_input_count(input_count: usize) -> Result<u16, BfvError> {
+    u16::try_from(input_count).map_err(|_| {
+        BfvError::InvalidParameters("BFV evaluation input count exceeds u16 bounds".to_owned())
+    })
+}
+
+/// Return the multiplicative depth of a deterministic balanced multiply tree.
+///
+/// # Errors
+/// Returns [`BfvError`] when `input_count` is zero or the depth calculation
+/// exceeds deterministic bounds.
+pub fn bfv_balanced_multiplication_depth(input_count: usize) -> Result<u16, BfvError> {
+    if input_count == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV balanced multiplication requires at least one input".to_owned(),
+        ));
+    }
+    let mut covered = 1_usize;
+    let mut depth = 0_u16;
+    while covered < input_count {
+        covered = covered.checked_mul(2).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV balanced multiplication input count exceeds deterministic bounds".to_owned(),
+            )
+        })?;
+        depth = depth.checked_add(1).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV balanced multiplication depth exceeds u16 bounds".to_owned(),
+            )
+        })?;
+    }
+    Ok(depth)
+}
 
 #[cfg(feature = "bfv-accel")]
 #[derive(Clone, Copy, Debug)]
@@ -162,6 +347,19 @@ impl BfvParameters {
                 "ciphertext_modulus must be divisible by plaintext_modulus".to_owned(),
             ));
         }
+        let error_headroom = self
+            .plaintext_modulus
+            .checked_mul(u64::from(BFV_ERROR_MULTIPLE_BOUND) * 2)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "plaintext-multiple error profile exceeds ciphertext modulus bounds".to_owned(),
+                )
+            })?;
+        if self.ciphertext_modulus <= error_headroom {
+            return Err(BfvError::InvalidParameters(format!(
+                "ciphertext_modulus must exceed 2 * plaintext_modulus * BFV error bound {BFV_ERROR_MULTIPLE_BOUND}"
+            )));
+        }
         if self.decomposition_base_log == 0 || self.decomposition_base_log > 16 {
             return Err(BfvError::InvalidParameters(
                 "decomposition_base_log must be within 1..=16".to_owned(),
@@ -244,7 +442,6 @@ impl BfvRnsModulusChain {
     /// malformed, noncanonical, unsupported for NTT evaluation, or too small to
     /// cover the parameter-set ciphertext modulus.
     pub fn validate_for_parameters(&self, params: &BfvParameters) -> Result<(), BfvError> {
-        params.validate()?;
         validate_bfv_rns_modulus_chain(self, params).map(|_| ())
     }
 
@@ -293,10 +490,10 @@ impl BfvRnsModulusChain {
     ///
     /// This guard rejects using product-ring RNS multiplication as a drop-in
     /// replacement for `Z_q[x] / (x^n + 1)` multiplication unless the chain can
-    /// uniquely represent the signed unreduced coefficient range. The current
-    /// registered RAM-LFE chain intentionally does not satisfy this stronger
-    /// bound; it remains a representation/vector corridor until the full
-    /// BFV-RNS evaluator lands.
+    /// uniquely represent the signed unreduced coefficient range. The
+    /// registered RAM-LFE chain satisfies this exact-evaluator bridge bound,
+    /// but this remains separate from the future bounded-noise BFV-RNS
+    /// evaluator.
     ///
     /// # Errors
     /// Returns [`BfvError`] when the chain is malformed or too narrow for this
@@ -587,13 +784,20 @@ pub struct BfvBootstrapKey {
     pub key_id: String,
     /// Maximum number of refresh rounds this key authorizes for one job.
     pub max_refresh_rounds: u16,
-    /// Encryption of zero added during refresh.
+    /// First-round encryption of zero added during refresh.
     ///
-    /// The key holder prepares this ciphertext with the BFV public key for the
-    /// registered parameter set. Evaluators can refresh/re-randomize a
-    /// ciphertext by homomorphically adding this mask without holding the secret
-    /// key or observing the plaintext.
+    /// This mirrors `round_refreshes[0]` for first-release compatibility with
+    /// existing key-bundle descriptors. Multi-round refresh must consume
+    /// `round_refreshes` by round index rather than reusing this ciphertext.
     pub zero_refresh: BfvCiphertext,
+    /// Domain-separated encryptions of zero, one per authorized refresh round.
+    ///
+    /// The key holder prepares these ciphertexts with the BFV public key for
+    /// the registered parameter set. Evaluators can refresh/re-randomize a
+    /// ciphertext by adding the ciphertext at the requested round index without
+    /// holding the secret key or observing the plaintext.
+    #[norito(default)]
+    pub round_refreshes: Vec<BfvCiphertext>,
 }
 
 /// Evaluation keys required by public BFV evaluators.
@@ -613,6 +817,48 @@ pub struct BfvEvaluationKeyBundle {
     pub bootstrap_key: Option<BfvBootstrapKey>,
 }
 
+/// Public transcript seed descriptor for a rotation refresh key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BfvRotationKeyTranscriptSeed<'a> {
+    /// Rotation step count whose refresh key must be recomputed.
+    pub rotation_steps: u32,
+    /// Seed used by [`rotation_key_from_seed`] for this rotation key.
+    pub seed: &'a [u8],
+}
+
+/// Public transcript seed descriptor for a bootstrap refresh key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BfvBootstrapKeyTranscriptSeed<'a> {
+    /// Bootstrap key id whose refresh transcript must be recomputed.
+    pub key_id: &'a str,
+    /// Maximum refresh-round capacity advertised for the bootstrap key.
+    pub max_refresh_rounds: u16,
+    /// Seed used by [`bootstrap_key_with_max_refresh_rounds_from_seed`].
+    pub seed: &'a [u8],
+}
+
+#[derive(Encode)]
+struct BfvRotationKeyTranscriptDigestMaterial {
+    rotation_steps: u32,
+    seed: Vec<u8>,
+}
+
+#[derive(Encode)]
+struct BfvBootstrapKeyTranscriptDigestMaterial {
+    key_id: String,
+    max_refresh_rounds: u16,
+    seed: Vec<u8>,
+}
+
+#[derive(Encode)]
+struct BfvRefreshTranscriptDigestMaterial {
+    params: BfvParameters,
+    public_key: BfvPublicKey,
+    evaluation_key_digest: Hash,
+    rotation_transcripts: Vec<BfvRotationKeyTranscriptDigestMaterial>,
+    bootstrap_transcript: Option<BfvBootstrapKeyTranscriptDigestMaterial>,
+}
+
 impl BfvEvaluationKeyBundle {
     /// Validate evaluation-key shapes against BFV parameters.
     ///
@@ -628,36 +874,256 @@ impl BfvEvaluationKeyBundle {
         }
         let mut seen_rotations = std::collections::BTreeSet::new();
         for key in &self.rotation_keys {
-            if key.rotation_steps == 0 {
-                return Err(BfvError::InvalidParameters(
-                    "rotation key steps must be greater than zero".to_owned(),
-                ));
-            }
+            validate_rotation_key(params, key)?;
             if !seen_rotations.insert(key.rotation_steps) {
                 return Err(BfvError::InvalidParameters(format!(
                     "duplicate rotation key for {} steps",
                     key.rotation_steps
                 )));
             }
-            validate_ciphertext(params, &key.zero_refresh)?;
         }
-        if self.galois_keys.len() > BFV_EVALUATION_KEY_MAX_GALOIS_KEYS {
-            return Err(BfvError::InvalidParameters(format!(
-                "evaluation-key bundle supports at most {BFV_EVALUATION_KEY_MAX_GALOIS_KEYS} Galois keys"
+        validate_galois_key_set(params, &self.galois_keys, "evaluation-key bundle")?;
+        if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
+            validate_bootstrap_key(params, bootstrap_key)?;
+        }
+        Ok(())
+    }
+
+    /// Verify public encrypted-zero refresh transcripts for the whole bundle.
+    ///
+    /// This is a public admission diagnostic for the current deterministic
+    /// refresh-key format. It requires one transcript seed for every rotation
+    /// refresh key and matching metadata for the optional bootstrap key, then
+    /// recomputes each encrypted-zero refresh ciphertext from `public_key`.
+    /// This prevents callers from validating only a subset of refresh material.
+    /// It is still separate from the future proof-carrying full bootstrap key
+    /// format.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle, public key, transcript inventory,
+    /// or recomputed refresh material is malformed or inconsistent.
+    pub fn validate_refresh_transcripts(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<(), BfvError> {
+        self.validate(params)?;
+        validate_public_key(params, public_key)?;
+        if rotation_transcripts.len() != self.rotation_keys.len() {
+            return Err(BfvError::ShapeMismatch(format!(
+                "evaluation-key bundle expected {} rotation refresh transcripts, found {}",
+                self.rotation_keys.len(),
+                rotation_transcripts.len()
             )));
         }
-        let mut seen_galois = std::collections::BTreeSet::new();
-        for key in &self.galois_keys {
-            validate_galois_key(params, key)?;
-            if !seen_galois.insert(key.automorphism_power) {
+        let mut seen_rotations = std::collections::BTreeSet::new();
+        for transcript in rotation_transcripts {
+            if !seen_rotations.insert(transcript.rotation_steps) {
                 return Err(BfvError::InvalidParameters(format!(
-                    "duplicate Galois key for automorphism power {}",
-                    key.automorphism_power
+                    "duplicate rotation refresh transcript for {} steps",
+                    transcript.rotation_steps
+                )));
+            }
+            if self
+                .rotation_keys
+                .iter()
+                .all(|key| key.rotation_steps != transcript.rotation_steps)
+            {
+                return Err(BfvError::ShapeMismatch(format!(
+                    "rotation refresh transcript supplied for missing rotation key {}",
+                    transcript.rotation_steps
                 )));
             }
         }
+        for rotation_key in &self.rotation_keys {
+            let transcript = rotation_transcripts
+                .iter()
+                .find(|transcript| transcript.rotation_steps == rotation_key.rotation_steps)
+                .ok_or_else(|| {
+                    BfvError::ShapeMismatch(format!(
+                        "missing deterministic transcript seed for rotation key {}",
+                        rotation_key.rotation_steps
+                    ))
+                })?;
+            validate_rotation_key_zero_refresh_transcript(
+                params,
+                public_key,
+                rotation_key,
+                transcript.seed,
+            )?;
+        }
+
+        match (self.bootstrap_key.as_ref(), bootstrap_transcript) {
+            (Some(bootstrap_key), Some(transcript)) => {
+                if transcript.key_id != bootstrap_key.key_id
+                    || transcript.max_refresh_rounds != bootstrap_key.max_refresh_rounds
+                {
+                    return Err(BfvError::ShapeMismatch(
+                        "bootstrap refresh transcript metadata does not match bundle bootstrap key"
+                            .to_owned(),
+                    ));
+                }
+                validate_bootstrap_key_zero_refresh_transcript(
+                    params,
+                    public_key,
+                    bootstrap_key,
+                    transcript.seed,
+                )?;
+            }
+            (Some(bootstrap_key), None) => {
+                return Err(BfvError::ShapeMismatch(format!(
+                    "missing deterministic transcript seed for bootstrap key {}",
+                    bootstrap_key.key_id
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(BfvError::ShapeMismatch(
+                    "bootstrap refresh transcript supplied but bundle has no bootstrap key"
+                        .to_owned(),
+                ));
+            }
+            (None, None) => {}
+        }
+        Ok(())
+    }
+
+    /// Return a stable digest over the public refresh transcript inventory.
+    ///
+    /// The digest is intended for governance/admission binding of the current
+    /// deterministic encrypted-zero refresh material. It first validates that
+    /// every public rotation/bootstrap refresh mask in the bundle matches the
+    /// supplied transcript seed, then hashes the parameter set, public key,
+    /// evaluation-key digest, and transcript seed metadata in bundle order. It
+    /// does not replace future proof-carrying full bootstrap key admission.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when transcript validation fails or canonical
+    /// encoding of the digest material fails.
+    pub fn refresh_transcript_digest(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<Hash, BfvError> {
+        self.validate_refresh_transcripts(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+        )?;
+        let evaluation_key_digest = self.digest(params)?;
+        let rotation_transcripts = self
+            .rotation_keys
+            .iter()
+            .map(|rotation_key| {
+                let transcript = rotation_transcripts
+                    .iter()
+                    .find(|transcript| transcript.rotation_steps == rotation_key.rotation_steps)
+                    .expect("validated rotation transcript exists");
+                BfvRotationKeyTranscriptDigestMaterial {
+                    rotation_steps: rotation_key.rotation_steps,
+                    seed: transcript.seed.to_vec(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let bootstrap_transcript =
+            bootstrap_transcript.map(|transcript| BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: transcript.key_id.to_owned(),
+                max_refresh_rounds: transcript.max_refresh_rounds,
+                seed: transcript.seed.to_vec(),
+            });
+        let material = BfvRefreshTranscriptDigestMaterial {
+            params: *params,
+            public_key: public_key.clone(),
+            evaluation_key_digest,
+            rotation_transcripts,
+            bootstrap_transcript,
+        };
+        let bytes = norito::to_bytes(&material).map_err(|err| {
+            BfvError::InvalidParameters(format!("refresh transcript digest encoding failed: {err}"))
+        })?;
+        Ok(Hash::new_from_chunks(&[
+            BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+            bytes.as_slice(),
+        ]))
+    }
+
+    /// Verify that all public refresh ciphertexts decrypt to zero.
+    ///
+    /// This is a key-owner diagnostic for bundle construction. Public
+    /// evaluators still validate only shapes, bounds, and metadata because the
+    /// current encrypted-zero refresh path does not carry public zero-plaintext
+    /// proofs.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle is malformed, `secret_key` does not
+    /// match the parameter set, or any rotation/bootstrap refresh ciphertext
+    /// decrypts to non-zero plaintext under `secret_key`.
+    pub fn validate_zero_refreshes(
+        &self,
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Result<(), BfvError> {
+        self.validate(params)?;
+        validate_secret_key(params, secret_key)?;
+        for (index, rotation_key) in self.rotation_keys.iter().enumerate() {
+            validate_refresh_ciphertext_decrypts_to_zero(
+                params,
+                secret_key,
+                &rotation_key.zero_refresh,
+                &format!("evaluation-key bundle rotation_keys[{index}].zero_refresh"),
+            )?;
+        }
         if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
-            validate_bootstrap_key(params, bootstrap_key)?;
+            validate_bootstrap_key_zero_refreshes(params, secret_key, bootstrap_key)?;
+        }
+        Ok(())
+    }
+
+    /// Verify that evaluation keys are consistent with a secret key.
+    ///
+    /// This is a key-owner diagnostic for bundle construction. It checks that
+    /// relinearization entries decrypt to the expected scaled `s^2` residues,
+    /// Galois entries decrypt to the expected scaled automorphed-secret
+    /// residues, and every public refresh ciphertext decrypts to zero. The
+    /// residual for key-switch entries must stay in the current deterministic
+    /// plaintext-modulus-multiple error profile.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle is malformed, `secret_key` does not
+    /// match the parameter set, any key-switch entry has an unexpected
+    /// plaintext residue or oversized error multiple, or any public refresh
+    /// ciphertext decrypts to non-zero plaintext.
+    pub fn validate_secret_key_consistency(
+        &self,
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Result<(), BfvError> {
+        self.validate_zero_refreshes(params, secret_key)?;
+        let secret_square = poly_mul_mod(params, &secret_key.s, &secret_key.s);
+        validate_key_switch_entry_residuals(
+            params,
+            &secret_key.s,
+            &secret_square,
+            &self.relinearization_key.entries,
+            "evaluation-key bundle relinearization_key",
+        )?;
+        for (index, galois_key) in self.galois_keys.iter().enumerate() {
+            let target_secret = apply_galois_automorphism_poly(
+                params,
+                &secret_key.s,
+                galois_key.automorphism_power,
+            )?;
+            validate_key_switch_entry_residuals(
+                params,
+                &secret_key.s,
+                &target_secret,
+                &galois_key.entries,
+                &format!("evaluation-key bundle galois_keys[{index}]"),
+            )?;
         }
         Ok(())
     }
@@ -686,6 +1152,25 @@ pub struct BfvCiphertext {
     pub c0: Vec<u64>,
     /// Second ciphertext polynomial.
     pub c1: Vec<u64>,
+}
+
+/// Secret-key diagnostic for the first-release exact BFV residual.
+///
+/// This is not a bounded-RLWE noise estimate. It decomposes each centered
+/// decrypted coefficient as `plaintext + t * residual_multiple`, where `t` is
+/// the plaintext modulus used by the deterministic exact evaluator bridge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BfvExactResidualProfile {
+    /// Plaintext coefficients returned by the normal BFV decrypt path.
+    pub plaintext: Vec<u64>,
+    /// Signed residual multiple for each centered decrypted coefficient.
+    pub residual_multiples: Vec<i128>,
+    /// Largest absolute residual multiple in this ciphertext.
+    pub max_abs_residual_multiple: u128,
+    /// Largest centered residual multiple representable before wraparound.
+    pub centered_residual_multiple_capacity: u128,
+    /// Remaining margin to the centered residual capacity.
+    pub residual_multiple_headroom: u128,
 }
 
 /// Public BFV parameters published to clients for encrypted identifier input.
@@ -774,7 +1259,7 @@ pub fn registered_bfv_rns_modulus_chain(
 ) -> Result<BfvRnsModulusChain, BfvError> {
     validate_registered_bfv_parameters(params)?;
     let chain = ram_lfe_bfv_rns_modulus_chain_v1();
-    chain.validate_exact_lift_compatibility(params)?;
+    chain.validate_for_parameters(params)?;
     Ok(chain)
 }
 
@@ -818,6 +1303,7 @@ impl BfvAffineCircuit {
     /// # Errors
     /// Returns [`BfvError`] when the circuit shape is invalid.
     pub fn validate(&self, params: &BfvParameters, input_count: usize) -> Result<(), BfvError> {
+        params.validate()?;
         if self.weights.is_empty() {
             return Err(BfvError::InvalidCircuit(
                 "affine circuit must have at least one output row".to_owned(),
@@ -929,13 +1415,46 @@ pub fn keygen_from_seed(
         scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
     }
 
-    Ok((
-        BfvSecretKey { s: secret },
-        BfvPublicKey { b, a },
-        BfvRelinearizationKey {
-            entries: relin_entries,
-        },
-    ))
+    let secret_key = BfvSecretKey { s: secret };
+    let public_key = BfvPublicKey { b, a };
+    let relinearization_key = BfvRelinearizationKey {
+        entries: relin_entries,
+    };
+    validate_public_key_secret_consistency(params, &secret_key, &public_key)?;
+    validate_key_switch_entry_residuals(
+        params,
+        &secret_key.s,
+        &secret_sq,
+        &relinearization_key.entries,
+        "generated relinearization key",
+    )?;
+    Ok((secret_key, public_key, relinearization_key))
+}
+
+/// Verify that a BFV public key is consistent with a secret key.
+///
+/// This is a key-owner diagnostic for key material construction. It checks
+/// that `b + a*s` decrypts as a plaintext-modulus-multiple error term within
+/// the current deterministic exact evaluator bound. It is not a public proof
+/// that a published key was honestly generated.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key material is malformed, the public key does
+/// not match `secret_key`, or the public-key residual exceeds the current error
+/// profile.
+pub fn validate_public_key_secret_consistency(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    public_key: &BfvPublicKey,
+) -> Result<(), BfvError> {
+    validate_secret_key(params, secret_key)?;
+    validate_public_key(params, public_key)?;
+    let residual = poly_add_mod(
+        params,
+        &public_key.b,
+        &poly_mul_mod(params, &public_key.a, &secret_key.s),
+    );
+    validate_plaintext_multiple_residual_bound(params, &residual, &zero_poly(params), "public key")
 }
 
 /// Encrypt a plaintext polynomial from a seed.
@@ -1027,12 +1546,12 @@ pub fn apply_galois_automorphism_ciphertext(
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
         apply_galois_automorphism_poly(params, &ciphertext.c1, galois_key.automorphism_power)?;
-    Ok(key_switch_from_transformed_secret(
+    key_switch_from_transformed_secret(
         params,
         &galois_key.entries,
         &automorphed_c0,
         &automorphed_c1,
-    ))
+    )
 }
 
 /// Apply a packed-polynomial BFV Galois automorphism through an exact RNS corridor.
@@ -1196,6 +1715,272 @@ pub fn packed_galois_slot_permutation(
         .collect()
 }
 
+/// Return the Galois automorphism power for a canonical packed-slot left rotation.
+///
+/// The registered packed slot order is the canonical odd-power CRT order used
+/// by [`encode_packed_plaintext_slots`]. Not every cyclic left rotation in that
+/// order is representable by one BFV Galois automorphism. This helper searches
+/// the deterministic automorphism surface and fails closed when the requested
+/// rotation cannot be expressed by a single public Galois key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not batchable, the requested
+/// rotation is zero, or no single Galois automorphism matches the requested
+/// packed-slot rotation.
+pub fn packed_left_rotation_galois_automorphism_power(
+    params: &BfvParameters,
+    rotation_steps: u32,
+) -> Result<u32, BfvError> {
+    let degree = params.degree();
+    let normalized_steps = normalize_packed_rotation_steps(params, rotation_steps)?;
+    let expected = (0..degree)
+        .map(|slot| (slot + normalized_steps) % degree)
+        .collect::<Vec<_>>();
+    for power_u32 in canonical_galois_automorphism_powers(params)? {
+        if packed_galois_slot_permutation(params, power_u32)? == expected {
+            return Ok(power_u32);
+        }
+    }
+    Err(BfvError::InvalidParameters(format!(
+        "packed RotateLeft by {rotation_steps} slots is not representable by one BFV Galois automorphism"
+    )))
+}
+
+/// Return every Galois automorphism power required for a packed left rotation.
+///
+/// Single-automorphism rotations return one power. Other rotations return a
+/// deterministic ascending key schedule that can be evaluated by masking and
+/// summing public Galois-key switched ciphertexts.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not batchable or the
+/// requested rotation is zero/effectively a full packed-slot cycle.
+pub fn packed_left_rotation_galois_automorphism_powers(
+    params: &BfvParameters,
+    rotation_steps: u32,
+) -> Result<Vec<u32>, BfvError> {
+    packed_left_rotation_galois_schedule(params, rotation_steps).map(|schedule| {
+        schedule
+            .into_iter()
+            .map(|(automorphism_power, _mask)| automorphism_power)
+            .collect()
+    })
+}
+
+/// Rotate a packed BFV ciphertext left with a public Galois key.
+///
+/// This applies a canonical packed-slot left rotation only when the requested
+/// `rotation_steps` maps to the supplied Galois key. Unsupported rotations fail
+/// closed instead of falling back to an unrelated permutation.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation is not representable by one Galois
+/// automorphism, the key power does not match the requested rotation, or the
+/// ciphertext/key material is malformed for the parameter set.
+pub fn rotate_packed_ciphertext_slots_left(
+    params: &BfvParameters,
+    galois_key: &BfvGaloisKey,
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    let expected_power = packed_left_rotation_galois_automorphism_power(params, rotation_steps)?;
+    if galois_key.automorphism_power != expected_power {
+        return Err(BfvError::InvalidParameters(format!(
+            "packed RotateLeft by {rotation_steps} slots requires Galois automorphism power {expected_power}, found {}",
+            galois_key.automorphism_power
+        )));
+    }
+    apply_galois_automorphism_ciphertext(params, galois_key, ciphertext)
+}
+
+/// Rotate a packed BFV ciphertext left with a public Galois-key schedule.
+///
+/// This helper supports any non-zero cyclic packed-slot rotation for the
+/// canonical CRT slot order. If the rotation is not a single automorphism, it
+/// applies every required public Galois key, masks the slots contributed by
+/// that automorphism with a packed plaintext selector, and adds the masked
+/// ciphertexts. Evaluators never need the BFV secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation is invalid, required Galois keys are
+/// missing or malformed, or ciphertext/plaintext-mask arithmetic fails.
+pub fn rotate_packed_ciphertext_slots_left_with_galois_keys(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set(params, galois_keys, "packed RotateLeft")?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let transformed = apply_galois_automorphism_ciphertext(params, galois_key, ciphertext)?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked = multiply_plaintext_polynomial(params, &transformed, &mask_plaintext)?;
+        output = Some(match output {
+            Some(accumulator) => add_ciphertexts(params, &accumulator, &masked)?,
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )
+    })
+}
+
+/// Rotate a packed BFV ciphertext left with a public Galois-key schedule
+/// through an exact RNS corridor.
+///
+/// This is the RNS exact counterpart of
+/// [`rotate_packed_ciphertext_slots_left_with_galois_keys`]. Each public
+/// Galois switch, plaintext mask product, and accumulator addition uses the
+/// guarded registered-chain bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation is invalid, required Galois keys are
+/// missing or malformed, or the RNS chain is malformed or too narrow for exact
+/// ciphertext-modulus arithmetic.
+pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set(params, galois_keys, "packed RotateLeft")?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let transformed = apply_galois_automorphism_ciphertext_rns_exact(
+            params, rns_chain, galois_key, ciphertext,
+        )?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked = multiply_plaintext_polynomial_rns_exact(
+            params,
+            rns_chain,
+            &transformed,
+            &mask_plaintext,
+        )?;
+        output = Some(match output {
+            Some(accumulator) => {
+                add_ciphertexts_rns_exact(params, rns_chain, &accumulator, &masked)?
+            }
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )
+    })
+}
+
+fn packed_left_rotation_galois_schedule(
+    params: &BfvParameters,
+    rotation_steps: u32,
+) -> Result<Vec<(u32, Vec<u64>)>, BfvError> {
+    let normalized_steps = normalize_packed_rotation_steps(params, rotation_steps)?;
+    let degree = params.degree();
+    let mut covered = vec![false; degree];
+    let mut schedule = Vec::new();
+    for automorphism_power in canonical_galois_automorphism_powers(params)? {
+        let permutation = packed_galois_slot_permutation(params, automorphism_power)?;
+        let mut mask_slots = vec![0_u64; degree];
+        let mut has_contribution = false;
+        for (output_slot, input_slot) in permutation.into_iter().enumerate() {
+            let target_slot = (output_slot + normalized_steps) % degree;
+            if input_slot == target_slot {
+                mask_slots[output_slot] = 1;
+                covered[output_slot] = true;
+                has_contribution = true;
+            }
+        }
+        if has_contribution {
+            schedule.push((automorphism_power, mask_slots));
+        }
+    }
+    if covered.iter().any(|covered| !covered) {
+        return Err(BfvError::InvalidParameters(
+            "packed RotateLeft Galois schedule does not cover every output slot".to_owned(),
+        ));
+    }
+    Ok(schedule)
+}
+
+fn normalize_packed_rotation_steps(
+    params: &BfvParameters,
+    rotation_steps: u32,
+) -> Result<usize, BfvError> {
+    packed_plaintext_root(params)?;
+    if rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "packed RotateLeft requires non-zero rotation_steps".to_owned(),
+        ));
+    }
+    let degree = params.degree();
+    let degree = u64::try_from(degree)
+        .map_err(|_| BfvError::InvalidParameters("BFV packed-slot count exceeds u64".to_owned()))?;
+    let normalized_steps = u64::from(rotation_steps) % degree;
+    if normalized_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "packed RotateLeft by a full slot cycle is not represented by a Galois key".to_owned(),
+        ));
+    }
+    usize::try_from(normalized_steps).map_err(|_| {
+        BfvError::InvalidParameters(
+            "packed RotateLeft step normalization exceeds platform usize".to_owned(),
+        )
+    })
+}
+
+fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u32>, BfvError> {
+    packed_plaintext_root(params)?;
+    let degree = params.degree();
+    let cyclotomic_order = degree.checked_mul(2).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV packed-slot cyclotomic order exceeds deterministic bounds".to_owned(),
+        )
+    })?;
+    let cyclotomic_order_u64 = u64::try_from(cyclotomic_order).map_err(|_| {
+        BfvError::InvalidParameters("BFV packed-slot cyclotomic order exceeds u64".to_owned())
+    })?;
+    let mut powers = Vec::new();
+    for power in (1..cyclotomic_order).step_by(2) {
+        let power_u64 = u64::try_from(power).map_err(|_| {
+            BfvError::InvalidParameters(
+                "BFV packed-slot Galois power exceeds deterministic bounds".to_owned(),
+            )
+        })?;
+        if gcd_u64(power_u64, cyclotomic_order_u64) == 1 {
+            powers.push(u32::try_from(power).map_err(|_| {
+                BfvError::InvalidParameters("BFV packed-slot Galois power exceeds u32".to_owned())
+            })?);
+        }
+    }
+    Ok(powers)
+}
+
 /// Derive a deterministic one-round public bootstrap refresh key from a BFV public key.
 ///
 /// The resulting key contains an encryption of zero. Adding it to any
@@ -1224,6 +2009,11 @@ pub fn bootstrap_key_from_seed(
 
 /// Derive a deterministic bounded public bootstrap refresh key from a BFV public key.
 ///
+/// The returned key contains one domain-separated encrypted-zero refresh
+/// ciphertext per authorized round. Round zero is mirrored in `zero_refresh`
+/// for first-release descriptor compatibility; evaluators must consume
+/// `round_refreshes` by index for multi-round refreshes.
+///
 /// # Errors
 /// Returns [`BfvError`] when parameter, public-key, key id, or refresh-round
 /// bounds are invalid.
@@ -1236,17 +2026,103 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
 ) -> Result<BfvBootstrapKey, BfvError> {
     let key_id = key_id.into();
     validate_bootstrap_key_metadata(&key_id, max_refresh_rounds)?;
-    let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let round_refreshes = (0..max_refresh_rounds)
+        .map(|round_index| {
+            let round_seed =
+                bootstrap_refresh_round_seed(&key_id, max_refresh_rounds, seed, round_index);
+            encrypt_from_seed(params, public_key, &[0], &round_seed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(zero_refresh) = round_refreshes.first().cloned() else {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap refresh rounds must be greater than zero".to_owned(),
+        ));
+    };
     let bootstrap_key = BfvBootstrapKey {
         key_id,
         max_refresh_rounds,
         zero_refresh,
+        round_refreshes,
     };
     validate_bootstrap_key(params, &bootstrap_key)?;
     Ok(bootstrap_key)
 }
 
-/// Refresh a ciphertext with a public bootstrap key.
+/// Verify that every public bootstrap refresh ciphertext decrypts to zero.
+///
+/// This is a key-owner diagnostic for the current encrypted-zero refresh path.
+/// Public evaluators still validate only shape and metadata; a future full
+/// bootstrapping key format should replace this with public proof-carrying key
+/// admission.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is malformed or any refresh ciphertext
+/// decrypts to a non-zero plaintext under `secret_key`.
+pub fn validate_bootstrap_key_zero_refreshes(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    bootstrap_key: &BfvBootstrapKey,
+) -> Result<(), BfvError> {
+    validate_bootstrap_key(params, bootstrap_key)?;
+    for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
+        validate_refresh_ciphertext_decrypts_to_zero(
+            params,
+            secret_key,
+            refresh,
+            &format!("bootstrap key round_refreshes[{index}]"),
+        )?;
+    }
+    Ok(())
+}
+
+/// Verify that a bootstrap refresh key matches its public deterministic transcript.
+///
+/// The current first-release bootstrap material is a bounded set of
+/// domain-separated encrypted-zero refresh ciphertexts. This check lets public
+/// admission code recompute those refresh ciphertexts from the advertised seed
+/// and public key, so malformed or seed/key-id-drifted refresh material is
+/// rejected without a BFV secret key. It is still not the full proof-carrying
+/// BFV bootstrapping key format tracked for production readiness.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or public key is malformed, or when any
+/// refresh ciphertext differs from the deterministic transcript.
+pub fn validate_bootstrap_key_zero_refresh_transcript(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    bootstrap_key: &BfvBootstrapKey,
+    seed: &[u8],
+) -> Result<(), BfvError> {
+    validate_bootstrap_key(params, bootstrap_key)?;
+    let expected = bootstrap_key_with_max_refresh_rounds_from_seed(
+        params,
+        public_key,
+        bootstrap_key.key_id.clone(),
+        bootstrap_key.max_refresh_rounds,
+        seed,
+    )?;
+    if expected.zero_refresh != bootstrap_key.zero_refresh {
+        return Err(BfvError::ShapeMismatch(
+            "bootstrap key zero_refresh does not match deterministic encrypted-zero transcript"
+                .to_owned(),
+        ));
+    }
+    for (index, (expected_refresh, actual_refresh)) in expected
+        .round_refreshes
+        .iter()
+        .zip(&bootstrap_key.round_refreshes)
+        .enumerate()
+    {
+        if expected_refresh != actual_refresh {
+            return Err(BfvError::ShapeMismatch(format!(
+                "bootstrap key round_refreshes[{index}] does not match deterministic encrypted-zero transcript"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refresh a ciphertext with round zero from a public bootstrap key.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the input or refresh key does not match the
@@ -1256,9 +2132,69 @@ pub fn bootstrap_ciphertext(
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
+    bootstrap_ciphertext_round(params, bootstrap_key, ciphertext, 0)
+}
+
+/// Refresh a ciphertext with one indexed public bootstrap-key round.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or round index does not
+/// match the parameter set.
+pub fn bootstrap_ciphertext_round(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    round_index: u16,
+) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
     validate_bootstrap_key(params, bootstrap_key)?;
-    add_ciphertexts(params, ciphertext, &bootstrap_key.zero_refresh)
+    add_ciphertexts(
+        params,
+        ciphertext,
+        bootstrap_round_refresh(bootstrap_key, round_index)?,
+    )
+}
+
+/// Refresh a ciphertext with round zero from a public bootstrap key through an
+/// exact RNS corridor.
+///
+/// This is the round-indexed encrypted-zero refresh bridge used until full BFV
+/// bootstrapping lands. The refresh is still public and secret-key free, but
+/// its ciphertext addition runs through the registered RNS exact evaluator.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or RNS chain does not
+/// match the parameter set.
+pub fn bootstrap_ciphertext_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    bootstrap_ciphertext_rns_exact_round(params, rns_chain, bootstrap_key, ciphertext, 0)
+}
+
+/// Refresh a ciphertext with one indexed public bootstrap-key round through an
+/// exact RNS corridor.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, round index, or RNS chain
+/// does not match the parameter set.
+pub fn bootstrap_ciphertext_rns_exact_round(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    round_index: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    add_ciphertexts_rns_exact(
+        params,
+        rns_chain,
+        ciphertext,
+        bootstrap_round_refresh(bootstrap_key, round_index)?,
+    )
 }
 
 /// Derive a deterministic public slot-rotation key from a BFV public key.
@@ -1285,8 +2221,58 @@ pub fn rotation_key_from_seed(
         rotation_steps,
         zero_refresh,
     };
-    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    validate_rotation_key(params, &rotation_key)?;
     Ok(rotation_key)
+}
+
+/// Verify that a public rotation-key refresh ciphertext decrypts to zero.
+///
+/// This is a key-owner diagnostic for the current outer-slot refresh path.
+/// Public evaluators still validate only shape and metadata.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is malformed or its refresh ciphertext
+/// decrypts to a non-zero plaintext under `secret_key`.
+pub fn validate_rotation_key_zero_refresh(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    rotation_key: &BfvRotationKey,
+) -> Result<(), BfvError> {
+    validate_rotation_key(params, rotation_key)?;
+    validate_refresh_ciphertext_decrypts_to_zero(
+        params,
+        secret_key,
+        &rotation_key.zero_refresh,
+        "rotation key zero_refresh",
+    )
+}
+
+/// Verify that a rotation refresh key matches its public deterministic transcript.
+///
+/// This check recomputes the encrypted-zero refresh mask from the advertised
+/// seed, public key, and rotation step count. It provides a public transcript
+/// check for the current outer-slot refresh path, while the owner-side
+/// [`validate_rotation_key_zero_refresh`] diagnostic remains the secret-key
+/// check that the ciphertext decrypts to zero.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or public key is malformed, or when the
+/// refresh ciphertext differs from the deterministic transcript.
+pub fn validate_rotation_key_zero_refresh_transcript(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    rotation_key: &BfvRotationKey,
+    seed: &[u8],
+) -> Result<(), BfvError> {
+    validate_rotation_key(params, rotation_key)?;
+    let expected = rotation_key_from_seed(params, public_key, rotation_key.rotation_steps, seed)?;
+    if expected.zero_refresh != rotation_key.zero_refresh {
+        return Err(BfvError::ShapeMismatch(
+            "rotation key zero_refresh does not match deterministic encrypted-zero transcript"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Rotate an identifier ciphertext-slot envelope left and refresh each moved slot.
@@ -1299,35 +2285,54 @@ pub fn rotation_key_from_seed(
 ///
 /// # Errors
 /// Returns [`BfvError`] when the key or any ciphertext slot does not match the
-/// parameter set.
+/// parameter set, or when the normalized rotation would be empty/full-cycle.
 pub fn rotate_ciphertext_slots_left(
     params: &BfvParameters,
     rotation_key: &BfvRotationKey,
     slots: &[BfvCiphertext],
 ) -> Result<Vec<BfvCiphertext>, BfvError> {
     params.validate()?;
-    if rotation_key.rotation_steps == 0 {
-        return Err(BfvError::InvalidParameters(
-            "rotation key steps must be greater than zero".to_owned(),
-        ));
-    }
-    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    validate_rotation_key(params, rotation_key)?;
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-    if slots.is_empty() {
-        return Ok(Vec::new());
-    }
+    let normalized_steps = rotation_steps_mod_slot_count(rotation_key.rotation_steps, slots.len())?;
 
     let mut rotated = slots.to_vec();
-    let slot_count = rotated.len();
-    rotated.rotate_left(rotation_steps_mod_slot_count(
-        rotation_key.rotation_steps,
-        slot_count,
-    )?);
+    rotated.rotate_left(normalized_steps);
     rotated
         .iter()
         .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
+        .collect()
+}
+
+/// Rotate an identifier ciphertext-slot envelope left and refresh each moved
+/// slot through an exact RNS corridor.
+///
+/// This is the RNS exact counterpart of [`rotate_ciphertext_slots_left`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the key, RNS chain, or any ciphertext slot does
+/// not match the parameter set, or when the normalized rotation would be
+/// empty/full-cycle.
+pub fn rotate_ciphertext_slots_left_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    rotation_key: &BfvRotationKey,
+    slots: &[BfvCiphertext],
+) -> Result<Vec<BfvCiphertext>, BfvError> {
+    params.validate()?;
+    validate_rotation_key(params, rotation_key)?;
+    for slot in slots {
+        validate_ciphertext(params, slot)?;
+    }
+    let normalized_steps = rotation_steps_mod_slot_count(rotation_key.rotation_steps, slots.len())?;
+
+    let mut rotated = slots.to_vec();
+    rotated.rotate_left(normalized_steps);
+    rotated
+        .iter()
+        .map(|slot| add_ciphertexts_rns_exact(params, rns_chain, slot, &rotation_key.zero_refresh))
         .collect()
 }
 
@@ -1340,16 +2345,161 @@ pub fn decrypt(
     secret_key: &BfvSecretKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<Vec<u64>, BfvError> {
+    let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
+    Ok(decode_plaintext(params, &scaled))
+}
+
+/// Decrypt a ciphertext and return the exact residual profile.
+///
+/// The profile is a secret-key diagnostic for the current deterministic
+/// plaintext-lift evaluator. It records how far each centered decrypted
+/// coefficient sits from its decoded plaintext in multiples of the plaintext
+/// modulus, plus the remaining centered-modulus headroom. It must not be
+/// interpreted as a complete BFV-RNS noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, ciphertext, or key shapes are invalid.
+pub fn decrypt_with_exact_residual_profile(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvExactResidualProfile, BfvError> {
+    let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
+    Ok(exact_residual_profile_from_scaled(params, &scaled))
+}
+
+fn decrypt_scaled_coefficients(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<Polynomial, BfvError> {
     params.validate()?;
     validate_secret_key(params, secret_key)?;
     validate_ciphertext(params, ciphertext)?;
 
-    let scaled = poly_add_mod(
+    Ok(poly_add_mod(
         params,
         &ciphertext.c0,
         &poly_mul_mod(params, &ciphertext.c1, &secret_key.s),
-    );
-    Ok(decode_plaintext(params, &scaled))
+    ))
+}
+
+fn exact_residual_profile_from_scaled(
+    params: &BfvParameters,
+    scaled: &[u64],
+) -> BfvExactResidualProfile {
+    let plaintext = decode_plaintext(params, scaled);
+    let plaintext_modulus = i128::from(params.plaintext_modulus);
+    let residual_multiples = scaled
+        .iter()
+        .zip(&plaintext)
+        .map(|(&coefficient, &plaintext)| {
+            (center_lift(coefficient, params.ciphertext_modulus) - i128::from(plaintext))
+                / plaintext_modulus
+        })
+        .collect::<Vec<_>>();
+    let max_abs_residual_multiple = residual_multiples
+        .iter()
+        .map(|multiple| multiple.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    let centered_residual_multiple_capacity = centered_residual_multiple_capacity(params);
+    let residual_multiple_headroom =
+        centered_residual_multiple_capacity.saturating_sub(max_abs_residual_multiple);
+    BfvExactResidualProfile {
+        plaintext,
+        residual_multiples,
+        max_abs_residual_multiple,
+        centered_residual_multiple_capacity,
+        residual_multiple_headroom,
+    }
+}
+
+fn centered_residual_multiple_capacity(params: &BfvParameters) -> u128 {
+    u128::from(params.ciphertext_modulus / params.plaintext_modulus / 2)
+}
+
+fn validate_refresh_ciphertext_decrypts_to_zero(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    label: &str,
+) -> Result<(), BfvError> {
+    let profile = decrypt_with_exact_residual_profile(params, secret_key, ciphertext)?;
+    if profile
+        .plaintext
+        .iter()
+        .any(|&coefficient| coefficient != 0)
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must decrypt to zero plaintext"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_key_switch_entry_residuals(
+    params: &BfvParameters,
+    source_secret: &[u64],
+    target_secret: &[u64],
+    entries: &[BfvRelinearizationKeyEntry],
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_poly(params, source_secret, "key-switch source secret")?;
+    validate_poly(params, target_secret, "key-switch target secret")?;
+    validate_key_switch_entries(params, entries, label)?;
+    let base = params.decomposition_base();
+    let mut scale = 1_u64;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        let decrypted_entry = poly_add_mod(
+            params,
+            &entry.b,
+            &poly_mul_mod(params, &entry.a, source_secret),
+        );
+        let expected_target = poly_scalar_mul_mod(params, target_secret, scale);
+        validate_plaintext_multiple_residual_bound(
+            params,
+            &decrypted_entry,
+            &expected_target,
+            &format!("{label} entry[{entry_index}]"),
+        )?;
+        scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
+    }
+    Ok(())
+}
+
+fn validate_plaintext_multiple_residual_bound(
+    params: &BfvParameters,
+    actual: &[u64],
+    expected: &[u64],
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_poly(params, actual, "actual key-switch residual polynomial")?;
+    validate_poly(params, expected, "expected key-switch residual polynomial")?;
+    let plaintext_modulus = i128::from(params.plaintext_modulus);
+    let max_error_multiple = u128::from(BFV_ERROR_MULTIPLE_BOUND);
+    for (coefficient_index, (&actual_coefficient, &expected_coefficient)) in
+        actual.iter().zip(expected).enumerate()
+    {
+        let residual = sub_mod_u64(
+            actual_coefficient,
+            expected_coefficient,
+            params.ciphertext_modulus,
+        );
+        let centered_residual = center_lift(residual, params.ciphertext_modulus);
+        if centered_residual % plaintext_modulus != 0 {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} coefficient {coefficient_index} has non-plaintext-multiple residual"
+            )));
+        }
+        let residual_multiple = centered_residual / plaintext_modulus;
+        if residual_multiple.unsigned_abs() > max_error_multiple {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} coefficient {coefficient_index} residual exceeds BFV error bound {BFV_ERROR_MULTIPLE_BOUND}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Homomorphically add two ciphertexts.
@@ -1374,9 +2524,9 @@ pub fn add_ciphertexts(
 ///
 /// This is a guarded evaluator bridge for parameter sets whose RNS chain is
 /// wide enough to reconstruct unreduced ciphertext-modulus coefficient sums
-/// before reducing back into `Z_q`. The registered RAM-LFE v1 chain is
-/// intentionally narrower than this bound and fails closed here until the full
-/// BFV-RNS evaluator lands.
+/// before reducing back into `Z_q`. The registered RAM-LFE v1 chain covers this
+/// exact-evaluator bridge, which remains separate from the future bounded-noise
+/// BFV-RNS evaluator.
 ///
 /// # Errors
 /// Returns [`BfvError`] when ciphertext shapes do not match the parameter set
@@ -1412,6 +2562,30 @@ pub fn subtract_ciphertexts(
         c0: poly_sub_mod(params, &lhs.c0, &rhs.c0),
         c1: poly_sub_mod(params, &lhs.c1, &rhs.c1),
     })
+}
+
+/// Homomorphically subtract one ciphertext from another through an exact RNS corridor.
+///
+/// This mirrors [`add_ciphertexts_rns_exact`] for evaluator paths that need
+/// subtraction while staying inside the guarded exact `Z_q` bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when ciphertext shapes do not match the parameter set
+/// or when the RNS chain is malformed or too narrow for exact `Z_q` addition.
+pub fn subtract_ciphertexts_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, lhs)?;
+    validate_ciphertext(params, rhs)?;
+    let rhs_negated = BfvCiphertext {
+        c0: poly_neg_mod(params, &rhs.c0),
+        c1: poly_neg_mod(params, &rhs.c1),
+    };
+    add_ciphertexts_rns_exact(params, rns_chain, lhs, &rhs_negated)
 }
 
 /// Add a plaintext scalar to the coefficient-0 slot of a ciphertext.
@@ -1462,6 +2636,63 @@ pub fn multiply_plain_scalar(
     })
 }
 
+/// Multiply a ciphertext by a plaintext polynomial modulo the plaintext modulus.
+///
+/// The plaintext coefficients are encoded in `Z_t[x] / (x^n + 1)` and padded
+/// to the BFV polynomial degree before multiplying both ciphertext components
+/// in the ciphertext ring. This is the public plaintext-mask primitive used by
+/// packed-slot Galois rotation schedules.
+///
+/// # Errors
+/// Returns [`BfvError`] when the plaintext or ciphertext shape is invalid.
+pub fn multiply_plaintext_polynomial(
+    params: &BfvParameters,
+    ciphertext: &BfvCiphertext,
+    plaintext: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_plaintext(params, plaintext)?;
+    let encoded = encode_plaintext(params, plaintext);
+    Ok(BfvCiphertext {
+        c0: poly_mul_mod(params, &ciphertext.c0, &encoded),
+        c1: poly_mul_mod(params, &ciphertext.c1, &encoded),
+    })
+}
+
+/// Multiply a ciphertext by a plaintext polynomial through an exact RNS corridor.
+///
+/// This is used by packed-slot public mask schedules so ciphertext-mask
+/// polynomial products follow the same guarded RNS bridge as ciphertext
+/// multiplication.
+///
+/// # Errors
+/// Returns [`BfvError`] when the plaintext, ciphertext, or RNS chain shape is
+/// invalid or too narrow for exact ciphertext-modulus multiplication.
+pub fn multiply_plaintext_polynomial_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    ciphertext: &BfvCiphertext,
+    plaintext: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_plaintext(params, plaintext)?;
+    let encoded = encode_plaintext(params, plaintext);
+    Ok(BfvCiphertext {
+        c0: rns_chain.multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+            params,
+            &ciphertext.c0,
+            &encoded,
+        )?,
+        c1: rns_chain.multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+            params,
+            &ciphertext.c1,
+            &encoded,
+        )?,
+    })
+}
+
 /// Multiply two ciphertexts and relinearize the result back to two components.
 ///
 /// # Errors
@@ -1484,13 +2715,7 @@ pub fn multiply_ciphertexts(
         &poly_mul_mod(params, &lhs.c1, &rhs.c0),
     );
     let raw_c2 = poly_mul_mod(params, &lhs.c1, &rhs.c1);
-    Ok(relinearize(
-        params,
-        relinearization_key,
-        &raw_c0,
-        &raw_c1,
-        &raw_c2,
-    ))
+    relinearize(params, relinearization_key, &raw_c0, &raw_c1, &raw_c2)
 }
 
 /// Multiply two ciphertexts through an exact RNS corridor and relinearize.
@@ -1665,6 +2890,7 @@ impl fmt::Display for BfvScalar {
 }
 
 fn validate_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Result<(), BfvError> {
+    params.validate()?;
     if plaintext.len() > params.degree() {
         return Err(BfvError::ShapeMismatch(format!(
             "plaintext length {} exceeds polynomial_degree {}",
@@ -1684,10 +2910,12 @@ fn validate_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Result<(), B
 }
 
 fn validate_secret_key(params: &BfvParameters, secret_key: &BfvSecretKey) -> Result<(), BfvError> {
+    params.validate()?;
     validate_poly(params, &secret_key.s, "secret key")
 }
 
 fn validate_public_key(params: &BfvParameters, public_key: &BfvPublicKey) -> Result<(), BfvError> {
+    params.validate()?;
     validate_poly(params, &public_key.b, "public key b")?;
     validate_poly(params, &public_key.a, "public key a")
 }
@@ -1696,12 +2924,51 @@ fn validate_relinearization_key(
     params: &BfvParameters,
     relinearization_key: &BfvRelinearizationKey,
 ) -> Result<(), BfvError> {
+    params.validate()?;
     validate_key_switch_entries(params, &relinearization_key.entries, "relinearization key")
 }
 
 fn validate_galois_key(params: &BfvParameters, galois_key: &BfvGaloisKey) -> Result<(), BfvError> {
+    params.validate()?;
     validate_galois_automorphism_power(params, galois_key.automorphism_power)?;
     validate_key_switch_entries(params, &galois_key.entries, "Galois key")
+}
+
+fn validate_rotation_key(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    if rotation_key.rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &rotation_key.zero_refresh)
+}
+
+fn validate_galois_key_set(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    label: &str,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    if galois_keys.len() > BFV_EVALUATION_KEY_MAX_GALOIS_KEYS {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} supports at most {BFV_EVALUATION_KEY_MAX_GALOIS_KEYS} Galois keys"
+        )));
+    }
+    let mut seen_powers = std::collections::BTreeSet::new();
+    for key in galois_keys {
+        if !seen_powers.insert(key.automorphism_power) {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} contains duplicate Galois key for automorphism power {}",
+                key.automorphism_power
+            )));
+        }
+        validate_galois_key(params, key)?;
+    }
+    Ok(())
 }
 
 fn validate_key_switch_entries(
@@ -1709,6 +2976,7 @@ fn validate_key_switch_entries(
     entries: &[BfvRelinearizationKeyEntry],
     label: &str,
 ) -> Result<(), BfvError> {
+    params.validate()?;
     if entries.len() != params.decomposition_digits() {
         return Err(BfvError::ShapeMismatch(format!(
             "{label} expected {} entries, found {}",
@@ -1723,10 +2991,30 @@ fn validate_key_switch_entries(
     Ok(())
 }
 
+fn validate_key_switch_inputs(
+    params: &BfvParameters,
+    entries: &[BfvRelinearizationKeyEntry],
+    c0: &[u64],
+    c1: &[u64],
+    switching_component: &[u64],
+    label: &str,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    validate_key_switch_entries(params, entries, label)?;
+    validate_poly(params, c0, "key switch c0")?;
+    validate_poly(params, c1, "key switch c1")?;
+    validate_poly(
+        params,
+        switching_component,
+        "key switch switching component",
+    )
+}
+
 fn validate_galois_automorphism_power(
     params: &BfvParameters,
     automorphism_power: u32,
 ) -> Result<usize, BfvError> {
+    params.validate()?;
     let cyclotomic_order = params.degree().checked_mul(2).ok_or_else(|| {
         BfvError::InvalidParameters(
             "BFV Galois automorphism order exceeds deterministic bounds".to_owned(),
@@ -1756,11 +3044,13 @@ fn validate_galois_automorphism_power(
 }
 
 fn validate_ciphertext(params: &BfvParameters, ciphertext: &BfvCiphertext) -> Result<(), BfvError> {
+    params.validate()?;
     validate_poly(params, &ciphertext.c0, "ciphertext c0")?;
     validate_poly(params, &ciphertext.c1, "ciphertext c1")
 }
 
 fn validate_poly(params: &BfvParameters, poly: &[u64], label: &str) -> Result<(), BfvError> {
+    params.validate()?;
     if poly.len() != params.degree() {
         return Err(BfvError::ShapeMismatch(format!(
             "{label} length {} does not match polynomial_degree {}",
@@ -1784,8 +3074,33 @@ fn validate_bootstrap_key(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
+    params.validate()?;
     validate_bootstrap_key_metadata(&bootstrap_key.key_id, bootstrap_key.max_refresh_rounds)?;
-    validate_ciphertext(params, &bootstrap_key.zero_refresh)
+    validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+    let expected_rounds = usize::from(bootstrap_key.max_refresh_rounds);
+    if bootstrap_key.round_refreshes.len() != expected_rounds {
+        return Err(BfvError::ShapeMismatch(format!(
+            "bootstrap key expected {expected_rounds} round refresh ciphertexts, found {}",
+            bootstrap_key.round_refreshes.len()
+        )));
+    }
+    for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
+        validate_ciphertext(params, refresh)?;
+        if index == 0 && refresh != &bootstrap_key.zero_refresh {
+            return Err(BfvError::ShapeMismatch(
+                "bootstrap key zero_refresh must match round_refreshes[0]".to_owned(),
+            ));
+        }
+        if bootstrap_key.round_refreshes[..index]
+            .iter()
+            .any(|prior| prior == refresh)
+        {
+            return Err(BfvError::ShapeMismatch(format!(
+                "bootstrap key contains duplicate round refresh ciphertext at index {index}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_bootstrap_key_metadata(key_id: &str, max_refresh_rounds: u16) -> Result<(), BfvError> {
@@ -1827,10 +3142,42 @@ fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
     Ok(())
 }
 
+fn bootstrap_refresh_round_seed(
+    key_id: &str,
+    max_refresh_rounds: u16,
+    seed: &[u8],
+    round_index: u16,
+) -> [u8; Hash::LENGTH] {
+    Hash::new_from_chunks(&[
+        BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+        key_id.as_bytes(),
+        &max_refresh_rounds.to_le_bytes(),
+        seed,
+        &round_index.to_le_bytes(),
+    ])
+    .into()
+}
+
+fn bootstrap_round_refresh(
+    bootstrap_key: &BfvBootstrapKey,
+    round_index: u16,
+) -> Result<&BfvCiphertext, BfvError> {
+    bootstrap_key
+        .round_refreshes
+        .get(usize::from(round_index))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(format!(
+                "bootstrap refresh round {round_index} exceeds key max_refresh_rounds {}",
+                bootstrap_key.max_refresh_rounds
+            ))
+        })
+}
+
 fn validate_bfv_rns_modulus_chain(
     chain: &BfvRnsModulusChain,
     params: &BfvParameters,
 ) -> Result<u128, BfvError> {
+    params.validate()?;
     if chain.moduli.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS {
         return Err(BfvError::InvalidParameters(format!(
             "BFV RNS modulus chain supports at most {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS} limbs"
@@ -2010,6 +3357,7 @@ fn validate_rns_polynomial(
     chain: &BfvRnsModulusChain,
     polynomial: &BfvRnsPolynomial,
 ) -> Result<(), BfvError> {
+    params.validate()?;
     if polynomial.residues_by_limb.len() != chain.moduli.len() {
         return Err(BfvError::ShapeMismatch(format!(
             "RNS polynomial expected {} limbs, found {}",
@@ -2433,10 +3781,15 @@ fn sample_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
 }
 
 fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
-    let _ = rng;
-    // TODO: Replace this exact zero-error release profile with bounded RLWE
-    // noise once the full BFV-RNS modulus-chain and bootstrapping engine lands.
-    zero_poly(params)
+    (0..params.degree())
+        .map(
+            |_| match rng.random_range(0..=(BFV_ERROR_MULTIPLE_BOUND * 2)) {
+                0 => 0,
+                1 => params.plaintext_modulus,
+                _ => params.ciphertext_modulus - params.plaintext_modulus,
+            },
+        )
+        .collect()
 }
 
 fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
@@ -2469,7 +3822,7 @@ fn relinearize(
     c0: &[u64],
     c1: &[u64],
     c2: &[u64],
-) -> BfvCiphertext {
+) -> Result<BfvCiphertext, BfvError> {
     key_switch(params, &relinearization_key.entries, c0, c1, c2)
 }
 
@@ -2479,7 +3832,15 @@ fn key_switch(
     c0: &[u64],
     c1: &[u64],
     switching_component: &[u64],
-) -> BfvCiphertext {
+) -> Result<BfvCiphertext, BfvError> {
+    validate_key_switch_inputs(
+        params,
+        entries,
+        c0,
+        c1,
+        switching_component,
+        "key switch key",
+    )?;
     let digits = decompose_poly(params, switching_component);
     let mut out0 = c0.to_vec();
     let mut out1 = c1.to_vec();
@@ -2487,7 +3848,7 @@ fn key_switch(
         out0 = poly_add_mod(params, &out0, &poly_mul_mod(params, digit_poly, &entry.b));
         out1 = poly_add_mod(params, &out1, &poly_mul_mod(params, digit_poly, &entry.a));
     }
-    BfvCiphertext { c0: out0, c1: out1 }
+    Ok(BfvCiphertext { c0: out0, c1: out1 })
 }
 
 fn key_switch_from_transformed_secret(
@@ -2495,7 +3856,7 @@ fn key_switch_from_transformed_secret(
     entries: &[BfvRelinearizationKeyEntry],
     c0: &[u64],
     transformed_c1: &[u64],
-) -> BfvCiphertext {
+) -> Result<BfvCiphertext, BfvError> {
     key_switch(params, entries, c0, &zero_poly(params), transformed_c1)
 }
 
@@ -2564,6 +3925,14 @@ fn key_switch_rns_exact(
     c1: &[u64],
     switching_component: &[u64],
 ) -> Result<BfvCiphertext, BfvError> {
+    validate_key_switch_inputs(
+        params,
+        entries,
+        c0,
+        c1,
+        switching_component,
+        "RNS exact key switch key",
+    )?;
     let digits = decompose_poly(params, switching_component);
     let mut out0 = c0.to_vec();
     let mut out1 = c1.to_vec();
@@ -3056,7 +4425,9 @@ fn rotation_steps_mod_slot_count(
     slot_count: usize,
 ) -> Result<usize, BfvError> {
     if slot_count == 0 {
-        return Ok(0);
+        return Err(BfvError::InvalidParameters(
+            "BFV rotation requires at least one ciphertext slot".to_owned(),
+        ));
     }
     let slot_count = u64::try_from(slot_count).map_err(|_| {
         BfvError::InvalidParameters(
@@ -3064,6 +4435,11 @@ fn rotation_steps_mod_slot_count(
         )
     })?;
     let normalized = u64::from(rotation_steps) % slot_count;
+    if normalized == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV rotation steps must not be a full slot cycle".to_owned(),
+        ));
+    }
     usize::try_from(normalized).map_err(|_| {
         BfvError::InvalidParameters(
             "normalized BFV rotation step exceeds platform usize".to_owned(),
@@ -3101,6 +4477,7 @@ mod tests {
 
     struct EvaluationKeyAdversarialMaterial {
         params: BfvParameters,
+        secret_key: BfvSecretKey,
         public_key: BfvPublicKey,
         relinearization_key: BfvRelinearizationKey,
         rotation_key: BfvRotationKey,
@@ -3123,6 +4500,7 @@ mod tests {
 
         EvaluationKeyAdversarialMaterial {
             params,
+            secret_key,
             public_key,
             relinearization_key,
             rotation_key,
@@ -3144,6 +4522,28 @@ mod tests {
         );
     }
 
+    fn assert_malformed_parameter_rejection(result: Result<(), BfvError>, context: &str) {
+        let err = result.expect_err(context);
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn bootstrap_key_with_rounds(
+        key_id: &str,
+        max_refresh_rounds: u16,
+        zero_refresh: &BfvCiphertext,
+        round_refreshes: Vec<BfvCiphertext>,
+    ) -> BfvBootstrapKey {
+        BfvBootstrapKey {
+            key_id: key_id.to_owned(),
+            max_refresh_rounds,
+            zero_refresh: zero_refresh.clone(),
+            round_refreshes,
+        }
+    }
+
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let params = params();
@@ -3158,6 +4558,391 @@ mod tests {
         .expect("encrypt");
         let plaintext = decrypt(&params, &secret_key, &ciphertext).expect("decrypt");
         assert_eq!(&plaintext[..4], &[13, 42, 99, 7]);
+    }
+
+    #[test]
+    fn public_key_secret_consistency_rejects_tampered_key_material() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-public-key-consistency-keygen").expect("keygen");
+
+        validate_public_key_secret_consistency(&params, &secret_key, &public_key)
+            .expect("generated public key is consistent with the secret key");
+
+        let mut non_plaintext_residue = public_key.clone();
+        non_plaintext_residue.b[0] =
+            add_mod_u64(non_plaintext_residue.b[0], 1, params.ciphertext_modulus);
+        let err =
+            validate_public_key_secret_consistency(&params, &secret_key, &non_plaintext_residue)
+                .expect_err("non-plaintext-multiple public-key residual must be rejected");
+        assert!(
+            err.to_string().contains("non-plaintext-multiple"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_residual = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        oversized_residual.b[0] = params.plaintext_modulus * 2;
+        let err = validate_public_key_secret_consistency(&params, &secret_key, &oversized_residual)
+            .expect_err("oversized public-key residual must be rejected");
+        assert!(
+            err.to_string().contains("BFV error bound"),
+            "unexpected error: {err}"
+        );
+
+        let (wrong_secret, _, _) =
+            keygen_from_seed(&params, b"bfv-public-key-consistency-wrong-secret")
+                .expect("wrong keygen");
+        let err = validate_public_key_secret_consistency(&params, &wrong_secret, &public_key)
+            .expect_err("public key must reject an unrelated secret key");
+        assert!(
+            err.to_string().contains("residual"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn refresh_key_transcripts_reject_tampered_public_material() {
+        let material = evaluation_key_adversarial_material();
+
+        validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &material.rotation_key,
+            b"bfv-eval-key-rotation",
+        )
+        .expect("generated rotation key matches its deterministic transcript");
+
+        let err = validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &material.rotation_key,
+            b"bfv-eval-key-rotation-wrong-seed",
+        )
+        .expect_err("wrong rotation transcript seed must be rejected");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_rotation = material.rotation_key.clone();
+        tampered_rotation.zero_refresh.c0[0] = add_mod_u64(
+            tampered_rotation.zero_refresh.c0[0],
+            1,
+            material.params.ciphertext_modulus,
+        );
+        let err = validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &tampered_rotation,
+            b"bfv-eval-key-rotation",
+        )
+        .expect_err("tampered rotation refresh must be rejected by transcript validation");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let bootstrap_seed = b"bfv-refresh-transcript-bootstrap";
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+            bootstrap_seed,
+        )
+        .expect("generated bootstrap key matches its deterministic transcript");
+
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+            b"bfv-refresh-transcript-wrong-seed",
+        )
+        .expect_err("wrong bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_bootstrap_round = bootstrap_key.clone();
+        tampered_bootstrap_round.round_refreshes[1].c1[0] = add_mod_u64(
+            tampered_bootstrap_round.round_refreshes[1].c1[0],
+            1,
+            material.params.ciphertext_modulus,
+        );
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &tampered_bootstrap_round,
+            bootstrap_seed,
+        )
+        .expect_err("tampered bootstrap round refresh must be rejected");
+        assert!(
+            err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+
+        let mut drifted_key_id = bootstrap_key;
+        drifted_key_id.key_id.push_str("-drift");
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &drifted_key_id,
+            bootstrap_seed,
+        )
+        .expect_err("bootstrap key-id drift must change the transcript");
+        assert!(
+            err.to_string().contains("zero_refresh"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn evaluation_key_bundle_refresh_transcripts_cover_all_public_masks() {
+        let material = evaluation_key_adversarial_material();
+        let bootstrap_seed = b"bfv-bundle-refresh-transcript-bootstrap";
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+
+        bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("bundle refresh transcripts match generated public masks");
+        let transcript_digest = bundle
+            .refresh_transcript_digest(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("bundle refresh transcript digest");
+        let transcript_material = BfvRefreshTranscriptDigestMaterial {
+            params: material.params,
+            public_key: material.public_key.clone(),
+            evaluation_key_digest: bundle
+                .digest(&material.params)
+                .expect("evaluation-key digest"),
+            rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial {
+                rotation_steps: material.rotation_key.rotation_steps,
+                seed: b"bfv-eval-key-rotation".to_vec(),
+            }],
+            bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: "bootstrap-refresh-key".to_owned(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            }),
+        };
+        let transcript_material_bytes =
+            norito::to_bytes(&transcript_material).expect("encode transcript digest material");
+        let legacy_transcript_digest = Hash::new(
+            [
+                BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+                transcript_material_bytes.as_slice(),
+            ]
+            .concat(),
+        );
+        assert_eq!(transcript_digest, legacy_transcript_digest);
+
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &[],
+                bootstrap_transcript,
+            )
+            .expect_err("bundle transcript validation must reject missing rotation seeds");
+        assert!(
+            err.to_string().contains("expected 1 rotation"),
+            "unexpected error: {err}"
+        );
+
+        let wrong_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps + 1,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &wrong_rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("bundle transcript validation must reject unmatched rotation seeds");
+        assert!(
+            err.to_string().contains("missing rotation key"),
+            "unexpected error: {err}"
+        );
+
+        let wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: b"bfv-bundle-refresh-transcript-wrong-bootstrap",
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                wrong_bootstrap_seed,
+            )
+            .expect_err("bundle transcript validation must reject wrong bootstrap seed");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let drifted_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key-drift",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                drifted_bootstrap_metadata,
+            )
+            .expect_err("bundle transcript validation must reject bootstrap metadata drift");
+        assert!(
+            err.to_string().contains("metadata"),
+            "unexpected error: {err}"
+        );
+
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                None,
+            )
+            .expect_err("bundle transcript validation must require bootstrap seed");
+        assert!(
+            err.to_string().contains("bootstrap key"),
+            "unexpected error: {err}"
+        );
+
+        let bundle_without_bootstrap = BfvEvaluationKeyBundle {
+            bootstrap_key: None,
+            ..bundle
+        };
+        let err = bundle_without_bootstrap
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("extra bootstrap transcript must be rejected");
+        assert!(
+            err.to_string().contains("no bootstrap key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn exact_residual_profile_reports_centered_plaintext_multiple_decomposition() {
+        let params = params();
+        let (secret_key, _, _) =
+            keygen_from_seed(&params, b"bfv-residual-profile-keygen").expect("keygen");
+        let mut c0 = zero_poly(&params);
+        c0[0] = 13 + params.plaintext_modulus * 3;
+        c0[1] = params.ciphertext_modulus - (params.plaintext_modulus * 2 - 42);
+        let ciphertext = BfvCiphertext {
+            c0,
+            c1: zero_poly(&params),
+        };
+
+        let profile = decrypt_with_exact_residual_profile(&params, &secret_key, &ciphertext)
+            .expect("residual profile");
+
+        assert_eq!(profile.plaintext[0], 13);
+        assert_eq!(profile.plaintext[1], 42);
+        assert_eq!(
+            decrypt(&params, &secret_key, &ciphertext).expect("decrypt"),
+            profile.plaintext
+        );
+        assert_eq!(profile.residual_multiples[0], 3);
+        assert_eq!(profile.residual_multiples[1], -2);
+        assert_eq!(profile.max_abs_residual_multiple, 3);
+        assert_eq!(
+            profile.centered_residual_multiple_capacity,
+            centered_residual_multiple_capacity(&params)
+        );
+        assert_eq!(
+            profile.residual_multiple_headroom,
+            centered_residual_multiple_capacity(&params) - 3
+        );
+
+        for (index, (&coefficient, &plaintext)) in
+            ciphertext.c0.iter().zip(&profile.plaintext).enumerate()
+        {
+            assert_eq!(
+                center_lift(coefficient, params.ciphertext_modulus),
+                i128::from(plaintext)
+                    + i128::from(params.plaintext_modulus) * profile.residual_multiples[index]
+            );
+        }
+    }
+
+    #[test]
+    fn error_sampler_uses_plaintext_modulus_multiples() {
+        let params = params();
+        let mut rng = derive_rng(b"bfv-error-sampler", b"plaintext-multiple");
+        let error = sample_error_poly(&params, &mut rng);
+
+        assert!(error.iter().any(|&coefficient| coefficient != 0));
+        for coefficient in error {
+            assert!(
+                [
+                    0,
+                    params.plaintext_modulus,
+                    params.ciphertext_modulus - params.plaintext_modulus
+                ]
+                .contains(&coefficient),
+                "unexpected error coefficient {coefficient}"
+            );
+            assert_eq!(coefficient % params.plaintext_modulus, 0);
+        }
     }
 
     #[test]
@@ -3202,6 +4987,241 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_refresh_uses_round_specific_public_material() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-round-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &[91],
+            b"bfv-bootstrap-round-input-ciphertext",
+        )
+        .expect("encrypt");
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            2,
+            b"bfv-bootstrap-round-refresh",
+        )
+        .expect("bootstrap key");
+
+        assert_eq!(bootstrap_key.round_refreshes.len(), 2);
+        assert_eq!(bootstrap_key.zero_refresh, bootstrap_key.round_refreshes[0]);
+        assert_ne!(
+            bootstrap_key.round_refreshes[0], bootstrap_key.round_refreshes[1],
+            "bootstrap round refresh material must be domain-separated"
+        );
+
+        let first = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 0)
+            .expect("first refresh");
+        let second =
+            bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 1).expect("second refresh");
+        let repeated_first = bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 0)
+            .expect("repeated first refresh");
+        let err = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 2)
+            .expect_err("out-of-range bootstrap rounds must be rejected");
+
+        assert_ne!(second, repeated_first);
+        assert!(err.to_string().contains("round 2"));
+        assert_eq!(
+            decrypt(&params, &secret_key, &second).expect("decrypt second refresh")[0],
+            91
+        );
+    }
+
+    #[test]
+    fn refresh_key_zero_plaintext_validators_reject_nonzero_masks() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-refresh-zero-keygen").expect("keygen");
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-refresh-zero-rotation")
+                .expect("rotation key");
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            2,
+            b"bfv-refresh-zero-bootstrap",
+        )
+        .expect("bootstrap key");
+
+        validate_rotation_key_zero_refresh(&params, &secret_key, &rotation_key)
+            .expect("generated rotation refresh decrypts to zero");
+        validate_bootstrap_key_zero_refreshes(&params, &secret_key, &bootstrap_key)
+            .expect("generated bootstrap refreshes decrypt to zero");
+
+        let mut nonzero_rotation = rotation_key;
+        nonzero_rotation.zero_refresh =
+            add_plain_scalar(&params, &nonzero_rotation.zero_refresh, 1)
+                .expect("add non-zero plaintext to rotation refresh");
+        let err = validate_rotation_key_zero_refresh(&params, &secret_key, &nonzero_rotation)
+            .expect_err("non-zero rotation refresh must be rejected");
+        assert!(
+            err.to_string().contains("rotation key zero_refresh"),
+            "unexpected error: {err}"
+        );
+
+        let mut nonzero_bootstrap = bootstrap_key;
+        nonzero_bootstrap.round_refreshes[1] =
+            add_plain_scalar(&params, &nonzero_bootstrap.round_refreshes[1], 1)
+                .expect("add non-zero plaintext to bootstrap refresh");
+        let err = validate_bootstrap_key_zero_refreshes(&params, &secret_key, &nonzero_bootstrap)
+            .expect_err("non-zero bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn evaluation_key_bundle_zero_refresh_diagnostics_cover_all_public_masks() {
+        let material = evaluation_key_adversarial_material();
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            2,
+            b"bfv-bundle-zero-refresh-bootstrap",
+        )
+        .expect("bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: Some(bootstrap_key),
+        };
+
+        bundle
+            .validate_zero_refreshes(&material.params, &material.secret_key)
+            .expect("generated bundle refreshes decrypt to zero");
+
+        let mut nonzero_rotation = bundle.clone();
+        nonzero_rotation.rotation_keys[0].zero_refresh = add_plain_scalar(
+            &material.params,
+            &nonzero_rotation.rotation_keys[0].zero_refresh,
+            1,
+        )
+        .expect("add non-zero plaintext to rotation refresh");
+        let err = nonzero_rotation
+            .validate_zero_refreshes(&material.params, &material.secret_key)
+            .expect_err("non-zero bundle rotation refresh must be rejected");
+        assert!(
+            err.to_string().contains("rotation_keys[0]"),
+            "unexpected error: {err}"
+        );
+
+        let mut nonzero_bootstrap = bundle;
+        let bootstrap_key = nonzero_bootstrap
+            .bootstrap_key
+            .as_mut()
+            .expect("bundle carries bootstrap key");
+        bootstrap_key.round_refreshes[1] =
+            add_plain_scalar(&material.params, &bootstrap_key.round_refreshes[1], 1)
+                .expect("add non-zero plaintext to bootstrap refresh");
+        let err = nonzero_bootstrap
+            .validate_zero_refreshes(&material.params, &material.secret_key)
+            .expect_err("non-zero bundle bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn evaluation_key_bundle_secret_consistency_rejects_tampered_key_switch_entries() {
+        let material = evaluation_key_adversarial_material();
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: None,
+        };
+
+        bundle
+            .validate_secret_key_consistency(&material.params, &material.secret_key)
+            .expect("generated evaluation-key bundle is consistent with the secret key");
+
+        let mut non_plaintext_residue = bundle.clone();
+        non_plaintext_residue.relinearization_key.entries[0].b[0] = add_mod_u64(
+            non_plaintext_residue.relinearization_key.entries[0].b[0],
+            1,
+            material.params.ciphertext_modulus,
+        );
+        let err = non_plaintext_residue
+            .validate_secret_key_consistency(&material.params, &material.secret_key)
+            .expect_err("non-plaintext-multiple relin residue must be rejected");
+        assert!(
+            err.to_string().contains("non-plaintext-multiple"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_error = bundle.clone();
+        oversized_error.relinearization_key.entries[0].b[0] = add_mod_u64(
+            oversized_error.relinearization_key.entries[0].b[0],
+            material.params.plaintext_modulus * 2,
+            material.params.ciphertext_modulus,
+        );
+        let err = oversized_error
+            .validate_secret_key_consistency(&material.params, &material.secret_key)
+            .expect_err("oversized relin error multiple must be rejected");
+        assert!(
+            err.to_string().contains("BFV error bound"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_galois = bundle;
+        tampered_galois.galois_keys[0].entries[0].b[0] = add_mod_u64(
+            tampered_galois.galois_keys[0].entries[0].b[0],
+            1,
+            material.params.ciphertext_modulus,
+        );
+        let err = tampered_galois
+            .validate_secret_key_consistency(&material.params, &material.secret_key)
+            .expect_err("tampered Galois entry must be rejected");
+        assert!(
+            err.to_string().contains("galois_keys[0]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_refresh_rns_exact_matches_scalar_refresh() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-rns-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &[77],
+            b"bfv-bootstrap-rns-input-ciphertext",
+        )
+        .expect("encrypt");
+        let bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            b"bfv-bootstrap-rns-zero-refresh",
+        )
+        .expect("bootstrap key");
+
+        let scalar = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 0)
+            .expect("scalar refresh");
+        let rns =
+            bootstrap_ciphertext_rns_exact_round(&params, &chain, &bootstrap_key, &ciphertext, 0)
+                .expect("RNS exact refresh");
+
+        assert_eq!(rns, scalar);
+        assert_eq!(
+            decrypt(&params, &secret_key, &rns).expect("decrypt RNS refresh")[0],
+            77
+        );
+    }
+
+    #[test]
     fn rotation_key_rotates_and_refreshes_ciphertext_slots() {
         let params = params();
         let (secret_key, public_key, _) =
@@ -3232,6 +5252,42 @@ mod tests {
             vec![slots[1].clone(), slots[2].clone(), slots[0].clone()]
         );
         let plaintexts = rotated
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
+            .collect::<Vec<_>>();
+        assert_eq!(plaintexts, vec![20, 30, 10]);
+    }
+
+    #[test]
+    fn rotation_key_rns_exact_matches_scalar_refresh() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-rns-keygen").expect("keygen");
+        let slots = [10_u64, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rotation-rns-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-rotation-rns-zero-refresh")
+                .expect("rotation key");
+
+        let scalar =
+            rotate_ciphertext_slots_left(&params, &rotation_key, &slots).expect("scalar rotate");
+        let rns = rotate_ciphertext_slots_left_rns_exact(&params, &chain, &rotation_key, &slots)
+            .expect("RNS exact rotate");
+
+        assert_eq!(rns, scalar);
+        let plaintexts = rns
             .iter()
             .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
             .collect::<Vec<_>>();
@@ -3276,6 +5332,48 @@ mod tests {
             .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
             .collect::<Vec<_>>();
         assert_eq!(plaintexts, vec![40, 50, 60, 70, 10, 20, 30]);
+    }
+
+    #[test]
+    fn rotation_key_rejects_empty_and_full_cycle_slot_rotations() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-full-cycle-keygen").expect("keygen");
+        let slots = [10_u64, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rotation-full-cycle-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let full_cycle_key = rotation_key_from_seed(
+            &params,
+            &public_key,
+            u32::try_from(slots.len()).expect("slot count fits u32"),
+            b"bfv-rotation-full-cycle-refresh",
+        )
+        .expect("rotation key");
+
+        let err = rotate_ciphertext_slots_left(&params, &full_cycle_key, &slots)
+            .expect_err("full-cycle outer-slot rotations must be rejected");
+        assert!(err.to_string().contains("full slot cycle"));
+        let err = rotate_ciphertext_slots_left_rns_exact(&params, &chain, &full_cycle_key, &slots)
+            .expect_err("RNS full-cycle outer-slot rotations must be rejected");
+        assert!(err.to_string().contains("full slot cycle"));
+
+        let non_empty_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-rotation-empty-refresh")
+                .expect("rotation key");
+        let err = rotate_ciphertext_slots_left(&params, &non_empty_key, &[])
+            .expect_err("empty outer-slot rotations must be rejected");
+        assert!(err.to_string().contains("at least one ciphertext slot"));
     }
 
     #[test]
@@ -3418,6 +5516,268 @@ mod tests {
     }
 
     #[test]
+    fn packed_rotate_left_uses_matching_galois_key_when_representable() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-packed-rotate-keygen").expect("keygen");
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let power = packed_left_rotation_galois_automorphism_power(&params, half_rotation)
+            .expect("half rotation must be representable");
+        assert_eq!(power, u32::from(params.polynomial_degree) + 1);
+        assert_eq!(
+            packed_left_rotation_galois_automorphism_powers(&params, half_rotation)
+                .expect("half rotation schedule"),
+            vec![power]
+        );
+
+        let slots = (0..params.degree())
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-rotate-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+        let galois_key =
+            galois_key_from_seed(&params, &secret_key, power, b"bfv-packed-rotate-key")
+                .expect("Galois key");
+
+        let rotated =
+            rotate_packed_ciphertext_slots_left(&params, &galois_key, &ciphertext, half_rotation)
+                .expect("rotate packed slots");
+        let rotated_plaintext =
+            decrypt(&params, &secret_key, &rotated).expect("decrypt packed rotation");
+        let rotated_slots =
+            decode_packed_plaintext_slots(&params, &rotated_plaintext).expect("decode slots");
+        let mut expected_slots = slots;
+        expected_slots.rotate_left(usize::try_from(half_rotation).expect("rotation fits usize"));
+        assert_eq!(rotated_slots, expected_slots);
+    }
+
+    #[test]
+    fn packed_rotate_left_with_galois_schedule_supports_one_step_rotation() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-packed-arbitrary-rotate-keygen").expect("keygen");
+        let powers = packed_left_rotation_galois_automorphism_powers(&params, 1)
+            .expect("one-step packed rotation schedule");
+        assert!(
+            powers.len() > 1,
+            "one-step canonical packed rotation must use a mask schedule"
+        );
+        let galois_keys = powers
+            .iter()
+            .map(|&power| {
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    power,
+                    b"bfv-packed-arbitrary-rotate-key",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let slots = (0..params.degree())
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-arbitrary-rotate-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+
+        let rotated = rotate_packed_ciphertext_slots_left_with_galois_keys(
+            &params,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect("rotate packed slots with schedule");
+        let rns_rotated = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+            &params,
+            &chain,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect("rotate packed slots with RNS exact schedule");
+        assert_eq!(rns_rotated, rotated);
+        let rotated_plaintext =
+            decrypt(&params, &secret_key, &rns_rotated).expect("decrypt packed rotation");
+        let rotated_slots =
+            decode_packed_plaintext_slots(&params, &rotated_plaintext).expect("decode slots");
+        let mut expected_slots = slots;
+        expected_slots.rotate_left(1);
+        assert_eq!(rotated_slots, expected_slots);
+    }
+
+    #[test]
+    fn packed_rotate_left_with_galois_schedule_rejects_missing_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-packed-arbitrary-rotate-missing-keygen")
+                .expect("keygen");
+        let powers = packed_left_rotation_galois_automorphism_powers(&params, 1)
+            .expect("one-step packed rotation schedule");
+        let missing_power = powers[0];
+        let galois_keys = powers
+            .iter()
+            .skip(1)
+            .map(|&power| {
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    power,
+                    b"bfv-packed-arbitrary-rotate-missing-key",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let packed_plaintext = encode_packed_plaintext_slots(&params, &vec![0; params.degree()])
+            .expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-arbitrary-rotate-missing-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys(
+            &params,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect_err("missing schedule key must fail closed");
+        assert!(
+            err.to_string()
+                .contains(&format!("automorphism power {missing_power}")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn packed_rotate_left_rejects_duplicate_and_malformed_extra_galois_keys() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-packed-rotate-key-set-keygen").expect("keygen");
+        let one_step_powers =
+            packed_left_rotation_galois_automorphism_powers(&params, 1).expect("one-step schedule");
+        let galois_keys = one_step_powers
+            .iter()
+            .map(|&power| {
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    power,
+                    b"bfv-packed-rotate-key-set-key",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let packed_plaintext = encode_packed_plaintext_slots(&params, &vec![0; params.degree()])
+            .expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-rotate-key-set-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+
+        let mut duplicate_keys = galois_keys.clone();
+        duplicate_keys.push(galois_keys[0].clone());
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys(
+            &params,
+            &duplicate_keys,
+            &ciphertext,
+            1,
+        )
+        .expect_err("duplicate raw packed-rotation Galois keys must fail closed");
+        assert!(
+            err.to_string().contains("duplicate Galois key"),
+            "unexpected error: {err}"
+        );
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+            &params,
+            &chain,
+            &duplicate_keys,
+            &ciphertext,
+            1,
+        )
+        .expect_err("duplicate raw RNS packed-rotation Galois keys must fail closed");
+        assert!(
+            err.to_string().contains("duplicate Galois key"),
+            "unexpected error: {err}"
+        );
+
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let half_power = packed_left_rotation_galois_automorphism_power(&params, half_rotation)
+            .expect("half rotation is one Galois automorphism");
+        let half_key = galois_key_from_seed(
+            &params,
+            &secret_key,
+            half_power,
+            b"bfv-packed-rotate-key-set-half-key",
+        )
+        .expect("half-rotation Galois key");
+        let mut malformed_extra_key = galois_key_from_seed(
+            &params,
+            &secret_key,
+            3,
+            b"bfv-packed-rotate-malformed-extra",
+        )
+        .expect("extra Galois key");
+        malformed_extra_key.entries.pop();
+        let malformed_extra_keys = vec![half_key, malformed_extra_key];
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys(
+            &params,
+            &malformed_extra_keys,
+            &ciphertext,
+            half_rotation,
+        )
+        .expect_err("malformed extra Galois keys must fail closed");
+        assert!(
+            err.to_string().contains("Galois key expected"),
+            "unexpected error: {err}"
+        );
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+            &params,
+            &chain,
+            &malformed_extra_keys,
+            &ciphertext,
+            half_rotation,
+        )
+        .expect_err("malformed extra RNS Galois keys must fail closed");
+        assert!(
+            err.to_string().contains("Galois key expected"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn packed_rotate_left_rejects_unrepresentable_rotation() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let err = packed_left_rotation_galois_automorphism_power(&params, 1)
+            .expect_err("one-step packed rotation is not one automorphism in canonical order");
+        assert!(
+            err.to_string().contains("not representable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn galois_keys_reject_noncanonical_powers_and_malformed_entries() {
         let params = params();
         let (secret_key, public_key, _) =
@@ -3443,7 +5803,139 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_key_bundle_rejects_adversarial_rotation_and_bootstrap_metadata() {
+    fn key_switch_primitives_reject_truncated_entries_before_digit_zip() {
+        let params = params();
+        let (_, _, relinearization_key) =
+            keygen_from_seed(&params, b"bfv-key-switch-truncated-keygen").expect("keygen");
+        let mut truncated_entries = relinearization_key.entries.clone();
+        truncated_entries.pop().expect("sample key has entries");
+        let zero = zero_poly(&params);
+
+        let err = key_switch(&params, &truncated_entries, &zero, &zero, &zero)
+            .expect_err("scalar key switching must reject truncated entries before zipping digits");
+        assert!(
+            err.to_string().contains("key switch key expected"),
+            "unexpected error: {err}"
+        );
+
+        let rns_params = rns_exact_params();
+        let rns_chain = rns_exact_chain();
+        let (_, _, rns_relinearization_key) =
+            keygen_from_seed(&rns_params, b"bfv-rns-key-switch-truncated-keygen")
+                .expect("RNS keygen");
+        let mut rns_truncated_entries = rns_relinearization_key.entries.clone();
+        rns_truncated_entries
+            .pop()
+            .expect("sample RNS key has entries");
+        let rns_zero = zero_poly(&rns_params);
+
+        let err = key_switch_rns_exact(
+            &rns_params,
+            &rns_chain,
+            &rns_truncated_entries,
+            &rns_zero,
+            &rns_zero,
+            &rns_zero,
+        )
+        .expect_err("RNS key switching must reject truncated entries before zipping digits");
+        assert!(
+            err.to_string()
+                .contains("RNS exact key switch key expected"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn shared_key_validators_reject_malformed_parameters_first() {
+        let material = evaluation_key_adversarial_material();
+        let mut invalid_params = material.params;
+        invalid_params.decomposition_base_log = 0;
+        let bootstrap_key = bootstrap_key_with_rounds(
+            "bootstrap-refresh-key",
+            BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+            &material.zero_refresh,
+            vec![material.zero_refresh.clone()],
+        );
+
+        assert_malformed_parameter_rejection(
+            validate_secret_key(&invalid_params, &material.secret_key),
+            "secret-key validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_public_key(&invalid_params, &material.public_key),
+            "public-key validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_rotation_key(&invalid_params, &material.rotation_key),
+            "rotation-key validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_relinearization_key(&invalid_params, &material.relinearization_key),
+            "relinearization-key validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_galois_key(&invalid_params, &material.galois_key),
+            "Galois-key validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_key_switch_entries(
+                &invalid_params,
+                &material.relinearization_key.entries,
+                "direct key-switch entries",
+            ),
+            "key-switch entry validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_bootstrap_key(&invalid_params, &bootstrap_key),
+            "bootstrap-key validation must reject malformed parameters",
+        );
+    }
+
+    #[test]
+    fn bfv_shape_validators_reject_malformed_parameters_first() {
+        let material = evaluation_key_adversarial_material();
+        let mut invalid_params = material.params;
+        invalid_params.decomposition_base_log = 0;
+        let affine_circuit = BfvAffineCircuit {
+            weights: vec![vec![1]],
+            bias: vec![0],
+        };
+        let rns_polynomial = BfvRnsPolynomial {
+            residues_by_limb: Vec::new(),
+        };
+
+        assert_malformed_parameter_rejection(
+            validate_plaintext(&invalid_params, &[0]),
+            "plaintext validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_ciphertext(&invalid_params, &material.zero_refresh),
+            "ciphertext validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_poly(
+                &invalid_params,
+                &material.zero_refresh.c0,
+                "direct polynomial",
+            ),
+            "polynomial validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_galois_automorphism_power(&invalid_params, 3).map(|_| ()),
+            "Galois automorphism validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            affine_circuit.validate(&invalid_params, 1),
+            "affine circuit validation must reject malformed parameters",
+        );
+        assert_malformed_parameter_rejection(
+            validate_rns_polynomial(&invalid_params, &rns_exact_chain(), &rns_polynomial),
+            "RNS polynomial validation must reject malformed parameters",
+        );
+    }
+
+    #[test]
+    fn evaluation_key_bundle_rejects_adversarial_rotation_metadata() {
         let material = evaluation_key_adversarial_material();
         let duplicate_rotation = BfvEvaluationKeyBundle {
             relinearization_key: material.relinearization_key.clone(),
@@ -3488,16 +5980,21 @@ mod tests {
             "ciphertext c0 length",
             "malformed rotation refresh ciphertext must be rejected",
         );
+    }
 
+    #[test]
+    fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
+        let material = evaluation_key_adversarial_material();
         let blank_bootstrap_key = BfvEvaluationKeyBundle {
             relinearization_key: material.relinearization_key.clone(),
             rotation_keys: Vec::new(),
             galois_keys: Vec::new(),
-            bootstrap_key: Some(BfvBootstrapKey {
-                key_id: "   ".to_owned(),
-                max_refresh_rounds: BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
-                zero_refresh: material.zero_refresh.clone(),
-            }),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "   ",
+                BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone()],
+            )),
         };
         assert_evaluation_key_bundle_error_contains(
             &material.params,
@@ -3510,22 +6007,24 @@ mod tests {
             relinearization_key: material.relinearization_key.clone(),
             rotation_keys: Vec::new(),
             galois_keys: Vec::new(),
-            bootstrap_key: Some(BfvBootstrapKey {
-                key_id: " bootstrap-refresh-key".to_owned(),
-                max_refresh_rounds: BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
-                zero_refresh: material.zero_refresh.clone(),
-            }),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                " bootstrap-refresh-key",
+                BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone()],
+            )),
         };
         let err = padded_bootstrap_key
             .digest(&material.params)
             .expect_err("padded bootstrap key ids must not receive digests");
         assert!(err.to_string().contains("canonical"));
 
-        let control_bootstrap_key = BfvBootstrapKey {
-            key_id: "bootstrap\nkey".to_owned(),
-            max_refresh_rounds: BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
-            zero_refresh: material.zero_refresh.clone(),
-        };
+        let control_bootstrap_key = bootstrap_key_with_rounds(
+            "bootstrap\nkey",
+            BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+            &material.zero_refresh,
+            vec![material.zero_refresh.clone()],
+        );
         let err = bootstrap_ciphertext(
             &material.params,
             &control_bootstrap_key,
@@ -3542,16 +6041,21 @@ mod tests {
         )
         .expect_err("oversized bootstrap key ids must be rejected");
         assert!(err.to_string().contains("maximum supported length"));
+    }
 
+    #[test]
+    fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
+        let material = evaluation_key_adversarial_material();
         let zero_round_key = BfvEvaluationKeyBundle {
             relinearization_key: material.relinearization_key.clone(),
             rotation_keys: Vec::new(),
             galois_keys: Vec::new(),
-            bootstrap_key: Some(BfvBootstrapKey {
-                key_id: "bootstrap-refresh-key".to_owned(),
-                max_refresh_rounds: 0,
-                zero_refresh: material.zero_refresh.clone(),
-            }),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "bootstrap-refresh-key",
+                0,
+                &material.zero_refresh,
+                Vec::new(),
+            )),
         };
         assert_evaluation_key_bundle_error_contains(
             &material.params,
@@ -3564,11 +6068,57 @@ mod tests {
             &material.params,
             &material.public_key,
             "bootstrap-refresh-key",
+            0,
+            b"bfv-zero-bootstrap-refresh-rounds",
+        )
+        .expect_err("zero bootstrap refresh-round capacity must be rejected");
+        assert!(err.to_string().contains("greater than zero"));
+
+        let err = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
             BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS + 1,
             b"bfv-oversized-bootstrap-refresh-rounds",
         )
         .expect_err("oversized bootstrap refresh-round capacity must be rejected");
         assert!(err.to_string().contains("supported limit"));
+
+        let missing_round_refresh = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "bootstrap-refresh-key",
+                2,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone()],
+            )),
+        };
+        assert_evaluation_key_bundle_error_contains(
+            &material.params,
+            &missing_round_refresh,
+            "round refresh ciphertexts",
+            "missing per-round bootstrap refresh material must be rejected",
+        );
+
+        let duplicate_round_refresh = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "bootstrap-refresh-key",
+                2,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone(), material.zero_refresh.clone()],
+            )),
+        };
+        assert_evaluation_key_bundle_error_contains(
+            &material.params,
+            &duplicate_round_refresh,
+            "duplicate round refresh",
+            "duplicate per-round bootstrap refresh material must be rejected",
+        );
     }
 
     #[test]
@@ -3899,6 +6449,48 @@ mod tests {
     }
 
     #[test]
+    fn homomorphic_plaintext_polynomial_multiplication_matches_packed_mask() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-packed-mask-keygen").expect("keygen");
+        let slots = (0..params.degree())
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let mask_slots = (0..params.degree())
+            .map(|index| u64::from(index % 3 == 0))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let mask_plaintext =
+            encode_packed_plaintext_slots(&params, &mask_slots).expect("encode packed mask");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-mask-input",
+        )
+        .expect("encrypt packed input");
+
+        let masked = multiply_plaintext_polynomial(&params, &ciphertext, &mask_plaintext)
+            .expect("multiply by packed plaintext mask");
+        let rns_masked =
+            multiply_plaintext_polynomial_rns_exact(&params, &chain, &ciphertext, &mask_plaintext)
+                .expect("multiply by packed plaintext mask through RNS");
+        assert_eq!(rns_masked, masked);
+        let masked_plaintext =
+            decrypt(&params, &secret_key, &rns_masked).expect("decrypt packed mask output");
+        let masked_slots =
+            decode_packed_plaintext_slots(&params, &masked_plaintext).expect("decode slots");
+        let expected_slots = slots
+            .into_iter()
+            .zip(mask_slots)
+            .map(|(slot, mask)| slot * mask)
+            .collect::<Vec<_>>();
+        assert_eq!(masked_slots, expected_slots);
+    }
+
+    #[test]
     fn homomorphic_ciphertext_multiplication_matches_plaintext() {
         let params = params();
         let (secret_key, public_key, relin_key) =
@@ -4069,6 +6661,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_parameter_sets_without_error_profile_headroom() {
+        let params = BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 512,
+            plaintext_modulus: 256,
+            decomposition_base_log: 8,
+        };
+        let err = params
+            .validate()
+            .expect_err("q = 2t collapses positive and negative error representatives");
+        assert!(
+            err.to_string().contains("BFV error bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = keygen_from_seed(&params, b"bfv-error-headroom-keygen")
+            .expect_err("key generation must reject insufficient error headroom");
+        assert!(
+            err.to_string().contains("BFV error bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn registered_rns_modulus_chain_covers_ram_lfe_profile() {
         let params = ram_lfe_bfv_parameters_v1();
         let chain =
@@ -4077,15 +6693,22 @@ mod tests {
         assert_eq!(chain.moduli, RAM_LFE_BFV_RNS_MODULI_V1);
         assert_eq!(
             chain.product().expect("RNS chain product fits"),
-            72_339_115_408_190_977
+            1_297_818_766_851_231_300_719_063_877_926_878_849
         );
         assert!(chain.product().expect("product") >= u128::from(params.ciphertext_modulus));
         chain
             .validate_for_parameters(&params)
             .expect("registered RNS chain covers BFV parameters");
         chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&params)
+            .expect("registered RNS chain covers exact q-ring addition");
+        chain
+            .validate_exact_ciphertext_modulus_negacyclic_product_coverage(&params)
+            .expect("registered RNS chain covers exact q-ring negacyclic products");
+        let err = chain
             .validate_exact_lift_compatibility(&params)
-            .expect("registered RNS chain fits the exact-lift fallback");
+            .expect_err("wide registered RNS chain no longer fits the narrow exact-lift bound");
+        assert!(err.to_string().contains("exact-arithmetic"));
 
         let encoded_chain = norito::to_bytes(&chain).expect("encode RNS chain");
         let legacy_digest = Hash::new(
@@ -4104,6 +6727,151 @@ mod tests {
         assert_eq!(
             registered_bfv_rns_modulus_chain_digest(&params).expect("registered RNS digest"),
             legacy_digest
+        );
+    }
+
+    #[test]
+    fn bfv_evaluation_budget_plans_balanced_multiplication_depth() {
+        assert_eq!(bfv_balanced_multiplication_depth(1).expect("one input"), 0);
+        assert_eq!(bfv_balanced_multiplication_depth(2).expect("two inputs"), 1);
+        assert_eq!(
+            bfv_balanced_multiplication_depth(3).expect("three inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(4).expect("four inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(5).expect("five inputs"),
+            3
+        );
+        assert!(
+            bfv_balanced_multiplication_depth(0)
+                .expect_err("empty multiplication plans must be rejected")
+                .to_string()
+                .contains("at least one input")
+        );
+    }
+
+    #[test]
+    fn bfv_evaluation_plan_constructors_validate_operation_shapes() {
+        assert_eq!(
+            BfvEvaluationPlan::add(2).expect("two-input add plan"),
+            BfvEvaluationPlan {
+                input_ciphertexts: 2,
+                ciphertext_multiplication_depth: 0,
+                bootstrap_refresh_rounds: 0,
+            }
+        );
+        assert!(
+            BfvEvaluationPlan::add(1)
+                .expect_err("single-input add plans must be rejected")
+                .to_string()
+                .contains("at least two input ciphertexts")
+        );
+        assert_eq!(
+            BfvEvaluationPlan::rotate_left(1).expect("single-input rotate plan"),
+            BfvEvaluationPlan {
+                input_ciphertexts: 1,
+                ciphertext_multiplication_depth: 0,
+                bootstrap_refresh_rounds: 0,
+            }
+        );
+        assert!(
+            BfvEvaluationPlan::rotate_left(2)
+                .expect_err("multi-input rotate plans must be rejected")
+                .to_string()
+                .contains("exactly one input ciphertext")
+        );
+        assert!(
+            BfvEvaluationPlan::bootstrap_refresh(1, 0)
+                .expect_err("zero-round bootstrap plans must be rejected")
+                .to_string()
+                .contains("at least one round")
+        );
+        assert!(
+            BfvEvaluationPlan::bootstrap_refresh(2, 1)
+                .expect_err("multi-input bootstrap plans must be rejected")
+                .to_string()
+                .contains("exactly one input ciphertext")
+        );
+
+        let plan = BfvEvaluationPlan::balanced_multiply(4).expect("four-input plan");
+        assert_eq!(plan.input_ciphertexts, 4);
+        assert_eq!(plan.ciphertext_multiplication_depth, 2);
+        BfvEvaluationBudget::exact_evaluator_v1()
+            .validate_plan(plan)
+            .expect("plan fits budget");
+    }
+
+    #[test]
+    fn bfv_evaluation_budget_rejects_adversarial_plan_shapes() {
+        let budget = BfvEvaluationBudget::exact_evaluator_v1();
+        let plan = BfvEvaluationPlan::balanced_multiply(4).expect("four-input plan");
+        budget.validate_plan(plan).expect("plan fits budget");
+
+        let zero_input = BfvEvaluationPlan {
+            input_ciphertexts: 0,
+            ..plan
+        };
+        assert!(
+            budget
+                .validate_plan(zero_input)
+                .expect_err("zero-input plans must be rejected")
+                .to_string()
+                .contains("at least one input ciphertext")
+        );
+
+        let single_input_depth = BfvEvaluationPlan {
+            input_ciphertexts: 1,
+            ciphertext_multiplication_depth: 1,
+            bootstrap_refresh_rounds: 0,
+        };
+        assert!(
+            budget
+                .validate_plan(single_input_depth)
+                .expect_err("single-input multiplicative-depth plans must be rejected")
+                .to_string()
+                .contains("at least two input ciphertexts")
+        );
+
+        let multi_input_bootstrap = BfvEvaluationPlan {
+            input_ciphertexts: 2,
+            ciphertext_multiplication_depth: 0,
+            bootstrap_refresh_rounds: 1,
+        };
+        assert!(
+            budget
+                .validate_plan(multi_input_bootstrap)
+                .expect_err("multi-input bootstrap plans must be rejected")
+                .to_string()
+                .contains("exactly one input ciphertext")
+        );
+
+        let too_deep = BfvEvaluationPlan {
+            ciphertext_multiplication_depth: budget.max_multiplicative_depth + 1,
+            ..plan
+        };
+        assert!(
+            budget
+                .validate_plan(too_deep)
+                .expect_err("over-depth plan must be rejected")
+                .to_string()
+                .contains("multiplicative depth")
+        );
+
+        let too_many_refreshes = BfvEvaluationPlan::bootstrap_refresh(
+            1,
+            budget.max_bootstrap_refresh_rounds.saturating_add(1),
+        )
+        .expect("over-budget bootstrap plan is still structurally valid");
+        assert!(
+            budget
+                .validate_plan(too_many_refreshes)
+                .expect_err("over-refresh plan must be rejected")
+                .to_string()
+                .contains("bootstrap refresh rounds")
         );
     }
 
@@ -4156,6 +6924,30 @@ mod tests {
     }
 
     #[test]
+    fn rns_exact_coverage_guards_validate_parameters_first() {
+        let invalid_params = BfvParameters {
+            polynomial_degree: 3,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        let chain = rns_exact_chain();
+
+        for result in [
+            chain.validate_for_parameters(&invalid_params),
+            chain.validate_exact_lift_compatibility(&invalid_params),
+            chain.validate_exact_ciphertext_modulus_addition_coverage(&invalid_params),
+            chain.validate_exact_ciphertext_modulus_negacyclic_product_coverage(&invalid_params),
+        ] {
+            let err = result.expect_err("invalid BFV parameters must fail before RNS coverage");
+            assert!(
+                err.to_string().contains("polynomial_degree"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn rns_modulus_chain_rejects_insufficient_and_overflowing_products() {
         let params = ram_lfe_bfv_parameters_v1();
         let insufficient = BfvRnsModulusChain {
@@ -4192,54 +6984,89 @@ mod tests {
     }
 
     #[test]
-    fn registered_rns_chain_rejects_naive_ciphertext_modulus_arithmetic_coverage() {
+    fn registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline() {
         let params = ram_lfe_bfv_parameters_v1();
         let chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
-        let zero = vec![0; params.degree()];
-        let (secret_key, _, relinearization_key) =
-            keygen_from_seed(&params, b"bfv-registered-rns-exact-reject-keygen").expect("keygen");
+        let lhs_poly = (0..params.degree())
+            .map(|index| {
+                (u64::try_from(index + 11).expect("index fits") * 17) % params.ciphertext_modulus
+            })
+            .collect::<Vec<_>>();
+        let rhs_poly = (0..params.degree())
+            .map(|index| {
+                (u64::try_from(index + 23).expect("index fits") * 29) % params.ciphertext_modulus
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            chain
+                .add_ciphertext_modulus_polynomials_exact(&params, &lhs_poly, &rhs_poly)
+                .expect("registered exact RNS q-ring addition"),
+            poly_add_mod(&params, &lhs_poly, &rhs_poly)
+        );
+        assert_eq!(
+            chain
+                .multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+                    &params, &lhs_poly, &rhs_poly
+                )
+                .expect("registered exact RNS q-ring multiplication"),
+            poly_mul_mod(&params, &lhs_poly, &rhs_poly)
+        );
+
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"bfv-registered-rns-exact-keygen").expect("keygen");
         let galois_key =
-            galois_key_from_seed(&params, &secret_key, 3, b"bfv-registered-rns-galois-reject")
+            galois_key_from_seed(&params, &secret_key, 3, b"bfv-registered-rns-galois")
                 .expect("Galois key");
-        let zero_ciphertext = zero_ciphertext(&params);
-
-        let err = chain
-            .validate_exact_ciphertext_modulus_addition_coverage(&params)
-            .expect_err("registered chain is not wide enough for naive q-ring addition");
-        assert!(err.to_string().contains("addition bound"));
-        let err = chain
-            .add_ciphertext_modulus_polynomials_exact(&params, &zero, &zero)
-            .expect_err("registered chain must reject exact q-ring addition helper");
-        assert!(err.to_string().contains("addition bound"));
-        let err = add_ciphertexts_rns_exact(&params, &chain, &zero_ciphertext, &zero_ciphertext)
-            .expect_err("registered chain must reject exact RNS ciphertext addition");
-        assert!(err.to_string().contains("addition bound"));
-
-        let err = chain
-            .validate_exact_ciphertext_modulus_negacyclic_product_coverage(&params)
-            .expect_err("registered chain is not wide enough for naive q-ring multiplication");
-        assert!(err.to_string().contains("negacyclic product bound"));
-        let err = chain
-            .multiply_ciphertext_modulus_polynomials_negacyclic_exact(&params, &zero, &zero)
-            .expect_err("registered chain must reject exact q-ring multiplication helper");
-        assert!(err.to_string().contains("negacyclic product bound"));
-        let err = multiply_ciphertexts_rns_exact(
+        let lhs = encrypt_from_seed(
             &params,
-            &chain,
-            &relinearization_key,
-            &zero_ciphertext,
-            &zero_ciphertext,
+            &public_key,
+            &[params.plaintext_modulus - 1, 7, 11, 13],
+            b"bfv-registered-rns-exact-lhs",
         )
-        .expect_err("registered chain must reject exact RNS ciphertext multiplication");
-        assert!(err.to_string().contains("negacyclic product bound"));
-        let err = apply_galois_automorphism_ciphertext_rns_exact(
+        .expect("encrypt lhs");
+        let rhs = encrypt_from_seed(
             &params,
-            &chain,
-            &galois_key,
-            &zero_ciphertext,
+            &public_key,
+            &[3, params.plaintext_modulus - 1, 19, 23],
+            b"bfv-registered-rns-exact-rhs",
         )
-        .expect_err("registered chain must reject exact RNS Galois key switching");
-        assert!(err.to_string().contains("negacyclic product bound"));
+        .expect("encrypt rhs");
+
+        let scalar_sum = add_ciphertexts(&params, &lhs, &rhs).expect("scalar add");
+        let rns_sum =
+            add_ciphertexts_rns_exact(&params, &chain, &lhs, &rhs).expect("RNS exact add");
+        assert_eq!(rns_sum, scalar_sum);
+        assert_eq!(
+            &decrypt(&params, &secret_key, &rns_sum).expect("decrypt RNS sum")[..4],
+            &[2, 6, 30, 36]
+        );
+
+        let scalar_difference = subtract_ciphertexts(&params, &lhs, &rhs).expect("scalar subtract");
+        let rns_difference = subtract_ciphertexts_rns_exact(&params, &chain, &lhs, &rhs)
+            .expect("RNS exact subtract");
+        assert_eq!(rns_difference, scalar_difference);
+        assert_eq!(
+            &decrypt(&params, &secret_key, &rns_difference).expect("decrypt RNS difference")[..4],
+            &[253, 8, 249, 247]
+        );
+
+        let scalar_product = multiply_ciphertexts(&params, &relinearization_key, &lhs, &rhs)
+            .expect("scalar multiply");
+        let rns_product =
+            multiply_ciphertexts_rns_exact(&params, &chain, &relinearization_key, &lhs, &rhs)
+                .expect("RNS exact multiply");
+        assert_eq!(rns_product, scalar_product);
+        assert_eq!(
+            &decrypt(&params, &secret_key, &rns_product).expect("decrypt RNS product")[..4],
+            &[254, 22, 7, 138]
+        );
+
+        let scalar_galois = apply_galois_automorphism_ciphertext(&params, &galois_key, &lhs)
+            .expect("scalar Galois switch");
+        let rns_galois =
+            apply_galois_automorphism_ciphertext_rns_exact(&params, &chain, &galois_key, &lhs)
+                .expect("RNS exact Galois switch");
+        assert_eq!(rns_galois, scalar_galois);
     }
 
     #[test]
@@ -4330,6 +7157,15 @@ mod tests {
             &[2, 0]
         );
 
+        let scalar_difference = subtract_ciphertexts(&params, &lhs, &rhs).expect("scalar subtract");
+        let rns_difference = subtract_ciphertexts_rns_exact(&params, &chain, &lhs, &rhs)
+            .expect("RNS exact subtract");
+        assert_eq!(rns_difference, scalar_difference);
+        assert_eq!(
+            &decrypt(&params, &secret_key, &rns_difference).expect("decrypt RNS difference")[..2],
+            &[1, 2]
+        );
+
         let scalar_product = multiply_ciphertexts(&params, &relinearization_key, &lhs, &rhs)
             .expect("scalar multiply");
         let rns_product =
@@ -4394,7 +7230,10 @@ mod tests {
         let err = chain
             .reconstruct_polynomial(&params, &wrong_limb_count)
             .expect_err("RNS limb-count drift must be rejected");
-        assert!(err.to_string().contains("expected 3 limbs"));
+        assert!(
+            err.to_string()
+                .contains(&format!("expected {} limbs", chain.moduli.len()))
+        );
 
         let mut wrong_limb_len = rns.clone();
         wrong_limb_len.residues_by_limb[0].pop();

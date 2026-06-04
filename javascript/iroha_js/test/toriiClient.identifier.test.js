@@ -57,7 +57,7 @@ const BFV_PUBLIC_PARAMETERS = {
   max_input_bytes: 3,
 };
 const BFV_ENCRYPTED_INPUT_HEX =
-  "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000004887a2a6d485fb5100a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002cab6c00000000000800000000000000440e92000000000008000000000000005a25000000000000080000000000000049671100000000000800000000000000bd3e2300000000000800000000000000403d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ed884300000000000800000000000000dc21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006b979b00000000000800000000000000ddd4410000000000080000000000000052086600000000000800000000000000ee13ae00000000002001000000000000880000000000000008000000000000000800000000000000d96d690000000000080000000000000092060e0000000000080000000000000034077500000000000800000000000000dcc4190000000000080000000000000062ea230000000000080000000000000055ef0a00000000000800000000000000ac52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f3214400000000000800000000000000caedd2000000000008000000000000001cfb5b00000000000800000000000000d26e660000000000080000000000000016ec0e000000000008000000000000003cee83000000000008000000000000006d7ef900000000000800000000000000c2fbbb00000000002001000000000000880000000000000008000000000000000800000000000000c9c7eb00000000000800000000000000c8c04800000000000800000000000000ef1e8700000000000800000000000000aed22c000000000008000000000000006021990000000000080000000000000035ac8c00000000000800000000000000d24393000000000008000000000000008a206d0000000000880000000000000008000000000000000800000000000000407ded00000000000800000000000000d79c3400000000000800000000000000a0332c0000000000080000000000000091fe5700000000000800000000000000543de8000000000008000000000000005eb9df00000000000800000000000000a7c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005c874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006c1c1a000000000008000000000000006f4fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000caf929000000000008000000000000005848730000000000080000000000000061909200000000000800000000000000f5f5dd00000000000800000000000000435a3b000000000008000000000000009a9f690000000000";
+  "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000";
 const BFV_VECTOR_FIXTURE = JSON.parse(
   readFileSync(
     new URL("../../../fixtures/soracloud/bfv_identifier_vectors_v1.json", import.meta.url),
@@ -72,8 +72,6 @@ const IDENTIFIER_RECEIPT_VECTOR_FIXTURE = JSON.parse(
 );
 const BFV_COMPONENT_DIGEST_RE = /^[0-9A-F]{64}$/u;
 const BFV_CHAIN_DIGEST_RE = /^[0-9a-f]{64}$/u;
-const BFV_RNS_MODULI_V1 = [358273, 448769, 449921];
-
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
     status,
@@ -137,6 +135,17 @@ function assertBfvUpperSha256(label, value) {
   assert.notEqual(value, "0".repeat(64), `${label}: digest must not be zero`);
 }
 
+function balancedBfvMultiplicationDepth(inputCount) {
+  assert.equal(inputCount > 0, true, "BFV multiplication depth requires at least one input");
+  let covered = 1;
+  let depth = 0;
+  while (covered < inputCount) {
+    covered *= 2;
+    depth += 1;
+  }
+  return depth;
+}
+
 function assertBfvLowerDigest(label, value) {
   assert.equal(typeof value, "string", `${label}: digest must be a string`);
   assert.match(value, BFV_CHAIN_DIGEST_RE, `${label}: digest must be canonical lowercase hex`);
@@ -154,8 +163,14 @@ function assertBfvRnsPolynomialFixture(label, polynomial, publicDegree, limbCoun
 
 function assertBfvRnsModulusChainFixture(operationVectors, publicDegree) {
   const rns = operationVectors.rns_modulus_chain;
-  assert.deepEqual(rns.moduli, BFV_RNS_MODULI_V1, "RNS moduli");
-  assert.equal(rns.product, "72339115408190977", "RNS product");
+  assert.equal(Array.isArray(rns.moduli), true, "RNS moduli must be an array");
+  assert.equal(rns.moduli.length > 0, true, "RNS moduli must not be empty");
+  assert.deepEqual([...rns.moduli].sort((lhs, rhs) => lhs - rhs), rns.moduli, "RNS moduli must be sorted");
+  for (const [index, modulus] of rns.moduli.entries()) {
+    assert.equal(Number.isSafeInteger(modulus), true, `RNS modulus ${index} must be a safe integer`);
+    assert.equal(modulus > 2 && modulus % 2 === 1, true, `RNS modulus ${index} must be an odd prime candidate`);
+  }
+  assert.match(rns.product, /^[0-9]+$/, "RNS product must be decimal");
   assertBfvLowerDigest("RNS chain digest", rns.expected_digest_hex);
 
   const samples = rns.sample_polynomials;
@@ -259,9 +274,154 @@ function assertBfvOperationKeyComponentVectors(operationVectors) {
   }
   const bootstrap = operationVectors.bootstrap_key;
   assert.equal(bootstrap.key_id, evaluationKey.bootstrap_key_id);
+  assert.equal(bootstrap.max_refresh_rounds, evaluationKey.bootstrap_max_refresh_rounds);
+  assert.equal(Number.isSafeInteger(bootstrap.max_refresh_rounds), true, "bootstrap max refresh rounds");
+  assert.equal(bootstrap.max_refresh_rounds > 0, true, "bootstrap max refresh rounds positive");
   assert.equal(bootstrap.zero_refresh_components.coefficient_count, publicDegree);
   assertBfvComponentDigest("bootstrap key c0", bootstrap.zero_refresh_components.c0_sha256, componentDigests);
   assertBfvComponentDigest("bootstrap key c1", bootstrap.zero_refresh_components.c1_sha256, componentDigests);
+  assert.equal(Array.isArray(bootstrap.round_refreshes), true, "bootstrap round refresh list");
+  assert.equal(bootstrap.round_refreshes.length, bootstrap.max_refresh_rounds, "bootstrap round refresh count");
+  for (const [index, refresh] of bootstrap.round_refreshes.entries()) {
+    assert.equal(refresh.round_index, index, `bootstrap round ${index}: index`);
+    assert.equal(refresh.expected_refresh_bytes > 0, true, `bootstrap round ${index}: bytes`);
+    assertBfvUpperSha256(`bootstrap round ${index}: refresh`, refresh.expected_refresh_sha256);
+    assert.equal(refresh.components.coefficient_count, publicDegree, `bootstrap round ${index}: coefficient count`);
+    if (index === 0) {
+      assert.equal(refresh.components.c0_sha256, bootstrap.zero_refresh_components.c0_sha256, "bootstrap round 0 c0 mirrors zero_refresh");
+      assert.equal(refresh.components.c1_sha256, bootstrap.zero_refresh_components.c1_sha256, "bootstrap round 0 c1 mirrors zero_refresh");
+      assertBfvUpperSha256("bootstrap round 0 c0", refresh.components.c0_sha256);
+      assertBfvUpperSha256("bootstrap round 0 c1", refresh.components.c1_sha256);
+    } else {
+      assertBfvComponentDigest(`bootstrap round ${index} c0`, refresh.components.c0_sha256, componentDigests);
+      assertBfvComponentDigest(`bootstrap round ${index} c1`, refresh.components.c1_sha256, componentDigests);
+    }
+  }
+  assert.equal(
+    bootstrap.round_refreshes[0].expected_refresh_sha256,
+    bootstrap.expected_zero_refresh_sha256,
+    "bootstrap first round mirrors zero_refresh",
+  );
+  assert.notEqual(
+    bootstrap.round_refreshes[0].expected_refresh_sha256,
+    bootstrap.round_refreshes[1]?.expected_refresh_sha256,
+    "bootstrap round refresh material must be domain separated",
+  );
+  assert.equal(operationVectors.bootstrap_refresh_vectors.length > 0, true, "bootstrap refresh vectors must not be empty");
+  for (const vector of operationVectors.bootstrap_refresh_vectors) {
+    assert.equal(vector.key_id, bootstrap.key_id, `bootstrap refresh vector ${vector.name}: key id`);
+    assert.equal(Number.isSafeInteger(vector.refresh_rounds), true, `bootstrap refresh vector ${vector.name}: refresh rounds`);
+    assert.equal(vector.refresh_rounds > 0, true, `bootstrap refresh vector ${vector.name}: refresh rounds positive`);
+    assert.equal(
+      vector.refresh_rounds <= bootstrap.max_refresh_rounds,
+      true,
+      `bootstrap refresh vector ${vector.name}: refresh rounds within key bound`,
+    );
+    assert.equal(vector.input_plaintext_slots.length > 0, true, `bootstrap refresh vector ${vector.name}: plaintext slots`);
+    for (const [index, slot] of vector.input_plaintext_slots.entries()) {
+      assert.equal(Number.isSafeInteger(slot), true, `bootstrap refresh vector ${vector.name}: slot ${index}`);
+      assert.equal(slot >= 0, true, `bootstrap refresh vector ${vector.name}: slot ${index} non-negative`);
+    }
+    assert.equal(vector.expected_input_ciphertext_bytes > 0, true, `bootstrap refresh vector ${vector.name}: input bytes`);
+    assert.equal(vector.expected_output_ciphertext_bytes > 0, true, `bootstrap refresh vector ${vector.name}: output bytes`);
+    assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: input`, vector.expected_input_ciphertext_sha256);
+    assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: output`, vector.expected_output_ciphertext_sha256);
+    assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: plaintext`, vector.expected_plaintext_sha256);
+    assert.equal(vector.output_components.coefficient_count, publicDegree, `bootstrap refresh vector ${vector.name}: coefficient count`);
+    assertBfvComponentDigest(`bootstrap refresh vector ${vector.name} c0`, vector.output_components.c0_sha256, componentDigests);
+    assertBfvComponentDigest(`bootstrap refresh vector ${vector.name} c1`, vector.output_components.c1_sha256, componentDigests);
+  }
+  for (const vector of operationVectors.vectors) {
+    const expectedDepth =
+      vector.operation === "Multiply" ? balancedBfvMultiplicationDepth(vector.inputs.length) : 0;
+    assert.equal(
+      vector.requested_multiplication_depth,
+      expectedDepth,
+      `${vector.name}: requested multiplication depth`,
+    );
+  }
+  const packedRotate = operationVectors.vectors.find((vector) => vector.name === "soracloud-packed-rotate-left-output");
+  assert.notEqual(packedRotate, undefined, "packed RotateLeft operation vector must be present");
+  assert.equal(packedRotate.operation, "RotateLeft");
+  assert.equal(packedRotate.rotation_steps, publicDegree / 2, "packed RotateLeft half rotation");
+  assert.equal(packedRotate.automorphism_power, publicDegree + 1, "packed RotateLeft Galois power");
+  assert.equal(
+    operationVectors.galois_keys.some((key) => key.automorphism_power === packedRotate.automorphism_power),
+    true,
+    "packed RotateLeft vector must have matching Galois key",
+  );
+  assert.equal(packedRotate.inputs.length, 1, "packed RotateLeft input count");
+  const packedRotateInput = packedRotate.inputs[0];
+  assert.equal(packedRotateInput.packed_slots.length, publicDegree, "packed RotateLeft input slot count");
+  assert.equal(packedRotate.expected_packed_slots.length, publicDegree, "packed RotateLeft output slot count");
+  for (const [label, values] of [
+    ["input", packedRotateInput.packed_slots],
+    ["output", packedRotate.expected_packed_slots],
+  ]) {
+    for (const [index, value] of values.entries()) {
+      assert.equal(Number.isSafeInteger(value), true, `packed RotateLeft ${label} ${index}`);
+      assert.equal(value >= 0, true, `packed RotateLeft ${label} ${index} non-negative`);
+    }
+  }
+  assert.equal(packedRotateInput.expected_ciphertext_bytes > 0, true, "packed RotateLeft input bytes");
+  assert.equal(packedRotate.expected_output_ciphertext_bytes > 0, true, "packed RotateLeft output bytes");
+  assertBfvUpperSha256("packed RotateLeft input plaintext", packedRotateInput.expected_packed_plaintext_sha256);
+  assertBfvUpperSha256("packed RotateLeft input", packedRotateInput.expected_ciphertext_sha256);
+  assertBfvUpperSha256("packed RotateLeft output", packedRotate.expected_output_ciphertext_sha256);
+  assertBfvUpperSha256("packed RotateLeft plaintext", packedRotate.expected_plaintext_coefficients_sha256);
+  assert.equal(packedRotate.output_components.coefficient_count, publicDegree, "packed RotateLeft coefficient count");
+  assertBfvComponentDigest("packed RotateLeft c0", packedRotate.output_components.c0_sha256, componentDigests);
+  assertBfvComponentDigest("packed RotateLeft c1", packedRotate.output_components.c1_sha256, componentDigests);
+
+  const packedRotateSchedule = operationVectors.vectors.find(
+    (vector) => vector.name === "soracloud-packed-rotate-left-schedule-output",
+  );
+  assert.notEqual(packedRotateSchedule, undefined, "packed RotateLeft schedule vector must be present");
+  assert.equal(packedRotateSchedule.operation, "RotateLeft");
+  assert.equal(packedRotateSchedule.rotation_steps, 1, "packed RotateLeft schedule rotation");
+  assert.equal(Array.isArray(packedRotateSchedule.automorphism_powers), true, "packed RotateLeft schedule powers");
+  assert.equal(packedRotateSchedule.automorphism_powers.length > 1, true, "packed RotateLeft schedule must use multiple powers");
+  for (const [index, power] of packedRotateSchedule.automorphism_powers.entries()) {
+    assert.equal(Number.isSafeInteger(power), true, `packed RotateLeft schedule power ${index}`);
+    assert.equal(power > 0, true, `packed RotateLeft schedule power ${index} positive`);
+    assert.equal(
+      operationVectors.galois_keys.some((key) => key.automorphism_power === power),
+      true,
+      `packed RotateLeft schedule power ${power} must have matching Galois key`,
+    );
+  }
+  assert.equal(packedRotateSchedule.inputs.length, 1, "packed RotateLeft schedule input count");
+  const scheduleInput = packedRotateSchedule.inputs[0];
+  assert.equal(scheduleInput.packed_slots.length, publicDegree, "packed RotateLeft schedule input slot count");
+  assert.equal(packedRotateSchedule.expected_packed_slots.length, publicDegree, "packed RotateLeft schedule output slot count");
+  const expectedScheduleSlots = scheduleInput.packed_slots.slice(1).concat(scheduleInput.packed_slots[0]);
+  assert.deepEqual(
+    packedRotateSchedule.expected_packed_slots,
+    expectedScheduleSlots,
+    "packed RotateLeft schedule output slots",
+  );
+  for (const [label, values] of [
+    ["input", scheduleInput.packed_slots],
+    ["output", packedRotateSchedule.expected_packed_slots],
+  ]) {
+    for (const [index, value] of values.entries()) {
+      assert.equal(Number.isSafeInteger(value), true, `packed RotateLeft schedule ${label} ${index}`);
+      assert.equal(value >= 0, true, `packed RotateLeft schedule ${label} ${index} non-negative`);
+    }
+  }
+  assert.equal(scheduleInput.expected_ciphertext_bytes > 0, true, "packed RotateLeft schedule input bytes");
+  assert.equal(packedRotateSchedule.expected_output_ciphertext_bytes > 0, true, "packed RotateLeft schedule output bytes");
+  assertBfvUpperSha256("packed RotateLeft schedule input plaintext", scheduleInput.expected_packed_plaintext_sha256);
+  assertBfvUpperSha256("packed RotateLeft schedule input", scheduleInput.expected_ciphertext_sha256);
+  assertBfvUpperSha256("packed RotateLeft schedule output", packedRotateSchedule.expected_output_ciphertext_sha256);
+  assertBfvUpperSha256("packed RotateLeft schedule plaintext", packedRotateSchedule.expected_plaintext_coefficients_sha256);
+  assert.equal(
+    packedRotateSchedule.output_components.coefficient_count,
+    publicDegree,
+    "packed RotateLeft schedule coefficient count",
+  );
+  assertBfvComponentDigest("packed RotateLeft schedule c0", packedRotateSchedule.output_components.c0_sha256, componentDigests);
+  assertBfvComponentDigest("packed RotateLeft schedule c1", packedRotateSchedule.output_components.c1_sha256, componentDigests);
 }
 
 function sampleExecution(overrides = {}) {
@@ -697,6 +857,14 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation inp
   for (const vector of operationVectors.vectors) {
     for (const input of vector.inputs) {
       inputCount += 1;
+      if (input.packed_slots !== undefined) {
+        assert.equal(input.packed_slots.length, operationVectors.public_parameters.polynomial_degree);
+        assertBfvUpperSha256(`${vector.name}/${input.seed_utf8}: packed plaintext`, input.expected_packed_plaintext_sha256);
+        assert.equal(input.expected_ciphertext_bytes > 0, true);
+        assertBfvUpperSha256(`${vector.name}/${input.seed_utf8}: ciphertext`, input.expected_ciphertext_sha256);
+        observedDigests.add(input.expected_ciphertext_sha256);
+        continue;
+      }
       const ciphertextHex = encryptIdentifierInputForPolicy(
         policy,
         Buffer.from(input.input_hex, "hex"),
@@ -716,7 +884,7 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation inp
     }
   }
 
-  assert.equal(inputCount, 8, "fixture should cover all Add/Multiply/Rotate/Bootstrap inputs");
+  assert.equal(inputCount, 10, "fixture should cover all Add/Multiply/Rotate/Bootstrap inputs");
   assert.equal(
     observedDigests.size,
     inputCount,
@@ -756,6 +924,18 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
       "component coefficient-count drift",
       (operationVectors) => {
         operationVectors.bootstrap_key.zero_refresh_components.coefficient_count = 63;
+      },
+    ],
+    [
+      "bootstrap refresh bound drift",
+      (operationVectors) => {
+        operationVectors.bootstrap_key.max_refresh_rounds = 1;
+      },
+    ],
+    [
+      "bootstrap refresh component drift",
+      (operationVectors) => {
+        operationVectors.bootstrap_refresh_vectors[0].output_components.c0_sha256 = "0".repeat(64);
       },
     ],
     [

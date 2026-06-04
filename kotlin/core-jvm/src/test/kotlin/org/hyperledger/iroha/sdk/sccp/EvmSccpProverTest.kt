@@ -11,6 +11,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class EvmSccpProverTest {
+    private val ethereumSyncCommitteeSupermajorityBits =
+        "0x" + "ff".repeat(42) + "3f" + "00".repeat(21)
+    private val ethereumSyncCommitteeSupermajorityParticipation = "342"
+    private val ethereumFinalityBranch =
+        (0 until 6).map { "0x" + (0x50 + it).toString(16).padStart(2, '0').repeat(32) }
+
     @Test
     fun proofRequestBindsPublicSignalsAndRelayContext() {
         val bundleBytes = byteArrayOf(5, 6, 7)
@@ -925,7 +931,7 @@ class EvmSccpProverTest {
             "hash" to blockHash,
             "number" to "0x1234",
             "receiptsRoot" to ("0x" + "cc".repeat(32)),
-            "beaconSlot" to "32",
+            "beaconSlot" to "64",
         )
         val calls = mutableListOf<Pair<String, Map<String, String>>>()
         val transport = EthereumMainnetBeaconRestTransport { url, headers ->
@@ -933,15 +939,15 @@ class EvmSccpProverTest {
             when (url) {
                 "https://beacon.example/eth/v1/beacon/headers/finalized" ->
                     EthereumMainnetBeaconRestResponse(200, beaconHeaderJson().toByteArray(Charsets.UTF_8))
-                "https://beacon.example/eth/v1/beacon/headers/32" ->
+                "https://beacon.example/eth/v1/beacon/headers/64" ->
                     EthereumMainnetBeaconRestResponse(
                         200,
-                        beaconHeaderJson(rootByte = "aa", slot = "32").toByteArray(Charsets.UTF_8),
+                        beaconHeaderJson(slot = "64").toByteArray(Charsets.UTF_8),
                     )
-                "https://beacon.example/eth/v1/beacon/blocks/32/root" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("aa").toByteArray(Charsets.UTF_8))
-                "https://beacon.example/eth/v2/beacon/blocks/32" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "32").toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v1/beacon/blocks/64/root" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("dd").toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v2/beacon/blocks/64" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "64").toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" ->
                     EthereumMainnetBeaconRestResponse(200, beaconCheckpointJson().toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/light_client/finality_update" ->
@@ -961,19 +967,23 @@ class EvmSccpProverTest {
         assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
         assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
         assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
-        assertEquals("0x" + "aa".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
+        assertEquals("0x" + "dd".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
         assertEquals("0x" + "ee".repeat(32), evidence.beaconFinality?.get("syncCommitteeRoot"))
-        assertEquals("32", evidence.beaconFinality?.get("beaconSlot"))
-        assertEquals("0x01" + "00".repeat(63), evidence.beaconFinality?.get("syncCommitteeBits"))
+        assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
+        assertEquals(ethereumFinalityBranch, evidence.beaconFinality?.get("finalityBranch"))
+        assertEquals(ethereumSyncCommitteeSupermajorityBits, evidence.beaconFinality?.get("syncCommitteeBits"))
         assertEquals("0x" + "34".repeat(96), evidence.beaconFinality?.get("syncCommitteeSignature"))
-        assertEquals("1", evidence.beaconFinality?.get("syncCommitteeParticipation"))
+        assertEquals(
+            ethereumSyncCommitteeSupermajorityParticipation,
+            evidence.beaconFinality?.get("syncCommitteeParticipation"),
+        )
         assertEquals("65", evidence.beaconFinality?.get("syncSignatureSlot"))
         assertEquals(
             listOf(
                 "https://beacon.example/eth/v1/beacon/headers/finalized",
-                "https://beacon.example/eth/v1/beacon/headers/32",
-                "https://beacon.example/eth/v1/beacon/blocks/32/root",
-                "https://beacon.example/eth/v2/beacon/blocks/32",
+                "https://beacon.example/eth/v1/beacon/headers/64",
+                "https://beacon.example/eth/v1/beacon/blocks/64/root",
+                "https://beacon.example/eth/v2/beacon/blocks/64",
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
                 "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             ),
@@ -1008,7 +1018,7 @@ class EvmSccpProverTest {
             "hash" to blockHash,
             "number" to "0x1234",
             "receiptsRoot" to ("0x" + "cc".repeat(32)),
-            "timestamp" to "0x1e4",
+            "timestamp" to "0x364",
         )
         val calls = mutableListOf<String>()
         val transport = EthereumMainnetBeaconRestTransport { url, _ ->
@@ -1018,15 +1028,15 @@ class EvmSccpProverTest {
                     EthereumMainnetBeaconRestResponse(200, beaconGenesisJson("100").toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/headers/finalized" ->
                     EthereumMainnetBeaconRestResponse(200, beaconHeaderJson().toByteArray(Charsets.UTF_8))
-                "https://beacon.example/eth/v1/beacon/headers/32" ->
+                "https://beacon.example/eth/v1/beacon/headers/64" ->
                     EthereumMainnetBeaconRestResponse(
                         200,
-                        beaconHeaderJson(rootByte = "aa", slot = "32").toByteArray(Charsets.UTF_8),
+                        beaconHeaderJson(slot = "64").toByteArray(Charsets.UTF_8),
                     )
-                "https://beacon.example/eth/v1/beacon/blocks/32/root" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("aa").toByteArray(Charsets.UTF_8))
-                "https://beacon.example/eth/v2/beacon/blocks/32" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "32").toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v1/beacon/blocks/64/root" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("dd").toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v2/beacon/blocks/64" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "64").toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" ->
                     EthereumMainnetBeaconRestResponse(200, beaconCheckpointJson().toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/light_client/finality_update" ->
@@ -1049,15 +1059,15 @@ class EvmSccpProverTest {
                 ),
             )
 
-        assertEquals("0x" + "aa".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
-        assertEquals("32", evidence.beaconFinality?.get("beaconSlot"))
+        assertEquals("0x" + "dd".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
+        assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
         assertEquals(
             listOf(
                 "https://beacon.example/eth/v1/beacon/genesis",
                 "https://beacon.example/eth/v1/beacon/headers/finalized",
-                "https://beacon.example/eth/v1/beacon/headers/32",
-                "https://beacon.example/eth/v1/beacon/blocks/32/root",
-                "https://beacon.example/eth/v2/beacon/blocks/32",
+                "https://beacon.example/eth/v1/beacon/headers/64",
+                "https://beacon.example/eth/v1/beacon/blocks/64/root",
+                "https://beacon.example/eth/v2/beacon/blocks/64",
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
                 "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             ),
@@ -1149,6 +1159,31 @@ class EvmSccpProverTest {
                     ),
                 ).collectFinalityEvidence(null, block, null)
             }.message?.contains("response body must be at most") == true,
+        )
+        val historicalProvider = EthereumMainnetBeaconRestConsensusProvider(
+            endpoint = "https://beacon.example/eth/v1",
+            syncCommitteeRoot = "0x" + "ee".repeat(32),
+            transport = EthereumMainnetBeaconRestTransport { url, _ ->
+                when (url) {
+                    "https://beacon.example/eth/v1/beacon/headers/finalized" ->
+                        EthereumMainnetBeaconRestResponse(200, beaconHeaderJson().toByteArray(Charsets.UTF_8))
+                    "https://beacon.example/eth/v1/beacon/headers/32" ->
+                        EthereumMainnetBeaconRestResponse(
+                            200,
+                            beaconHeaderJson(rootByte = "aa", slot = "32").toByteArray(Charsets.UTF_8),
+                        )
+                    else -> error("unexpected Beacon REST URL $url")
+                }
+            },
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                historicalProvider.collectFinalityEvidence(
+                    null,
+                    block + ("beaconSlot" to "32"),
+                    null,
+                )
+            }.message?.contains("historical target blocks require an ancestry proof") == true,
         )
         assertTrue(
             assertFailsWith<IllegalArgumentException> {
@@ -1315,6 +1350,50 @@ class EvmSccpProverTest {
         )
         assertTrue(
             assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalityUpdate = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconFinalityUpdateJson(syncCommitteeBits = "0x01" + "00".repeat(63))
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("sync_committee_bits must contain Ethereum sync committee supermajority") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalityUpdate = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconFinalityUpdateJson(includeFinalityBranch = false)
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("finality_branch") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalityUpdate = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconFinalityUpdateJson(finalityBranch = ethereumFinalityBranch.take(5))
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("finality_branch") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalityUpdate = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconFinalityUpdateJson(syncCommitteeSignature = "0x" + "00".repeat(96))
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("sync_committee_signature must not be zero") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
                 provider(syncCommitteeRoot = null).collectFinalityEvidence(null, block, null)
             }.message?.contains("requires syncCommitteeRoot or syncCommitteePayload") == true,
         )
@@ -1371,9 +1450,9 @@ class EvmSccpProverTest {
                 "syncCommitteeRoot" to ("0x" + "aa".repeat(32)),
             ),
             beaconSlot = "0x20",
-            syncCommitteeBits = "0x01" + "00".repeat(63),
+            syncCommitteeBits = ethereumSyncCommitteeSupermajorityBits,
             syncCommitteeSignature = "0x" + "34".repeat(96),
-            syncCommitteeParticipation = "1",
+            syncCommitteeParticipation = ethereumSyncCommitteeSupermajorityParticipation,
             syncSignatureSlot = "65",
         )
         val beaconFinality = beaconFinalityEvidence.toMap()
@@ -1511,6 +1590,14 @@ class EvmSccpProverTest {
         }
 
         val proofReadyEvidence = sourceEventEvidence.copy(receiptProof = receiptProof, receiptProofHash = receiptProofHash)
+        val missingFinalityBranch = assertFailsWith<IllegalArgumentException> {
+            sdk.proveInboundToSora(
+                proofReadyEvidence.copy(
+                    beaconFinality = proofReadyEvidence.beaconFinality?.minus("finalityBranch"),
+                ),
+            )
+        }
+        assertTrue(missingFinalityBranch.message?.contains("beaconFinality.finalityBranch") == true)
         val missingSyncBits = assertFailsWith<IllegalArgumentException> {
             sdk.proveInboundToSora(
                 proofReadyEvidence.copy(
@@ -1529,6 +1616,107 @@ class EvmSccpProverTest {
             )
         }
         assertTrue(conflictingSyncBits.message?.contains("beaconFinality.syncCommitteeBits") == true)
+        val mismatchedSyncParticipation = assertFailsWith<IllegalArgumentException> {
+            sdk.proveInboundToSora(
+                proofReadyEvidence.copy(
+                    beaconFinality = proofReadyEvidence.beaconFinality?.plus(
+                        "syncCommitteeParticipation" to "341",
+                    ),
+                ),
+            )
+        }
+        assertTrue(
+            mismatchedSyncParticipation.message?.contains("beaconFinality.syncCommitteeParticipation") == true,
+        )
+        val underQuorumSyncBits = assertFailsWith<IllegalArgumentException> {
+            sdk.proveInboundToSora(
+                proofReadyEvidence.copy(
+                    beaconFinality = proofReadyEvidence.beaconFinality?.plus(
+                        mapOf(
+                            "syncCommitteeBits" to ("0x01" + "00".repeat(63)),
+                            "syncCommitteeParticipation" to "1",
+                        ),
+                    ),
+                ),
+            )
+        }
+        assertTrue(underQuorumSyncBits.message?.contains("beaconFinality.syncCommitteeBits") == true)
+        val staleSyncSignatureSlot = assertFailsWith<IllegalArgumentException> {
+            sdk.proveInboundToSora(
+                proofReadyEvidence.copy(
+                    beaconFinality = proofReadyEvidence.beaconFinality?.plus(
+                        "syncSignatureSlot" to "31",
+                    ),
+                ),
+            )
+        }
+        assertTrue(staleSyncSignatureSlot.message?.contains("beaconFinality.syncSignatureSlot") == true)
+        val zeroSyncCommitteeSignature = assertFailsWith<IllegalArgumentException> {
+            sdk.proveInboundToSora(
+                proofReadyEvidence.copy(
+                    beaconFinality = proofReadyEvidence.beaconFinality?.plus(
+                        "syncCommitteeSignature" to ("0x" + "00".repeat(96)),
+                    ),
+                ),
+            )
+        }
+        assertTrue(zeroSyncCommitteeSignature.message?.contains("beaconFinality.syncCommitteeSignature") == true)
+        val aliasOnlyFinality = mapOf<String, Any?>(
+            "execution_block_number" to "0x1234",
+            "finality_block_hash" to blockHash,
+            "receipts_root" to ("0x" + "cc".repeat(32)),
+            "finalized_header_root" to ("0x" + "dd".repeat(32)),
+            "sync_committee_root" to ("0x" + "aa".repeat(32)),
+            "beacon_slot" to "0x20",
+            "sync_committee_bits" to ethereumSyncCommitteeSupermajorityBits,
+            "sync_committee_signature" to ("0x" + "34".repeat(96)),
+            "sync_committee_participation" to ethereumSyncCommitteeSupermajorityParticipation,
+            "signature_slot" to "65",
+            "extensionWitness" to "kept",
+        )
+        val aliasOnlyProof = EthereumMainnetSccp(
+            inboundProver = EthereumMainnetInboundProver { aliasEvidence ->
+                val finality = aliasEvidence.beaconFinality ?: error("beaconFinality required")
+                assertEquals("4660", finality["executionBlockNumber"])
+                assertEquals(blockHash, finality["executionBlockHash"])
+                assertEquals("0x" + "cc".repeat(32), finality["executionReceiptsRoot"])
+                assertEquals("0x" + "dd".repeat(32), finality["finalizedHeaderRoot"])
+                assertEquals("0x" + "aa".repeat(32), finality["syncCommitteeRoot"])
+                assertEquals("32", finality["beaconSlot"])
+                assertEquals(ethereumSyncCommitteeSupermajorityBits, finality["syncCommitteeBits"])
+                assertEquals("0x" + "34".repeat(96), finality["syncCommitteeSignature"])
+                assertEquals(ethereumSyncCommitteeSupermajorityParticipation, finality["syncCommitteeParticipation"])
+                assertEquals("65", finality["syncSignatureSlot"])
+                assertEquals("kept", finality["extensionWitness"])
+                for (alias in listOf(
+                    "execution_block_number",
+                    "finalityHeight",
+                    "finality_block_hash",
+                    "receipts_root",
+                    "finalized_header_root",
+                    "sync_committee_root",
+                    "beacon_slot",
+                    "sync_committee_bits",
+                    "sync_committee_signature",
+                    "sync_committee_participation",
+                    "signature_slot",
+                )) {
+                    assertTrue(alias !in finality)
+                }
+                byteArrayOf(4, 5, 6)
+            },
+        ).proveInboundToSora(
+            EthereumMainnetInboundEvidence(
+                transactionHash = evidence.transactionHash,
+                receipt = receiptWithSourceEvent,
+                block = evidence.block,
+                beaconFinality = aliasOnlyFinality,
+                receiptProof = receiptProof,
+                receiptProofHash = receiptProofHash,
+                sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            ),
+        )
+        assertContentEquals(byteArrayOf(4, 5, 6), aliasOnlyProof)
         for ((alias, value, label) in listOf(
             Triple("finalized_header_root", "0x" + "13".repeat(32), "beaconFinality.finalizedHeaderRoot"),
             Triple("sync_committee_root", "0x" + "14".repeat(32), "beaconFinality.syncCommitteeRoot"),
@@ -1604,6 +1792,24 @@ class EvmSccpProverTest {
                 EthereumMainnetInboundEvidence(receiptProof = receiptProof.copy(sourceDomain = SccpEvm.DOMAIN_BSC)),
             )
         }
+
+        var prebuiltProofOnlyProverCalls = 0
+        val prebuiltProofWithoutSourceEvent = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver {
+                    prebuiltProofOnlyProverCalls += 1
+                    byteArrayOf(1, 2, 3)
+                },
+            ).proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    beaconFinality = beaconFinality,
+                    receiptProof = receiptProof,
+                    receiptProofHash = receiptProofHash,
+                ),
+            )
+        }
+        assertTrue(prebuiltProofWithoutSourceEvent.message?.contains("receipt source event validation") == true)
+        assertEquals(0, prebuiltProofOnlyProverCalls)
 
         assertContentEquals(
             byteArrayOf(7, 8, 9),
@@ -2191,6 +2397,34 @@ class EvmSccpProverTest {
                 "0x0",
             )
         }
+        val conflictingIndex = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+                listOf(receipt + ("transaction_index" to "0x0")),
+                "0x0",
+            )
+        }
+        assertTrue(conflictingIndex.message?.contains("blockReceipts[0].transactionIndex") == true)
+        val conflictingHash = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+                listOf(receipt + ("transaction_hash" to receipt["transactionHash"])),
+                "0x0",
+            )
+        }
+        assertTrue(conflictingHash.message?.contains("blockReceipts[0].transactionHash") == true)
+        val conflictingGas = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+                listOf(receipt + ("cumulative_gas_used" to "0x5208")),
+                "0x0",
+            )
+        }
+        assertTrue(conflictingGas.message?.contains("receipt.cumulativeGasUsed") == true)
+        val conflictingBloom = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+                listOf(receipt + ("logs_bloom" to ("0x" + "00".repeat(256)))),
+                "0x0",
+            )
+        }
+        assertTrue(conflictingBloom.message?.contains("receipt.logsBloom") == true)
         val duplicateHashReceipt = sampleEvmReceipt(
             transactionIndex = 1,
             transactionHash = "0x" + "aa".repeat(32),
@@ -2336,6 +2570,86 @@ class EvmSccpProverTest {
             ),
             evidence.receiptProofHash,
         )
+
+        for ((alias, value, label) in listOf(
+            Triple("transaction_hash", "0x" + "ac".repeat(32), "receipt.transactionHash"),
+            Triple("block_hash", "0x" + "ac".repeat(32), "receipt.blockHash"),
+            Triple("block_number", "0x1235", "receipt.blockNumber"),
+            Triple("transaction_index", "0x0", "receipt.transactionIndex"),
+        )) {
+            val aliasConflict = assertFailsWith<IllegalArgumentException> {
+                sdk.collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt = receipt + (alias to value),
+                        block = block,
+                        beaconFinality = beaconFinality,
+                        sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                        blockReceipts = blockReceipts,
+                        inclusionBranch = inclusionBranch,
+                    ),
+                )
+            }
+            assertTrue(aliasConflict.message?.contains(label) == true)
+        }
+        for ((alias, value) in listOf("blockNumber" to "0x1235", "block_number" to "0x1235")) {
+            val aliasConflict = assertFailsWith<IllegalArgumentException> {
+                sdk.collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt = receipt,
+                        block = block + (alias to value),
+                        beaconFinality = beaconFinality,
+                        sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                        blockReceipts = blockReceipts,
+                        inclusionBranch = inclusionBranch,
+                    ),
+                )
+            }
+            assertTrue(aliasConflict.message?.contains("block.number") == true)
+        }
+        val receiptsRootAliasConflict = assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block + ("receipts_root" to ("0x" + "ac".repeat(32))),
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    blockReceipts = blockReceipts,
+                    inclusionBranch = inclusionBranch,
+                ),
+            )
+        }
+        assertTrue(receiptsRootAliasConflict.message?.contains("block.receiptsRoot") == true)
+        for ((alias, value, label) in listOf(
+            Triple("block_hash", "0x" + "ac".repeat(32), "blockReceipts.blockHash"),
+            Triple("block_number", "0x1235", "blockReceipts.blockNumber"),
+        )) {
+            val aliasConflict = assertFailsWith<IllegalArgumentException> {
+                sdk.collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt = receipt,
+                        block = block,
+                        beaconFinality = beaconFinality,
+                        sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                        blockReceipts = listOf(receipt + (alias to value), otherReceipt),
+                        inclusionBranch = inclusionBranch,
+                    ),
+                )
+            }
+            assertTrue(aliasConflict.message?.contains(label) == true)
+        }
+        val indexedHashAliasConflict = assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    blockReceipts = listOf(receipt + ("transaction_hash" to receipt["transactionHash"]), otherReceipt),
+                    inclusionBranch = inclusionBranch,
+                ),
+            )
+        }
+        assertTrue(indexedHashAliasConflict.message?.contains("blockReceipts[0].transactionHash") == true)
 
         val rootMismatch = assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(
@@ -2802,6 +3116,21 @@ class EvmSccpProverTest {
             )
         }
         assertTrue(missingBscSourceContextLog.message?.contains("receipt.logs[0].transactionHash") == true)
+        for ((alias, value, label) in listOf(
+            Triple("transaction_hash", "0x" + "ab".repeat(32), "receipt.logs[0].transactionHash"),
+            Triple("block_hash", "0x" + "ac".repeat(32), "receipt.logs[0].blockHash"),
+            Triple("block_number", "0x1235", "receipt.logs[0].blockNumber"),
+        )) {
+            val conflictingBscSourceContextLog = assertFailsWith<IllegalArgumentException> {
+                sourceEventGuardSdk.collectInboundEvidenceFromReceipt(
+                    BscMainnetInboundEvidence(
+                        receipt = bscReceiptWithSourceLogs(listOf(sourceEventLog(mapOf(alias to value)))),
+                        block = block,
+                    ),
+                )
+            }
+            assertTrue(conflictingBscSourceContextLog.message?.contains(label) == true)
+        }
         assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(
                 BscMainnetInboundEvidence(
@@ -2972,18 +3301,29 @@ class EvmSccpProverTest {
 
     private fun ethereumBeaconFinalityUpdateFields(): Map<String, Any?> =
         mapOf(
-            "syncCommitteeBits" to ("0x01" + "00".repeat(63)),
+            "finalityBranch" to ethereumFinalityBranch,
+            "syncCommitteeBits" to ethereumSyncCommitteeSupermajorityBits,
             "syncCommitteeSignature" to ("0x" + "34".repeat(96)),
-            "syncCommitteeParticipation" to "1",
+            "syncCommitteeParticipation" to ethereumSyncCommitteeSupermajorityParticipation,
             "syncSignatureSlot" to "65",
         )
 
     private fun beaconFinalityUpdateJson(
         slot: String = "64",
         signatureSlot: String = "65",
-        syncCommitteeBits: String = "0x01" + "00".repeat(63),
+        syncCommitteeBits: String = ethereumSyncCommitteeSupermajorityBits,
         syncCommitteeSignature: String = "0x" + "34".repeat(96),
+        includeFinalityBranch: Boolean = true,
+        finalityBranch: List<String> = ethereumFinalityBranch,
     ): String =
+        run {
+            val quotedFinalityBranch = finalityBranch.joinToString(",") { "\"$it\"" }
+            val finalityBranchField =
+                if (includeFinalityBranch) {
+                    "\"finality_branch\": [$quotedFinalityBranch],"
+                } else {
+                    ""
+                }
         """
         {
           "execution_optimistic": false,
@@ -2997,6 +3337,7 @@ class EvmSccpProverTest {
                 "body_root": "0x${"03".repeat(32)}"
               }
             },
+            $finalityBranchField
             "sync_aggregate": {
               "sync_committee_bits": "$syncCommitteeBits",
               "sync_committee_signature": "$syncCommitteeSignature"
@@ -3005,6 +3346,7 @@ class EvmSccpProverTest {
           }
         }
         """.trimIndent()
+        }
 
     private fun abiWord(value: Long): ByteArray {
         val out = ByteArray(32)

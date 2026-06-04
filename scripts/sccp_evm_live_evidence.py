@@ -1183,6 +1183,7 @@ def _collect_route_canary_transaction_evidence(
         proof_family_hash=expected_proof_family_hash,
         network_id=expected_network_id,
         used_message_proof=used_summary["message_proof_used"],
+        receipt_block_finalized=finalized_block["receipt_block_finalized"],
     )
     summary = {
         **event_summary,

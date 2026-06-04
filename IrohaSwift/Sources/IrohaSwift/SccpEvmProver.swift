@@ -1188,7 +1188,12 @@ public final class BscMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("receipt.status")
             }
             let receiptTransactionHash = try Self.normalizeRpcHex(
-                Self.firstPresent(currentReceipt, "transactionHash", "transaction_hash"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.transactionHash",
+                    "transactionHash",
+                    "transaction_hash"
+                ),
                 label: "receipt.transactionHash",
                 byteLength: 32
             )
@@ -1197,12 +1202,22 @@ public final class BscMainnetSccp {
             }
             transactionHash = receiptTransactionHash
             blockHash = try Self.normalizeRpcHex(
-                Self.firstPresent(currentReceipt, "blockHash", "block_hash"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.blockHash",
+                    "blockHash",
+                    "block_hash"
+                ),
                 label: "receipt.blockHash",
                 byteLength: 32
             )
             receiptBlockNumber = try Self.normalizePositiveRpcQuantity(
-                Self.firstPresent(currentReceipt, "blockNumber", "block_number"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.blockNumber",
+                    "blockNumber",
+                    "block_number"
+                ),
                 label: "receipt.blockNumber"
             )
             let sourceEvent = try Self.evmReceiptSourceEvent(
@@ -1796,6 +1811,7 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
     }
 
     private struct BeaconRestFinalityUpdateSummary {
+        let finalityBranch: [String]
         let syncCommitteeBits: String
         let syncCommitteeSignature: String
         let syncCommitteeParticipation: UInt64
@@ -1859,14 +1875,14 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         }
         let blockHash = try Self.normalizeRpcHex(block["hash"], label: "block.hash", byteLength: 32)
         let blockNumber = try Self.normalizeRpcQuantity(
-            Self.firstPresent(block, "number", "blockNumber", "block_number"),
+            Self.strictFirstPresent(block, label: "block.number", "number", "blockNumber", "block_number"),
             label: "block.number"
         )
         guard blockNumber != "0x0" else {
             throw EvmSccpProverError.zeroField("block.number")
         }
         let receiptsRoot = try Self.normalizeRpcHex(
-            Self.firstPresent(block, "receiptsRoot", "receipts_root"),
+            Self.strictFirstPresent(block, label: "block.receiptsRoot", "receiptsRoot", "receipts_root"),
             label: "block.receiptsRoot",
             byteLength: 32
         )
@@ -1901,6 +1917,9 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         }
         guard targetHeader.slot <= finalizedHeader.slot else {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.targetHeader.finalizedSlot")
+        }
+        guard targetHeader.slot == finalizedHeader.slot else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.targetHeader.ancestryProof")
         }
         if targetHeader.slot == finalizedHeader.slot, targetHeader.root != finalizedHeader.root {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.targetHeader.finalizedRoot")
@@ -2076,6 +2095,7 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             "finalizedHeaderRoot": targetHeader.root,
             "syncCommitteeRoot": try resolvedSyncCommitteeRoot(),
             "beaconSlot": String(targetHeader.slot),
+            "finalityBranch": finalityUpdate.finalityBranch,
             "syncCommitteeBits": finalityUpdate.syncCommitteeBits,
             "syncCommitteeSignature": finalityUpdate.syncCommitteeSignature,
             "syncCommitteeParticipation": String(finalityUpdate.syncCommitteeParticipation),
@@ -2309,6 +2329,14 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             ),
             label: "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits"
         )
+        let finalityBranch = try normalizeFinalityBranch(
+            requireField(
+                data,
+                label: "Ethereum mainnet Beacon REST light-client finality update.data",
+                field: "finality_branch"
+            ),
+            label: "Ethereum mainnet Beacon REST light-client finality update.data.finality_branch"
+        )
         let syncCommitteeSignature = try normalizeRpcHex(
             requireField(
                 syncAggregate,
@@ -2319,6 +2347,7 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             byteLength: 96
         )
         return BeaconRestFinalityUpdateSummary(
+            finalityBranch: finalityBranch,
             syncCommitteeBits: syncCommitteeBits,
             syncCommitteeSignature: syncCommitteeSignature,
             syncCommitteeParticipation: syncCommitteeParticipation(syncCommitteeBits),
@@ -2328,10 +2357,31 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
 
     private static func normalizeSyncCommitteeBits(_ value: Any?, label: String) throws -> String {
         let bits = try normalizeRpcHex(value, label: label, byteLength: 64, allowZero: true)
-        guard syncCommitteeParticipation(bits) != 0 else {
+        let participation = syncCommitteeParticipation(bits)
+        guard participation != 0 else {
             throw EvmSccpProverError.zeroField(label)
         }
+        guard participation * 3 >= 512 * 2 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
         return bits
+    }
+
+    private static func normalizeFinalityBranch(_ value: Any?, label: String) throws -> [String] {
+        guard let branch = value as? [Any] else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        guard branch.count == 6 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        return try branch.enumerated().map { index, sibling in
+            try normalizeRpcHex(
+                sibling,
+                label: "\(label)[\(index)]",
+                byteLength: 32,
+                allowZero: true
+            )
+        }
     }
 
     private static func syncCommitteeParticipation(_ bits: String) -> UInt64 {
@@ -2459,6 +2509,19 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             return input[key]
         }
         return nil
+    }
+
+    private static func strictFirstPresent(_ input: [String: Any], label: String, _ keys: String...) throws -> Any? {
+        var selected: Any?
+        var found = false
+        for key in keys where input.keys.contains(key) {
+            guard !found else {
+                throw EvmSccpProverError.invalidPublicInputs(label)
+            }
+            selected = input[key]
+            found = true
+        }
+        return selected
     }
 
     private static func normalizeUnsignedInteger(_ value: Any?, label: String) throws -> UInt64 {
@@ -2947,7 +3010,12 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("receipt.status")
             }
             let receiptTransactionHash = try Self.normalizeRpcHex(
-                Self.firstPresent(currentReceipt, "transactionHash", "transaction_hash"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.transactionHash",
+                    "transactionHash",
+                    "transaction_hash"
+                ),
                 label: "receipt.transactionHash",
                 byteLength: 32
             )
@@ -2956,12 +3024,22 @@ public final class EthereumMainnetSccp {
             }
             transactionHash = receiptTransactionHash
             blockHash = try Self.normalizeRpcHex(
-                Self.firstPresent(currentReceipt, "blockHash", "block_hash"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.blockHash",
+                    "blockHash",
+                    "block_hash"
+                ),
                 label: "receipt.blockHash",
                 byteLength: 32
             )
             receiptBlockNumber = try Self.normalizePositiveRpcQuantity(
-                Self.firstPresent(currentReceipt, "blockNumber", "block_number"),
+                Self.strictFirstPresent(
+                    currentReceipt,
+                    label: "receipt.blockNumber",
+                    "blockNumber",
+                    "block_number"
+                ),
                 label: "receipt.blockNumber"
             )
             let sourceEvent = try Self.ethereumReceiptSourceEvent(
@@ -3001,7 +3079,13 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("block.hash")
             }
             let normalizedBlockNumber = try Self.normalizePositiveRpcQuantity(
-                Self.firstPresent(currentBlock, "number", "blockNumber", "block_number"),
+                Self.strictFirstPresent(
+                    currentBlock,
+                    label: "block.number",
+                    "number",
+                    "blockNumber",
+                    "block_number"
+                ),
                 label: "block.number"
             )
             if let receiptBlockNumber, receiptBlockNumber != normalizedBlockNumber {
@@ -3009,7 +3093,12 @@ public final class EthereumMainnetSccp {
             }
             receiptBlockNumber = normalizedBlockNumber
             blockReceiptsRoot = try Self.normalizeRpcHex(
-                Self.firstPresent(currentBlock, "receiptsRoot", "receipts_root"),
+                Self.strictFirstPresent(
+                    currentBlock,
+                    label: "block.receiptsRoot",
+                    "receiptsRoot",
+                    "receipts_root"
+                ),
                 label: "block.receiptsRoot",
                 byteLength: 32
             )
@@ -3064,8 +3153,9 @@ public final class EthereumMainnetSccp {
             guard let blockReceipts else {
                 throw EvmSccpProverError.invalidPublicInputs("blockReceipts")
             }
-            guard let receiptTransactionIndex = Self.firstPresent(
+            guard let receiptTransactionIndex = try Self.strictFirstPresent(
                 currentReceipt,
+                label: "receipt.transactionIndex",
                 "transactionIndex",
                 "transaction_index"
             ) else {
@@ -3099,7 +3189,12 @@ public final class EthereumMainnetSccp {
             }
             let indexedReceipt = blockReceipts[Int(targetIndex)]
             let indexedTransactionHash = try Self.normalizeRpcHex(
-                Self.firstPresent(indexedReceipt, "transactionHash", "transaction_hash"),
+                Self.strictFirstPresent(
+                    indexedReceipt,
+                    label: "blockReceipts.transactionHash",
+                    "transactionHash",
+                    "transaction_hash"
+                ),
                 label: "blockReceipts.transactionHash",
                 byteLength: 32
             )
@@ -3110,7 +3205,12 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("blockReceipts.transactionHash")
             }
             let indexedBlockHash = try Self.normalizeRpcHex(
-                Self.firstPresent(indexedReceipt, "blockHash", "block_hash"),
+                Self.strictFirstPresent(
+                    indexedReceipt,
+                    label: "blockReceipts.blockHash",
+                    "blockHash",
+                    "block_hash"
+                ),
                 label: "blockReceipts.blockHash",
                 byteLength: 32
             )
@@ -3118,7 +3218,12 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("blockReceipts.blockHash")
             }
             let indexedBlockNumber = try Self.normalizePositiveRpcQuantity(
-                Self.firstPresent(indexedReceipt, "blockNumber", "block_number"),
+                Self.strictFirstPresent(
+                    indexedReceipt,
+                    label: "blockReceipts.blockNumber",
+                    "blockNumber",
+                    "block_number"
+                ),
                 label: "blockReceipts.blockNumber"
             )
             guard indexedBlockNumber == receiptBlockNumber else {
@@ -3268,6 +3373,7 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.invalidPublicInputs("beaconFinality.beaconSlot")
         }
         for field in [
+            "finalityBranch",
             "syncCommitteeBits",
             "syncCommitteeSignature",
             "syncCommitteeParticipation",
@@ -3365,11 +3471,26 @@ public final class EthereumMainnetSccp {
               request.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("request.targetDomain")
         }
-        guard request.destinationBinding?.sourceDomain == sccpDomainSora else {
+        guard let destinationBinding = request.destinationBinding else {
+            throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding")
+        }
+        guard destinationBinding.sourceDomain == sccpDomainSora else {
             throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.sourceDomain")
         }
-        guard request.destinationBinding?.networkId == sccpEthereumMainnetNetworkId else {
+        guard destinationBinding.networkId == sccpEthereumMainnetNetworkId else {
             throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.networkId")
+        }
+        let destinationBindingHash = try requireEvmDestinationBindingForProofRequest(
+            publicInputs: request.publicInputs,
+            destinationBinding: destinationBinding,
+            backend: request.backend,
+            sourceDomain: request.sourceDomain
+        )
+        guard request.destinationBindingHash == destinationBindingHash else {
+            throw EvmSccpProverError.invalidPublicInputs("destinationBindingHash")
+        }
+        guard request.proofContext.destinationBindingHash == destinationBindingHash else {
+            throw EvmSccpProverError.invalidPublicInputs("proofContext.destinationBindingHash")
         }
     }
 
@@ -3738,6 +3859,9 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.invalidPublicInputs("beaconFinality.executionReceiptsRoot")
         }
         var normalized = finality
+        for key in Self.beaconFinalityAliasKeys {
+            normalized.removeValue(forKey: key)
+        }
         normalized["executionBlockNumber"] = String(executionBlockNumber)
         normalized["executionBlockHash"] = executionBlockHash
         normalized["executionReceiptsRoot"] = executionReceiptsRoot
@@ -3767,6 +3891,7 @@ public final class EthereumMainnetSccp {
                 byteLength: 32
             )
         }
+        var normalizedBeaconSlot: UInt64?
         if let beaconSlotInput = try Self.strictFirstPresent(
             finality,
             label: "beaconFinality.beaconSlot",
@@ -3783,18 +3908,33 @@ public final class EthereumMainnetSccp {
             guard beaconSlot != 0 else {
                 throw EvmSccpProverError.zeroField("beaconFinality.beaconSlot")
             }
+            normalizedBeaconSlot = beaconSlot
             normalized["beaconSlot"] = String(beaconSlot)
         }
+        if let finalityBranchInput = try Self.strictFirstPresent(
+            finality,
+            label: "beaconFinality.finalityBranch",
+            "finalityBranch",
+            "finality_branch"
+        ) {
+            normalized["finalityBranch"] = try Self.normalizeFinalityBranch(
+                finalityBranchInput,
+                label: "beaconFinality.finalityBranch"
+            )
+        }
+        var normalizedSyncCommitteeBits: String?
         if let syncCommitteeBitsInput = try Self.strictFirstPresent(
             finality,
             label: "beaconFinality.syncCommitteeBits",
             "syncCommitteeBits",
             "sync_committee_bits"
         ) {
-            normalized["syncCommitteeBits"] = try Self.normalizeFinalitySyncCommitteeBits(
+            let bits = try Self.normalizeFinalitySyncCommitteeBits(
                 syncCommitteeBitsInput,
                 label: "beaconFinality.syncCommitteeBits"
             )
+            normalizedSyncCommitteeBits = bits
+            normalized["syncCommitteeBits"] = bits
         }
         if let syncCommitteeSignatureInput = try Self.strictFirstPresent(
             finality,
@@ -3808,6 +3948,7 @@ public final class EthereumMainnetSccp {
                 byteLength: 96
             )
         }
+        var normalizedSyncSignatureSlot: UInt64?
         if let syncSignatureSlotInput = try Self.strictFirstPresent(
             finality,
             label: "beaconFinality.syncSignatureSlot",
@@ -3823,8 +3964,15 @@ public final class EthereumMainnetSccp {
             guard syncSignatureSlot != 0 else {
                 throw EvmSccpProverError.zeroField("beaconFinality.syncSignatureSlot")
             }
+            normalizedSyncSignatureSlot = syncSignatureSlot
             normalized["syncSignatureSlot"] = String(syncSignatureSlot)
         }
+        if let normalizedBeaconSlot,
+           let normalizedSyncSignatureSlot,
+           normalizedSyncSignatureSlot < normalizedBeaconSlot {
+            throw EvmSccpProverError.invalidPublicInputs("beaconFinality.syncSignatureSlot")
+        }
+        var normalizedSyncCommitteeParticipation: UInt64?
         if let syncCommitteeParticipationInput = try Self.strictFirstPresent(
             finality,
             label: "beaconFinality.syncCommitteeParticipation",
@@ -3838,17 +3986,82 @@ public final class EthereumMainnetSccp {
             guard syncCommitteeParticipation != 0 else {
                 throw EvmSccpProverError.zeroField("beaconFinality.syncCommitteeParticipation")
             }
+            normalizedSyncCommitteeParticipation = syncCommitteeParticipation
             normalized["syncCommitteeParticipation"] = String(syncCommitteeParticipation)
+        }
+        if let normalizedSyncCommitteeBits,
+           let normalizedSyncCommitteeParticipation,
+           normalizedSyncCommitteeParticipation != Self.finalitySyncCommitteeParticipation(normalizedSyncCommitteeBits) {
+            throw EvmSccpProverError.invalidPublicInputs("beaconFinality.syncCommitteeParticipation")
         }
         return normalized
     }
 
+    private static let beaconFinalityAliasKeys: [String] = [
+        "executionBlockNumber",
+        "execution_block_number",
+        "finalityHeight",
+        "finality_height",
+        "executionBlockHash",
+        "execution_block_hash",
+        "finalityBlockHash",
+        "finality_block_hash",
+        "executionReceiptsRoot",
+        "execution_receipts_root",
+        "receiptsRoot",
+        "receipts_root",
+        "finalizedHeaderRoot",
+        "finalized_header_root",
+        "beaconFinalizedRoot",
+        "beacon_finalized_root",
+        "syncCommitteeRoot",
+        "sync_committee_root",
+        "beaconSlot",
+        "beacon_slot",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+        "finalityBranch",
+        "finality_branch",
+        "syncCommitteeBits",
+        "sync_committee_bits",
+        "syncCommitteeSignature",
+        "sync_committee_signature",
+        "syncSignatureSlot",
+        "sync_signature_slot",
+        "signatureSlot",
+        "signature_slot",
+        "syncCommitteeParticipation",
+        "sync_committee_participation",
+    ]
+
     private static func normalizeFinalitySyncCommitteeBits(_ value: Any?, label: String) throws -> String {
         let bits = try normalizeRpcHex(value, label: label, byteLength: 64, allowZero: true)
-        guard finalitySyncCommitteeParticipation(bits) != 0 else {
+        let participation = finalitySyncCommitteeParticipation(bits)
+        guard participation != 0 else {
             throw EvmSccpProverError.zeroField(label)
         }
+        guard participation * 3 >= 512 * 2 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
         return bits
+    }
+
+    private static func normalizeFinalityBranch(_ value: Any?, label: String) throws -> [String] {
+        guard let branch = value as? [Any] else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        guard branch.count == 6 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        return try branch.enumerated().map { index, sibling in
+            try normalizeRpcHex(
+                sibling,
+                label: "\(label)[\(index)]",
+                byteLength: 32,
+                allowZero: true
+            )
+        }
     }
 
     private static func finalitySyncCommitteeParticipation(_ bits: String) -> UInt64 {

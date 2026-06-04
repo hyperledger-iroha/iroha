@@ -1,11 +1,13 @@
 use hkdf::Hkdf;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryRngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::KeyExchangeScheme;
-#[cfg(feature = "rand")]
-use crate::rng::os_rng;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
 
 const HKDF_SALT: &[u8] = b"iroha:x25519:hkdf:v1";
@@ -27,14 +29,22 @@ impl KeyExchangeScheme for X25519Sha256 {
 
     fn keypair(
         &self,
-        mut option: KeyGenOption<Self::PrivateKey>,
+        option: KeyGenOption<Self::PrivateKey>,
     ) -> (Self::PublicKey, Self::PrivateKey) {
+        self.try_keypair(option)
+            .expect("X25519 key generation should succeed")
+    }
+
+    fn try_keypair(
+        &self,
+        mut option: KeyGenOption<Self::PrivateKey>,
+    ) -> Result<(Self::PublicKey, Self::PrivateKey), Error> {
         match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
-                let sk = StaticSecret::random_from_rng(os_rng());
+                let sk = Self::random_private_key()?;
                 let pk = PublicKey::from(&sk);
-                (pk, sk)
+                Ok((pk, sk))
             }
             KeyGenOption::UseSeed(ref mut s) => {
                 let mut rng = rng_from_seed(s.clone());
@@ -43,11 +53,11 @@ impl KeyExchangeScheme for X25519Sha256 {
                 rand_core::RngCore::fill_bytes(&mut rng, &mut bytes);
                 let sk = StaticSecret::from(bytes);
                 let pk = PublicKey::from(&sk);
-                (pk, sk)
+                Ok((pk, sk))
             }
             KeyGenOption::FromPrivateKey(ref sk) => {
                 let pk = PublicKey::from(sk);
-                (pk, sk.clone())
+                Ok((pk, sk.clone()))
             }
         }
     }
@@ -100,6 +110,17 @@ impl KeyExchangeScheme for X25519Sha256 {
     const PRIVATE_KEY_SIZE: usize = 32;
 }
 
+impl X25519Sha256 {
+    #[cfg(feature = "rand")]
+    fn random_private_key() -> Result<StaticSecret, Error> {
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        OsRng
+            .try_fill_bytes(bytes.as_mut())
+            .map_err(|err| Error::KeyGen(format!("X25519 OS RNG failed: {err}")))?;
+        Ok(StaticSecret::from(*bytes))
+    }
+}
+
 fn is_low_order_public_key(public_key: &PublicKey) -> bool {
     let probe_secret = StaticSecret::from(LOW_ORDER_CHECK_PRIVATE_KEY);
     probe_secret
@@ -129,6 +150,26 @@ mod tests {
 
         let (public_key2, _secret_key1) = scheme.keypair(KeyGenOption::FromPrivateKey(secret_key1));
         assert_eq!(public_key2, public_key1);
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn try_keypair_random_derives_shared_secret() {
+        let scheme = X25519Sha256::new();
+        let (public_key1, secret_key1) = scheme
+            .try_keypair(KeyGenOption::Random)
+            .expect("checked random keypair");
+        let (public_key2, secret_key2) = scheme
+            .try_keypair(KeyGenOption::Random)
+            .expect("checked random keypair");
+
+        let shared_secret1 = scheme
+            .compute_shared_secret(&secret_key2, &public_key1)
+            .expect("shared secret");
+        let shared_secret2 = scheme
+            .compute_shared_secret(&secret_key1, &public_key2)
+            .expect("shared secret");
+        assert_eq!(shared_secret1.payload(), shared_secret2.payload());
     }
 
     #[test]

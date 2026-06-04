@@ -542,6 +542,7 @@ async function main() {
   const verifierAddress = await verifier.getAddress();
   const verifierCodeHash = await contractCodeHash(provider, verifierAddress);
   const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);
+  const bscMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(56), 32);
   const bridgeConstructorArgs = ({
     bridgeVerifierAddress = verifierAddress,
     bridgeVerifierCodeHash = verifierCodeHash,
@@ -629,6 +630,35 @@ async function main() {
       );
     },
     callException
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: bscMainnetNetworkId,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be ETH mainnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: ethMainnetNetworkId,
+          targetDomain: 2,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be BSC mainnet")
   );
 
   await assert.rejects(
@@ -1117,7 +1147,7 @@ async function main() {
         ]
       );
     },
-    callException
+    callExceptionWithReason("Verifier key hash is required")
   );
 
   await assert.rejects(
@@ -1138,7 +1168,7 @@ async function main() {
         ]
       );
     },
-    callException
+    callExceptionWithReason("Verifier key hash mismatch")
   );
 
   const groth16Bridge = await deploy(
@@ -1252,7 +1282,7 @@ async function main() {
         statementHash,
         ethers.ZeroHash
       ),
-    callException
+    callExceptionWithReason("Destination binding hash is required")
   );
 
   const zeroTargetGrothInputs = publicInputs.slice();
@@ -1642,7 +1672,7 @@ async function main() {
       );
       await replayGroth16Tx.wait();
     },
-    callException
+    callExceptionWithReason("Message proof already used")
   );
 
   const tronNetworkId = ethers.encodeBytes32String("tron-mainnet");

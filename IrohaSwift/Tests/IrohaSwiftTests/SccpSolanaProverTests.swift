@@ -3,6 +3,43 @@ import XCTest
 @testable import IrohaSwift
 
 final class SccpSolanaProverTests: XCTestCase {
+    private static let ethereumSyncCommitteeSupermajorityBits =
+        "0x" + String(repeating: "ff", count: 42) + "3f" + String(repeating: "00", count: 21)
+    private static let ethereumSyncCommitteeSupermajorityParticipation = "342"
+    private static let ethereumFinalityBranch =
+        (0..<6).map { "0x" + String(repeating: String(format: "%02x", 0x50 + $0), count: 32) }
+
+    private static func ethereumSyncCommitteeBytes(_ byte: UInt8, count: Int) -> [Data] {
+        (0..<512).map { index in
+            var value = Data(repeating: byte, count: count)
+            value[count - 2] = UInt8((index >> 8) & 0xff)
+            value[count - 1] = UInt8(index & 0xff)
+            return value
+        }
+    }
+
+    private static func ethereumSyncCommitteeWeights() -> [UInt64] {
+        Array(repeating: 1, count: 512)
+    }
+
+    private static func ethereumSyncCommitteeSignersBitmap(_ count: Int) -> Data {
+        var bitmap = Data(repeating: 0, count: 64)
+        for index in 0..<count {
+            let byteIndex = index / 8
+            bitmap[byteIndex] = bitmap[byteIndex] | UInt8(1 << (index % 8))
+        }
+        return bitmap
+    }
+
+    private static func sampleEthereumSyncCommitteePayload(publicKeyByte: UInt8 = 0x33,
+                                                           popByte: UInt8 = 0xcc) throws -> Data {
+        try canonicalEthSyncCommitteePayloadBytes(
+            syncCommitteePublicKeys: ethereumSyncCommitteeBytes(publicKeyByte, count: 48),
+            syncCommitteeWeights: ethereumSyncCommitteeWeights(),
+            syncCommitteePops: ethereumSyncCommitteeBytes(popByte, count: 96)
+        )
+    }
+
     private static let solanaSignature55 =
         "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU"
     private static let solanaSignature01 =
@@ -364,10 +401,21 @@ final class SccpSolanaProverTests: XCTestCase {
 
     private static func ethereumBeaconFinalityUpdateJson(slot: String = "32",
                                                          signatureSlot: String = "33",
-                                                         syncCommitteeBits: String = "0x01" + String(repeating: "00", count: 63),
+                                                         syncCommitteeBits: String = "0x" + String(repeating: "ff", count: 42) + "3f" + String(repeating: "00", count: 21),
                                                          syncCommitteeSignature: String = "0x" + String(repeating: "34", count: 96),
-                                                         executionOptimistic: Bool = false) -> Data {
-        Data("""
+                                                         executionOptimistic: Bool = false,
+                                                         includeFinalityBranch: Bool = true,
+                                                         finalityBranch: [String]? = nil) -> Data {
+        let finalityBranchJson = (finalityBranch ?? Self.ethereumFinalityBranch)
+            .map { "\"\($0)\"" }
+            .joined(separator: ",")
+        let finalityBranchField: String
+        if includeFinalityBranch {
+            finalityBranchField = "\"finality_branch\": [\(finalityBranchJson)],"
+        } else {
+            finalityBranchField = ""
+        }
+        return Data("""
         {
           "execution_optimistic": \(executionOptimistic),
           "data": {
@@ -380,6 +428,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 "body_root": "0x\(String(repeating: "03", count: 32))"
               }
             },
+            \(finalityBranchField)
             "sync_aggregate": {
               "sync_committee_bits": "\(syncCommitteeBits)",
               "sync_committee_signature": "\(syncCommitteeSignature)"
@@ -8872,6 +8921,19 @@ final class SccpSolanaProverTests: XCTestCase {
 
         let proofBytes = Self.sampleGroth16ProofBytes()
         let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: ethRequest)
+        do {
+            _ = try await facade.buildOutboundProofRequest(EvmSccpProofRequestInput(
+                publicInputs: ethRequest.publicInputs,
+                bundleBytes: ethRequest.bundleBytes,
+                sourceProofBytes: ethRequest.sourceProofBytes,
+                statementHash: ethRequest.statementHash,
+                destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+                destinationBinding: ethRequest.destinationBinding
+            ))
+            XCTFail("Ethereum outbound facade must reject forged destinationBindingHash before returning request")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("destinationBindingHash"))
+        }
         let forgedBindingHashRequest = try buildEvmSccpProofRequest(EvmSccpProofRequestInput(
             publicInputs: ethRequest.publicInputs,
             bundleBytes: ethRequest.bundleBytes,
@@ -9156,28 +9218,24 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence() async throws {
         let finalizedHeaderRoot = "0x" + String(repeating: "dd", count: 32)
-        let targetHeaderRoot = "0x" + String(repeating: "ee", count: 32)
+        let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
-        let syncCommitteePayload = try canonicalEthSyncCommitteePayloadBytes(
-            syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)],
-            syncCommitteeWeights: [1, 2],
-            syncCommitteePops: [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
-        )
+        let syncCommitteePayload = try Self.sampleEthereumSyncCommitteePayload()
         let syncCommitteeRoot = try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
         let transport = EthereumMainnetBeaconRestTransportStub(responses: [
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/headers/32?token=rpc": Self.ethereumBeaconResponse(
-                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "32")
+            "https://beacon.example/eth/v1/beacon/headers/64?token=rpc": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/blocks/32/root?token=rpc": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/blocks/64/root?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: targetHeaderRoot)
             ),
-            "https://beacon.example/eth/v2/beacon/blocks/32?token=rpc": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v2/beacon/blocks/64?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockJson(
-                    slot: "32",
+                    slot: "64",
                     blockHash: blockHash,
                     receiptsRoot: receiptsRoot
                 )
@@ -9202,7 +9260,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 "hash": blockHash,
                 "number": "0x1234",
                 "receiptsRoot": receiptsRoot,
-                "beaconSlot": "32",
+                "beaconSlot": "64",
             ],
             transactionHash: nil
         )
@@ -9212,16 +9270,17 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(finality["executionReceiptsRoot"] as? String, receiptsRoot)
         XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, targetHeaderRoot)
         XCTAssertEqual(finality["syncCommitteeRoot"] as? String, syncCommitteeRoot)
-        XCTAssertEqual(finality["beaconSlot"] as? String, "32")
-        XCTAssertEqual(finality["syncCommitteeBits"] as? String, "0x01" + String(repeating: "00", count: 63))
+        XCTAssertEqual(finality["beaconSlot"] as? String, "64")
+        XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        XCTAssertEqual(finality["syncCommitteeBits"] as? String, Self.ethereumSyncCommitteeSupermajorityBits)
         XCTAssertEqual(finality["syncCommitteeSignature"] as? String, "0x" + String(repeating: "34", count: 96))
-        XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, "1")
+        XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, Self.ethereumSyncCommitteeSupermajorityParticipation)
         XCTAssertEqual(finality["syncSignatureSlot"] as? String, "65")
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc",
-            "https://beacon.example/eth/v1/beacon/headers/32?token=rpc",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root?token=rpc",
-            "https://beacon.example/eth/v2/beacon/blocks/32?token=rpc",
+            "https://beacon.example/eth/v1/beacon/headers/64?token=rpc",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root?token=rpc",
+            "https://beacon.example/eth/v2/beacon/blocks/64?token=rpc",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update?token=rpc",
         ])
@@ -9230,7 +9289,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testEthereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp() async throws {
         let finalizedHeaderRoot = "0x" + String(repeating: "dd", count: 32)
-        let targetHeaderRoot = "0x" + String(repeating: "ee", count: 32)
+        let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
         let transport = EthereumMainnetBeaconRestTransportStub(responses: [
@@ -9240,15 +9299,15 @@ final class SccpSolanaProverTests: XCTestCase {
             "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/headers/32": Self.ethereumBeaconResponse(
-                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "32")
+            "https://beacon.example/eth/v1/beacon/headers/64": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/blocks/32/root": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/blocks/64/root": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: targetHeaderRoot)
             ),
-            "https://beacon.example/eth/v2/beacon/blocks/32": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v2/beacon/blocks/64": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockJson(
-                    slot: "32",
+                    slot: "64",
                     blockHash: blockHash,
                     receiptsRoot: receiptsRoot
                 )
@@ -9272,19 +9331,19 @@ final class SccpSolanaProverTests: XCTestCase {
                 "hash": blockHash,
                 "number": "0x1234",
                 "receiptsRoot": receiptsRoot,
-                "timestamp": "0x1e4",
+                "timestamp": "0x364",
             ],
             transactionHash: nil
         )
 
         XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, targetHeaderRoot)
-        XCTAssertEqual(finality["beaconSlot"] as? String, "32")
+        XCTAssertEqual(finality["beaconSlot"] as? String, "64")
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/genesis",
             "https://beacon.example/eth/v1/beacon/headers/finalized",
-            "https://beacon.example/eth/v1/beacon/headers/32",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root",
-            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/headers/64",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root",
+            "https://beacon.example/eth/v2/beacon/blocks/64",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update",
         ])
@@ -9359,11 +9418,7 @@ final class SccpSolanaProverTests: XCTestCase {
             "number": "0x1234",
             "receiptsRoot": "0x" + String(repeating: "cc", count: 32),
         ]
-        let syncCommitteePayload = try canonicalEthSyncCommitteePayloadBytes(
-            syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48)],
-            syncCommitteeWeights: [1],
-            syncCommitteePops: [Data(repeating: 0xaa, count: 96)]
-        )
+        let syncCommitteePayload = try Self.sampleEthereumSyncCommitteePayload()
         let syncCommitteeRoot = try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
 
         func provider(
@@ -9421,6 +9476,31 @@ final class SccpSolanaProverTests: XCTestCase {
             _ = try await provider(
                 header: Data(repeating: 0x7b, count: 1024 * 1024 + 1)
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        var historicalBlock = block
+        historicalBlock["beaconSlot"] = "32"
+        let historicalTransport = EthereumMainnetBeaconRestTransportStub(responses: [
+            "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
+            ),
+            "https://beacon.example/eth/v1/beacon/headers/32": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(
+                    finalizedHeaderRoot: "0x" + String(repeating: "aa", count: 32),
+                    slot: "32"
+                )
+            ),
+        ])
+        let historicalProvider = try EthereumMainnetBeaconRestConsensusProvider(
+            endpoint: "https://beacon.example/eth/v1",
+            syncCommitteeRoot: syncCommitteeRoot,
+            transport: historicalTransport
+        )
+        await assertEvmError(.invalidPublicInputs("beaconRest.targetHeader.ancestryProof")) {
+            _ = try await historicalProvider.collectFinalityEvidence(
+                receipt: nil,
+                block: historicalBlock,
+                transactionHash: nil
+            )
         }
         await assertEvmError(.invalidPublicInputs("beaconRest.finalizedHeader")) {
             _ = try await provider(
@@ -9543,6 +9623,44 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
         }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    syncCommitteeBits: "0x01" + String(repeating: "00", count: 63)
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.finality_branch")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(includeFinalityBranch: false)
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.finality_branch")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    finalityBranch: Array(Self.ethereumFinalityBranch.prefix(5))
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .zeroField("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    syncCommitteeSignature: "0x" + String(repeating: "00", count: 96)
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
         XCTAssertThrowsError(
             try EthereumMainnetBeaconRestConsensusProvider(
                 endpoint: "https://beacon.example/eth/v1",
@@ -9642,6 +9760,46 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(
                 error as? SccpSourceProofHashError,
                 .invalidRlp("blockReceipts[0].transactionIndex")
+            )
+        }
+        var conflictingReceiptIndex = typedReceipt
+        conflictingReceiptIndex["transaction_index"] = "0x0"
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingReceiptIndex], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionIndex")
+            )
+        }
+        var conflictingReceiptHash = typedReceipt
+        conflictingReceiptHash["transaction_hash"] = typedReceipt["transactionHash"]
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingReceiptHash], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionHash")
+            )
+        }
+        var conflictingCumulativeGas = typedReceipt
+        conflictingCumulativeGas["cumulative_gas_used"] = "0x5208"
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingCumulativeGas], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("receipt.cumulativeGasUsed")
+            )
+        }
+        var conflictingLogsBloom = typedReceipt
+        conflictingLogsBloom["logs_bloom"] = logsBloom
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingLogsBloom], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("receipt.logsBloom")
             )
         }
         var duplicateHashReceipt = legacyReceipt
@@ -9778,9 +9936,10 @@ final class SccpSolanaProverTests: XCTestCase {
             "receiptsRoot": "0x" + String(repeating: "cc", count: 32),
         ]
         let beaconFinalityUpdateFields: [String: Any] = [
-            "syncCommitteeBits": "0x01" + String(repeating: "00", count: 63),
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
             "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
-            "syncCommitteeParticipation": "1",
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
             "syncSignatureSlot": "65",
         ]
         let beaconFinalityEvidence = EthereumMainnetBeaconFinalityEvidence(
@@ -9788,16 +9947,18 @@ final class SccpSolanaProverTests: XCTestCase {
             executionBlockHash: blockHash,
             executionReceiptsRoot: "0x" + String(repeating: "cc", count: 32),
             beaconSlot: "0x20",
-            syncCommitteeBits: "0x01" + String(repeating: "00", count: 63),
+            syncCommitteeBits: Self.ethereumSyncCommitteeSupermajorityBits,
             syncCommitteeSignature: "0x" + String(repeating: "34", count: 96),
-            syncCommitteeParticipation: "1",
+            syncCommitteeParticipation: Self.ethereumSyncCommitteeSupermajorityParticipation,
             syncSignatureSlot: "65",
             additionalFields: [
                 "finalizedHeaderRoot": "0x" + String(repeating: "dd", count: 32),
                 "syncCommitteeRoot": "0x" + String(repeating: "aa", count: 32),
+                "finalityBranch": Self.ethereumFinalityBranch,
             ]
         )
         let beaconFinality = beaconFinalityEvidence.dictionary
+        XCTAssertEqual(beaconFinality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
         let autoReceiptBlock: [String: Any] = [
             "hash": blockHash,
             "number": "0x1234",
@@ -9810,6 +9971,7 @@ final class SccpSolanaProverTests: XCTestCase {
             "finalizedHeaderRoot": "0x" + String(repeating: "dd", count: 32),
             "syncCommitteeRoot": "0x" + String(repeating: "aa", count: 32),
             "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
         ].merging(beaconFinalityUpdateFields) { _, new in new }
         let autoReceiptInclusionBranch = [Data(repeating: 0x44, count: 32)]
         let autoReceiptProvider = EthereumMainnetExecutionProviderStub(
@@ -9854,6 +10016,99 @@ final class SccpSolanaProverTests: XCTestCase {
                 inclusionBranch: autoReceiptProof.inclusionBranch
             )
         )
+        for (alias, value, label) in [
+            ("transaction_hash", "0x" + String(repeating: "ab", count: 32), "receipt.transactionHash"),
+            ("block_hash", "0x" + String(repeating: "ab", count: 32), "receipt.blockHash"),
+            ("block_number", "0x1235", "receipt.blockNumber"),
+            ("transaction_index", "0x0", "receipt.transactionIndex"),
+        ] {
+            var conflictingReceipt = rlpSourceReceipt
+            conflictingReceipt[alias] = value
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: conflictingReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        for (alias, value) in [
+            ("blockNumber", "0x1235"),
+            ("block_number", "0x1235"),
+        ] {
+            var conflictingBlock = autoReceiptBlock
+            conflictingBlock[alias] = value
+            await assertEvmError(.invalidPublicInputs("block.number")) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: conflictingBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        var conflictingBlockReceiptsRoot = autoReceiptBlock
+        conflictingBlockReceiptsRoot["receipts_root"] = "0x" + String(repeating: "ab", count: 32)
+        await assertEvmError(.invalidPublicInputs("block.receiptsRoot")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: rlpSourceReceipt,
+                    block: conflictingBlockReceiptsRoot,
+                    beaconFinality: autoReceiptFinality,
+                    blockReceipts: blockReceipts,
+                    inclusionBranch: autoReceiptInclusionBranch,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        for (alias, value, label) in [
+            ("block_hash", "0x" + String(repeating: "ab", count: 32), "blockReceipts.blockHash"),
+            ("block_number", "0x1235", "blockReceipts.blockNumber"),
+        ] {
+            var conflictingIndexedReceipt = rlpSourceReceipt
+            conflictingIndexedReceipt[alias] = value
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: [conflictingIndexedReceipt, otherReceipt],
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        var conflictingIndexedHashReceipt = rlpSourceReceipt
+        conflictingIndexedHashReceipt["transaction_hash"] = rlpSourceReceipt["transactionHash"]
+        do {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: rlpSourceReceipt,
+                    block: autoReceiptBlock,
+                    beaconFinality: autoReceiptFinality,
+                    blockReceipts: [conflictingIndexedHashReceipt, otherReceipt],
+                    inclusionBranch: autoReceiptInclusionBranch,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+            XCTFail("expected blockReceipts[0].transactionHash")
+        } catch {
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionHash")
+            )
+        }
         await assertEvmError(.invalidPublicInputs("receiptProof.executionReceiptsRoot")) {
             _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -9987,6 +10242,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(evidence.beaconFinality?["finalizedHeaderRoot"] as? String, beaconFinality["finalizedHeaderRoot"] as? String)
         XCTAssertEqual(evidence.beaconFinality?["syncCommitteeRoot"] as? String, beaconFinality["syncCommitteeRoot"] as? String)
         XCTAssertEqual(evidence.beaconFinality?["beaconSlot"] as? String, "32")
+        XCTAssertEqual(evidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
         XCTAssertEqual(evidence.beaconFinality?["executionReceiptsRoot"] as? String, "0x" + String(repeating: "cc", count: 32))
         XCTAssertEqual(consensusProvider.calls, 1)
         XCTAssertEqual(provider.calls, ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"])
@@ -10002,18 +10258,6 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
-        let proofBytes = try await sdk.proveInboundToSora(
-            EthereumMainnetInboundEvidence(
-                transactionHash: evidence.transactionHash,
-                receipt: sourceReceipt,
-                block: evidence.block,
-                beaconFinality: evidence.beaconFinality,
-                receiptProof: receiptProof,
-                receiptProofHash: receiptProofHash,
-                sourceBridgeEmitterAddress: sourceBridgeAddress
-            )
-        )
-        XCTAssertEqual(proofBytes, Data([1, 2, 3]))
         let proofReadyEvidence = EthereumMainnetInboundEvidence(
             transactionHash: evidence.transactionHash,
             receipt: sourceReceipt,
@@ -10023,6 +10267,26 @@ final class SccpSolanaProverTests: XCTestCase {
             receiptProofHash: receiptProofHash,
             sourceBridgeEmitterAddress: sourceBridgeAddress
         )
+        XCTAssertEqual(proofReadyEvidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        let recollectedProofReadyEvidence = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(proofReadyEvidence)
+        XCTAssertEqual(recollectedProofReadyEvidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        let proofBytes = try await sdk.proveInboundToSora(proofReadyEvidence)
+        XCTAssertEqual(proofBytes, Data([1, 2, 3]))
+        var missingFinalityBranchFinality = try XCTUnwrap(evidence.beaconFinality)
+        missingFinalityBranchFinality.removeValue(forKey: "finalityBranch")
+        await assertEvmError(.invalidPublicInputs("beaconFinality.finalityBranch")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: missingFinalityBranchFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
         var missingSyncBitsFinality = try XCTUnwrap(evidence.beaconFinality)
         missingSyncBitsFinality.removeValue(forKey: "syncCommitteeBits")
         await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeBits")) {
@@ -10053,6 +10317,126 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
+        var mismatchedSyncParticipationFinality = try XCTUnwrap(evidence.beaconFinality)
+        mismatchedSyncParticipationFinality["syncCommitteeParticipation"] = "341"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeParticipation")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: mismatchedSyncParticipationFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var underQuorumSyncBitsFinality = try XCTUnwrap(evidence.beaconFinality)
+        underQuorumSyncBitsFinality["syncCommitteeBits"] = "0x01" + String(repeating: "00", count: 63)
+        underQuorumSyncBitsFinality["syncCommitteeParticipation"] = "1"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeBits")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: underQuorumSyncBitsFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var staleSyncSignatureSlotFinality = try XCTUnwrap(evidence.beaconFinality)
+        staleSyncSignatureSlotFinality["syncSignatureSlot"] = "31"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncSignatureSlot")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: staleSyncSignatureSlotFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var zeroSyncCommitteeSignatureFinality = try XCTUnwrap(evidence.beaconFinality)
+        zeroSyncCommitteeSignatureFinality["syncCommitteeSignature"] = "0x" + String(repeating: "00", count: 96)
+        await assertEvmError(.zeroField("beaconFinality.syncCommitteeSignature")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: zeroSyncCommitteeSignatureFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        let aliasOnlyFinality: [String: Any] = [
+            "execution_block_number": "0x1234",
+            "finality_block_hash": blockHash,
+            "receipts_root": "0x" + String(repeating: "cc", count: 32),
+            "finalized_header_root": "0x" + String(repeating: "dd", count: 32),
+            "sync_committee_root": "0x" + String(repeating: "aa", count: 32),
+            "beacon_slot": "0x20",
+            "finality_branch": Self.ethereumFinalityBranch,
+            "sync_committee_bits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "sync_committee_signature": "0x" + String(repeating: "34", count: 96),
+            "sync_committee_participation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "signature_slot": "65",
+            "extensionWitness": "kept",
+        ]
+        let aliasOnlyProof = try await EthereumMainnetSccp(
+            inboundProveFunction: { evidence in
+                let finality = try XCTUnwrap(evidence.beaconFinality)
+                XCTAssertEqual(finality["executionBlockNumber"] as? String, "4660")
+                XCTAssertEqual(finality["executionBlockHash"] as? String, blockHash)
+                XCTAssertEqual(finality["executionReceiptsRoot"] as? String, "0x" + String(repeating: "cc", count: 32))
+                XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, "0x" + String(repeating: "dd", count: 32))
+                XCTAssertEqual(finality["syncCommitteeRoot"] as? String, "0x" + String(repeating: "aa", count: 32))
+                XCTAssertEqual(finality["beaconSlot"] as? String, "32")
+                XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+                XCTAssertEqual(finality["syncCommitteeBits"] as? String, Self.ethereumSyncCommitteeSupermajorityBits)
+                XCTAssertEqual(finality["syncCommitteeSignature"] as? String, "0x" + String(repeating: "34", count: 96))
+                XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, Self.ethereumSyncCommitteeSupermajorityParticipation)
+                XCTAssertEqual(finality["syncSignatureSlot"] as? String, "65")
+                XCTAssertEqual(finality["extensionWitness"] as? String, "kept")
+                for alias in [
+                    "execution_block_number",
+                    "finalityHeight",
+                    "finality_block_hash",
+                    "receipts_root",
+                    "finalized_header_root",
+                    "sync_committee_root",
+                    "beacon_slot",
+                    "finality_branch",
+                    "sync_committee_bits",
+                    "sync_committee_signature",
+                    "sync_committee_participation",
+                    "signature_slot",
+                ] {
+                    XCTAssertFalse(finality.keys.contains(alias))
+                }
+                return Data([4, 5, 6])
+            }
+        ).proveInboundToSora(
+            EthereumMainnetInboundEvidence(
+                transactionHash: evidence.transactionHash,
+                receipt: sourceReceipt,
+                block: evidence.block,
+                beaconFinality: aliasOnlyFinality,
+                receiptProof: receiptProof,
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
+            )
+        )
+        XCTAssertEqual(aliasOnlyProof, Data([4, 5, 6]))
         for (alias, value, label) in [
             ("finalized_header_root", "0x" + String(repeating: "13", count: 32), "beaconFinality.finalizedHeaderRoot"),
             ("sync_committee_root", "0x" + String(repeating: "14", count: 32), "beaconFinality.syncCommitteeRoot"),
@@ -12736,44 +13120,31 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         )
 
-        let parentSyncKeys = [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)]
-        let parentSyncWeights: [UInt64] = [1, 2]
-        let parentSyncPops = [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
-        let nextSyncKeys = [Data(repeating: 0x33, count: 48), Data(repeating: 0x44, count: 48)]
-        let nextSyncWeights: [UInt64] = [3, 4]
-        let nextSyncPops = [Data(repeating: 0xcc, count: 96), Data(repeating: 0xdd, count: 96)]
+        let parentSyncKeys = Self.ethereumSyncCommitteeBytes(0x11, count: 48)
+        let parentSyncWeights = Self.ethereumSyncCommitteeWeights()
+        let parentSyncPops = Self.ethereumSyncCommitteeBytes(0xaa, count: 96)
+        let nextSyncKeys = Self.ethereumSyncCommitteeBytes(0x33, count: 48)
+        let nextSyncWeights = Self.ethereumSyncCommitteeWeights()
+        let nextSyncPops = Self.ethereumSyncCommitteeBytes(0xcc, count: 96)
         let nextSyncPayload = try canonicalEthSyncCommitteePayloadBytes(
             syncCommitteePublicKeys: nextSyncKeys,
             syncCommitteeWeights: nextSyncWeights,
             syncCommitteePops: nextSyncPops
         )
-        XCTAssertEqual(
-            try ethSyncCommitteeHash(
-                syncCommitteePublicKeys: parentSyncKeys,
-                syncCommitteeWeights: parentSyncWeights,
-                syncCommitteePops: parentSyncPops
-            ),
-            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536"
+        let parentSyncCommitteeHash = try ethSyncCommitteeHash(
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops
         )
-        XCTAssertEqual(
-            nextSyncPayload.hexEncodedString(),
-            "010200000030000000"
-                + String(repeating: "33", count: 48)
-                + "030000000000000060000000"
-                + String(repeating: "cc", count: 96)
-                + "30000000"
-                + String(repeating: "44", count: 48)
-                + "040000000000000060000000"
-                + String(repeating: "dd", count: 96)
-        )
-        XCTAssertEqual(
-            try ethSyncCommitteeHashFromPayload(payload: nextSyncPayload),
-            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
-        )
-        XCTAssertEqual(
-            try ethSyncCommitteePayloadHash(payload: nextSyncPayload),
-            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
-        )
+        let nextSyncCommitteeHash = try ethSyncCommitteeHashFromPayload(payload: nextSyncPayload)
+        let nextSyncCommitteePayloadHash = try ethSyncCommitteePayloadHash(payload: nextSyncPayload)
+        func assertHex32(_ value: String) {
+            XCTAssertNotNil(value.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression))
+        }
+        XCTAssertEqual(nextSyncPayload.count, 81_925)
+        assertHex32(parentSyncCommitteeHash)
+        assertHex32(nextSyncCommitteeHash)
+        assertHex32(nextSyncCommitteePayloadHash)
         XCTAssertEqual(sccpEthMainnetSlotsPerSyncCommitteePeriod, 8192)
         XCTAssertEqual(ethMainnetSyncCommitteePeriodForSlot(19), 0)
         XCTAssertEqual(ethMainnetSyncCommitteePeriodForSlot(8192), 1)
@@ -12782,23 +13153,20 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )
-        XCTAssertEqual(
-            ethTransitionMessageHash,
-            "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e"
-        )
+        assertHex32(ethTransitionMessageHash)
         XCTAssertThrowsError(try canonicalEthSyncCommitteeTransitionMessageBytes(
             fromSyncPeriod: 0,
             toSyncPeriod: 2,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("toSyncPeriod"))
@@ -12808,9 +13176,9 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 2,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transitionSlot"))
@@ -12820,114 +13188,153 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 1,
             transitionSlot: 0,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transitionSlot"))
         }
-        XCTAssertEqual(try canonicalEthSyncCommitteeTransitionSignatureBytes(
+        let transitionSignatureTranscript = try canonicalEthSyncCommitteeTransitionSignatureBytes(
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
-        ).count, 1068)
-        XCTAssertEqual(try ethSyncCommitteeTransitionSignatureHash(
+        )
+        XCTAssertGreaterThan(transitionSignatureTranscript.count, nextSyncPayload.count)
+        let ethTransitionSignatureHash = try ethSyncCommitteeTransitionSignatureHash(
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
-        ), "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d")
+        )
+        assertHex32(ethTransitionSignatureHash)
         XCTAssertThrowsError(try canonicalEthSyncCommitteeTransitionSignatureBytes(
             version: 0,
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
         ))
         XCTAssertThrowsError(try canonicalEthBeaconSyncCommitteeProofBytes(
             version: 0,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteeMessageHash: ethTransitionMessageHash,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
         ))
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: Array(repeating: Data(repeating: 0x11, count: 48), count: 513),
-                syncCommitteeWeights: Array(repeating: 1, count: 513),
-                syncCommitteePops: Array(repeating: Data(repeating: 0xaa, count: 96), count: 513)
+                syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)],
+                syncCommitteeWeights: [1, 1],
+                syncCommitteePops: [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
             )
         )
+        var weightedSyncWeights = parentSyncWeights
+        weightedSyncWeights[0] = 2
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: [Data(repeating: 0x11, count: 47), parentSyncKeys[1]],
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: weightedSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        var oversizedSyncKeys = parentSyncKeys
+        oversizedSyncKeys.append(Data(repeating: 0x55, count: 48))
+        var oversizedSyncWeights = parentSyncWeights
+        oversizedSyncWeights.append(1)
+        var oversizedSyncPops = parentSyncPops
+        oversizedSyncPops.append(Data(repeating: 0xdd, count: 96))
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: oversizedSyncKeys,
+                syncCommitteeWeights: oversizedSyncWeights,
+                syncCommitteePops: oversizedSyncPops
+            )
+        )
+        var shortSyncKeys = parentSyncKeys
+        shortSyncKeys[0] = Data(repeating: 0x11, count: 47)
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: shortSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops
             )
         )
+        var zeroSyncKeys = parentSyncKeys
+        zeroSyncKeys[0] = Data(repeating: 0, count: 48)
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: [Data(repeating: 0, count: 48), parentSyncKeys[1]],
+                syncCommitteePublicKeys: zeroSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops
             )
         )
+        var duplicateSyncKeys = parentSyncKeys
+        duplicateSyncKeys[1] = duplicateSyncKeys[0]
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: duplicateSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        var zeroSyncPops = parentSyncPops
+        zeroSyncPops[0] = Data(repeating: 0, count: 96)
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
-                syncCommitteePops: [Data(repeating: 0, count: 96), parentSyncPops[1]]
+                syncCommitteePops: zeroSyncPops
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
@@ -12938,73 +13345,73 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
+                totalWeight: 512,
                 signedWeight: 0,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x00]),
+                signersBitmap: Data(repeating: 0, count: 64),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 341,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x04]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 2,
+                totalWeight: 512,
+                signedWeight: 511,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x01]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 4,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 341,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x03]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(341),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 1,
+                totalWeight: 511,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x01]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x03]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0, count: 96)
             )
         )

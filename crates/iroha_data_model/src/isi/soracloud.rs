@@ -17,8 +17,8 @@ use crate::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
+        AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1, DecryptionAuthorityPolicyV1,
+        DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
         SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
         SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
         SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
@@ -369,6 +369,8 @@ pub struct RunSoracloudFheJob {
     pub param_set: FheParamSetV1,
     /// Public evaluation keys used for homomorphic execution.
     pub evaluation_keys: BfvEvaluationKeyBundle,
+    /// Public deterministic refresh transcript inventory for evaluation keys.
+    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1561,6 +1563,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

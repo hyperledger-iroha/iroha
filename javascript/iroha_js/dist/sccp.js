@@ -479,16 +479,15 @@ const SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR = 0x8e81278a;
 const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
 const SCCP_EVM_MAX_BLOCK_RECEIPTS = 4096;
 const SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
+const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES;
 const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48;
 const SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96;
 const SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNATURE_BYTES = 192;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES =
   1 + 4 + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES *
-    (4 + SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES);
+    (4 + SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + SCCP_ETH_SYNC_COMMITTEE_POP_BYTES);
 const SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNERS_BITMAP_BYTES =
   Math.ceil(SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES / 8);
 const SCCP_SUBSTRATE_MAX_AUTHORITIES = 2048;
@@ -505,6 +504,7 @@ const SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS = 200n;
 const SCCP_EVM_MAX_RECEIPT_VALUE_BYTES = 16 * 1024;
 const SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9n;
 const SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4;
+const SCCP_ETH_FINALITY_BRANCH_DEPTH = 6;
 const SCCP_TRON_MAX_MPT_PROOF_NODES = 64;
 const SCCP_TRON_MAX_MPT_NODE_BYTES = 16 * 1024;
 const SCCP_TRON_MAX_RAW_HEADER_BYTES = 16 * 1024;
@@ -7372,7 +7372,12 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
         throw new TypeError("SCCP source event log data must be 0x");
       }
       const logTransactionHash = requireEthereumRpcHexData(
-        log.transactionHash ?? log.transaction_hash,
+        strictResultField(
+          log,
+          `receipt.logs[${index}].transactionHash`,
+          "transactionHash",
+          "transaction_hash",
+        ),
         `receipt.logs[${index}].transactionHash`,
         32,
       );
@@ -7380,7 +7385,12 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
         throw new TypeError("receipt.logs transactionHash must match receipt.transactionHash");
       }
       const logBlockHash = requireEthereumRpcHexData(
-        log.blockHash ?? log.block_hash,
+        strictResultField(
+          log,
+          `receipt.logs[${index}].blockHash`,
+          "blockHash",
+          "block_hash",
+        ),
         `receipt.logs[${index}].blockHash`,
         32,
       );
@@ -7388,7 +7398,12 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
         throw new TypeError("receipt.logs blockHash must match receipt.blockHash");
       }
       const logBlockNumberValue = requireEthereumRpcQuantity(
-        log.blockNumber ?? log.block_number,
+        strictResultField(
+          log,
+          `receipt.logs[${index}].blockNumber`,
+          "blockNumber",
+          "block_number",
+        ),
         `receipt.logs[${index}].blockNumber`,
       );
       const logBlockNumber = `0x${logBlockNumberValue.toString(16)}`;
@@ -7427,7 +7442,12 @@ const normalizeEvmMainnetReceipt = (receipt, suppliedTransactionHash, label) => 
     throw new TypeError(`${label} inbound receipt status must be 0x1`);
   }
   const receiptTransactionHash = requireEthereumRpcHexData(
-    receipt.transactionHash ?? receipt.transaction_hash,
+    strictResultField(
+      receipt,
+      "receipt.transactionHash",
+      "transactionHash",
+      "transaction_hash",
+    ),
     "receipt.transactionHash",
     32,
   );
@@ -7435,11 +7455,16 @@ const normalizeEvmMainnetReceipt = (receipt, suppliedTransactionHash, label) => 
     throw new TypeError("receipt.transactionHash must match transactionHash");
   }
   const blockHash = requireEthereumRpcHexData(
-    receipt.blockHash ?? receipt.block_hash,
+    strictResultField(receipt, "receipt.blockHash", "blockHash", "block_hash"),
     "receipt.blockHash",
     32,
   );
-  const blockNumberInput = receipt.blockNumber ?? receipt.block_number;
+  const blockNumberInput = strictResultField(
+    receipt,
+    "receipt.blockNumber",
+    "blockNumber",
+    "block_number",
+  );
   if (blockNumberInput === undefined) {
     throw new TypeError("receipt.blockNumber is required");
   }
@@ -7473,7 +7498,13 @@ const normalizeEvmMainnetBlock = (block, expectedBlockHash, expectedBlockNumber,
   if (blockHash !== expectedBlockHash) {
     throw new TypeError("block.hash must match receipt.blockHash");
   }
-  const blockNumberInput = block.number ?? block.blockNumber ?? block.block_number;
+  const blockNumberInput = strictResultField(
+    block,
+    "block.number",
+    "number",
+    "blockNumber",
+    "block_number",
+  );
   if (blockNumberInput === undefined) {
     throw new TypeError("block.number is required");
   }
@@ -7486,7 +7517,7 @@ const normalizeEvmMainnetBlock = (block, expectedBlockHash, expectedBlockNumber,
     throw new TypeError("block.number must match receipt.blockNumber");
   }
   requireEthereumRpcHexData(
-    block.receiptsRoot ?? block.receipts_root,
+    strictResultField(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
     "block.receiptsRoot",
     32,
   );
@@ -7626,6 +7657,19 @@ const normalizeEthereumMainnetBeaconFinality = (
           syncCommitteeBitsInput,
           "beaconFinality.syncCommitteeBits",
         );
+  const finalityBranchInput = strictOptionalResultField(
+    finality,
+    "beaconFinality.finalityBranch",
+    "finalityBranch",
+    "finality_branch",
+  );
+  const finalityBranch =
+    finalityBranchInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? undefined
+      : normalizeEthereumMainnetFinalityBranch(
+          finalityBranchInput,
+          "beaconFinality.finalityBranch",
+        );
   const syncCommitteeSignatureInput = strictOptionalResultField(
     finality,
     "beaconFinality.syncCommitteeSignature",
@@ -7655,6 +7699,15 @@ const normalizeEthereumMainnetBeaconFinality = (
   if (syncSignatureSlot === 0n) {
     throw new RangeError("beaconFinality.syncSignatureSlot must be positive");
   }
+  if (
+    beaconSlot !== undefined &&
+    syncSignatureSlot !== undefined &&
+    syncSignatureSlot < beaconSlot
+  ) {
+    throw new TypeError(
+      "beaconFinality.syncSignatureSlot must cover beaconFinality.beaconSlot",
+    );
+  }
   const syncCommitteeParticipationInput = strictOptionalResultField(
     finality,
     "beaconFinality.syncCommitteeParticipation",
@@ -7671,14 +7724,69 @@ const normalizeEthereumMainnetBeaconFinality = (
   if (syncCommitteeParticipation === 0n) {
     throw new RangeError("beaconFinality.syncCommitteeParticipation must be positive");
   }
+  if (
+    syncCommitteeBits !== undefined &&
+    syncCommitteeParticipation !== undefined &&
+    syncCommitteeParticipation !==
+      BigInt(
+        ethereumMainnetBeaconRestPopcount(
+          hexToBytes(syncCommitteeBits, "beaconFinality.syncCommitteeBits", 64),
+        ),
+      )
+  ) {
+    throw new TypeError(
+      "beaconFinality.syncCommitteeParticipation must match syncCommitteeBits",
+    );
+  }
+  const normalized = { ...finality };
+  for (const key of [
+    "executionBlockNumber",
+    "execution_block_number",
+    "finalityHeight",
+    "finality_height",
+    "executionBlockHash",
+    "execution_block_hash",
+    "finalityBlockHash",
+    "finality_block_hash",
+    "executionReceiptsRoot",
+    "execution_receipts_root",
+    "receiptsRoot",
+    "receipts_root",
+    "finalizedHeaderRoot",
+    "finalized_header_root",
+    "beaconFinalizedRoot",
+    "beacon_finalized_root",
+    "syncCommitteeRoot",
+    "sync_committee_root",
+    "beaconSlot",
+    "beacon_slot",
+    "finalizedSlot",
+    "finalized_slot",
+    "slot",
+    "finalityBranch",
+    "finality_branch",
+    "syncCommitteeBits",
+    "sync_committee_bits",
+    "syncCommitteeSignature",
+    "sync_committee_signature",
+    "syncSignatureSlot",
+    "sync_signature_slot",
+    "signatureSlot",
+    "signature_slot",
+    "syncCommitteeParticipation",
+    "sync_committee_participation",
+  ]) {
+    delete normalized[key];
+  }
   return Object.freeze({
-    ...finality,
+    ...normalized,
     executionBlockNumber: executionBlockNumber.toString(),
     executionBlockHash,
     executionReceiptsRoot,
     ...(finalizedHeaderRoot === undefined ? {} : { finalizedHeaderRoot }),
     ...(syncCommitteeRoot === undefined ? {} : { syncCommitteeRoot }),
     ...(beaconSlot === undefined ? {} : { beaconSlot: beaconSlot.toString() }),
+    ...(finalityBranch === undefined ? {} : { finalityBranch }),
     ...(syncCommitteeBits === undefined ? {} : { syncCommitteeBits }),
     ...(syncCommitteeSignature === undefined ? {} : { syncCommitteeSignature }),
     ...(syncSignatureSlot === undefined ? {} : { syncSignatureSlot: syncSignatureSlot.toString() }),
@@ -8287,6 +8395,9 @@ const ethereumMainnetBeaconRestPopcount = (bytes) => {
   return count;
 };
 
+const hasEthereumMainnetSyncCommitteeSupermajority = (participation) =>
+  participation * 3n >= 512n * 2n;
+
 const normalizeEthereumMainnetBeaconRestSyncCommitteeBits = (value, label) => {
   const bits = requireEthereumRpcHexData(value, label, 64, { nonzero: false });
   const bitBytes = hexToBytes(bits, label, 64);
@@ -8294,7 +8405,28 @@ const normalizeEthereumMainnetBeaconRestSyncCommitteeBits = (value, label) => {
   if (participation === 0n) {
     throw new TypeError(`${label} must contain at least one participant`);
   }
+  if (!hasEthereumMainnetSyncCommitteeSupermajority(participation)) {
+    throw new TypeError(`${label} must contain Ethereum sync committee supermajority`);
+  }
   return bits;
+};
+
+const normalizeEthereumMainnetFinalityBranch = (value, label) => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  if (value.length !== SCCP_ETH_FINALITY_BRANCH_DEPTH) {
+    throw new TypeError(
+      `${label} must contain 6 siblings`,
+    );
+  }
+  return Object.freeze(
+    value.map((sibling, index) =>
+      requireEthereumRpcHexData(sibling, `${label}[${index}]`, 32, {
+        nonzero: false,
+      }),
+    ),
+  );
 };
 
 const ethereumMainnetBeaconRestFinalityUpdateSummary = (
@@ -8371,6 +8503,14 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
     ),
     "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
   );
+  const finalityBranch = normalizeEthereumMainnetFinalityBranch(
+    requireEthereumMainnetBeaconRestField(
+      data,
+      "Ethereum mainnet Beacon REST light-client finality update.data",
+      "finality_branch",
+    ),
+    "Ethereum mainnet Beacon REST light-client finality update.data.finality_branch",
+  );
   const syncCommitteeSignature = requireEthereumRpcHexData(
     requireEthereumMainnetBeaconRestField(
       syncAggregate,
@@ -8381,6 +8521,7 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
     96,
   );
   return {
+    finalityBranch,
     syncCommitteeBits,
     syncCommitteeSignature,
     syncCommitteeParticipation: ethereumMainnetBeaconRestPopcount(
@@ -8532,6 +8673,11 @@ export class EthereumMainnetBeaconRestConsensusProvider {
         "Ethereum mainnet Beacon REST target block is newer than the finalized header",
       );
     }
+    if (targetHeader.slot < finalizedHeader.slot) {
+      throw new TypeError(
+        "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
+      );
+    }
     if (targetHeader.slot === finalizedHeader.slot && targetHeader.root !== finalizedHeader.root) {
       throw new TypeError(
         "Ethereum mainnet Beacon REST target header root must match finalized header root at the same slot",
@@ -8567,7 +8713,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       "finalizedBlockRoot",
       32,
     );
-    if (finalizedBlockRoot !== targetHeader.root) {
+    if (finalizedBlockRoot !== finalizedHeader.root) {
       throw new TypeError(
         "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
       );
@@ -8582,7 +8728,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       "Ethereum mainnet Beacon REST finalized block",
     );
     requireEthereumMainnetBeaconRestExecutionPayloadBinding(blockResponse, {
-      beaconSlot: targetHeader.slot,
+      beaconSlot: finalizedHeader.slot,
       executionBlockHash: blockHash,
       executionBlockNumber,
       executionReceiptsRoot,
@@ -8663,9 +8809,9 @@ export class EthereumMainnetBeaconRestConsensusProvider {
         executionBlockNumber,
         executionBlockHash: blockHash,
         executionReceiptsRoot,
-        finalizedHeaderRoot: targetHeader.root,
+        finalizedHeaderRoot: finalizedHeader.root,
         syncCommitteeRoot: ethereumMainnetBeaconRestSyncCommitteeRoot(this, options),
-        beaconSlot: targetHeader.slot.toString(),
+        beaconSlot: finalizedHeader.slot.toString(),
         ...finalityUpdate,
       },
       {
@@ -9311,6 +9457,7 @@ const requireEthereumMainnetBeaconFinalityRootsForProof = (evidence) => {
     );
   }
   for (const field of [
+    "finalityBranch",
     "syncCommitteeBits",
     "syncCommitteeSignature",
     "syncCommitteeParticipation",
@@ -9529,14 +9676,16 @@ export class EthereumMainnetSccp {
         "Ethereum mainnet inbound evidence requires a receipt, receiptProof, receiptProofHash, or transactionHash",
       );
     }
+    const blockHashInput = maybeStrictOptionalResultField(
+      input,
+      "blockHash",
+      "blockHash",
+      "block_hash",
+    );
     let blockHash =
-      input.blockHash === undefined && input.block_hash === undefined
+      blockHashInput === undefined
         ? undefined
-        : requireEthereumRpcHexData(
-            input.blockHash ?? input.block_hash,
-            "blockHash",
-            32,
-          );
+        : requireEthereumRpcHexData(blockHashInput, "blockHash", 32);
     let receiptBlockNumber;
     let executionReceiptsRoot;
     let sourceEventDigest;
@@ -9573,11 +9722,11 @@ export class EthereumMainnetSccp {
     if (block !== undefined && blockHash !== undefined) {
       block = normalizeEthereumMainnetBlock(block, blockHash, receiptBlockNumber);
       receiptBlockNumber = `0x${requireEthereumRpcQuantity(
-        block.number ?? block.blockNumber ?? block.block_number,
+        strictResultField(block, "block.number", "number", "blockNumber", "block_number"),
         "block.number",
       ).toString(16)}`;
       executionReceiptsRoot = requireEthereumRpcHexData(
-        block.receiptsRoot ?? block.receipts_root,
+        strictResultField(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
         "block.receiptsRoot",
         32,
       );
@@ -9628,7 +9777,12 @@ export class EthereumMainnetSccp {
               receiptBlockNumber,
             ]);
       const transactionIndex = requireEthereumRpcQuantity(
-        receipt.transactionIndex ?? receipt.transaction_index,
+        strictResultField(
+          receipt,
+          "receipt.transactionIndex",
+          "transactionIndex",
+          "transaction_index",
+        ),
         "receipt.transactionIndex",
       );
       const receiptTrieProof = buildEvmReceiptTrieProofFromReceipts(blockReceipts, {
@@ -9647,7 +9801,12 @@ export class EthereumMainnetSccp {
         throw new TypeError("eth_getBlockReceipts target receipt must be an object");
       }
       const indexedTransactionHash = requireEthereumRpcHexData(
-        indexedReceipt.transactionHash ?? indexedReceipt.transaction_hash,
+        strictResultField(
+          indexedReceipt,
+          "blockReceipts.transactionHash",
+          "transactionHash",
+          "transaction_hash",
+        ),
         "blockReceipts transactionHash",
         32,
       );
@@ -9655,7 +9814,12 @@ export class EthereumMainnetSccp {
         throw new TypeError("eth_getBlockReceipts target receipt must match transactionHash");
       }
       const indexedBlockHash = requireEthereumRpcHexData(
-        indexedReceipt.blockHash ?? indexedReceipt.block_hash,
+        strictResultField(
+          indexedReceipt,
+          "blockReceipts.blockHash",
+          "blockHash",
+          "block_hash",
+        ),
         "blockReceipts blockHash",
         32,
       );
@@ -9663,7 +9827,12 @@ export class EthereumMainnetSccp {
         throw new TypeError("eth_getBlockReceipts target receipt blockHash must match receipt");
       }
       const indexedBlockNumber = requireEthereumRpcQuantity(
-        indexedReceipt.blockNumber ?? indexedReceipt.block_number,
+        strictResultField(
+          indexedReceipt,
+          "blockReceipts.blockNumber",
+          "blockNumber",
+          "block_number",
+        ),
         "blockReceipts blockNumber",
       );
       if (indexedBlockNumber !== requireEthereumRpcQuantity(receiptBlockNumber, "receipt.blockNumber")) {
@@ -11523,12 +11692,12 @@ const normalizeEthSyncCommitteeParts = (input) => {
   if (!Array.isArray(publicKeys) || !Array.isArray(weights) || !Array.isArray(pops)) {
     throw new TypeError("ETH sync committee public keys, weights, and PoPs must be arrays");
   }
-  if (publicKeys.length === 0 || publicKeys.length !== weights.length || publicKeys.length !== pops.length) {
-    throw new RangeError("ETH sync committee public keys, weights, and PoPs must be non-empty equal-length arrays");
+  if (publicKeys.length !== weights.length || publicKeys.length !== pops.length) {
+    throw new RangeError("ETH sync committee public keys, weights, and PoPs must be equal-length arrays");
   }
-  if (publicKeys.length > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+  if (publicKeys.length !== SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
     throw new RangeError(
-      `ETH sync committee must contain at most ${SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities`,
+      `ETH sync committee must contain exactly ${SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES} authorities`,
     );
   }
   const seen = new Set();
@@ -11551,8 +11720,8 @@ const normalizeEthSyncCommitteeParts = (input) => {
   });
   const syncCommitteeWeights = weights.map((weightValue, index) => {
     const weight = normalizeUnsignedBigInt(weightValue, `syncCommitteeWeights[${index}]`);
-    if (weight === 0n) {
-      throw new RangeError(`syncCommitteeWeights[${index}] must not be zero`);
+    if (weight !== 1n) {
+      throw new RangeError(`syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet`);
     }
     return weight;
   });
@@ -11599,12 +11768,9 @@ const validateEthSyncCommitteePayloadBytes = (payload) => {
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const count = view.getUint32(cursor, true);
   cursor += 4;
-  if (count === 0) {
-    throw new TypeError("ETH sync committee payload must not be empty");
-  }
-  if (count > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+  if (count !== SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
     throw new RangeError(
-      `ETH sync committee must contain at most ${SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities`,
+      `ETH sync committee must contain exactly ${SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES} authorities`,
     );
   }
   const seen = new Set();
@@ -11630,7 +11796,9 @@ const validateEthSyncCommitteePayloadBytes = (payload) => {
     if (cursor + 8 > payload.length) throw new TypeError("ETH sync committee weight is truncated");
     const weight = view.getBigUint64(cursor, true);
     cursor += 8;
-    if (weight === 0n) throw new TypeError(`syncCommitteeWeights[${index}] must not be zero`);
+    if (weight !== 1n) {
+      throw new TypeError(`syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet`);
+    }
     if (cursor + 4 > payload.length) throw new TypeError("ETH sync committee PoP is truncated");
     const popLength = view.getUint32(cursor, true);
     cursor += 4;
@@ -13043,12 +13211,25 @@ export function canonicalEvmReceiptRlp(receipt) {
     [
       minimalBigEndianBytes(status, "receipt.status"),
       minimalBigEndianBytes(
-        requireEthereumRpcQuantity(receipt.cumulativeGasUsed, "receipt.cumulativeGasUsed"),
+        requireEthereumRpcQuantity(
+          strictResultField(
+            receipt,
+            "receipt.cumulativeGasUsed",
+            "cumulativeGasUsed",
+            "cumulative_gas_used",
+          ),
+          "receipt.cumulativeGasUsed",
+        ),
         "receipt.cumulativeGasUsed",
       ),
       hexToBytes(
         requireEthereumRpcHexData(
-          receipt.logsBloom,
+          strictResultField(
+            receipt,
+            "receipt.logsBloom",
+            "logsBloom",
+            "logs_bloom",
+          ),
           "receipt.logsBloom",
           256,
           { nonzero: false },
@@ -13242,14 +13423,24 @@ export function buildEvmReceiptTrieProofFromReceipts(receipts, options = {}) {
       throw new TypeError(`blockReceipts[${index}] must be an object`);
     }
     const receiptIndex = requireEthereumRpcQuantity(
-      receipt.transactionIndex ?? receipt.transaction_index,
+      strictResultField(
+        receipt,
+        `blockReceipts[${index}].transactionIndex`,
+        "transactionIndex",
+        "transaction_index",
+      ),
       `blockReceipts[${index}].transactionIndex`,
     );
     if (receiptIndex !== BigInt(index)) {
       throw new TypeError("block receipt transactionIndex must match receipt order");
     }
     const transactionHash = requireEthereumRpcHexData(
-      receipt.transactionHash ?? receipt.transaction_hash,
+      strictResultField(
+        receipt,
+        `blockReceipts[${index}].transactionHash`,
+        "transactionHash",
+        "transaction_hash",
+      ),
       `blockReceipts[${index}].transactionHash`,
       32,
     );

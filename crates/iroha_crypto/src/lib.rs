@@ -190,9 +190,11 @@ impl KeyPair {
     /// internally consistent key pair.
     pub fn try_random_with_algorithm(algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
-            Algorithm::Ed25519 => Ok(ed25519::Ed25519Sha512::keypair(KeyGenOption::Random).into()),
+            Algorithm::Ed25519 => {
+                ed25519::Ed25519Sha512::try_keypair(KeyGenOption::Random).map(Into::into)
+            }
             Algorithm::Secp256k1 => {
-                Ok(secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into())
+                secp256k1::EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random).map(Into::into)
             }
             Algorithm::MlDsa => {
                 use pqcrypto_mldsa::mldsa65;
@@ -2910,6 +2912,30 @@ mod tests {
                 .unwrap_or_else(|_| panic!("Failed to deserialize algorithm {:?}", &algorithm));
             assert_eq!(algorithm, de);
         }
+    }
+
+    #[test]
+    fn try_random_with_algorithm_ed25519_signs_and_verifies() {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("checked Ed25519 random keypair");
+        let message = b"top-level checked Ed25519 random keypair";
+        let signature = Signature::new(key_pair.private_key(), message);
+
+        signature
+            .verify(key_pair.public_key(), message)
+            .expect("signature verifies");
+    }
+
+    #[test]
+    fn try_random_with_algorithm_secp256k1_signs_and_verifies() {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
+            .expect("checked secp256k1 random keypair");
+        let message = b"top-level checked secp256k1 random keypair";
+        let signature = Signature::new(key_pair.private_key(), message);
+
+        signature
+            .verify(key_pair.public_key(), message)
+            .expect("signature verifies");
     }
 
     #[cfg(feature = "bls")]

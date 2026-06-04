@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -154,6 +155,9 @@ public final class IdentifierJsonParser {
   }
 
   private static long asLong(final Object value, final String path) {
+    if (value instanceof String string) {
+      return new BigInteger(string).longValue();
+    }
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " must be a number");
     }
@@ -243,7 +247,10 @@ public final class IdentifierJsonParser {
         new IdentifierBfvPublicParameters.PublicKey(
             asLongList(publicKey.get("b"), context + ".public_key.b"),
             asLongList(publicKey.get("a"), context + ".public_key.a")),
-        Math.toIntExact(asLong(root.get("max_input_bytes"), context + ".max_input_bytes")));
+        Math.toIntExact(asLong(root.get("max_input_bytes"), context + ".max_input_bytes")),
+        root.get("norito_length_encoding") instanceof String
+            ? (String) root.get("norito_length_encoding")
+            : null);
   }
 
   private static RamLfeProofVerifierMetadata parseProofVerifier(

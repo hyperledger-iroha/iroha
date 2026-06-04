@@ -81,6 +81,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     ),
     "java-android": (
         "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),

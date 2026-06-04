@@ -108,6 +108,11 @@ static HANDSHAKE_BUCKET_COUNTS: [AtomicU64; HN] = [
 static HANDSHAKE_MS_SUM: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_MS_COUNT: AtomicU64 = AtomicU64::new(0);
 
+fn soranet_handshake_rng() -> Result<StdRng, Error> {
+    StdRng::try_from_os_rng()
+        .map_err(|err| Error::HandshakeSoranet(format!("SoraNet OS RNG failed: {err}")))
+}
+
 /// Runtime configuration shared across `SoraNet` handshake attempts.
 #[derive(Debug, Clone)]
 pub struct SoranetHandshakeConfig {
@@ -567,11 +572,18 @@ pub struct MintedChallenge {
 mod handshake_config_tests {
     use std::num::NonZeroU32;
 
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn soranet_handshake_rng_reads_os_entropy() {
+        let mut rng = soranet_handshake_rng().expect("OS RNG should seed SoraNet handshake RNG");
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+    }
 
     #[test]
     fn sanitises_invalid_kem_and_signature_ids() {
@@ -7023,7 +7035,7 @@ mod state {
                 return Err(crate::Error::from(e));
             }
             let runtime_params = soranet_handshake.runtime_params();
-            let mut rng = StdRng::from_os_rng();
+            let mut rng = soranet_handshake_rng()?;
 
             if let Some(minted) = soranet_handshake
                 .mint_challenge_ticket(&mut rng)
@@ -7112,8 +7124,9 @@ mod state {
                     Cryptographer::new(&session_key)?
                 }
             };
-            let kx_local_pk = K::new().keypair(KeyGenOption::Random).0;
-            let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
+            let kx = K::new();
+            let kx_local_pk = kx.try_keypair(KeyGenOption::Random)?.0;
+            let kx_remote_pk = kx.try_keypair(KeyGenOption::Random)?.0;
             Ok(SendKey {
                 our_public_address,
                 expected_peer_id: Some(expected_peer_id),
@@ -7176,7 +7189,7 @@ mod state {
                 return Err(crate::Error::from(e));
             }
             let runtime_params = soranet_handshake.runtime_params();
-            let mut rng = StdRng::from_os_rng();
+            let mut rng = soranet_handshake_rng()?;
 
             if soranet_handshake.pow_required() {
                 let ticket = read_handshake_frame(&mut connection.read).await?;
@@ -7261,8 +7274,9 @@ mod state {
                     Cryptographer::new(&session_key)?
                 }
             };
-            let kx_local_pk = K::new().keypair(KeyGenOption::Random).0;
-            let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
+            let kx = K::new();
+            let kx_local_pk = kx.try_keypair(KeyGenOption::Random)?.0;
+            let kx_remote_pk = kx.try_keypair(KeyGenOption::Random)?.0;
             Ok(SendKey {
                 our_public_address,
                 expected_peer_id: None,

@@ -20,7 +20,8 @@ use norito::{
         },
     },
 };
-use rand::RngCore;
+use rand::rngs::OsRng;
+use rand_core::{OsError, TryRngCore};
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
     MlKemError, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os, validate_mlkem_key_pair,
@@ -30,7 +31,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::{
-    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature, rng,
+    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
     signature::ed25519::Ed25519Sha512,
 };
 
@@ -183,6 +184,9 @@ pub enum HandshakeError {
         /// Stream identifier carried by the rejected feedback frame.
         found: Hash,
     },
+    /// Secure random generation failed while preparing local streaming material.
+    #[error("secure random generation failed")]
+    Randomness(#[source] OsError),
 }
 
 const KYBER_FINGERPRINT_DOMAIN: &[u8] = b"nsc_kyber_pk";
@@ -512,9 +516,13 @@ struct X25519Ephemeral {
 }
 
 impl X25519Ephemeral {
-    fn new_random() -> Self {
-        let secret = StaticSecret::random_from_rng(rng::os_rng());
-        Self::from_secret(secret)
+    fn new_random() -> Result<Self, HandshakeError> {
+        let mut secret_bytes = Zeroizing::new([0u8; 32]);
+        OsRng
+            .try_fill_bytes(secret_bytes.as_mut())
+            .map_err(HandshakeError::Randomness)?;
+        let secret = StaticSecret::from(*secret_bytes);
+        Ok(Self::from_secret(secret))
     }
 
     fn from_secret(secret: StaticSecret) -> Self {
@@ -1429,7 +1437,7 @@ impl StreamingSession {
     ) -> Result<(Vec<u8>, Option<[u8; 32]>), HandshakeError> {
         match suite_ephemeral_mechanism(suite)? {
             EphemeralMechanism::X25519 => {
-                let eph = self.ensure_x25519_ephemeral();
+                let eph = self.ensure_x25519_ephemeral()?;
                 Ok((eph.public.to_vec(), None))
             }
             EphemeralMechanism::Kyber768 { fingerprint } => {
@@ -1687,7 +1695,7 @@ impl StreamingSession {
         let shared_secret_bytes = match suite_ephemeral_mechanism(&suite)? {
             EphemeralMechanism::X25519 => {
                 const X25519_PUBLIC_LEN: usize = 32;
-                let state = self.ensure_x25519_ephemeral();
+                let state = self.ensure_x25519_ephemeral()?;
                 let remote_bytes: [u8; X25519_PUBLIC_LEN] =
                     frame.pub_ephemeral.as_slice().try_into().map_err(|_| {
                         StreamingCryptoError::InvalidEphemeralPublicKey {
@@ -1785,8 +1793,9 @@ impl StreamingSession {
         self.validate_content_key_progression_values(content_key_id, valid_from_segment)?;
         let nonce_len = streaming_crypto::nonce_len_for_suite(&suite);
         let mut nonce = vec![0u8; nonce_len];
-        let mut rng = rng::os_rng();
-        rng.fill_bytes(&mut nonce);
+        OsRng
+            .try_fill_bytes(&mut nonce)
+            .map_err(HandshakeError::Randomness)?;
         let gck_wrapped = streaming_crypto::wrap_gck(
             &suite,
             &transport.send,
@@ -1856,12 +1865,15 @@ impl StreamingSession {
         }
     }
 
-    fn ensure_x25519_ephemeral(&mut self) -> &mut X25519Ephemeral {
-        let state = self
-            .local_ephemeral
-            .get_or_insert_with(|| EphemeralState::X25519(X25519Ephemeral::new_random()));
-        match state {
-            EphemeralState::X25519(inner) => inner,
+    fn ensure_x25519_ephemeral(&mut self) -> Result<&mut X25519Ephemeral, HandshakeError> {
+        if self.local_ephemeral.is_none() {
+            self.local_ephemeral = Some(EphemeralState::X25519(X25519Ephemeral::new_random()?));
+        }
+        match self.local_ephemeral.as_mut() {
+            Some(EphemeralState::X25519(inner)) => Ok(inner),
+            None => Err(HandshakeError::InvalidSnapshot(
+                "x25519 ephemeral initialization failed",
+            )),
         }
     }
 
@@ -2035,6 +2047,57 @@ pub fn key_update_transcript_bytes(frame: &KeyUpdate) -> Result<Vec<u8>, norito:
 #[cfg(test)]
 mod key_update_tests {
     use super::*;
+
+    #[test]
+    fn x25519_ephemeral_new_random_derives_nonzero_public_key() {
+        let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
+
+        assert_ne!(ephemeral.public, [0u8; 32]);
+    }
+
+    #[test]
+    fn x25519_content_key_update_roundtrips_after_key_exchange() {
+        let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("seeded publisher Ed25519 keypair");
+        let viewer_keys = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("seeded viewer Ed25519 keypair");
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
+        let session_id = [0xC7; 32];
+
+        let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+        publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+        let publisher_update = publisher_session
+            .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
+            .expect("publisher key update");
+
+        let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+        viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+        viewer_session
+            .process_remote_key_update(&publisher_update, publisher_keys.public_key())
+            .expect("viewer transport keys");
+
+        let viewer_update = viewer_session
+            .build_key_update(session_id, &suite, 1, 2, viewer_keys.private_key())
+            .expect("viewer key update");
+        publisher_session
+            .process_remote_key_update(&viewer_update, viewer_keys.public_key())
+            .expect("publisher transport keys");
+
+        let gck_plaintext = [0xAB; GROUP_CONTENT_KEY_LEN];
+        let content_update = publisher_session
+            .build_content_key_update(&gck_plaintext, 1, 1)
+            .expect("content key update");
+        let decrypted_gck = viewer_session
+            .process_content_key_update(&content_update)
+            .expect("decrypted group content key");
+
+        assert_eq!(decrypted_gck, gck_plaintext);
+        assert_eq!(
+            publisher_session.latest_gck(),
+            Some(gck_plaintext.as_slice())
+        );
+        assert_eq!(viewer_session.latest_gck(), Some(gck_plaintext.as_slice()));
+    }
 
     #[test]
     fn process_remote_key_update_rejects_malformed_remote_identity_without_state_change() {

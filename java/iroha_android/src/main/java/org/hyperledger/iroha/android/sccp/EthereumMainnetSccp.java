@@ -31,6 +31,43 @@ public final class EthereumMainnetSccp {
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   private static final int BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
   private static final long ETHEREUM_MAINNET_SECONDS_PER_SLOT = 12L;
+  private static final List<String> BEACON_FINALITY_ALIAS_KEYS =
+      Arrays.asList(
+          "executionBlockNumber",
+          "execution_block_number",
+          "finalityHeight",
+          "finality_height",
+          "executionBlockHash",
+          "execution_block_hash",
+          "finalityBlockHash",
+          "finality_block_hash",
+          "executionReceiptsRoot",
+          "execution_receipts_root",
+          "receiptsRoot",
+          "receipts_root",
+          "finalizedHeaderRoot",
+          "finalized_header_root",
+          "beaconFinalizedRoot",
+          "beacon_finalized_root",
+          "syncCommitteeRoot",
+          "sync_committee_root",
+          "beaconSlot",
+          "beacon_slot",
+          "finalizedSlot",
+          "finalized_slot",
+          "slot",
+          "finalityBranch",
+          "finality_branch",
+          "syncCommitteeBits",
+          "sync_committee_bits",
+          "syncCommitteeSignature",
+          "sync_committee_signature",
+          "syncSignatureSlot",
+          "sync_signature_slot",
+          "signatureSlot",
+          "signature_slot",
+          "syncCommitteeParticipation",
+          "sync_committee_participation");
 
   private static final class BeaconRestHeaderSummary {
     final String root;
@@ -55,16 +92,19 @@ public final class EthereumMainnetSccp {
   }
 
   private static final class BeaconRestFinalityUpdateSummary {
+    final List<String> finalityBranch;
     final String syncCommitteeBits;
     final String syncCommitteeSignature;
     final long syncCommitteeParticipation;
     final long syncSignatureSlot;
 
     BeaconRestFinalityUpdateSummary(
+        final List<String> finalityBranch,
         final String syncCommitteeBits,
         final String syncCommitteeSignature,
         final long syncCommitteeParticipation,
         final long syncSignatureSlot) {
+      this.finalityBranch = finalityBranch;
       this.syncCommitteeBits = syncCommitteeBits;
       this.syncCommitteeSignature = syncCommitteeSignature;
       this.syncCommitteeParticipation = syncCommitteeParticipation;
@@ -234,7 +274,8 @@ public final class EthereumMainnetSccp {
       }
       final String receiptTransactionHash =
           normalizeRpcHex(
-              firstPresent(receipt, "transactionHash", "transaction_hash"),
+              strictFirstPresent(
+                  receipt, "receipt.transactionHash", "transactionHash", "transaction_hash"),
               "receipt.transactionHash",
               32);
       if (transactionHash != null && !transactionHash.equals(receiptTransactionHash)) {
@@ -242,8 +283,12 @@ public final class EthereumMainnetSccp {
       }
       transactionHash = receiptTransactionHash;
       blockHash =
-          normalizeRpcHex(firstPresent(receipt, "blockHash", "block_hash"), "receipt.blockHash", 32);
-      final Object receiptBlockNumberInput = firstPresent(receipt, "blockNumber", "block_number");
+          normalizeRpcHex(
+              strictFirstPresent(receipt, "receipt.blockHash", "blockHash", "block_hash"),
+              "receipt.blockHash",
+              32);
+      final Object receiptBlockNumberInput =
+          strictFirstPresent(receipt, "receipt.blockNumber", "blockNumber", "block_number");
       receiptBlockNumber = normalizePositiveRpcQuantity(receiptBlockNumberInput, "receipt.blockNumber");
     }
 
@@ -260,7 +305,7 @@ public final class EthereumMainnetSccp {
         throw new IllegalArgumentException("block.hash must match receipt.blockHash");
       }
       final Object blockNumberInput =
-          firstPresent(block, "number", "blockNumber", "block_number");
+          strictFirstPresent(block, "block.number", "number", "blockNumber", "block_number");
       final String blockNumber = normalizePositiveRpcQuantity(blockNumberInput, "block.number");
       if (receiptBlockNumber != null && !receiptBlockNumber.equals(blockNumber)) {
         throw new IllegalArgumentException("block.number must match receipt.blockNumber");
@@ -268,7 +313,9 @@ public final class EthereumMainnetSccp {
       receiptBlockNumber = blockNumber;
       blockReceiptsRoot =
           normalizeRpcHex(
-              firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
+              strictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
+              "block.receiptsRoot",
+              32);
     }
 
     final Map<String, Object> rawBeaconFinality =
@@ -314,7 +361,8 @@ public final class EthereumMainnetSccp {
                 "eth_getBlockReceipts");
       }
       final Object receiptTransactionIndex =
-          firstPresent(receipt, "transactionIndex", "transaction_index");
+          strictFirstPresent(
+              receipt, "receipt.transactionIndex", "transactionIndex", "transaction_index");
       final SourceSccpProofs.EvmReceiptTrieProof receiptTrieProof =
           SourceSccpProofs.buildEvmReceiptTrieProofFromReceipts(
               blockReceipts, receiptTransactionIndex);
@@ -335,7 +383,11 @@ public final class EthereumMainnetSccp {
       final Map<String, Object> indexedReceipt = blockReceipts.get((int) targetIndex);
       final String indexedTransactionHash =
           normalizeRpcHex(
-              firstPresent(indexedReceipt, "transactionHash", "transaction_hash"),
+              strictFirstPresent(
+                  indexedReceipt,
+                  "blockReceipts.transactionHash",
+                  "transactionHash",
+                  "transaction_hash"),
               "blockReceipts transactionHash",
               32);
       if (!indexedTransactionHash.equals(transactionHash)) {
@@ -344,7 +396,8 @@ public final class EthereumMainnetSccp {
       }
       final String indexedBlockHash =
           normalizeRpcHex(
-              firstPresent(indexedReceipt, "blockHash", "block_hash"),
+              strictFirstPresent(
+                  indexedReceipt, "blockReceipts.blockHash", "blockHash", "block_hash"),
               "blockReceipts blockHash",
               32);
       if (!indexedBlockHash.equals(blockHash)) {
@@ -353,7 +406,8 @@ public final class EthereumMainnetSccp {
       }
       final String indexedBlockNumber =
           normalizePositiveRpcQuantity(
-              firstPresent(indexedReceipt, "blockNumber", "block_number"),
+              strictFirstPresent(
+                  indexedReceipt, "blockReceipts.blockNumber", "blockNumber", "block_number"),
               "blockReceipts blockNumber");
       if (!indexedBlockNumber.equals(receiptBlockNumber)) {
         throw new IllegalArgumentException(
@@ -438,7 +492,7 @@ public final class EthereumMainnetSccp {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receiptProof");
     }
-    if (evidence.receipt() != null && evidence.sourceEventDigest() == null) {
+    if (evidence.sourceEventDigest() == null) {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receipt source event validation");
     }
@@ -456,6 +510,7 @@ public final class EthereumMainnetSccp {
     }
     for (final String field :
         Arrays.asList(
+            "finalityBranch",
             "syncCommitteeBits",
             "syncCommitteeSignature",
             "syncCommitteeParticipation",
@@ -1299,6 +1354,9 @@ public final class EthereumMainnetSccp {
     }
     final java.util.LinkedHashMap<String, Object> normalized =
         new java.util.LinkedHashMap<>(finality);
+    for (final String key : BEACON_FINALITY_ALIAS_KEYS) {
+      normalized.remove(key);
+    }
     normalized.put("executionBlockNumber", Long.toString(executionBlockNumber));
     normalized.put("executionBlockHash", executionBlockHash);
     normalized.put("executionReceiptsRoot", executionReceiptsRoot);
@@ -1336,12 +1394,24 @@ public final class EthereumMainnetSccp {
             "finalizedSlot",
             "finalized_slot",
             "slot");
+    Long normalizedBeaconSlot = null;
     if (beaconSlotInput != null) {
-      final long beaconSlot = normalizeUnsignedInteger(beaconSlotInput, "beaconFinality.beaconSlot");
-      if (beaconSlot == 0) {
+      normalizedBeaconSlot = normalizeUnsignedInteger(beaconSlotInput, "beaconFinality.beaconSlot");
+      if (normalizedBeaconSlot == 0) {
         throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
       }
-      normalized.put("beaconSlot", Long.toString(beaconSlot));
+      normalized.put("beaconSlot", Long.toString(normalizedBeaconSlot));
+    }
+    final Object finalityBranchInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.finalityBranch",
+            "finalityBranch",
+            "finality_branch");
+    if (finalityBranchInput != null) {
+      normalized.put(
+          "finalityBranch",
+          normalizeFinalityBranch(finalityBranchInput, "beaconFinality.finalityBranch"));
     }
     final Object syncCommitteeBitsInput =
         strictFirstPresent(
@@ -1349,11 +1419,14 @@ public final class EthereumMainnetSccp {
             "beaconFinality.syncCommitteeBits",
             "syncCommitteeBits",
             "sync_committee_bits");
+    String normalizedSyncCommitteeBits = null;
     if (syncCommitteeBitsInput != null) {
+      normalizedSyncCommitteeBits =
+          normalizeFinalitySyncCommitteeBits(
+              syncCommitteeBitsInput, "beaconFinality.syncCommitteeBits");
       normalized.put(
           "syncCommitteeBits",
-          normalizeFinalitySyncCommitteeBits(
-              syncCommitteeBitsInput, "beaconFinality.syncCommitteeBits"));
+          normalizedSyncCommitteeBits);
     }
     final Object syncCommitteeSignatureInput =
         strictFirstPresent(
@@ -1375,13 +1448,20 @@ public final class EthereumMainnetSccp {
             "sync_signature_slot",
             "signatureSlot",
             "signature_slot");
+    Long normalizedSyncSignatureSlot = null;
     if (syncSignatureSlotInput != null) {
-      final long syncSignatureSlot =
+      normalizedSyncSignatureSlot =
           normalizeUnsignedInteger(syncSignatureSlotInput, "beaconFinality.syncSignatureSlot");
-      if (syncSignatureSlot == 0) {
+      if (normalizedSyncSignatureSlot == 0) {
         throw new IllegalArgumentException("beaconFinality.syncSignatureSlot must be positive");
       }
-      normalized.put("syncSignatureSlot", Long.toString(syncSignatureSlot));
+      normalized.put("syncSignatureSlot", Long.toString(normalizedSyncSignatureSlot));
+    }
+    if (normalizedBeaconSlot != null
+        && normalizedSyncSignatureSlot != null
+        && normalizedSyncSignatureSlot < normalizedBeaconSlot) {
+      throw new IllegalArgumentException(
+          "beaconFinality.syncSignatureSlot must cover beaconFinality.beaconSlot");
     }
     final Object syncCommitteeParticipationInput =
         strictFirstPresent(
@@ -1389,15 +1469,25 @@ public final class EthereumMainnetSccp {
             "beaconFinality.syncCommitteeParticipation",
             "syncCommitteeParticipation",
             "sync_committee_participation");
+    Long normalizedSyncCommitteeParticipation = null;
     if (syncCommitteeParticipationInput != null) {
-      final long syncCommitteeParticipation =
+      normalizedSyncCommitteeParticipation =
           normalizeUnsignedInteger(
               syncCommitteeParticipationInput, "beaconFinality.syncCommitteeParticipation");
-      if (syncCommitteeParticipation == 0) {
+      if (normalizedSyncCommitteeParticipation == 0) {
         throw new IllegalArgumentException(
             "beaconFinality.syncCommitteeParticipation must be positive");
       }
-      normalized.put("syncCommitteeParticipation", Long.toString(syncCommitteeParticipation));
+      normalized.put(
+          "syncCommitteeParticipation",
+          Long.toString(normalizedSyncCommitteeParticipation));
+    }
+    if (normalizedSyncCommitteeBits != null
+        && normalizedSyncCommitteeParticipation != null
+        && finalitySyncCommitteeParticipation(normalizedSyncCommitteeBits)
+            != normalizedSyncCommitteeParticipation) {
+      throw new IllegalArgumentException(
+          "beaconFinality.syncCommitteeParticipation must match syncCommitteeBits");
     }
     return Collections.unmodifiableMap(normalized);
   }
@@ -1405,10 +1495,31 @@ public final class EthereumMainnetSccp {
   private static String normalizeFinalitySyncCommitteeBits(
       final Object value, final String label) {
     final String bits = normalizeRpcHex(value, label, 64, true);
-    if (finalitySyncCommitteeParticipation(bits) == 0) {
+    final long participation = finalitySyncCommitteeParticipation(bits);
+    if (participation == 0) {
       throw new IllegalArgumentException(label + " must contain at least one participant");
     }
+    if (participation * 3 < 512 * 2) {
+      throw new IllegalArgumentException(
+          label + " must contain Ethereum sync committee supermajority");
+    }
     return bits;
+  }
+
+  private static List<String> normalizeFinalityBranch(
+      final Object value, final String label) {
+    if (!(value instanceof List<?>)) {
+      throw new IllegalArgumentException(label + " must be an array");
+    }
+    final List<?> input = (List<?>) value;
+    if (input.size() != 6) {
+      throw new IllegalArgumentException(label + " must contain 6 siblings");
+    }
+    final List<String> branch = new ArrayList<>();
+    for (int index = 0; index < input.size(); index++) {
+      branch.add(normalizeRpcHex(input.get(index), label + "[" + index + "]", 32, true));
+    }
+    return Collections.unmodifiableList(branch);
   }
 
   private static long finalitySyncCommitteeParticipation(final String bits) {
@@ -1667,13 +1778,17 @@ public final class EthereumMainnetSccp {
       }
       final String blockHash = normalizeRpcHex(block.get("hash"), "block.hash", 32);
       final String blockNumber =
-          normalizeRpcQuantity(firstPresent(block, "number", "blockNumber", "block_number"), "block.number");
+          normalizeRpcQuantity(
+              strictFirstPresent(block, "block.number", "number", "blockNumber", "block_number"),
+              "block.number");
       if ("0x0".equals(blockNumber)) {
         throw new IllegalArgumentException("block.number must be positive");
       }
       final String receiptsRoot =
           normalizeRpcHex(
-              firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
+              strictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
+              "block.receiptsRoot",
+              32);
       final BeaconRestBlockId targetBlockId = beaconRestBlockIdForTarget(block);
       final Map<String, Object> finalizedHeaderResponse =
           fetchJsonObject("/eth/v1/beacon/headers/finalized", "Ethereum mainnet Beacon REST finalized header");
@@ -1702,6 +1817,10 @@ public final class EthereumMainnetSccp {
       if (targetHeader.slot > finalizedHeader.slot) {
         throw new IllegalArgumentException(
             "Ethereum mainnet Beacon REST target block is newer than the finalized header");
+      }
+      if (targetHeader.slot < finalizedHeader.slot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof");
       }
       if (targetHeader.slot == finalizedHeader.slot && !targetHeader.root.equals(finalizedHeader.root)) {
         throw new IllegalArgumentException(
@@ -1859,6 +1978,7 @@ public final class EthereumMainnetSccp {
           "syncCommitteeRoot",
           resolveBeaconRestSyncCommitteeRoot(syncCommitteeRoot, syncCommitteePayload));
       evidence.put("beaconSlot", Long.toString(targetHeader.slot));
+      evidence.put("finalityBranch", finalityUpdate.finalityBranch);
       evidence.put("syncCommitteeBits", finalityUpdate.syncCommitteeBits);
       evidence.put("syncCommitteeSignature", finalityUpdate.syncCommitteeSignature);
       evidence.put(
@@ -2012,6 +2132,10 @@ public final class EthereumMainnetSccp {
               requireBeaconRestField(
                   syncAggregate, label + ".data.sync_aggregate", "sync_committee_bits"),
               label + ".data.sync_aggregate.sync_committee_bits");
+      final List<String> finalityBranch =
+          normalizeBeaconRestFinalityBranch(
+              requireBeaconRestField(data, label + ".data", "finality_branch"),
+              label + ".data.finality_branch");
       final String syncCommitteeSignature =
           normalizeRpcHex(
               requireBeaconRestField(
@@ -2019,6 +2143,7 @@ public final class EthereumMainnetSccp {
               label + ".data.sync_aggregate.sync_committee_signature",
               96);
       return new BeaconRestFinalityUpdateSummary(
+          finalityBranch,
           syncCommitteeBits,
           syncCommitteeSignature,
           beaconRestSyncCommitteeParticipation(syncCommitteeBits),
@@ -2028,10 +2153,31 @@ public final class EthereumMainnetSccp {
     private static String normalizeBeaconRestSyncCommitteeBits(
         final Object value, final String label) {
       final String bits = normalizeRpcHex(value, label, 64, true);
-      if (beaconRestSyncCommitteeParticipation(bits) == 0) {
+      final long participation = beaconRestSyncCommitteeParticipation(bits);
+      if (participation == 0) {
         throw new IllegalArgumentException(label + " must contain at least one participant");
       }
+      if (participation * 3 < 512 * 2) {
+        throw new IllegalArgumentException(
+            label + " must contain Ethereum sync committee supermajority");
+      }
       return bits;
+    }
+
+    private static List<String> normalizeBeaconRestFinalityBranch(
+        final Object value, final String label) {
+      if (!(value instanceof List<?>)) {
+        throw new IllegalArgumentException(label + " must be an array");
+      }
+      final List<?> input = (List<?>) value;
+      if (input.size() != 6) {
+        throw new IllegalArgumentException(label + " must contain 6 siblings");
+      }
+      final List<String> branch = new ArrayList<>();
+      for (int index = 0; index < input.size(); index++) {
+        branch.add(normalizeRpcHex(input.get(index), label + "[" + index + "]", 32, true));
+      }
+      return Collections.unmodifiableList(branch);
     }
 
     private static long beaconRestSyncCommitteeParticipation(final String bits) {

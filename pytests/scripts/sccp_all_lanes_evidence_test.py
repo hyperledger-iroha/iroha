@@ -1342,6 +1342,7 @@ def route_allowlist(
             proof_family_hash=raw_hex(destination["_comment_evm_proof_family_hash"]),
             network_id=raw_hex(destination["destination_network_id"]),
             used_message_proof=True,
+            receipt_block_finalized=True,
         )
         route["_comment_route_canary_evidence_hash"] = "0x" + canary_hash.hex()
         route["_comment_evm_route_canary_transaction_hash"] = (
@@ -2835,6 +2836,7 @@ def test_all_lanes_accepts_verified_evm_live_toml(tmp_path):
         proof_family_hash=live_module.evidence.evm_proof_family_hash(),
         network_id=fake.network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
     )
     live_summary = live_module.collect_live_evidence(
         SimpleNamespace(
@@ -3437,6 +3439,7 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
             proof_family_hash=raw_hex(destination["_comment_evm_proof_family_hash"]),
             network_id=raw_hex(destination["destination_network_id"]),
             used_message_proof=True,
+            receipt_block_finalized=True,
         ).hex()
     )
 

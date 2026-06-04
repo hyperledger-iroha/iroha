@@ -5,6 +5,7 @@ class IdentifierBfvPublicParameters(
     @JvmField val parameters: Parameters,
     @JvmField val publicKey: PublicKey,
     @JvmField val maxInputBytes: Int,
+    @JvmField val noritoLengthEncoding: String? = null,
 ) {
     /** Scalar BFV parameter set. */
     class Parameters(

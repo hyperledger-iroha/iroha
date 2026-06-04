@@ -952,9 +952,10 @@ mod tests {
     use iroha_crypto::{
         BfvEvaluationKeyBundle, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf, bfv_programmed_policy_commitment_with_program,
-        bfv_programmed_public_parameters_with_program, decode_bfv_programmed_public_parameters,
-        default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-        identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+        decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
+        derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
+        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+        try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
         IntoKeyValue,
@@ -1107,13 +1108,14 @@ mod tests {
             galois_keys: Vec::new(),
             bootstrap_key: None,
         };
-        let public_parameters = bfv_programmed_public_parameters_with_program(
+        let public_parameters = try_bfv_programmed_public_parameters_with_program(
             encryption,
             evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
-        );
+        )
+        .expect("build programmed BFV public parameters");
         let encoded_public_parameters =
             norito::to_bytes(&public_parameters).expect("encode programmed public parameters");
         let commitment = bfv_programmed_policy_commitment_with_program(

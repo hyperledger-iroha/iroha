@@ -66,15 +66,14 @@ object SccpSourceProofs {
     private const val EVM_MAX_BLOCK_RECEIPTS: Int = 4096
     private const val ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX: Int = 9
     private const val ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH: Int = 4
-    private const val ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: Int = 512
+    private const val ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES: Int = 512
+    private const val ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: Int = ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
     private const val ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: Int = 48
     private const val ETH_SYNC_COMMITTEE_POP_BYTES: Int = 96
     private const val ETH_SYNC_COMMITTEE_SIGNATURE_BYTES: Int = 96
-    private const val ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: Int = 96
-    private const val ETH_MAX_SYNC_COMMITTEE_POP_BYTES: Int = 256
     private const val ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES: Int =
         1 + 4 + ETH_MAX_SYNC_COMMITTEE_AUTHORITIES *
-            (4 + ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + ETH_MAX_SYNC_COMMITTEE_POP_BYTES)
+            (4 + ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + ETH_SYNC_COMMITTEE_POP_BYTES)
     private const val TON_MAX_VALIDATORS: Int = 1024
     private const val TRON_MAX_MPT_PROOF_NODES: Int = 64
     private const val TRON_MAX_MPT_NODE_BYTES: Int = 16 * 1024
@@ -1349,14 +1348,13 @@ object SccpSourceProofs {
         syncCommitteePops: List<ByteArray>,
     ): ByteArray {
         require(
-            syncCommitteePublicKeys.isNotEmpty() &&
-                syncCommitteePublicKeys.size == syncCommitteeWeights.size &&
+            syncCommitteePublicKeys.size == syncCommitteeWeights.size &&
                 syncCommitteePublicKeys.size == syncCommitteePops.size,
         ) {
-            "syncCommitteePublicKeys, syncCommitteeWeights, and syncCommitteePops must be non-empty equal-length arrays"
+            "syncCommitteePublicKeys, syncCommitteeWeights, and syncCommitteePops must be equal-length arrays"
         }
-        require(syncCommitteePublicKeys.size <= ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
-            "syncCommitteePublicKeys must contain at most $ETH_MAX_SYNC_COMMITTEE_AUTHORITIES entries"
+        require(syncCommitteePublicKeys.size == ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
+            "syncCommitteePublicKeys must contain exactly $ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES entries"
         }
         val out = ByteArrayOutputStream()
         out.write(1)
@@ -1372,7 +1370,7 @@ object SccpSourceProofs {
             }
             require(seenPublicKeys.add(hexLower(publicKey))) { "syncCommitteePublicKeys[$index] must be unique" }
             val weight = normalizeU64(syncCommitteeWeights[index], "syncCommitteeWeights[$index]")
-            require(weight != BigInteger.ZERO) { "syncCommitteeWeights[$index] must not be zero" }
+            require(weight == BigInteger.ONE) { "syncCommitteeWeights[$index] must be 1 for Ethereum mainnet" }
             val pop = syncCommitteePops[index]
             require(pop.size == ETH_SYNC_COMMITTEE_POP_BYTES) {
                 "syncCommitteePops[$index] must be $ETH_SYNC_COMMITTEE_POP_BYTES bytes"
@@ -4916,7 +4914,12 @@ object SccpSourceProofs {
                 rlpBytes(
                     minimalBigEndianBytes(
                         requireEthereumRpcQuantity(
-                            receipt["cumulativeGasUsed"] ?: receipt["cumulative_gas_used"],
+                            strictFirstPresent(
+                                receipt,
+                                "receipt.cumulativeGasUsed",
+                                "cumulativeGasUsed",
+                                "cumulative_gas_used",
+                            ),
                             "receipt.cumulativeGasUsed",
                         ),
                         "receipt.cumulativeGasUsed",
@@ -4924,7 +4927,12 @@ object SccpSourceProofs {
                 ),
                 rlpBytes(
                     ethereumRpcHexBytes(
-                        receipt["logsBloom"] ?: receipt["logs_bloom"],
+                        strictFirstPresent(
+                            receipt,
+                            "receipt.logsBloom",
+                            "logsBloom",
+                            "logs_bloom",
+                        ),
                         "receipt.logsBloom",
                         byteLength = 256,
                         nonzero = false,
@@ -4969,14 +4977,24 @@ object SccpSourceProofs {
         var targetReceiptRlp: ByteArray? = null
         receipts.forEachIndexed { index, receipt ->
             val receiptIndex = requireEthereumRpcQuantity(
-                receipt["transactionIndex"] ?: receipt["transaction_index"],
+                strictFirstPresent(
+                    receipt,
+                    "blockReceipts[$index].transactionIndex",
+                    "transactionIndex",
+                    "transaction_index",
+                ),
                 "blockReceipts[$index].transactionIndex",
             )
             require(receiptIndex == BigInteger.valueOf(index.toLong())) {
                 "block receipt transactionIndex must match receipt order"
             }
             val transactionHash = ethereumRpcHexBytes(
-                receipt["transactionHash"] ?: receipt["transaction_hash"],
+                strictFirstPresent(
+                    receipt,
+                    "blockReceipts[$index].transactionHash",
+                    "transactionHash",
+                    "transaction_hash",
+                ),
                 "blockReceipts[$index].transactionHash",
                 byteLength = 32,
             )
@@ -5132,6 +5150,19 @@ object SccpSourceProofs {
         }
         node.rlp = encoded
         return encoded
+    }
+
+    private fun strictFirstPresent(input: Map<String, Any?>, label: String, vararg keys: String): Any? {
+        var selected: Any? = null
+        var found = false
+        for (key in keys) {
+            if (input.containsKey(key)) {
+                require(!found) { "$label must not use multiple aliases" }
+                selected = input[key]
+                found = true
+            }
+        }
+        return selected
     }
 
     private fun evmTrieNodeReference(node: EvmTrieNode): ByteArray {
@@ -5918,9 +5949,8 @@ object SccpSourceProofs {
         cursor += 1
         val count = readU32Le(payload, cursor)
         cursor += 4
-        require(count > 0) { "syncCommitteePayload must not be empty" }
-        require(count <= ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
-            "syncCommitteePayload must contain at most $ETH_MAX_SYNC_COMMITTEE_AUTHORITIES entries"
+        require(count == ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
+            "syncCommitteePayload must contain exactly $ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES entries"
         }
         val seenPublicKeys = HashSet<String>()
         for (index in 0 until count) {
@@ -5935,7 +5965,7 @@ object SccpSourceProofs {
             require(seenPublicKeys.add(hexLower(publicKey))) { "syncCommitteePublicKeys[$index] must be unique" }
             val weight = readU64Le(payload, cursor)
             cursor += 8
-            require(weight != BigInteger.ZERO) { "syncCommitteeWeights[$index] must not be zero" }
+            require(weight == BigInteger.ONE) { "syncCommitteeWeights[$index] must be 1 for Ethereum mainnet" }
             val popLen = readU32Le(payload, cursor)
             cursor += 4
             require(popLen == ETH_SYNC_COMMITTEE_POP_BYTES && cursor + popLen <= payload.size) {

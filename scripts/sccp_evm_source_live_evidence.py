@@ -584,6 +584,56 @@ def _verify_receipt_block_header(
     return receipts_root
 
 
+def _deployment_receipt_finalized_block_summary(
+    rpc_url: str,
+    receipt_summary: dict[str, Any],
+    *,
+    opener: Urlopen,
+    timeout: float,
+) -> dict[str, Any]:
+    finalized = _json_rpc(
+        rpc_url,
+        "eth_getBlockByNumber",
+        ["finalized", False],
+        opener=opener,
+        timeout=timeout,
+    )
+    if not isinstance(finalized, dict):
+        raise RuntimeError("deployment receipt finalized block was not found")
+    finalized_block_number = _rpc_quantity(
+        finalized.get("number"),
+        method="deployment receipt finalized block number",
+    )
+    if finalized_block_number == 0:
+        raise RuntimeError("deployment receipt finalized block number must be non-zero")
+    finalized_block_hash = _rpc_fixed_hex_data(
+        finalized.get("hash"),
+        method="deployment receipt finalized block hash",
+        byte_length=32,
+    )
+    receipt_block_number = int(receipt_summary["deployment_receipt_block_number"])
+    if receipt_block_number > finalized_block_number:
+        raise RuntimeError(
+            "deployment receipt block is newer than the finalized execution block"
+        )
+    receipt_block_hash = _parse_hex32(
+        str(receipt_summary["deployment_receipt_block_hash"]),
+        label="deployment receipt block hash",
+    )
+    if (
+        receipt_block_number == finalized_block_number
+        and receipt_block_hash != finalized_block_hash
+    ):
+        raise RuntimeError(
+            "deployment receipt block hash does not match the finalized execution block"
+        )
+    return {
+        "deployment_receipt_finalized_block_number": finalized_block_number,
+        "deployment_receipt_finalized_block_hash": _hex(finalized_block_hash),
+        "deployment_receipt_block_finalized": True,
+    }
+
+
 def collect_source_bridge_evidence(
     rpc_url: str,
     *,
@@ -668,6 +718,15 @@ def collect_source_bridge_evidence(
                 "not match selected block tag"
             )
         receipt_summary["deployment_receipt_block_code_hash_matches"] = True
+        if domain == SCCP_DOMAIN_ETH and block_tag == "finalized":
+            receipt_summary.update(
+                _deployment_receipt_finalized_block_summary(
+                    rpc_url,
+                    receipt_summary,
+                    opener=opener,
+                    timeout=timeout,
+                )
+            )
     summary: dict[str, Any] = {
         "domain": domain,
         "chain": "eth" if domain == SCCP_DOMAIN_ETH else "bsc",
@@ -968,6 +1027,11 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
         chain = source_bridge.get("chain")
         if chain not in ("eth", "bsc"):
             return False
+        if (
+            chain == "eth"
+            and source_bridge.get("deployment_receipt_block_finalized") is not True
+        ):
+            return False
         evidence = _load_evidence_module(
             SCCP_DOMAIN_ETH if chain == "eth" else SCCP_DOMAIN_BSC
         )
@@ -1088,6 +1152,31 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         "deployment_receipt_block_receipts_root",
         label="deployment receipt block receiptsRoot",
     )
+    if domain == SCCP_DOMAIN_ETH:
+        if source_bridge.get("deployment_receipt_block_finalized") is not True:
+            raise ValueError(
+                "Ethereum source deployment receipt block finality metadata must be verified"
+            )
+        finalized_block_number = _require_exact_positive_u64(
+            source_bridge.get("deployment_receipt_finalized_block_number"),
+            label="deployment receipt finalized block number",
+        )
+        finalized_block_hash = _summary_hex32(
+            source_bridge,
+            "deployment_receipt_finalized_block_hash",
+            label="deployment receipt finalized block hash",
+        )
+        if deployment_receipt_block_number > finalized_block_number:
+            raise ValueError(
+                "deployment receipt block metadata is newer than the finalized execution block"
+            )
+        if (
+            deployment_receipt_block_number == finalized_block_number
+            and deployment_receipt_block_hash != finalized_block_hash
+        ):
+            raise ValueError(
+                "deployment receipt block hash metadata must match finalized execution block"
+            )
 
     source_args = summary.get("_source_args")
     if source_args is None:
@@ -1281,12 +1370,21 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
         if source_bridge.get("deployment_transaction_contract_creation") is not True:
             missing.append("deployment transaction contract-creation verification")
         if (
+            source_bridge.get("domain") == SCCP_DOMAIN_ETH
+            and source_bridge.get("deployment_receipt_block_finalized") is not True
+        ):
+            missing.append("deployment receipt finality verification")
+        if (
             source_bridge.get("deployment_receipt_block_hash_matches") is True
             and source_bridge.get("deployment_receipt_block_receipts_root_verified")
             is True
             and source_bridge.get("deployment_receipt_block_code_hash_matches") is True
             and source_bridge.get("deployment_transaction_block_matches") is True
             and source_bridge.get("deployment_transaction_contract_creation") is True
+            and (
+                source_bridge.get("domain") != SCCP_DOMAIN_ETH
+                or source_bridge.get("deployment_receipt_block_finalized") is True
+            )
             and not _source_bridge_deployment_receipt_is_verified(source_bridge)
         ):
             missing.append("--deployment-transaction-hash")
@@ -1361,6 +1459,21 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
             + json.dumps(str(source_bridge["deployment_receipt_block_receipts_root"])),
         ]
     )
+    if source_bridge["domain"] == SCCP_DOMAIN_ETH:
+        comments.extend(
+            [
+                "# sccp_evm_source_deployment_finalized_block_hash = "
+                + json.dumps(str(source_bridge["deployment_receipt_finalized_block_hash"])),
+                "# sccp_evm_source_deployment_finalized_block_number = "
+                + json.dumps(
+                    str(source_bridge["deployment_receipt_finalized_block_number"])
+                ),
+                "# sccp_evm_source_deployment_block_finalized = "
+                + json.dumps(
+                    source_bridge["deployment_receipt_block_finalized"] is True
+                ),
+            ]
+        )
     existing_keys = set()
     for line in rendered.splitlines():
         stripped = line.strip()

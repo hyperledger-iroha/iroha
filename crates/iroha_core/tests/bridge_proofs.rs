@@ -1641,6 +1641,7 @@ fn with_bsc_route_canary(
         2,
         56_000_001,
         [0xbb; 32],
+        true,
         [0xbc; 32],
         [0xbd; 32],
         [0xbe; 32],
@@ -1681,6 +1682,7 @@ fn with_eth_route_canary(
         1,
         56_000_000,
         [0xab; 32],
+        true,
         [0xac; 32],
         [0xad; 32],
         [0xae; 32],
@@ -1717,6 +1719,8 @@ fn actual_route_allowlist(
         evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
         evm_route_canary_receipt_block_number: allowlist.evm_route_canary_receipt_block_number,
         evm_route_canary_receipt_block_hash: allowlist.evm_route_canary_receipt_block_hash.clone(),
+        evm_route_canary_receipt_block_finalized: allowlist
+            .evm_route_canary_receipt_block_finalized,
         evm_route_canary_block_receipts_root: allowlist
             .evm_route_canary_block_receipts_root
             .clone(),
@@ -3480,6 +3484,65 @@ fn eth_source_chain_proof_rejects_replayed_source_material() {
         &artifact,
         &wrong_source_bridge,
         "wrong ETH source bridge emitter",
+    );
+}
+
+#[test]
+fn eth_source_chain_proof_rejects_replayed_source_adapter_deployment() {
+    let proof_material = configured_eth_source_verifier_material();
+    let proof_deployment = configured_eth_source_adapter_engine_deployment(&proof_material);
+    let artifact = iroha_sccp::test_fixtures::sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment(
+        1_004,
+        &proof_material,
+        &proof_deployment,
+    );
+    assert!(
+        iroha_sccp::verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+            &artifact.bundle,
+            &proof_material,
+            &proof_deployment,
+        )
+        .is_some(),
+        "fixture ETH source proof must bind its governed material and deployment",
+    );
+
+    let mut replayed_deployment = proof_deployment.clone();
+    replayed_deployment.deployment_receipt_hash = [0xe7; 32];
+    assert!(
+        iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            &proof_material,
+            &replayed_deployment,
+        ),
+        "replayed ETH deployment is internally shaped but must not match the proof",
+    );
+    let source_proof =
+        iroha_sccp::decode_sccp_source_chain_proof_envelope(&artifact.bundle.finality_proof)
+            .expect("decode ETH source proof");
+    assert!(
+        !iroha_sccp::verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+            &source_proof,
+            &proof_material,
+            &replayed_deployment,
+        ),
+        "ETH source proof must not structurally match replayed deployment material",
+    );
+    assert!(
+        !iroha_sccp::verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+            &source_proof,
+            &proof_material,
+            &replayed_deployment,
+        ),
+        "ETH source proof must reject replayed deployment material",
+    );
+    assert!(
+        iroha_sccp::verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+            &artifact.bundle,
+            &proof_material,
+            &replayed_deployment,
+        )
+        .is_none(),
+        "ETH bundle helper must reject replayed deployment material",
     );
 }
 

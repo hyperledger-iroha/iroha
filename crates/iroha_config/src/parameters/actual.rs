@@ -8066,6 +8066,8 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_receipt_block_number: Option<u64>,
     /// Hex-encoded EVM block hash for the route canary receipt block.
     pub evm_route_canary_receipt_block_hash: Option<String>,
+    /// Whether the EVM route canary receipt block was read through finalized state.
+    pub evm_route_canary_receipt_block_finalized: Option<bool>,
     /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
     pub evm_route_canary_block_receipts_root: Option<String>,
     /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.

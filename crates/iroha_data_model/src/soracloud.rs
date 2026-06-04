@@ -17,7 +17,10 @@ use std::{
 
 use iroha_crypto::{
     Hash, PublicKey, Signature,
-    fhe_bfv::BfvEvaluationKeyBundle,
+    fhe_bfv::{
+        BfvBootstrapKeyTranscriptSeed, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvPublicKey,
+        BfvRotationKeyTranscriptSeed, bfv_balanced_multiplication_depth,
+    },
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
 use iroha_primitives::json::Json;
@@ -2980,6 +2983,17 @@ impl FheParamSetV1 {
                 ),
             });
         }
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        if self.max_multiplicative_depth.get() > evaluator_budget.max_multiplicative_depth {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "max_multiplicative_depth",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator multiplicative-depth budget ({})",
+                    evaluator_budget.max_multiplicative_depth
+                ),
+            });
+        }
 
         if let Some(deprecation_height) = self.deprecation_height {
             let Some(activation_height) = self.activation_height else {
@@ -3087,6 +3101,93 @@ pub enum FheDeterministicRoundingModeV1 {
     NearestTiesToEven,
 }
 
+/// Public transcript seed for one BFV rotation refresh key.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvRotationRefreshTranscriptV1 {
+    /// Rotation step count whose public refresh key is derived from `seed`.
+    pub rotation_steps: u32,
+    /// Public deterministic seed for the encrypted-zero refresh key.
+    pub seed: Vec<u8>,
+}
+
+/// Public transcript seed for the BFV bootstrap refresh key.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvBootstrapRefreshTranscriptV1 {
+    /// Bootstrap key id whose refresh rounds are derived from `seed`.
+    pub key_id: String,
+    /// Maximum refresh-round capacity bound into the transcript.
+    pub max_refresh_rounds: u16,
+    /// Public deterministic seed for the encrypted-zero refresh rounds.
+    pub seed: Vec<u8>,
+}
+
+/// Public transcript inventory for BFV evaluation-key refresh material.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvEvaluationKeyRefreshTranscriptV1 {
+    /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
+    pub public_key: BfvPublicKey,
+    /// One transcript seed per public rotation refresh key.
+    #[norito(default)]
+    pub rotation_transcripts: Vec<BfvRotationRefreshTranscriptV1>,
+    /// Optional bootstrap refresh transcript.
+    #[norito(default)]
+    pub bootstrap_transcript: Option<BfvBootstrapRefreshTranscriptV1>,
+}
+
+impl BfvEvaluationKeyRefreshTranscriptV1 {
+    /// Validate and digest this transcript inventory against evaluation keys.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the transcript inventory does
+    /// not cover the public refresh material or canonical digesting fails.
+    pub fn digest_for_evaluation_keys(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) -> Result<Hash, SoracloudManifestError> {
+        let rotation_transcripts = self
+            .rotation_transcripts
+            .iter()
+            .map(|transcript| BfvRotationKeyTranscriptSeed {
+                rotation_steps: transcript.rotation_steps,
+                seed: transcript.seed.as_slice(),
+            })
+            .collect::<Vec<_>>();
+        let bootstrap_transcript =
+            self.bootstrap_transcript
+                .as_ref()
+                .map(|transcript| BfvBootstrapKeyTranscriptSeed {
+                    key_id: transcript.key_id.as_str(),
+                    max_refresh_rounds: transcript.max_refresh_rounds,
+                    seed: transcript.seed.as_slice(),
+                });
+        evaluation_keys
+            .refresh_transcript_digest(
+                params,
+                &self.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .map_err(|err| SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "refresh_transcript",
+                reason: err.to_string(),
+            })
+    }
+}
+
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3104,6 +3205,8 @@ pub struct FheExecutionPolicyV1 {
     pub param_set_version: NonZeroU32,
     /// Domain-separated digest of the BFV evaluation-key bundle admitted for this policy.
     pub evaluation_key_digest: Hash,
+    /// Domain-separated digest of the BFV refresh transcript inventory.
+    pub evaluation_key_refresh_transcript_digest: Hash,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
     /// Maximum admitted plaintext input size in bytes.
@@ -3151,6 +3254,28 @@ impl FheExecutionPolicyV1 {
                 manifest: "fhe execution policy",
                 field: "max_output_ciphertexts",
                 reason: "cannot exceed max_input_ciphertexts".to_string(),
+            });
+        }
+
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        if self.max_multiplication_depth.get() > evaluator_budget.max_multiplicative_depth {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_multiplication_depth",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator multiplicative-depth budget ({})",
+                    evaluator_budget.max_multiplicative_depth
+                ),
+            });
+        }
+        if self.max_bootstrap_count > evaluator_budget.max_bootstrap_refresh_rounds {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_bootstrap_count",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator bootstrap-refresh budget ({})",
+                    evaluator_budget.max_bootstrap_refresh_rounds
+                ),
             });
         }
 
@@ -3517,6 +3642,11 @@ pub enum FheJobOperationV1 {
     /// Element-wise homomorphic multiplication over two or more inputs.
     Multiply,
     /// Deterministic left-rotation over one ciphertext input.
+    ///
+    /// Single-ciphertext packed BFV envelopes use public Galois key switching,
+    /// including masked key schedules for rotations that are not one
+    /// automorphism. Multi-slot identifier envelopes use the outer
+    /// ciphertext-slot rotation path.
     RotateLeft,
     /// Deterministic bootstrap/relinearization refresh over one input.
     Bootstrap,
@@ -3686,6 +3816,24 @@ impl FheJobSpecV1 {
                         manifest: "fhe job spec",
                         field: "requested_multiplication_depth",
                         reason: "multiply operation requires non-zero depth".to_string(),
+                    });
+                }
+                let balanced_depth =
+                    bfv_balanced_multiplication_depth(self.inputs.len()).map_err(|err| {
+                        SoracloudManifestError::InvalidField {
+                            manifest: "fhe job spec",
+                            field: "inputs",
+                            reason: err.to_string(),
+                        }
+                    })?;
+                if self.requested_multiplication_depth < balanced_depth {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "requested_multiplication_depth",
+                        reason: format!(
+                            "requested depth {} under-declares balanced multiply depth {balanced_depth}",
+                            self.requested_multiplication_depth
+                        ),
                     });
                 }
                 if self.rotation_steps != 0 || self.bootstrap_count != 0 {
@@ -11680,7 +11828,8 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, job, policy, param_set, evaluation_keys, governance_tx_hash)`.
+/// `(service_name, binding_name, job, policy, param_set, evaluation_keys,
+/// evaluation_key_refresh_transcript, governance_tx_hash)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -11691,6 +11840,7 @@ pub fn encode_fhe_job_run_provenance_payload(
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(
@@ -11700,6 +11850,7 @@ pub fn encode_fhe_job_run_provenance_payload(
         policy,
         param_set,
         evaluation_keys,
+        evaluation_key_refresh_transcript,
         governance_tx_hash,
     ))
 }
@@ -11735,18 +11886,19 @@ pub fn encode_ciphertext_query_provenance_payload(
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
-        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
-        CIPHERTEXT_QUERY_SPEC_VERSION_V1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
-        CanonicalRequestSignatureWitnessV1, CanonicalRequestWitnessV1, CiphertextInclusionProofV1,
-        CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
-        CiphertextQuerySpecV1, CiphertextStateMetadataV1, CiphertextStateRecordV1,
-        DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
-        DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1,
-        FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
-        FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
-        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, BfvBootstrapRefreshTranscriptV1,
+        BfvEvaluationKeyRefreshTranscriptV1, BfvRotationRefreshTranscriptV1,
+        CANONICAL_REQUEST_WITNESS_VERSION_V1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
+        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CIPHERTEXT_QUERY_SPEC_VERSION_V1,
+        CIPHERTEXT_STATE_RECORD_VERSION_V1, CanonicalRequestSignatureWitnessV1,
+        CanonicalRequestWitnessV1, CiphertextInclusionProofV1, CiphertextQueryMetadataLevelV1,
+        CiphertextQueryResponseV1, CiphertextQueryResultItemV1, CiphertextQuerySpecV1,
+        CiphertextStateMetadataV1, CiphertextStateRecordV1, DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+        DECRYPTION_REQUEST_VERSION_V1, DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1,
+        DecryptionRequestV1, FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+        FHE_JOB_SPEC_VERSION_V1, FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1,
+        FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1,
+        FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
@@ -12934,6 +13086,7 @@ mod tests {
         let policy = sample_fhe_execution_policy();
         let param_set = sample_fhe_param_set();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
         let governance_tx_hash = sample_hash(21);
         let encoded = encode_fhe_job_run_provenance_payload(
             "health_portal",
@@ -12942,6 +13095,7 @@ mod tests {
             policy.clone(),
             param_set.clone(),
             evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
             governance_tx_hash,
         )
         .expect("encode payload");
@@ -12952,6 +13106,7 @@ mod tests {
             policy,
             param_set,
             evaluation_keys,
+            evaluation_key_refresh_transcript,
             governance_tx_hash,
         ))
         .expect("encode tuple");
@@ -13399,6 +13554,17 @@ mod tests {
         }
     }
 
+    fn sample_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
+        BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: BfvPublicKey {
+                b: Vec::new(),
+                a: Vec::new(),
+            },
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        }
+    }
+
     fn sample_fhe_execution_policy() -> FheExecutionPolicyV1 {
         FheExecutionPolicyV1 {
             schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
@@ -13406,6 +13572,7 @@ mod tests {
             param_set: "fhe_bfv_med".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(2).expect("nonzero"),
             evaluation_key_digest: sample_hash(90),
+            evaluation_key_refresh_transcript_digest: sample_hash(91),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
@@ -15276,6 +15443,26 @@ mod tests {
                 ..
             }
         ));
+
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        let mut over_evaluator_depth = sample_fhe_param_set();
+        over_evaluator_depth.ciphertext_modulus_bits =
+            vec![
+                NonZeroU16::new(60).expect("nonzero");
+                usize::from(evaluator_budget.max_multiplicative_depth) + 2
+            ];
+        over_evaluator_depth.max_multiplicative_depth =
+            NonZeroU16::new(evaluator_budget.max_multiplicative_depth + 1).expect("nonzero");
+        let error = over_evaluator_depth
+            .validate()
+            .expect_err("depth above exact evaluator budget must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplicative_depth",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -15347,6 +15534,38 @@ mod tests {
             error,
             SoracloudManifestError::InvalidField {
                 field: "max_output_ciphertexts",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow() {
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+
+        let mut depth_overflow = sample_fhe_execution_policy();
+        depth_overflow.max_multiplication_depth =
+            NonZeroU16::new(evaluator_budget.max_multiplicative_depth + 1).expect("nonzero");
+        let error = depth_overflow
+            .validate()
+            .expect_err("policy depth above exact evaluator budget must fail");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut bootstrap_overflow = sample_fhe_execution_policy();
+        bootstrap_overflow.max_bootstrap_count = evaluator_budget.max_bootstrap_refresh_rounds + 1;
+        let error = bootstrap_overflow
+            .validate()
+            .expect_err("policy bootstrap count above exact evaluator budget must fail");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_bootstrap_count",
                 ..
             }
         ));
@@ -15462,6 +15681,28 @@ mod tests {
     }
 
     #[test]
+    fn fhe_job_spec_balanced_multiply_depth_matches_tree_shape() {
+        assert!(bfv_balanced_multiplication_depth(0).is_err());
+        assert_eq!(
+            bfv_balanced_multiplication_depth(1).expect("single input"),
+            0
+        );
+        assert_eq!(bfv_balanced_multiplication_depth(2).expect("two inputs"), 1);
+        assert_eq!(
+            bfv_balanced_multiplication_depth(3).expect("three inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(4).expect("four inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(5).expect("five inputs"),
+            3
+        );
+    }
+
+    #[test]
     fn fhe_job_spec_validate_rejects_adversarial_operation_shapes() {
         assert_fhe_job_invalid_field(
             "add jobs require at least two inputs",
@@ -15478,6 +15719,19 @@ mod tests {
         assert_fhe_job_invalid_field(
             "multiply jobs require non-zero depth",
             |job| job.operation = FheJobOperationV1::Multiply,
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
+            "multiply jobs must declare balanced depth",
+            |job| {
+                job.operation = FheJobOperationV1::Multiply;
+                job.requested_multiplication_depth = 1;
+                job.inputs.push(FheJobInputRefV1 {
+                    state_key: "/state/health/patient-3".to_string(),
+                    payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                    commitment: sample_hash(123),
+                });
+            },
             "requested_multiplication_depth",
         );
         assert_fhe_job_invalid_field(

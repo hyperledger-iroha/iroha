@@ -4908,6 +4908,7 @@ def _check_evm_route_canary_transaction_evidence(
         proof_family_hash=proof_family_hash,
         network_id=network_id,
         used_message_proof=used_message_proof,
+        receipt_block_finalized=receipt_block_finalized,
     )
     if evidence_hash != expected_hash:
         errors.append(

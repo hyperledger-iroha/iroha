@@ -125,6 +125,12 @@ fn expected_fhe_evaluation_key_digest() -> Hash {
         .expect("fixture evaluation-key digest")
 }
 
+fn expected_fhe_refresh_transcript_digest() -> Hash {
+    "5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b"
+        .parse()
+        .expect("fixture refresh transcript digest")
+}
+
 fn expected_state_binding() -> SoraStateBindingV1 {
     SoraStateBindingV1 {
         schema_version: SORA_STATE_BINDING_VERSION_V1,
@@ -448,6 +454,7 @@ fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
         param_set: "bfv-default".parse().expect("valid name"),
         param_set_version: NonZeroU32::new(1).expect("nonzero"),
         evaluation_key_digest: expected_fhe_evaluation_key_digest(),
+        evaluation_key_refresh_transcript_digest: expected_fhe_refresh_transcript_digest(),
         max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
         max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
         max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),

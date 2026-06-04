@@ -66,6 +66,17 @@ fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAcces
         .expect("Signature verification should succeed");
 }
 
+fn test_checked_random_keypair_signs_and_verifies<
+    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+>() {
+    let (pk, sk) =
+        BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("checked random BLS keypair");
+
+    let signature = BlsImpl::<C>::try_sign(MESSAGE_1, &sk).expect("checked BLS sign");
+    BlsImpl::<C>::verify(MESSAGE_1, &signature, &pk)
+        .expect("checked random BLS signature should verify");
+}
+
 fn test_signature_verification_different_messages<
     C: BlsConfiguration + PreparedPublicKeyCacheAccess,
 >() {
@@ -150,6 +161,11 @@ mod normal {
     #[test]
     fn signature_verification() {
         test_signature_verification::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn checked_random_keypair_signs_and_verifies() {
+        test_checked_random_keypair_signs_and_verifies::<NormalConfiguration>();
     }
 
     #[test]
@@ -463,6 +479,11 @@ mod small {
     #[test]
     fn signature_verification() {
         test_signature_verification::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn checked_random_keypair_signs_and_verifies() {
+        test_checked_random_keypair_signs_and_verifies::<SmallConfiguration>();
     }
 
     #[test]

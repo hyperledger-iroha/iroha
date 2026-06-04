@@ -7,21 +7,32 @@ use std::{
     vec::Vec,
 };
 
-#[cfg(feature = "rand")]
-use crate::rng::os_rng;
 #[cfg(test)]
 use blstrs::G2Prepared;
 use blstrs::{G1Affine, G2Affine};
 use group::prime::PrimeCurveAffine;
 use parking_lot::Mutex;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryRngCore;
 use w3f_bls::{
     EngineBLS, PublicKey as W3fPublicKey, SerializableToBytes as _, Signature as W3fSignature,
 };
-use zeroize::Zeroize as _;
+use zeroize::{Zeroize as _, Zeroizing};
 
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
+
+#[cfg(feature = "rand")]
+fn checked_os_seed(context: &str) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut seed = Zeroizing::new(vec![0u8; 32]);
+    OsRng
+        .try_fill_bytes(seed.as_mut_slice())
+        .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
+    Ok(seed)
+}
 
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
@@ -92,10 +103,12 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         let sk = match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
+                let seed = checked_os_seed("key generation")?;
                 let bytes = if C::NORMAL {
-                    w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::generate(os_rng()).to_bytes()
+                    w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed.as_slice()).to_bytes()
                 } else {
-                    w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::generate(os_rng()).to_bytes()
+                    w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed.as_slice())
+                        .to_bytes()
                 };
                 Self::secret_key_from_generated_bytes(&bytes)?
             }

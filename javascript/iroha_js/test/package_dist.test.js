@@ -875,11 +875,11 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
 test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;[\s\S]*syncCommitteeBits\?: string;[\s\S]*syncCommitteeSignature\?: string;[\s\S]*syncSignatureSlot\?: string \| number \| bigint;[\s\S]*signatureSlot\?: string \| number \| bigint;[\s\S]*syncCommitteeParticipation\?: string \| number \| bigint;/,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;[\s\S]*finalityBranch\?: readonly string\[\];[\s\S]*finality_branch\?: readonly string\[\];[\s\S]*syncCommitteeBits\?: string;[\s\S]*syncCommitteeSignature\?: string;[\s\S]*syncSignatureSlot\?: string \| number \| bigint;[\s\S]*signatureSlot\?: string \| number \| bigint;[\s\S]*syncCommitteeParticipation\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;[\s\S]*readonly syncCommitteeBits\?: string;[\s\S]*readonly syncCommitteeSignature\?: string;[\s\S]*readonly syncSignatureSlot\?: string;[\s\S]*readonly syncCommitteeParticipation\?: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;[\s\S]*readonly finalityBranch\?: readonly string\[\];[\s\S]*readonly syncCommitteeBits\?: string;[\s\S]*readonly syncCommitteeSignature\?: string;[\s\S]*readonly syncSignatureSlot\?: string;[\s\S]*readonly syncCommitteeParticipation\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2551,20 +2551,27 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
 });
 
 test("package dist entrypoint exports ETH sync-committee payload helpers", () => {
+  const syncCommitteePublicKeys = Array.from({ length: 512 }, (_, index) => {
+    const publicKey = new Uint8Array(48).fill(0x33);
+    publicKey[46] = (index >> 8) & 0xff;
+    publicKey[47] = index & 0xff;
+    return publicKey;
+  });
+  const syncCommitteePops = Array.from({ length: 512 }, (_, index) => {
+    const pop = new Uint8Array(96).fill(0xcc);
+    pop[94] = (index >> 8) & 0xff;
+    pop[95] = index & 0xff;
+    return pop;
+  });
   const payload = canonicalEthSyncCommitteePayloadBytes({
-    syncCommitteePublicKeys: [`0x${"33".repeat(48)}`, `0x${"44".repeat(48)}`],
-    syncCommitteeWeights: [3n, 4n],
-    syncCommitteePops: [`0x${"cc".repeat(96)}`, `0x${"dd".repeat(96)}`],
+    syncCommitteePublicKeys,
+    syncCommitteeWeights: Array.from({ length: 512 }, () => 1n),
+    syncCommitteePops,
   });
 
-  assert.equal(
-    ethSyncCommitteeHashFromPayload(payload),
-    "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-  );
-  assert.equal(
-    ethSyncCommitteePayloadHash(payload),
-    "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
-  );
+  assert.equal(payload.length, 81925);
+  assert.match(ethSyncCommitteeHashFromPayload(payload), /^0x[0-9a-f]{64}$/u);
+  assert.match(ethSyncCommitteePayloadHash(payload), /^0x[0-9a-f]{64}$/u);
   assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);

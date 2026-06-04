@@ -36,7 +36,7 @@ SCCP_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 EVM_DESTINATION_BINDING_LABEL = b"iroha:sccp:evm-destination-binding:v1"
 SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
-EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v3"
+EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v4"
 ETH_MAINNET_NETWORK_ID = (1).to_bytes(32, "big")
 BSC_MAINNET_NETWORK_ID = (56).to_bytes(32, "big")
 
@@ -535,7 +535,7 @@ def evm_destination_binding_key(
     if proof_family != SCCP_PROOF_FAMILY_STARK_FRI:
         raise ValueError(f"proof_family must be {SCCP_PROOF_FAMILY_STARK_FRI}")
 
-    network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
+    network_id = _require_domain_network_id(target_domain, network_id)
     verifier_address = _require_fixed_bytes(
         verifier_address,
         label="verifier_address",
@@ -630,6 +630,7 @@ def evm_route_canary_transaction_evidence_hash(
     proof_family_hash: bytes,
     network_id: bytes,
     used_message_proof: bool,
+    receipt_block_finalized: bool,
 ) -> bytes:
     """Compute the EVM MessageProofAccepted route canary evidence hash."""
 
@@ -654,6 +655,8 @@ def evm_route_canary_transaction_evidence_hash(
         )
     if used_message_proof is not True:
         raise ValueError("used_message_proof must be true for EVM route canaries")
+    if type(receipt_block_finalized) is not bool:
+        raise ValueError("receipt_block_finalized must be a boolean for EVM route canaries")
     log_index = _require_exact_u32(log_index, "log_index")
     receipt_block_number = parse_u64_decimal(
         str(receipt_block_number),
@@ -754,7 +757,7 @@ def evm_route_canary_transaction_evidence_hash(
     )
 
     payload = bytearray()
-    _push_u8(payload, 3)
+    _push_u8(payload, 4)
     payload.extend(route_allowlist_hash)
     payload.extend(bridge_address)
     payload.extend(transaction_hash)
@@ -778,6 +781,7 @@ def evm_route_canary_transaction_evidence_hash(
     payload.extend(proof_family_hash)
     payload.extend(network_id)
     _push_u8(payload, 1)
+    _push_u8(payload, 1 if receipt_block_finalized else 0)
     return _prefixed_blake2b(EVM_ROUTE_CANARY_EVIDENCE_LABEL, payload)
 
 
@@ -1166,6 +1170,7 @@ def _route_canary_transaction_evidence_hash(
         proof_family_hash=evm_proof_family_hash(),
         network_id=args.network_id,
         used_message_proof=values["used_message_proof"],
+        receipt_block_finalized=values["receipt_block_finalized"],
     )
 
 

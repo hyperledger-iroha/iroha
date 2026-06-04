@@ -68,6 +68,15 @@ def corridor_evidence_script_tests() -> tuple[str, ...]:
     return tuple(tests)
 
 
+def corridor_android_harness_mains() -> tuple[str, ...]:
+    """Return Java/Android harness mains listed by the production corridor."""
+
+    script = CORRIDOR_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r'android_harness_mains="(?P<body>[^"]+)"', script)
+    assert match is not None, "java-android harness inventory not found"
+    return tuple(match.group("body").split(","))
+
+
 def load_all_lanes_helpers():
     """Load all-lanes fixture helpers without importing pytest collection state."""
 
@@ -195,6 +204,20 @@ def test_release_bundle_evidence_phase_inventory_matches_corridor_runner() -> No
         ]
         for test_path in corridor_evidence_script_tests():
             assert any(test_path in fragment for fragment in required_fragments)
+
+
+def test_release_bundle_java_android_phase_requires_source_proof_harness() -> None:
+    """Android corridor evidence must prove source-proof hardening ran."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+
+    assert source_harness in corridor_android_harness_mains()
+    for module in (report, verifier):
+        assert source_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "java-android"
+        ]
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
@@ -7082,6 +7105,40 @@ def test_release_bundle_verifier_rejects_phase_log_without_expected_command(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_java_android_log_without_source_harness(
+    tmp_path: Path,
+) -> None:
+    """Android phase evidence must show the source-proof harness selection."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    phase_log = output_dir / "corridor" / "java-android.log"
+    source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+    phase_log.write_text(
+        "==> SCCP production corridor: java-android\n"
+        "+ ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests\n"
+        "BUILD SUCCESSFUL\n"
+        "SCCP production corridor completed.\n",
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "java-android")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase java-android evidence artifact is missing "
+        f"expected phase-block command: {source_harness}"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
     tmp_path: Path,
 ) -> None:
@@ -7222,6 +7279,149 @@ def test_release_bundle_verifier_requires_evm_evidence_script_transcript(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_guards_evm_source_live_production(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep live EVM source guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_evm_source_live_production_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_evm_source_live_evidence.py"
+    sparse_script.write_text(
+        "eth_chainId for {chain} lane must be canonical mainnet chain id\n",
+        encoding="utf-8",
+    )
+    sparse_test = tmp_path / "sccp_evm_source_live_evidence_test.py"
+    sparse_test.write_text(
+        "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
+        (
+            sparse_script,
+            (
+                "eth_chainId for {chain} lane must be canonical mainnet chain id",
+                "deployment receipt block is newer than the finalized execution block",
+                "source verifier material hash metadata must match canonical inputs",
+            ),
+        ),
+        (
+            sparse_test,
+            (
+                "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift",
+                "test_evm_source_live_rejects_deployment_transaction_readback_drift",
+                "test_evm_source_live_toml_requires_independent_pins",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and (
+            "missing marker: deployment receipt block is newer than the "
+            "finalized execution block"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and (
+            "missing marker: source verifier material hash metadata must match "
+            "canonical inputs"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and (
+            "missing marker: "
+            "test_evm_source_live_rejects_deployment_transaction_readback_drift"
+        )
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_evm_live_destination_production(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep live EVM destination guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_evm_live_destination_production_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_evm_live_evidence.py"
+    sparse_script.write_text(
+        "verifierCodeHash() does not match eth_getCode runtime bytecode\n"
+        "submitSccpMessageProof(bytes,bytes32[6],bytes32)\n",
+        encoding="utf-8",
+    )
+    sparse_test = tmp_path / "sccp_evm_live_evidence_test.py"
+    sparse_test.write_text(
+        "test_live_evm_route_canary_rejects_unverified_transaction_metadata\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
+        (
+            sparse_script,
+            (
+                "verifierCodeHash() does not match eth_getCode runtime bytecode",
+                "destinationBindingHash() does not match canonical live deployment inputs",
+                "route-canary proof version must be 1",
+            ),
+        ),
+        (
+            sparse_test,
+            (
+                "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+                "route_canary_call_data_mutator",
+                "proofBytes must not be all zero",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and (
+            "missing marker: destinationBindingHash() does not match canonical "
+            "live deployment inputs"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and "missing marker: route-canary proof version must be 1" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and "missing marker: route_canary_call_data_mutator" in error
+        for error in verified["errors"]
+    )
+
+
 def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block(
     tmp_path: Path,
 ) -> None:
@@ -7251,6 +7451,7 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
                 '"eth_getBlockByNumber"',
                 '["finalized", False]',
                 "route-canary receipt block is newer than the finalized execution block",
+                'receipt_block_finalized=finalized_block["receipt_block_finalized"]',
             ),
         ),
         (
@@ -7293,6 +7494,15 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
         and 'missing marker: "receipt_block_finalized"] is False' in error
         for error in verified["errors"]
     )
+    assert any(
+        "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
+        in error
+        and (
+            'missing marker: receipt_block_finalized=finalized_block["receipt_block_finalized"]'
+            in error
+        )
+        for error in verified["errors"]
+    )
 
 
 def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
@@ -7314,6 +7524,8 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
             (
                 "networkId = ethMainnetNetworkId",
                 "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
+                'callExceptionWithReason("Network id must be ETH mainnet")',
+                'callExceptionWithReason("Network id must be BSC mainnet")',
             ),
         ),
     )
@@ -7327,6 +7539,76 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     assert any(
         "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
         and "missing marker: const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);"
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Network id must be ETH mainnet")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Network id must be BSC mainnet")'
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
+    tmp_path: Path,
+) -> None:
+    """Published bundles must retain EVM bridge/verifier smoke hardening."""
+
+    verifier = load_verify_helpers()
+    assert verifier._contract_smoke_evm_production_surface_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_message_bridge_smoke.js"
+    sparse_test.write_text(
+        'entry.name === "MessageProofAccepted"\n',
+        encoding="utf-8",
+    )
+    verifier.CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
+        (
+            sparse_test,
+            (
+                'entry.name === "MessageProofAccepted"',
+                'callExceptionWithReason("Verifier key hash mismatch")',
+                'callExceptionWithReason("Destination binding hash is required")',
+                "assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);",
+                'callExceptionWithReason("Message proof already used")',
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Verifier key hash mismatch")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Destination binding hash is required")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);"
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Message proof already used")'
         in error
         for error in verified["errors"]
     )
@@ -7515,6 +7797,66 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
             "missing marker: def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only"
             in error
         )
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must reject Ethereum SDK proxy fallback."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_data_collection_no_proxy_inventory_errors() == []
+
+    sparse_sdk = tmp_path / "sccp.js"
+    sparse_sdk.write_text(
+        "  async validateExecutionProviderMainnet() {\n"
+        "    await provider.request({ method: \"eth_chainId\" });\n"
+        "    await provider.request({ method: \"eth_getTransactionReceipt\" });\n"
+        "    return Torii.proxy.fallback();\n"
+        "  }\n"
+        "  async submitInboundToIroha() {}\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_DATA_COLLECTION_REGIONS = {
+        "js-sdk": (
+            sparse_sdk,
+            "  async validateExecutionProviderMainnet",
+            "  async submitInboundToIroha",
+            (
+                "eth_chainId",
+                "eth_getTransactionReceipt",
+                "eth_getBlockByHash",
+                "collectFinalityEvidence",
+            ),
+        )
+    }
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet js-sdk data collection source" in error
+        and "missing provider marker: eth_getBlockByHash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet js-sdk data collection source" in error
+        and "missing provider marker: collectFinalityEvidence" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet js-sdk data collection source" in error
+        and "contains forbidden Torii" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet js-sdk data collection source" in error
+        and "contains forbidden proxy" in error
         for error in verified["errors"]
     )
 
@@ -7854,7 +8196,7 @@ def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests(
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text("failedReceipt\n", encoding="utf-8")
     verifier.ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
-        (sparse_test, ("failedReceipt", "duplicateReceipt")),
+        (sparse_test, ("failedReceipt", "duplicateReceipt", "/exactly 2 topics/u")),
     )
 
     bundle_dir = tmp_path / "bundle"
@@ -7866,6 +8208,11 @@ def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests(
     assert any(
         "Ethereum mainnet inbound adversarial SDK test inventory" in error
         and "missing marker: duplicateReceipt" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: /exactly 2 topics/u" in error
         for error in verified["errors"]
     )
 
@@ -8435,12 +8782,17 @@ def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_t
     sparse_source.write_text("/eth/v2/beacon/blocks/finalized\n", encoding="utf-8")
     sparse_declarations = tmp_path / "index.d.ts"
     sparse_declarations.write_text("syncCommitteeBits?: string;\n", encoding="utf-8")
+    sparse_csharp_source = tmp_path / "EthereumMainnetSccp.cs"
+    sparse_csharp_source.write_text("execution_payload\n", encoding="utf-8")
+    sparse_csharp_test = tmp_path / "SccpEthereumMainnetTests.cs"
+    sparse_csharp_test.write_text("BeaconBlockJson(\n", encoding="utf-8")
     verifier.ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
         (
             sparse_source,
             (
                 "/eth/v2/beacon/blocks/finalized",
                 "/eth/v1/beacon/light_client/finality_update",
+                "historical target blocks require an ancestry proof",
                 "execution payload receipts_root must match block.receiptsRoot",
             ),
         ),
@@ -8449,6 +8801,20 @@ def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_t
             (
                 "syncCommitteeBits?: string;",
                 "readonly syncCommitteeBits?: string;",
+            ),
+        ),
+        (
+            sparse_csharp_source,
+            (
+                "EthExecutionPayloadHeaderRootFromRlp",
+                "EthBeaconBodyRootFromExecutionPayloadBranch",
+            ),
+        ),
+        (
+            sparse_csharp_test,
+            (
+                "BeaconExecutionPayloadSszRootsMatchSharedVector",
+                "0xc029dda492d2e41ad72bd83f1727a67e5331f413ec29d5c31de955d0bea24624",
             ),
         ),
     )
@@ -8475,7 +8841,62 @@ def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_t
     assert any(
         "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
         in error
+        and "missing marker: historical target blocks require an ancestry proof" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+        in error
         and "missing marker: readonly syncCommitteeBits?: string;" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+        in error
+        and "missing marker: EthExecutionPayloadHeaderRootFromRlp" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+        in error
+        and "missing marker: BeaconExecutionPayloadSszRootsMatchSharedVector" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_sync_committee_roster_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep exact mainnet sync-committee guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_sync_committee_roster_inventory_errors() == []
+
+    sparse_source = tmp_path / "sccp.js"
+    sparse_source.write_text(
+        "const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS = (
+        (
+            sparse_source,
+            (
+                "const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;",
+                "syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet sync-committee roster SDK test inventory" in error
+        and "missing marker: syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet"
+        in error
         for error in verified["errors"]
     )
 

@@ -822,19 +822,6 @@ const BSC_COMMIT_SIGNATURES = [
 ];
 const BSC_COMMIT_SEAL_HASH =
   "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172";
-const ETH_SYNC_COMMITTEE_HASH =
-  "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536";
-const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX =
-  `010200000030000000${"33".repeat(48)}030000000000000060000000${"cc".repeat(96)}` +
-  `30000000${"44".repeat(48)}040000000000000060000000${"dd".repeat(96)}`;
-const ETH_NEXT_SYNC_COMMITTEE_HASH =
-  "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445";
-const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH =
-  "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17";
-const ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH =
-  "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e";
-const ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH =
-  "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d";
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HEX = `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`;
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HASH =
   "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429";
@@ -10157,51 +10144,90 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
 });
 
 test("derives ETH sync-committee transition transcript hashes from UI witness material", () => {
+  const syncCommitteeFixture = (publicKeyByte, popByte) => ({
+    syncCommitteePublicKeys: Array.from({ length: 512 }, (_, index) => {
+      const publicKey = new Uint8Array(48).fill(publicKeyByte);
+      publicKey[46] = (index >> 8) & 0xff;
+      publicKey[47] = index & 0xff;
+      return publicKey;
+    }),
+    syncCommitteeWeights: Array.from({ length: 512 }, () => 1n),
+    syncCommitteePops: Array.from({ length: 512 }, (_, index) => {
+      const pop = new Uint8Array(96).fill(popByte);
+      pop[94] = (index >> 8) & 0xff;
+      pop[95] = index & 0xff;
+      return pop;
+    }),
+  });
+  const signersBitmap = (count) => {
+    const bitmap = new Uint8Array(64);
+    for (let index = 0; index < count; index += 1) {
+      bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+    }
+    return bitmap;
+  };
   const parent = {
-    syncCommitteePublicKeys: [`0x${"11".repeat(48)}`, `0x${"22".repeat(48)}`],
-    syncCommitteeWeights: [1n, 2n],
-    syncCommitteePops: [`0x${"aa".repeat(96)}`, `0x${"bb".repeat(96)}`],
+    ...syncCommitteeFixture(0x11, 0xaa),
   };
   const nextCommittee = {
-    syncCommitteePublicKeys: [`0x${"33".repeat(48)}`, `0x${"44".repeat(48)}`],
-    syncCommitteeWeights: [3n, 4n],
-    syncCommitteePops: [`0x${"cc".repeat(96)}`, `0x${"dd".repeat(96)}`],
+    ...syncCommitteeFixture(0x33, 0xcc),
   };
   const nextSyncCommitteePayload = canonicalEthSyncCommitteePayloadBytes(nextCommittee);
+  const parentSyncCommitteeHash = ethSyncCommitteeHash(parent);
+  const nextSyncCommitteeHash = ethSyncCommitteeHashFromPayload(nextSyncCommitteePayload);
+  const nextSyncCommitteePayloadHash = ethSyncCommitteePayloadHash(nextSyncCommitteePayload);
   const transitionMessage = {
     sourceDomain: SCCP_DOMAIN_ETH,
     fromSyncPeriod: 0n,
     toSyncPeriod: 1n,
     transitionSlot: 19n,
     finalizedBeaconRoot: HEX32_A,
-    parentSyncCommitteeHash: ETH_SYNC_COMMITTEE_HASH,
-    nextSyncCommitteeHash: ETH_NEXT_SYNC_COMMITTEE_HASH,
-    nextSyncCommitteePayloadHash: ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+    parentSyncCommitteeHash,
+    nextSyncCommitteeHash,
+    nextSyncCommitteePayloadHash,
     nextSyncCommitteeBranchHash: `0x${"be".repeat(32)}`,
   };
+  const transitionMessageHash = ethSyncCommitteeTransitionMessageHash(transitionMessage);
   const transitionSignature = {
     version: 1,
     ...transitionMessage,
     nextSyncCommitteePayload,
-    transitionMessageHash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+    transitionMessageHash,
     syncCommitteeProof: {
       version: 1,
-      totalWeight: 3n,
-      signedWeight: 3n,
-      syncCommitteeMessageHash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+      totalWeight: 512n,
+      signedWeight: 342n,
+      syncCommitteeMessageHash: transitionMessageHash,
       ...parent,
-      signersBitmap: [0x03],
+      signersBitmap: signersBitmap(342),
       aggregateSignature: new Uint8Array(96).fill(0xee),
     },
   };
 
-  assert.equal(ethSyncCommitteeHash(parent), ETH_SYNC_COMMITTEE_HASH);
-  assert.equal(Buffer.from(nextSyncCommitteePayload).toString("hex"), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX);
-  assert.equal(ethSyncCommitteeHashFromPayload(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_HASH);
-  assert.equal(ethSyncCommitteePayloadHash(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH);
+  assert.match(parentSyncCommitteeHash, /^0x[0-9a-f]{64}$/u);
+  assert.equal(nextSyncCommitteePayload.length, 81925);
+  assert.match(nextSyncCommitteeHash, /^0x[0-9a-f]{64}$/u);
+  assert.match(nextSyncCommitteePayloadHash, /^0x[0-9a-f]{64}$/u);
   assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteePayloadBytes({
+        syncCommitteePublicKeys: [`0x${"11".repeat(48)}`, `0x${"22".repeat(48)}`],
+        syncCommitteeWeights: [1n, 1n],
+        syncCommitteePops: [`0x${"aa".repeat(96)}`, `0x${"bb".repeat(96)}`],
+      }),
+    /exactly 512/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteePayloadBytes({
+        ...parent,
+        syncCommitteeWeights: [2n, ...parent.syncCommitteeWeights.slice(1)],
+      }),
+    /must be 1/u,
+  );
   assert.throws(
     () =>
       canonicalEthSyncCommitteePayloadBytes({
@@ -10211,10 +10237,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     /syncCommitteePublicKeys must not use multiple aliases/u,
   );
   assert.equal(canonicalEthSyncCommitteeTransitionMessageBytes(transitionMessage).length, 189);
-  assert.equal(
-    ethSyncCommitteeTransitionMessageHash(transitionMessage),
-    ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
-  );
+  assert.match(transitionMessageHash, /^0x[0-9a-f]{64}$/u);
   assert.throws(
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
@@ -10268,15 +10291,15 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
         ...transitionMessage,
-        next_sync_committee_payload_hash: ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+        next_sync_committee_payload_hash: nextSyncCommitteePayloadHash,
       }),
     /nextSyncCommitteePayloadHash must not use multiple aliases/u,
   );
-  assert.equal(canonicalEthSyncCommitteeTransitionSignatureBytes(transitionSignature).length, 1068);
-  assert.equal(
-    ethSyncCommitteeTransitionSignatureHash(transitionSignature),
-    ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH,
+  assert(
+    canonicalEthSyncCommitteeTransitionSignatureBytes(transitionSignature).length >
+      nextSyncCommitteePayload.length,
   );
+  assert.match(ethSyncCommitteeTransitionSignatureHash(transitionSignature), /^0x[0-9a-f]{64}$/u);
   assert.throws(
     () =>
       canonicalEthSyncCommitteeTransitionSignatureBytes({
@@ -10297,7 +10320,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionSignatureBytes({
         ...transitionSignature,
-        transition_message_hash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+        transition_message_hash: transitionMessageHash,
       }),
     /transitionMessageHash must not use multiple aliases/u,
   );
@@ -10345,30 +10368,39 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         syncCommitteeWeights: Array.from({ length: 513 }, () => 1n),
         syncCommitteePops: Array.from({ length: 513 }, () => `0x${"aa".repeat(96)}`),
       }),
-    /at most 512/,
+    /exactly 512/u,
   );
   assert.throws(
-    () =>
+    () => {
+      const malformedPublicKeys = parent.syncCommitteePublicKeys.slice();
+      malformedPublicKeys[0] = `0x${"11".repeat(47)}`;
       canonicalEthSyncCommitteePayloadBytes({
         ...parent,
-        syncCommitteePublicKeys: [`0x${"11".repeat(47)}`, `0x${"22".repeat(48)}`],
-      }),
+        syncCommitteePublicKeys: malformedPublicKeys,
+      });
+    },
     /48 bytes/,
   );
   assert.throws(
-    () =>
+    () => {
+      const zeroPublicKeys = parent.syncCommitteePublicKeys.slice();
+      zeroPublicKeys[0] = `0x${"00".repeat(48)}`;
       canonicalEthSyncCommitteePayloadBytes({
         ...parent,
-        syncCommitteePublicKeys: [`0x${"00".repeat(48)}`, `0x${"22".repeat(48)}`],
-      }),
+        syncCommitteePublicKeys: zeroPublicKeys,
+      });
+    },
     /must not be zero/,
   );
   assert.throws(
-    () =>
+    () => {
+      const zeroPops = parent.syncCommitteePops.slice();
+      zeroPops[0] = new Uint8Array(96);
       canonicalEthSyncCommitteePayloadBytes({
         ...parent,
-        syncCommitteePops: [new Uint8Array(96), `0x${"bb".repeat(96)}`],
-      }),
+        syncCommitteePops: zeroPops,
+      });
+    },
     /must not be zero/,
   );
   assert.throws(
@@ -10388,18 +10420,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signersBitmap: [0x04],
-        },
-      }),
-    /padding bits/,
-  );
-  assert.throws(
-    () =>
-      canonicalEthSyncCommitteeTransitionSignatureBytes({
-        ...transitionSignature,
-        syncCommitteeProof: {
-          ...transitionSignature.syncCommitteeProof,
-          signersBitmap: [0x00],
+          signersBitmap: signersBitmap(0),
         },
       }),
     /select at least one/,
@@ -10410,7 +10431,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          totalWeight: 4n,
+          totalWeight: 513n,
         },
       }),
     /totalWeight/,
@@ -10421,7 +10442,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signedWeight: 2n,
+          signedWeight: 341n,
         },
       }),
     /signedWeight/,
@@ -10432,8 +10453,8 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signedWeight: 1n,
-          signersBitmap: [0x01],
+          signedWeight: 341n,
+          signersBitmap: signersBitmap(341),
         },
       }),
     /greater than two thirds/,

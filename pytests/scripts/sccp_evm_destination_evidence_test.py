@@ -22,10 +22,10 @@ BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
 )
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "c08cea56ca5233fad7af7e4a2a849eb1c245f1f093015858b11049a0b63992d9"
+    "84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7"
 )
 BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "fbe2366715a171e9e1d8afdc48b811316c3c32cd393e83c65e5e27134e0d1def"
+    "66a7bdfe287e79a350688ca84699cde4df4c6cbf38926f0ac4f027c7a2c43744"
 )
 
 
@@ -103,6 +103,7 @@ def evm_runtime_material(module, *, domain=1):
         proof_family_hash=module.evm_proof_family_hash(),
         network_id=network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
     )
     return SimpleNamespace(
         domain=domain,
@@ -392,6 +393,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         "verifier_backend_hash": module.evm_verifier_backend_hash(),
         "proof_family_hash": module.evm_proof_family_hash(),
         "used_message_proof": True,
+        "receipt_block_finalized": True,
     }
     eth_common = {
         **common,
@@ -447,6 +449,12 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         else:
             raise AssertionError(f"reused EVM route canary hash role {field} accepted")
 
+    non_finalized_hash = module.evm_route_canary_transaction_evidence_hash(
+        target_domain=module.SCCP_DOMAIN_ETH,
+        **{**eth_common, "receipt_block_finalized": False},
+    )
+    assert non_finalized_hash != eth_hash
+
 
 def test_evm_destination_binding_hash_rejects_malformed_direct_material():
     module = load_evidence_module()
@@ -479,6 +487,16 @@ def test_evm_destination_binding_hash_rejects_malformed_direct_material():
         assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
     else:
         raise AssertionError("non-mainnet ETH network id was accepted")
+
+    try:
+        module.evm_destination_binding_key(
+            network_id=bytes.fromhex("33" * 32),
+            **{key: value for key, value in common.items() if key != "network_id"},
+        )
+    except ValueError as exc:
+        assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
+    else:
+        raise AssertionError("non-mainnet ETH network id binding key was accepted")
 
     try:
         module.evm_destination_binding_hash(
@@ -649,6 +667,7 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         proof_family_hash=module.evm_proof_family_hash(),
         network_id=network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
     )
     common = dict(
         domain=1,

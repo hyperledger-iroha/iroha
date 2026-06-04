@@ -79,12 +79,11 @@ private let sccpSourceAdapterFastpqOmegaCosetV1: UInt64 = 0x6AF3_25E8_25AD_5C18
 private let sccpEvmReceiptRootValueMarker = Data("sccp:evm:receipt-root-value:v1".utf8)
 private let sccpEthExecutionPayloadBodyFieldIndex: UInt64 = 9
 private let sccpEthExecutionPayloadBodyBranchDepth = 4
-private let sccpEthMaxSyncCommitteeAuthorities = 512
+private let sccpEthMainnetSyncCommitteeAuthorities = 512
+private let sccpEthMaxSyncCommitteeAuthorities = sccpEthMainnetSyncCommitteeAuthorities
 private let sccpEthSyncCommitteePublicKeyBytes = 48
 private let sccpEthSyncCommitteePopBytes = 96
 private let sccpEthSyncCommitteeSignatureBytes = 96
-private let sccpEthMaxSyncCommitteePublicKeyBytes = 96
-private let sccpEthMaxSyncCommitteePopBytes = 256
 private let sccpEthMaxSyncCommitteeSignatureBytes = 192
 public let sccpEthMainnetSlotsPerEpoch: UInt64 = 32
 public let sccpEthMainnetEpochsPerSyncCommitteePeriod: UInt64 = 256
@@ -92,7 +91,7 @@ public let sccpEthMainnetSlotsPerSyncCommitteePeriod: UInt64 =
     sccpEthMainnetSlotsPerEpoch * sccpEthMainnetEpochsPerSyncCommitteePeriod
 private let sccpEthMaxSyncCommitteePayloadBytes =
     1 + 4 + sccpEthMaxSyncCommitteeAuthorities *
-        (4 + sccpEthMaxSyncCommitteePublicKeyBytes + 8 + 4 + sccpEthMaxSyncCommitteePopBytes)
+        (4 + sccpEthSyncCommitteePublicKeyBytes + 8 + 4 + sccpEthSyncCommitteePopBytes)
 private let sccpEthMaxSyncCommitteeSignersBitmapBytes = (sccpEthMaxSyncCommitteeAuthorities + 7) / 8
 private let sccpBscMaxParliaValidators = 255
 private let sccpBscMaxValidatorSetPayloadBytes = 1 + 4 + sccpBscMaxParliaValidators * (20 + 8)
@@ -1287,15 +1286,14 @@ public func evmSccpReceiptProofHash(sourceDomain: UInt32 = sccpDomainEthereum,
 public func canonicalEthSyncCommitteePayloadBytes(syncCommitteePublicKeys: [Data],
                                                   syncCommitteeWeights: [UInt64],
                                                   syncCommitteePops: [Data]) throws -> Data {
-    guard !syncCommitteePublicKeys.isEmpty,
-          syncCommitteePublicKeys.count == syncCommitteeWeights.count,
+    guard syncCommitteePublicKeys.count == syncCommitteeWeights.count,
           syncCommitteePublicKeys.count == syncCommitteePops.count else {
         throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePublicKeys")
     }
     guard syncCommitteePublicKeys.count <= Int(UInt32.max) else {
         throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePublicKeys")
     }
-    guard syncCommitteePublicKeys.count <= sccpEthMaxSyncCommitteeAuthorities else {
+    guard syncCommitteePublicKeys.count == sccpEthMainnetSyncCommitteeAuthorities else {
         throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePublicKeys")
     }
     var out = Data()
@@ -1313,7 +1311,7 @@ public func canonicalEthSyncCommitteePayloadBytes(syncCommitteePublicKeys: [Data
         guard seenPublicKeys.insert(publicKey.hexEncodedString()).inserted else {
             throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePublicKeys[\(index)]")
         }
-        guard syncCommitteeWeights[index] != 0 else {
+        guard syncCommitteeWeights[index] == 1 else {
             throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteeWeights[\(index)]")
         }
         let pop = syncCommitteePops[index]
@@ -6071,10 +6069,7 @@ private func sourceProofValidateEthSyncCommitteePayload(_ payload: Data) throws 
     }
     cursor += 1
     let count = Int(try sourceProofReadU32Le(bytes, cursor: &cursor))
-    guard count > 0 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePayload")
-    }
-    guard count <= sccpEthMaxSyncCommitteeAuthorities else {
+    guard count == sccpEthMainnetSyncCommitteeAuthorities else {
         throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePayload")
     }
     var seenPublicKeys = Set<String>()
@@ -6093,7 +6088,7 @@ private func sourceProofValidateEthSyncCommitteePayload(_ payload: Data) throws 
             throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteePublicKeys[\(index)]")
         }
         let weight = try sourceProofReadU64Le(bytes, cursor: &cursor)
-        guard weight != 0 else {
+        guard weight == 1 else {
             throw SccpSourceProofHashError.invalidValidatorSet("syncCommitteeWeights[\(index)]")
         }
         let popLength = Int(try sourceProofReadU32Le(bytes, cursor: &cursor))
@@ -6335,14 +6330,24 @@ public func canonicalEvmReceiptRlp(_ receipt: [String: Any]) throws -> Data {
         sourceProofRlpString(
             sourceProofMinimalBigEndianBytes(
                 try sourceProofEthereumRpcQuantity(
-                    sourceProofFirstPresent(receipt, "cumulativeGasUsed", "cumulative_gas_used"),
+                    sourceProofStrictFirstPresent(
+                        receipt,
+                        field: "receipt.cumulativeGasUsed",
+                        "cumulativeGasUsed",
+                        "cumulative_gas_used"
+                    ),
                     field: "receipt.cumulativeGasUsed"
                 )
             )
         ),
         try sourceProofRlpString(
             sourceProofEthereumRpcHexBytes(
-                sourceProofFirstPresent(receipt, "logsBloom", "logs_bloom"),
+                sourceProofStrictFirstPresent(
+                    receipt,
+                    field: "receipt.logsBloom",
+                    "logsBloom",
+                    "logs_bloom"
+                ),
                 field: "receipt.logsBloom",
                 byteLength: 256,
                 nonzero: false
@@ -6383,14 +6388,24 @@ public func buildEvmReceiptTrieProofFromReceipts(
     var targetReceiptRlp: Data?
     for (index, receipt) in receipts.enumerated() {
         let receiptIndex = try sourceProofEthereumRpcQuantity(
-            sourceProofFirstPresent(receipt, "transactionIndex", "transaction_index"),
+            sourceProofStrictFirstPresent(
+                receipt,
+                field: "blockReceipts[\(index)].transactionIndex",
+                "transactionIndex",
+                "transaction_index"
+            ),
             field: "blockReceipts[\(index)].transactionIndex"
         )
         guard receiptIndex == UInt64(index) else {
             throw SccpSourceProofHashError.invalidRlp("blockReceipts[\(index)].transactionIndex")
         }
         let transactionHash = try sourceProofEthereumRpcHexBytes(
-            sourceProofFirstPresent(receipt, "transactionHash", "transaction_hash"),
+            sourceProofStrictFirstPresent(
+                receipt,
+                field: "blockReceipts[\(index)].transactionHash",
+                "transactionHash",
+                "transaction_hash"
+            ),
             field: "blockReceipts[\(index)].transactionHash",
             byteLength: 32
         )
@@ -6659,6 +6674,23 @@ private func sourceProofFirstPresent(_ input: [String: Any], _ keys: String...) 
         return input[key]
     }
     return nil
+}
+
+private func sourceProofStrictFirstPresent(
+    _ input: [String: Any],
+    field: String,
+    _ keys: String...
+) throws -> Any? {
+    var selected: Any?
+    var found = false
+    for key in keys where input.keys.contains(key) {
+        guard !found else {
+            throw SccpSourceProofHashError.invalidRlp(field)
+        }
+        selected = input[key]
+        found = true
+    }
+    return selected
 }
 
 private func sourceProofEthereumRpcQuantity(_ value: Any?, field: String) throws -> UInt64 {

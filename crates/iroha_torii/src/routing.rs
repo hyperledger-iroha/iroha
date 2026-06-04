@@ -7829,6 +7829,8 @@ fn sccp_configured_route_allowlist_for_domain(
         evm_route_canary_log_index: configured.evm_route_canary_log_index,
         evm_route_canary_receipt_block_number: configured.evm_route_canary_receipt_block_number,
         evm_route_canary_receipt_block_hash: configured.evm_route_canary_receipt_block_hash.clone(),
+        evm_route_canary_receipt_block_finalized: configured
+            .evm_route_canary_receipt_block_finalized,
         evm_route_canary_block_receipts_root: configured
             .evm_route_canary_block_receipts_root
             .clone(),
@@ -9194,6 +9196,7 @@ mod sccp_message_backend_tests {
                 0,
                 10_000 + u64::from(domain),
                 [0xd5u8.wrapping_add(domain as u8); 32],
+                true,
                 [0xd6u8.wrapping_add(domain as u8); 32],
                 [0xd0u8.wrapping_add(domain as u8); 32],
                 [0xd1u8.wrapping_add(domain as u8); 32],
@@ -9448,6 +9451,8 @@ mod sccp_message_backend_tests {
             evm_route_canary_receipt_block_hash: allowlist
                 .evm_route_canary_receipt_block_hash
                 .clone(),
+            evm_route_canary_receipt_block_finalized: allowlist
+                .evm_route_canary_receipt_block_finalized,
             evm_route_canary_block_receipts_root: allowlist
                 .evm_route_canary_block_receipts_root
                 .clone(),

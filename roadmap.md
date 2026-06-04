@@ -40,7 +40,10 @@ and completed history lives in [`status.md`](./status.md).
   JS/browser Ethereum mainnet proving now also has explicit regressions that
   missing inbound/outbound local proof callbacks fail before any execution
   provider fallback is attempted, with release inventories pinning the
-  no-fallback errors;
+  no-fallback errors; direct finality maps and Beacon REST finality updates now
+  also require at least 342 of 512 sync committee participants before
+  ETH -> SORA local proving can observe the evidence, with under-quorum
+  negatives pinned across JS/browser, Swift, Kotlin/JVM, Java Android, and C#;
   all five SDKs now also reject present-but-malformed Beacon REST boolean
   safety fields (`execution_optimistic`, `executionOptimistic`, `finalized`,
   and finalized-header `canonical`) and require canonical non-zero finalized
@@ -67,14 +70,22 @@ and completed history lives in [`status.md`](./status.md).
   Swift, Kotlin/JVM, Java Android, and C# now also require validated SCCP
   source bridge log context before receipt-proof-backed Ethereum inbound
   proving can invoke local prover callbacks, preventing prebuilt receiptProof
-  material from bypassing source-event admission checks; SDK receipt-proof
+  material from bypassing source-event admission checks, and release
+  inventories now pin malformed source-event negatives for extra topics,
+  non-empty data, zero digests, duplicate matches, and removed logs across all
+  primary SDKs; SDK receipt-proof
   transcript helpers now also require non-empty receipt-trie proof nodes and
   non-empty consensus inclusion branches plus the correct ETH/BSC source
   domain before deriving receipt-proof hashes, with browser/native release
   inventories pinning empty-node, empty-branch, and cross-domain negatives;
   Swift, Kotlin/JVM, Java Android, and C# now reject forged Ethereum outbound
-  `destinationBindingHash` values at the facade `wrapProofResult` boundary
-  and carry explicit forged-request regressions pinned by release inventories;
+  `destinationBindingHash` values at the facade `wrapProofResult` boundary,
+  Swift also rejects forged binding hashes at
+  `EthereumMainnetSccp.buildOutboundProofRequest(...)` before returning a
+  request to callers, and the Python Torii client regression now pins both
+  forged binding-hash rejection and BSC pre-callback rejection for the Ethereum
+  facade; those explicit forged-request regressions are pinned by release
+  inventories;
   the public active Ethereum mainnet launch checklist now also treats source
   and destination live-read `eth_chainId == 0x1` (1), `finalized` block tags,
   and finalized route-canary receipt-block metadata as governed-deployment
@@ -84,14 +95,31 @@ and completed history lives in [`status.md`](./status.md).
   cryptographic-evidence table exposes the EVM route-canary transaction hash,
   receipt block number/hash, finalized receipt-block flag, block
   `receiptsRoot`, and `messageId` with bundle-verifier checks binding those
-  public fields back to embedded lane evidence; the
+  public fields back to embedded lane evidence, while the live route-canary
+  adversarial suite now also pins `eth_getTransactionByHash(...).to` to the
+  governed destination bridge address, and release/readiness inventories now
+  also pin live source deployment receipt/transaction readback, receipt-block
+  `receiptsRoot` verification, finalized deployment-block binding, source
+  record hashes, destination bytecode-hash, `verifyingKeyHash()`,
+  `destinationBindingHash()`, binding-key, calldata, and
+  `usedMessageProofs(bytes32)` replay guards, with route-canary adversarial
+  coverage for malformed `submitSccpMessageProof(bytes,bytes32[6],bytes32)`
+  ABI/proof/public-input words; EVM route-canary evidence hashes are now `v4`
+  digests that commit to the finalized receipt-block readback flag, so
+  non-finalized diagnostic reads cannot reuse finalized canary hashes, and the
+  same flag is threaded through typed Rust config, SCCP readiness, core launch
+  readiness, and Torii mappings with a Rust/Python ETH vector parity regression
+  so production EVM lanes reject missing or non-finalized route-canary receipt
+  evidence; the
   same Beacon REST providers now resolve the target Beacon block from
   app-supplied slot/root/id metadata or timestamp-derived mainnet slot evidence,
   require the target header/root to be finalized relative to the current
-  finalized head and checkpoint, then require the target block body's execution
-  payload slot, `block_hash`, `block_number`, and `receipts_root` to match the
-  execution RPC block before emitting finality evidence, with release
-  inventories pinning that target-block and execution-payload binding plus
+  finalized head and checkpoint, reject historical target slots without an
+  ancestry proof in every native SDK, then require the target block body's
+  execution payload slot, `block_hash`, `block_number`, and `receipts_root` to
+  match the execution RPC block before emitting finality evidence, with release
+  inventories pinning the historical-target ancestry rejection, the current
+  finalized-slot target markers, and that execution-payload binding plus
   native timestamp-derived target-slot regressions, and
   the dynamic JS/browser provider requires real boolean
   `verifyFinalityCheckpoint` overrides rather than coercing strings or numbers;
@@ -111,17 +139,44 @@ and completed history lives in [`status.md`](./status.md).
   payload material is supplied, and now fetch
   `/eth/v1/beacon/light_client/finality_update` to pin
   `sync_aggregate.sync_committee_bits`, `sync_committee_signature`, and the
-  signature slot to the finalized header while rejecting empty sync-committee
-  participation before evidence leaves the SDK; the Ethereum mainnet inbound
-  facades also require those finality-update fields before invoking
+  signature slot to the finalized header, and require the six-sibling
+  `finality_branch` to be normalized as `finalityBranch` before evidence leaves
+  the SDK while rejecting empty sync-committee participation and all-zero
+  aggregate signatures; the Ethereum mainnet inbound facades also require those
+  finality-update fields and reject stale direct `syncSignatureSlot` values
+  plus all-zero direct `syncCommitteeSignature` values before invoking
   app-owned prover callbacks, and the TypeScript declarations plus typed Swift,
   Kotlin/JVM, Java Android, and C# finality-evidence surfaces expose those
-  fields directly; native direct `beaconFinality` maps now reject duplicate
+  fields directly; Python evidence tooling now mirrors the same finality gate
+  and binds prebuilt receipt proofs back to finalized-header roots,
+  sync-committee roots, and beacon slots before its native prover callback can
+  run; native direct `beaconFinality` maps now reject duplicate
   camelCase/snake_case aliases for the same finality value and normalize direct
   sync-aggregate fields before any receipt-proof or local-prover callback can
-  observe them. The EVM contract smoke path now also binds its `networkId`
+  observe them, and browser/native SDKs now also reject direct finality maps
+  whose `syncCommitteeParticipation` does not match the popcount of
+  `syncCommitteeBits` or whose `syncSignatureSlot` does not cover the
+  finalized `beaconSlot`; those direct finality maps must also carry
+  `finalityBranch`/`finality_branch` before easy inbound prover callbacks can
+  run. Accepted direct finality maps now strip known alias spellings from
+  callback-facing evidence while preserving unknown extension fields for app
+  proof context. The EVM contract smoke path now also binds its `networkId`
   vector to a 32-byte Ethereum mainnet chain-id `1` value instead of a devnet
-  label before exercising constructor and destination-binding checks. The Python evidence tooling
+  label before exercising constructor and destination-binding checks, and the
+  wrapper constructor now rejects ETH/BSC deployments whose nonzero network id
+  does not match the target domain's canonical mainnet EIP-155 chain id word.
+  The release bundle verifier now also requires EVM contract smoke markers for
+  verifier code/key hash binding, `destinationBindingHash()`, malformed
+  Groth16 proof words, `MessageProofAccepted` payload fields, and replayed
+  `messageId` rejection before Ethereum mainnet can be advertised as ready.
+  The diagnostic `sccp_allow_unready_transparent_proofs` bypass is now
+  config-only, with the old runtime environment override removed from
+  `iroha_config` and Taira launch units.
+  The offline EVM destination evidence helper now applies the same mainnet
+  network-id guard when deriving destination binding keys, so TOML/JSON evidence
+  cannot carry a hash checked against one network id and a key rendered from
+  another.
+  The Python evidence tooling
   and pure JS/browser,
   Swift, Kotlin/JVM, Java Android, and C# SDKs now also reconstruct typed
   receipt RLP, RLP transaction-index
@@ -150,10 +205,32 @@ and completed history lives in [`status.md`](./status.md).
   all-lanes evidence or checklist schema validation has already failed. Native
   receipt-proof cross-binding now applies the same duplicate-alias rejection to
   finalized-header roots, sync-committee roots, and beacon slots before local
-  prover callbacks can observe direct app-supplied evidence, and native
+  prover callbacks can observe direct app-supplied evidence, and browser/native
   source-event log validators reject conflicting receipt-log transaction,
   block-hash, and block-number aliases before deriving SCCP source event
-  digests.
+  digests. Browser, Swift, Kotlin/JVM, Java Android, and C# receipt-proof
+  collectors and trie helpers now also reject conflicting aliases for receipt,
+  block, `eth_getBlockReceipts` target receipt metadata, and receipt-RLP
+  gas-used/logs-bloom fields before
+  constructing Ethereum mainnet source-proof transcripts. Kotlin/JVM and Java
+  Android now also reject prebuilt Ethereum `receiptProof` plus Beacon finality
+  evidence that lacks validated `sourceEventDigest` before any local inbound
+  prover callback can observe the proof material. Rust/core Ethereum mainnet
+  source-proof verification now also rejects replayed source-adapter deployment
+  receipt material at the structure, production, and bundle-helper gates, even
+  when the replayed deployment descriptor is internally production-shaped, and
+  source-adapter deployment evidence now only unblocks production for explicit
+  ETH/BSC EVM lane branches so future or unsupported domains fail closed until
+  they receive audited lane-specific policy. Ethereum mainnet sync-committee
+  helpers in Rust/core, JS/browser, Python, Swift, Kotlin/JVM, Java Android,
+  and C# now also reject compressed or weighted committee rosters: payloads
+  must carry exactly 512 authorities with unit weights and proofs must use the
+  fixed 64-byte mainnet signer bitmap before any transcript hash or local
+  prover callback can observe them. Release-bundle and release-readiness
+  marker inventories now pin those exact-roster guards across Rust/core and
+  every SDK artifact before publication, and the Java Android corridor
+  transcript gate now also requires the `SourceSccpProofsTests` harness marker
+  so source-proof hardening cannot be dropped while advertising SDK coverage.
 - Keep focused validation green for the core transaction pipeline, Torii query
   and control-plane APIs, Norito wire formats, and SDK fixtures before broader
   workspace test runs. Torii app-query pages now expose concrete OpenAPI page
@@ -227,6 +304,34 @@ and completed history lives in [`status.md`](./status.md).
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components while preserving the previous contiguous seed transcript;
+  Ed25519 and secp256k1 now expose checked `try_keypair` paths, and top-level
+  `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
+  secp256k1 candidate scalar bytes through `OsRng::try_fill_bytes` so
+  entropy-source failures or bounded scalar-sampling exhaustion surface as
+  `Error::KeyGen` instead of the infallible compatibility RNG adapter;
+  standalone X25519 key exchange now exposes `KeyExchangeScheme::try_keypair`,
+  draws OS-backed private-key bytes through `OsRng::try_fill_bytes`, and routes
+  P2P, native Connect bridge, and Python Connect keypair generation through
+  fallible error surfaces instead of the infallible compatibility adapter;
+  GOST random scalar sampling and per-signature extra entropy now also use
+  checked OS fills, while both BLS backends derive random keys from checked OS
+  seed material and the default w3f backend seeds its key-splitting/signing RNGs
+  only after checked OS fills, leaving the compatibility `os_rng()` adapter
+  test-only; P2P SoraNet runtime handshakes now seed their local `StdRng`
+  through `SeedableRng::try_from_os_rng` and surface entropy-source failures as
+  `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
+  keeps explicit seeds deterministic while routing unseeded `StdRng` setup
+  through `SeedableRng::try_from_os_rng` and the CLI `Result` path, and CEK
+  rotation receipt HKDF salts use the same checked OS-seeded path when an
+  explicit `--hkdf-salt` is not supplied; Kagami keypair, PoP, genesis-signing,
+  wizard, and localnet peer/genesis/gas/extra-account key generation now route
+  random, seeded, and private-key-derived material through `KeyPair`'s fallible
+  APIs and BLS PoP `Result`s instead of compatibility panic
+  wrappers; irohad's ephemeral Torii receipt-signer fallback now uses checked
+  secp256k1 key generation and surfaces entropy/keygen failures as `StartTorii`,
+  while `iroha_swarm` peer/genesis key generation, seeded network material, and
+  BLS PoP proving now return `Error::KeyGeneration` through `Swarm::new`
+  instead of panicking;
   `PublicKey::try_to_*` and
   `ExposedPrivateKey::try_to_*` give public/private key formatting
   non-panicking routes; `Signature::try_new` now routes SM2 through checked
@@ -490,11 +595,14 @@ and completed history lives in [`status.md`](./status.md).
   secrets before any later HPKE use, and direct local ephemeral-payload
   precomputation no longer commits Kyber transport keys, negotiated-suite, STS,
   or snapshot state before a signed key update is built or accepted.
-  Norito streaming
-  X25519 key-update processing now requires prepared local ephemeral material and
-  applies the same low-order ephemeral-key preflight before transport-key
-  derivation or committing session state, and
-  signed remote key updates verify signatures and stage key-counter, suite, and
+	  Norito streaming
+	  X25519 key-update processing now requires prepared local ephemeral material and
+	  applies the same low-order ephemeral-key preflight before transport-key
+	  derivation or committing session state; X25519 ephemeral generation and
+	  outbound content-key nonce generation now propagate OS RNG failures as
+	  `HandshakeError::Randomness` instead of relying on the infallible RNG
+	  compatibility wrapper; and
+	  signed remote key updates verify signatures and stage key-counter, suite, and
   ephemeral-shape admission on a local copy before X25519 shared-secret
   derivation, ML-KEM decapsulation, transport-key derivation, resetting, or
   committing session state, and successful remote key updates now return the
@@ -830,7 +938,9 @@ and completed history lives in [`status.md`](./status.md).
   verified deployment receipt block and contract-creation input, all-lanes
   evidence now preserves and validates those source deployment transaction
   readback fields, direct ETH/BSC source bridge TOML renderers require the same
-  transaction block/input metadata, route-canary
+  transaction block/input metadata, Ethereum source live evidence also proves
+  the deployment receipt block is not newer than the finalized execution head
+  before governed TOML can be rendered, route-canary
   transaction receipts now reject
   non-object or removed logs before accepting `MessageProofAccepted`, the
   accepted route-canary log must carry receipt-matching `transactionHash`,
@@ -886,8 +996,10 @@ and completed history lives in [`status.md`](./status.md).
   failed receipt, receipt-root/finality drift, wrong source-event topic, and
   duplicate source-bridge log cases across browser and native SDKs. They now
   also guard the Ethereum mainnet
-  evidence-collection regions so they keep using app-owned execution/consensus
-  providers and do not grow Torii, proxy, or embedded HTTP-client fallbacks.
+  evidence-collection regions, including the published JS `dist` artifact, and
+  the standalone release-bundle verifier now mirrors that scan so published
+  bundles keep using app-owned execution/consensus providers and cannot grow
+  Torii, proxy, or embedded HTTP-client fallbacks.
   Core Ethereum beacon-receipt source-adapter preflight now rejects empty
   execution headers, empty sync committee rosters, and mismatched roster,
   weight, or proof-of-possession vectors before admission or cryptographic
@@ -1155,8 +1267,8 @@ and completed history lives in [`status.md`](./status.md).
   view-change quorum evidence for nonzero active views,
   NewView quorum handoff and complete-only view evidence,
   live NewView vote handoff and fresh-evidence gate matching,
-  live prepare-vote handoff gating,
-  live commit-vote handoff gating,
+  live prepare-vote handoff and proposal-evidence gate matching,
+  live commit-vote handoff and prepare-evidence gate matching,
   complete-only commit evidence,
   pre-commit stale commit-vote reset across view changes,
   pre-prepare stale prepare-vote reset across view changes,
@@ -1333,12 +1445,13 @@ and completed history lives in [`status.md`](./status.md).
   `--source-bridge-runtime-bytecode-hex` or
   `--source-bridge-runtime-bytecode-file` so the Keccak-256 runtime code hash is
   replayable from operator evidence.
-- EVM route-canary evidence now uses a v3 transcript aligned with the TRON
+- EVM route-canary evidence now uses a v4 transcript aligned with the TRON
   hardening model: ETH/BSC canary hashes bind the receipt block
   number/hash/`receiptsRoot`, submitted calldata SHA-256, decoded
   payload/finality public inputs, proof version/source domain, target domain,
-  and consumed-message state before all-lanes preflight or Rust `iroha_sccp`
-  route admission can mark route evidence launch-ready. TRON live
+  consumed-message state, and finalized receipt-block readback flag before
+  all-lanes preflight or Rust `iroha_sccp` route admission can mark route
+  evidence launch-ready. TRON live
   evidence also requires source-event and
   route-canary transaction readback to contain exactly one matching governed log
   and rejects explicit `logIndex`/`log_index` metadata that disagrees with the
@@ -3656,9 +3769,13 @@ operator-provided rollout bundles.
   source-proof helpers now also derive ETH Deneb/Fulu execution-payload,
   beacon-body branch, and beacon header SSZ roots from UI/mobile witness
   material, matching the source-adapter checks for `execution_payload_branch`
-  and `beacon_finalized_root`. The JavaScript
+  and `beacon_finalized_root`; the C# SDK now exposes the same native helpers
+  and shared root vector, with release/readiness inventories pinning the
+  helper names before Ethereum execution-payload binding can be advertised.
+  The JavaScript
   package entrypoint now re-exports those SCCP helpers at runtime, matching the
-  TypeScript declarations. JavaScript, Python, Swift, Kotlin, and Java Android now also
+  TypeScript declarations. JavaScript, Python, Swift, Kotlin, Java Android,
+  and C# now also
   package EVM-family and TRON wrapped Groth16 proof results into
   `submitSccpMessageProof(bytes,bytes32[6],bytes32)` contract-call calldata
   with selector/envelope bytes, six transparent ABI public-input words, and
@@ -5878,8 +5995,9 @@ or ABI behavior.
 
 **Status:** active research-to-product integration.
 
-- Replace current deterministic BFV-shaped evaluation scaffolding with the full
-  BFV-RNS implementation planned for release.
+- Replace current deterministic plaintext-modulus-multiple BFV-shaped
+  evaluation scaffolding with the full BFV-RNS implementation planned for
+  release.
 - Broaden cross-SDK deterministic vectors for encrypted payloads, receipts, and
   opening verification.
 - Keep Soracloud FHE multi-input behavior covered at the source level while the
@@ -5895,11 +6013,13 @@ or ABI behavior.
 - Keep BFV encrypted-input SDK vectors shared instead of local-only. The current
   fixture set covers the baseline identifier envelope plus Soracloud three-input
   Add and Multiply operand envelopes in JavaScript, Swift, Kotlin/JVM, and Java
-  Android test surfaces. Those SDK lanes now also validate the shared
-  operation fixture's component-level evaluation-key metadata so missing,
-  zeroed, duplicate, or count-drifted key-component vectors are caught outside
-  Rust, while the Rust executor consumes the same fixture for operation-output
-  digests and plaintext-slot checks. Crypto identifier-envelope admission now
+  Android test surfaces, with deterministic `{0, t, -t}` error-polynomial
+  sampling instead of zero-error ciphertexts. Those SDK lanes now also validate
+  the shared operation fixture's component-level evaluation-key metadata so
+  missing, zeroed, duplicate, or count-drifted key-component vectors are caught
+  outside Rust, while the Rust executor consumes the same fixture for
+  operation-output digests and plaintext-slot checks. Crypto
+  identifier-envelope admission now
   rejects structurally valid but unregistered BFV parameter profiles before
   identifier encryption, decryption, or downstream Torii/core validation, and
   identifier slot encoding now reports byte-length and slot-index conversion
@@ -5908,7 +6028,9 @@ or ABI behavior.
   avoid post-reduction `expect` conversions while preserving max-width
   `u64::MAX` modulus behavior, and the RAM-LFE default programmed BFV hidden
   program now uses profile-sized `u16` constants instead of runtime
-  `usize`-to-`u16` conversion assumptions; programmed BFV memory RNG transcript
+  `usize`-to-`u16` conversion assumptions; programmed BFV hidden-program
+  admission now also rejects `LoadInput` indexes above the encrypted envelope's
+  advertised `max_input_bytes`; programmed BFV memory RNG transcript
   derivation now binds `u64` step values directly instead of converting through
   a panic-only `expect`; BFV/RAM-LFE domain-separated digest, receipt, and
   RNG-seed transcripts now stream hash chunks directly while preserving the
@@ -5918,15 +6040,20 @@ or ABI behavior.
   rejects invalid operand lengths, unsupported NTT lengths, and CRT
   reconstruction overflow before using that same fallback instead of panicking
   on degree or NTT arithmetic.
-  Programmed RAM-LFE BFV bundle construction now also has fallible constructors
-  that reject unregistered identifier profiles and invalid proof metadata before
-  public-parameter digests are emitted. BFV now also has a registered RAM-LFE
+  Programmed RAM-LFE BFV bundle construction now also keeps only fallible
+  production constructors that reject unregistered identifier profiles and
+  invalid proof metadata before public-parameter digests are emitted, and
+  programmed BFV public-parameter decoding rejects encrypted-envelope
+  capacities above the canonical profile slot count. BFV now also has a registered RAM-LFE
   v1 RNS coefficient-modulus chain descriptor whose validation requires
   bounded, strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs,
   a checked product that covers the active ciphertext modulus, a stable
   domain-separated chain digest, and a separate exact-lift compatibility bound
-  while the full BFV-RNS arithmetic engine is still pending. The descriptor now
-  also supports checked limb-major polynomial decomposition and CRT
+  while the full BFV-RNS arithmetic engine is still pending. The shared RNS
+  validator now also validates BFV parameters directly, so exact-lift and exact
+  `Z_q` coverage helpers reject malformed parameter profiles before inspecting
+  chain arithmetic bounds. The descriptor now also supports checked limb-major
+  polynomial decomposition and CRT
   reconstruction, with malformed residue-shape and unreduced-residue rejection
   before arithmetic code can consume those residues, plus deterministic scalar
   residue addition and per-limb NTT-backed negacyclic multiplication with a
@@ -5942,18 +6069,97 @@ or ABI behavior.
   sufficiently wide chains, plus exact RNS-backed ciphertext addition,
   multiplication, relinearization, and Galois key-switch bridges that match the
   scalar evaluator on small wide-chain profiles. The registered RAM-LFE chain
-  still rejects treating product-ring fixture arithmetic as ciphertext-modulus
-  `Z_q` arithmetic unless the full unreduced exact-lift bounds are satisfied.
-  The deterministic BFV baseline now also has packed-polynomial Galois
+  is now wide enough for that guarded exact `Z_q` bridge, so Rust exercises
+  exact RNS ciphertext addition, multiplication/relinearization, and Galois
+  key-switching against the production RAM-LFE parameters while retaining a
+  separate rejection test for the narrower exact-lift compatibility corridor.
+  The programmed RAM-LFE BFV runtime now uses that registered exact RNS bridge
+  for ciphertext add, subtract, multiply/relinearization, and `SelectEqZero`
+  exponentiation/selection arithmetic; plaintext-scalar operations remain
+  scalar because they do not require RNS polynomial products. The public
+  Soracloud BFV job executor now uses the same registered exact RNS bridge for
+  Add, Multiply, packed and outer `RotateLeft`, and bounded Bootstrap refresh
+  rounds, keeping operation-output vectors on the production job path. The
+  deterministic BFV baseline now also has packed-polynomial Galois
   automorphism keys that switch `sigma_k(s)` ciphertexts back to the original
   secret key after applying `x -> x^k`, with regressions covering canonical
   odd powers, malformed key rejection, plaintext automorphism parity, exact-RNS
-  scalar parity, and registered-chain exact-RNS rejection. The registered
+  scalar parity, and registered-chain exact-RNS parity. Scalar and exact-RNS
+  key-switch primitives now also validate decomposition-entry counts and
+  operand shapes before zipping digits, so malformed key material cannot
+  silently truncate a switch. The registered
   batch-friendly `t = 257`, `n = 64` profile now also has deterministic packed
   plaintext slot encoding/decoding plus shared Soracloud scalar and packed
   Galois execution vectors that encrypt deterministic inputs, apply the public
   Galois key-switch, and verify output ciphertext/plaintext digests plus the
-  packed-slot permutation across Rust and SDK fixture-shape checks.
+  packed-slot permutation across Rust and SDK fixture-shape checks. JavaScript,
+  Swift, Kotlin/JVM, and Java Android now parse `compact-v1` BFV Norito length
+  encoding and reproduce the Rust-compatible compact operation-input encryption
+  stream for the non-packed Soracloud Add, Multiply, outer `RotateLeft`, and
+  Bootstrap input vectors, while packed-slot operation inputs remain Rust
+  execution vectors plus SDK fixture-shape/digest checks outside the
+  identifier-envelope builders. Public
+  bootstrap refresh keys now also bind an explicit `max_refresh_rounds` and
+  carry domain-separated public refresh ciphertexts for each authorized round;
+  Soracloud runtime rejects `Bootstrap` jobs whose requested count exceeds that
+  key capacity and consumes refresh material by round index. Soracloud runtime
+  now also routes single-ciphertext packed
+  `RotateLeft` envelopes through public Galois key switching, including masked
+  schedules for rotations that are not one automorphism; raw packed rotation
+  helpers validate the complete supplied Galois-key slice for bounds,
+  duplicates, and malformed entries before scheduled-key lookup, while missing
+  schedule keys fail closed. Shared BFV key validators also validate parameter
+  sets before key shapes, so malformed profiles cannot reach decomposition
+  math through direct secret/public/rotation/evaluation/bootstrap key checks.
+  Key-owner diagnostics now also verify that generated public rotation and
+  bootstrap refresh ciphertexts decrypt to zero under the matching secret key,
+  including a bundle-level check over every rotation and bootstrap refresh
+  mask, while public admission still depends on future proof-carrying
+  bootstrap key material. Public deterministic transcript checks now recompute
+  rotation and bootstrap encrypted-zero refresh material from the advertised
+  seed, public key, key id, and round count, rejecting wrong-seed,
+  key-id-drifted, or tampered refresh ciphertexts without requiring a secret
+  key; the same check now runs at the evaluation-key bundle level so admission
+  cannot accidentally validate only a subset of public rotation/bootstrap
+  refresh masks. The validated transcript inventory now also has a stable
+  domain-separated digest over the parameter set, public key, evaluation-key
+  digest, and transcript seed metadata, giving governance/admission code a
+  canonical value to bind before the final proof-carrying bootstrap key format
+  lands. This hardens the current refresh path but does not replace the final
+  proof-carrying bootstrap key format. The same bundle-level owner diagnostic now verifies
+  relinearization entries against scaled `s^2` residues and Galois entries
+  against scaled automorphed-secret residues, rejecting non-plaintext-multiple
+  key-switch residuals and residual multiples above the current exact error
+  bound. BFV key generation now self-checks freshly generated public keys by
+  verifying that `b + a*s` is a plaintext-modulus multiple within that bound,
+  and checks generated relinearization entries before returning key material;
+  public-key owner diagnostics reject shape-valid wrong-secret,
+  non-plaintext-multiple, or oversized residuals before publication, while
+  public admission still needs proof-carrying key-material checks.
+  Plaintext, ciphertext, polynomial, Galois-power, affine-circuit, and
+  RNS-polynomial shape validators now use the same parameter preflight before
+  inspecting caller-controlled shapes. BFV parameter admission now also
+  requires enough ciphertext-modulus headroom to keep the deterministic
+  `+t`/`-t` error representatives distinct under the configured error bound.
+  Secret-key diagnostics now also expose the exact centered residual multiples
+  and remaining centered-modulus headroom for the current plaintext-lift
+  evaluator, while full bounded-RLWE noise budgeting remains part of the
+  pending BFV-RNS engine.
+  Outer ciphertext-slot `RotateLeft` now also
+  rejects empty slot lists and full-cycle step counts before applying
+  rotation-key refresh material. Soracloud Multiply now uses a deterministic
+  balanced ciphertext tree and rejects jobs whose declared multiplication depth
+  underestimates that tree during job-spec validation and again before
+  ciphertext evaluation through the same crypto planner, whose operation
+  constructors and budget validation now also reject zero-input plans,
+  single-input nonzero-depth plans, single-input Add plans, multi-input
+  RotateLeft plans, and zero-round or non-single-input Bootstrap plans.
+  Soracloud FHE parameter sets and execution policies now also reject
+  advertised multiplication/bootstrap budgets above the exact evaluator budget
+  before governance admission.
+  Bootstrap fixtures now pin both the zero refresh and each round-indexed
+  public refresh ciphertext, while full bootstrapping circuit/key-material
+  vectors remain an open release item.
 - Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
   descriptor-only. The canonical parameter-set, execution-policy, governance
   bundle, and job-spec fixtures now target the registered `bfv-default`
@@ -5965,14 +6171,17 @@ or ABI behavior.
   also pin the domain-separated BFV evaluation-key bundle digest, and
   `RunSoracloudFheJob` rejects structurally valid but ungoverned key bundles
   before output state is emitted. The shared operation fixture also carries
-  sample residue-arithmetic hashes, Galois key-switch component digests, and
-  scalar plus packed Galois switch execution vectors so SDK release vectors can
-  reject fixture drift before the full BFV-RNS evaluator lands.
+  sample residue-arithmetic hashes, Galois key-switch component digests, scalar
+  plus packed Galois switch execution vectors, a runtime packed `RotateLeft`
+  half-rotation vector, a one-step packed `RotateLeft` mask-and-sum schedule
+  vector, and bounded one-/two-round bootstrap refresh vectors so SDK release
+  vectors can reject fixture drift before the full BFV-RNS evaluator lands.
 - Keep BFV evaluation-key metadata bounded and canonical. The crypto validator
   now caps rotation-key and Galois key bundles, rejects duplicate Galois
-  automorphism powers, and rejects noncanonical or oversized bootstrap key ids
-  before bundle digests or refresh operations admit them. Programmed RAM-LFE
-  public parameters now reject Galois, rotation, and bootstrap refresh material
+  automorphism powers, rejects noncanonical or oversized bootstrap key ids, and
+  rejects zero or oversized bootstrap refresh-round capacities before bundle
+  digests or refresh operations admit them. Programmed RAM-LFE public
+  parameters now reject Galois, rotation, and bootstrap refresh material
   entirely because first-release identifier programs consume only the
   relinearization key.
 - Keep signed and proof-attestation identifier receipt compatibility
@@ -6001,9 +6210,9 @@ or ABI behavior.
   corridor.
 
 **Next checkpoints:** extend the fixture-bound RNS descriptor/residue corridor
-into the full BFV-RNS evaluator and runtime packed-slot rotation path, add
-bootstrapping key vectors, and fold the focused ZK/FHE fixture corridor into
-broader release validation.
+into the full BFV-RNS evaluator, add full bootstrapping circuit/key-material
+vectors beyond encrypted-zero refresh, and fold the focused ZK/FHE fixture
+corridor into broader release validation.
 
 ## Consensus, Performance, and Operations
 

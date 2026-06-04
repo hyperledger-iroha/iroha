@@ -25,6 +25,8 @@ pub enum Error {
         /// Number of override entries supplied by the caller.
         actual: usize,
     },
+    /// Failed to generate cryptographic swarm material: {0}
+    KeyGeneration(String),
     /// {0}
     PathConversion(path::Error),
 }
@@ -83,27 +85,38 @@ impl PeerSettings {
                 .map(|(idx, override_)| {
                     let nth = u16::try_from(idx).expect("peer override index must fit into u16");
                     let extra_seed = nth.to_be_bytes();
-                    let (key_pair, pop) = peer::generate_bls_key_pair(seed, &extra_seed);
-                    (
+                    let name = override_.name;
+                    let (key_pair, pop) =
+                        peer::generate_bls_key_pair(seed, &extra_seed).map_err(|error| {
+                            Error::KeyGeneration(format!(
+                                "failed to generate BLS key pair for peer {name}: {error}"
+                            ))
+                        })?;
+                    Ok((
                         nth,
                         (
-                            override_.name,
+                            name,
                             [override_.p2p_port, override_.api_port],
                             key_pair,
                             pop,
                         ),
-                    )
+                    ))
                 })
-                .collect()
+                .collect::<Result<_, Error>>()?
         } else {
-            peer::network(count.get(), seed)
+            peer::network(count.get(), seed).map_err(|error| {
+                Error::KeyGeneration(format!("failed to generate peer network keys: {error}"))
+            })?
         };
         let topology = peer::topology(network.values());
+        let genesis_key_pair = peer::generate_key_pair(seed, GENESIS_SEED).map_err(|error| {
+            Error::KeyGeneration(format!("failed to generate genesis key pair: {error}"))
+        })?;
         Ok(Self {
             healthcheck,
             config_dir: path::AbsolutePath::new(config_dir)?.relative_to(target_dir)?,
             chain: peer::chain(),
-            genesis_key_pair: peer::generate_key_pair(seed, GENESIS_SEED),
+            genesis_key_pair,
             network,
             topology,
             consensus_mode,
