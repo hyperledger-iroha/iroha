@@ -3,8 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   buildKaigiRosterJoinProof,
+  buildZkAceTransferAuthorizationV1,
   generateKeyPair,
+  isKagemushaRecursiveSpendNativeAvailable,
+  kagemushaRecursiveSpendInit,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   normalizeCryptoAlgorithm,
+  preferredKagemushaOfflineSpendMode,
   supportedCryptoAlgorithms,
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
@@ -14,6 +19,10 @@ test("browser crypto bundle exposes Kaigi roster proof helper as unsupported", (
   assert.throws(
     () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
     /buildKaigiRosterJoinProof is unavailable in browser-only crypto builds/,
+  );
+  assert.throws(
+    () => buildZkAceTransferAuthorizationV1({}),
+    /buildZkAceTransferAuthorizationV1 is unavailable in browser-only crypto builds/,
   );
 });
 
@@ -58,6 +67,16 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       crypto.isKagemushaRecursiveSpendNativeAvailable(),
       false,
       `${label} Kagemusha native bridge must be unavailable`,
+    );
+    assert.equal(
+      crypto.preferredKagemushaOfflineSpendMode(),
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+      `${label} browser build must default to checked prefold spend mode`,
+    );
+    assert.equal(
+      crypto.preferredKagemushaOfflineSpendMode(true),
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+      `${label} native recursive availability should select recursive spend mode`,
     );
     assert.equal(crypto.KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
     assert.equal(

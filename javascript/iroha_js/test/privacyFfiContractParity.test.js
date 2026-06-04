@@ -176,10 +176,6 @@ const EXPECTED_ADVERSARIAL_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "sis-hints-anoncred-pq-v0-devfixture",
   "groth16/bls12-377/../../prod",
   "post-quantum-masp/audit-claimed",
-  "halo2/ipa/penumbra",
-  "halo2/ipa/masp",
-  "halo2/ipa/monero",
-  "halo2/ipa/curve-tree",
 ]);
 const EXPECTED_ADVERSARIAL_DEVELOPER_BACKEND_LABELS = Object.freeze([
   "stark/fri/dev-fixture",
@@ -1513,8 +1509,96 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
   ]) {
     assert.match(
       text,
-      /fn\s+privacy_catalog_label_is_portable\([^)]*\)\s*->\s*bool\s*\{[\s\S]*is_ascii_alphanumeric\(\)[\s\S]*b'-'[\s\S]*b'_'[\s\S]*b'\.'[\s\S]*b':'[\s\S]*b'\/'[\s\S]*\}/,
-      `${label} must define portable catalog labels`,
+      /fn\s+privacy_proof_family_is_portable\([^)]*label:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*!label\.is_empty\(\)[\s\S]*split\(\['-',\s*'\/'\]\)[\s\S]*!part\.is_empty\(\)[\s\S]*byte\.is_ascii_lowercase\(\)[\s\S]*byte\.is_ascii_digit\(\)/,
+      `${label} must keep proof families aligned with public lowercase proof-family tokens`,
+    );
+    const backendFamilyHelper = requireMatch(
+      text,
+      /fn\s+privacy_vk_ref_backend_family_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
+      `${label} verifier-key backend family helper`,
+    )[0];
+    assert.ok(
+      backendFamilyHelper.includes("let Some(first)") &&
+        backendFamilyHelper.includes("let Some(last)") &&
+        backendFamilyHelper.includes("first.is_ascii_lowercase()") &&
+        backendFamilyHelper.includes("last.is_ascii_lowercase()") &&
+        backendFamilyHelper.includes("byte.is_ascii_lowercase()") &&
+        backendFamilyHelper.includes("byte.is_ascii_digit()") &&
+        backendFamilyHelper.includes("b'-' | b'_' | b'.'"),
+      `${label} must keep backend families lowercase edge-safe and portable as vk_ref backend components`,
+    );
+    assert.ok(
+      !backendFamilyHelper.includes("is_ascii_alphanumeric()"),
+      `${label} must reject uppercase backend-family aliases before vk_ref binding`,
+    );
+    assert.ok(
+      !backendFamilyHelper.includes("b':'") && !backendFamilyHelper.includes("b'/'"),
+      `${label} must reject vk_ref delimiter and path separators in backend families`,
+    );
+    const vkRefNameHelper = requireMatch(
+      text,
+      /fn\s+privacy_vk_ref_name_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
+      `${label} verifier-key reference name helper`,
+    )[0];
+    assert.ok(
+      vkRefNameHelper.includes("let Some(first)") &&
+        vkRefNameHelper.includes("first.is_ascii_lowercase()") &&
+        vkRefNameHelper.includes("byte.is_ascii_lowercase()") &&
+        vkRefNameHelper.includes("byte.is_ascii_digit()") &&
+        vkRefNameHelper.includes("byte == b'_'"),
+      `${label} must keep vk_ref names lowercase underscore verifier-key labels`,
+    );
+    assert.ok(
+      !vkRefNameHelper.includes("b'-'") &&
+        !vkRefNameHelper.includes("b'.'") &&
+        !vkRefNameHelper.includes("is_ascii_alphanumeric()"),
+      `${label} must reject dash, dot, and uppercase aliases in vk_ref names`,
+    );
+    const algorithmIdHelper = requireMatch(
+      text,
+      /fn\s+privacy_algorithm_id_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
+      `${label} algorithm id helper`,
+    )[0];
+    assert.ok(
+      algorithmIdHelper.includes("let Some(first)") &&
+        algorithmIdHelper.includes("let Some(last)") &&
+        algorithmIdHelper.includes("first.is_ascii_lowercase()") &&
+        algorithmIdHelper.includes("first.is_ascii_digit()") &&
+        algorithmIdHelper.includes("last.is_ascii_lowercase()") &&
+        algorithmIdHelper.includes("last.is_ascii_digit()") &&
+        algorithmIdHelper.includes("byte.is_ascii_lowercase()") &&
+        algorithmIdHelper.includes("byte.is_ascii_digit()") &&
+        algorithmIdHelper.includes("b'-' | b'_'"),
+      `${label} must keep native algorithm ids aligned with public catalog id edge rules`,
+    );
+    assert.ok(
+      !algorithmIdHelper.includes("b':'") &&
+        !algorithmIdHelper.includes("b'.'") &&
+        !algorithmIdHelper.includes("is_ascii_alphanumeric()"),
+      `${label} must reject uppercase, delimiter, and dotted algorithm ids`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_sdk_entrypoint_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*split\('\.'\)[\s\S]*first\.is_ascii_alphabetic\(\)[\s\S]*byte\.is_ascii_alphanumeric\(\)[\s\S]*byte\s*==\s*b'_'/,
+      `${label} must validate SDK entrypoint names as dot-separated identifier segments`,
+    );
+    assert.ok(
+      !requireMatch(
+        text,
+        /fn\s+privacy_sdk_entrypoint_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
+        `${label} SDK entrypoint helper`,
+      )[0].includes("b'$'"),
+      `${label} must reject JavaScript-only dollar identifiers in SDK entrypoints`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_algorithm_entry_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_algorithm_id_is_portable\(entry\.id\)[\s\S]*sdk_entrypoints[\s\S]*privacy_sdk_entrypoint_is_portable\(entrypoint\)[\s\S]*planned_entrypoints[\s\S]*privacy_sdk_entrypoint_is_portable\(entrypoint\)/,
+      `${label} must apply catalog-shaped identifier checks to catalog IDs and entrypoints`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_algorithm_entry_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_proof_family_is_portable\(entry\.proof_family\)[\s\S]*privacy_vk_ref_backend_family_is_portable\(entry\.backend_family\)/,
+      `${label} must keep verifier-key backend families request-portable`,
     );
     assert.match(
       text,
@@ -1533,7 +1617,7 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels[\s\S]*duplicate algorithm IDs[\s\S]*unportable algorithm id[\s\S]*unportable proof family[\s\S]*duplicate sdk entrypoint[\s\S]*sdk planned overlap[\s\S]*unportable entrypoint/,
+      /privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels[\s\S]*duplicate algorithm IDs[\s\S]*unportable algorithm id[\s\S]*delimited algorithm id[\s\S]*uppercase algorithm id[\s\S]*leading underscore algorithm id[\s\S]*leading hyphen algorithm id[\s\S]*trailing underscore algorithm id[\s\S]*trailing hyphen algorithm id[\s\S]*unportable proof family[\s\S]*uppercase proof family[\s\S]*delimited proof family[\s\S]*empty proof-family segment[\s\S]*unportable backend family[\s\S]*delimited backend family[\s\S]*uppercase backend family[\s\S]*leading separator backend family[\s\S]*trailing separator backend family[\s\S]*duplicate sdk entrypoint[\s\S]*sdk planned overlap[\s\S]*unportable entrypoint[\s\S]*delimited entrypoint[\s\S]*hyphenated entrypoint[\s\S]*dollar entrypoint[\s\S]*empty sdk entrypoint[\s\S]*empty planned entrypoint/,
       `${label} must test adversarial catalog invariant violations`,
     );
   }
@@ -1557,13 +1641,18 @@ test("native privacy FFI catalogs keep dev fixtures explicit and non-production"
     );
     assert.match(
       text,
-      /fn\s+privacy_entrypoint_is_local_verifier\([^)]*\)\s*->\s*bool\s*\{[\s\S]*starts_with\("verify"\)[\s\S]*ends_with\("Locally"\)[\s\S]*\}/,
+      /fn\s+privacy_entrypoint_is_local_verifier\([^)]*\)\s*->\s*bool\s*\{[\s\S]*to_ascii_lowercase\(\)[\s\S]*starts_with\("verify"\)[\s\S]*ends_with\("locally"\)[\s\S]*ends_with\("local"\)[\s\S]*contains\("localverifier"\)[\s\S]*contains\("localonly"\)[\s\S]*\}/,
       `${label} must classify local-only verifier entrypoints`,
     );
     assert.match(
       text,
-      /fn\s+privacy_entrypoint_is_production_proof_builder\([^)]*\)\s*->\s*bool\s*\{[\s\S]*starts_with\("build"\)[\s\S]*contains\("Proof"\)[\s\S]*!privacy_entrypoint_is_instruction_builder[\s\S]*!privacy_entrypoint_is_dev_fixture[\s\S]*\}/,
-      `${label} must distinguish planned production proof builders from fixtures`,
+      /fn\s+privacy_entrypoint_is_proof_helper\([^)]*\)\s*->\s*bool\s*\{[\s\S]*ProofEnvelope[\s\S]*ProofWitness[\s\S]*ProofPublicInputs[\s\S]*ProofRequest[\s\S]*ProofCommitment[\s\S]*\}/,
+      `${label} must classify proof helper and wrapper entrypoints`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_entrypoint_is_production_proof_builder\([^)]*\)\s*->\s*bool\s*\{[\s\S]*starts_with\("build"\)[\s\S]*contains\("Proof"\)[\s\S]*!privacy_entrypoint_is_instruction_builder[\s\S]*!privacy_entrypoint_is_ledger_mutation[\s\S]*!privacy_entrypoint_is_proof_helper[\s\S]*!privacy_entrypoint_is_dev_fixture[\s\S]*\}/,
+      `${label} must distinguish planned production proof builders from fixtures, ledger mutations, and proof helpers`,
     );
     assert.match(
       text,
@@ -1572,7 +1661,7 @@ test("native privacy FFI catalogs keep dev fixtures explicit and non-production"
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints[\s\S]*buildMockProof[\s\S]*verifyShapeProofLocally[\s\S]*buildShapeDevProofFixture[\s\S]*buildShapeProductionInstruction/,
+      /privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints[\s\S]*buildMockProof[\s\S]*verifyShapeProofLocally[\s\S]*verifyShapeProofLocal[\s\S]*verifyShapeProofLocalVerifier[\s\S]*buildShapeDevProofFixture[\s\S]*buildShapeProductionInstruction[\s\S]*buildShapeProofEnvelope/,
       `${label} must test adversarial fixture and local-verifier catalog drift`,
     );
   }
@@ -1586,13 +1675,13 @@ test("native privacy FFI catalogs pin required production plan rows", () => {
   ]) {
     assert.match(
       text,
-      /const\s+PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS:\s*&\[\(&str,\s*&str,\s*&str\)\][\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*anonymous-pgc-k-out-of-n[\s\S]*anonymous-pgc[\s\S]*orchard-halo2-actions-v1[\s\S]*halo2-pasta-action-bundle[\s\S]*halo2-ipa-orchard[\s\S]*pq-masp-stark-v0[\s\S]*stark-fri[\s\S]*pq-masp-stark-fri/,
+      /const\s+PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS:\s*&\[\(&str,\s*&str,\s*&str\)\][\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*anonymous-pgc-k-out-of-n[\s\S]*anonymous-pgc[\s\S]*zk-ace-pq-authorization-v0[\s\S]*stark\/fri\/sha256-goldilocks[\s\S]*stark-fri[\s\S]*orchard-halo2-actions-v1[\s\S]*halo2-pasta-action-bundle[\s\S]*halo2-ipa-orchard[\s\S]*pq-masp-stark-v0[\s\S]*stark-fri[\s\S]*pq-masp-stark-fri/,
       `${label} must pin the required production privacy plan rows with proof and backend families`,
     );
     assert.match(
       text,
-      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*entry\.id\s*==\s*\*algorithm_id[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*!entry\.planned_entrypoints\.is_empty\(\)[\s\S]*\}/,
-      `${label} must validate required row proof families, backend families, and planned entrypoints`,
+      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*entry\.id\s*==\s*\*algorithm_id[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.planned_entrypoints\s*,?\s*\)[\s\S]*\}/,
+      `${label} must validate required row proof families, backend families, and planned production proof builders`,
     );
     assert.match(
       text,
@@ -1601,8 +1690,8 @@ test("native privacy FFI catalogs pin required production plan rows", () => {
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*planned_entrypoints\s*=\s*&\[\]/,
-      `${label} must test missing, proof-drifted, backend-drifted, and unplanned required rows`,
+      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*deriveOrchardWitness[\s\S]*ProofEnvelope[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*planned_entrypoints\s*=\s*&\[\][\s\S]*planned production proof builder/,
+      `${label} must test missing, proof-drifted, backend-drifted, unplanned, helper-only, and proof-helper required rows`,
     );
   }
 });
@@ -1615,7 +1704,7 @@ test("native privacy FFI catalogs require explicit verifier-key name maps", () =
   ]) {
     assert.match(
       text,
-      /fn\s+privacy_catalog_vk_ref_name_is_registered\([^)]*entry:\s*&PrivacyAlgorithmEntry[^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_catalog_vk_ref_name\(entry\)[\s\S]*name\s*!=\s*"unknown"[\s\S]*privacy_text_field_is_portable_identifier\(name\)/,
+      /fn\s+privacy_catalog_vk_ref_name_is_registered\([^)]*entry:\s*&PrivacyAlgorithmEntry[^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_catalog_vk_ref_name\(entry\)[\s\S]*name\s*!=\s*"unknown"[\s\S]*privacy_vk_ref_name_is_portable\(name\)/,
       `${label} must reject catalog rows without explicit verifier-key name mappings`,
     );
     assert.match(
@@ -1841,6 +1930,21 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
+      /fn\s+privacy_capability_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_algorithm_id_is_portable\(&capability\.algorithm_id\)[\s\S]*sdk_entrypoints[\s\S]*privacy_sdk_entrypoint_is_portable\(entrypoint\)[\s\S]*planned_entrypoints[\s\S]*privacy_sdk_entrypoint_is_portable\(entrypoint\)/,
+      `${label} must keep emitted privacy capability identifiers catalog-shaped`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_capability_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_proof_family_is_portable\(&capability\.proof_family\)[\s\S]*privacy_vk_ref_backend_family_is_portable\(&capability\.backend_family\)/,
+      `${label} must keep emitted verifier-key backend families request-portable`,
+    );
+    assert.match(
+      text,
+      /privacy_capability_invariants_reject_forged_production_readiness[\s\S]*uppercase proof family[\s\S]*delimited proof family[\s\S]*empty proof-family segment/,
+      `${label} must test malformed proof-family capability labels`,
+    );
+    assert.match(
+      text,
       /const\s+PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS:\s*&\[&str\][\s\S]*productionready[\s\S]*productionclaim[\s\S]*claimedproduction[\s\S]*mainnetready[\s\S]*mainnetclaim[\s\S]*auditedproduction[\s\S]*auditsignoff[\s\S]*claimedaudit[\s\S]*securityreviewpassed/,
       `${label} must define native exposed-label production-claim fragments`,
     );
@@ -2003,8 +2107,23 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
+      /fn\s+privacy_vk_ref_is_well_formed\([^)]*vk_ref:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_vk_ref_parts\(vk_ref\)[\s\S]*privacy_vk_ref_backend_family_is_portable\(backend\)[\s\S]*privacy_vk_ref_name_is_portable\(name\)/,
+      `${label} must reject malformed vk_ref shapes before backend binding`,
+    );
+    assert.match(
+      text,
       /fn\s+privacy_vk_ref_matches_backend\([^)]*entry:\s*&PrivacyAlgorithmEntry[^)]*vk_ref:\s*&str[^)]*\)[\s\S]*privacy_vk_ref_parts\(vk_ref\)[\s\S]*backend\s*==\s*entry\.backend_family/,
       `${label} must bind vk_ref backend to the algorithm backend family`,
+    );
+    assert.match(
+      text,
+      /!privacy_vk_ref_is_well_formed\(&request\.vk_ref\)[\s\S]*privacy proof request vk_ref must use backend:name with portable verifier-key components[\s\S]*None/,
+      `${label} must reject malformed vk_ref without request reflection`,
+    );
+    assert.match(
+      text,
+      /!privacy_vk_ref_is_well_formed\(&request\.vk_ref\)[\s\S]*None[\s\S]*let\s+Some\(entry\)\s*=\s*privacy_algorithm_entry\(&request\.algorithm_id\)/,
+      `${label} must validate vk_ref shape before catalog lookup and entrypoint binding`,
     );
     assert.match(
       text,
@@ -2013,7 +2132,17 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_malformed_or_wrong_backend_vk_ref_before_production_gate[\s\S]*missing-separator[\s\S]*empty-vk-name[\s\S]*wrong-backend[\s\S]*extra-separator[\s\S]*vk_ref backend[\s\S]*backend family/,
+      /privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection[\s\S]*missing-separator[\s\S]*empty-vk-name[\s\S]*extra-separator[\s\S]*delimited-backend[\s\S]*uppercase-backend[\s\S]*leading-separator-backend[\s\S]*trailing-separator-backend[\s\S]*uppercase-vk-name[\s\S]*dotted-vk-name[\s\S]*dashed-vk-name[\s\S]*leading-underscore-vk-name[\s\S]*backend:name/,
+      `${label} must test malformed vk_ref rejection without reflection`,
+    );
+    assert.match(
+      text,
+      /privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection[\s\S]*vk-ref-order-never-echo[\s\S]*unsupported-algorithm[\s\S]*planned-entrypoint[\s\S]*unregistered-entrypoint[\s\S]*non-proof-entrypoint[\s\S]*backend:name/,
+      `${label} must test malformed vk_ref rejection before catalog and entrypoint binding`,
+    );
+    assert.match(
+      text,
+      /privacy_proof_ffi_rejects_wrong_backend_vk_ref_before_production_gate[\s\S]*wrong-backend[\s\S]*vk_ref backend[\s\S]*backend family/,
       `${label} must test malformed and wrong-backend vk_ref requests`,
     );
   }
@@ -2047,7 +2176,7 @@ test("native privacy FFI hosts reject verifier-key name drift before production 
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate[\s\S]*generic-vk-name[\s\S]*foreign-algorithm-vk-name[\s\S]*legacy-vk-prefix[\s\S]*dash-normalized-vk-name[\s\S]*vk_ref name[\s\S]*algorithm verifier key/,
+      /privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate[\s\S]*generic-vk-name[\s\S]*foreign-algorithm-vk-name[\s\S]*legacy-vk-prefix[\s\S]*vk_ref name[\s\S]*algorithm verifier key/,
       `${label} must test same-backend wrong verifier-key names`,
     );
   }
@@ -2125,6 +2254,11 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     assert.match(
       text,
+      /privacy_request_has_invalid_catalog_shape\(&request\)[\s\S]*privacy proof request algorithm_id and entrypoint must use catalog identifier shapes[\s\S]*None/,
+      `${label} must reject invalid algorithm_id and entrypoint shapes without request reflection`,
+    );
+    assert.match(
+      text,
       /fn\s+privacy_request_has_exposed_production_claim_text_field\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_request_text_fields\(request\)[\s\S]*privacy_exposed_label_claims_production_readiness\(field\)[\s\S]*\}/,
       `${label} must define a request text-field production-claim guard`,
     );
@@ -2167,6 +2301,11 @@ test("native privacy FFI hosts bound reflected request fields before production 
       text,
       /privacy_request_rejects_unportable_text_fields_without_reflection[\s\S]*punctuation-text-never-echo[\s\S]*portable identifier/,
       `${label} must test unportable text-field rejection without reflection`,
+    );
+    assert.match(
+      text,
+      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2_[\s\S]*confidential-transfer-v2-[\s\S]*catalog identifier shapes/,
+      `${label} must test invalid catalog-shape request rejection without reflection`,
     );
     assert.match(
       text,
@@ -2761,6 +2900,10 @@ test("native chain proof admission uses explicit production verifier backend all
       /function normalizePrivacyBackendTag\([^)]*\)[\s\S]*isPortableVerifierBackendLabel\(raw\)/,
       `${label} must reject non-portable privacy proof-envelope backend labels before tag alias compaction`,
     );
+    assert.ok(
+      text.includes("return /^[A-Za-z0-9/_.:-]+$/u.test(backend);"),
+      `${label} must reject spaces and plus signs in verifier backend labels before alias compaction`,
+    );
   }
   for (const [label, text] of [
     ["JS Torii source", jsToriiClient],
@@ -2789,6 +2932,10 @@ test("native chain proof admission uses explicit production verifier backend all
       text,
       /function normalizeVerifyingKeyUpdatePayload\([^)]*\)[\s\S]*assertProductionVerifyBackendLabel\(record\.backend, "updateVerifyingKey\.backend"\)/,
       `${label} must reject unsupported updateVerifyingKey backends before fetch`,
+    );
+    assert.ok(
+      text.includes("return /^[A-Za-z0-9/_.:-]+$/u.test(backend);"),
+      `${label} must reject spaces and plus signs in verifier backend labels before request dispatch`,
     );
   }
   assert.match(

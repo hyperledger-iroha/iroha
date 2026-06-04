@@ -261,7 +261,7 @@ fn clear_validation_failure() {
 fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {
     match canonical_message_type(message_type).as_ref() {
         "head.001" => Some(&HEAD001_SCHEMA),
-        "colr.007" => Some(&COLR007_SCHEMA),
+        "colr.007" | "colr.012" => Some(&COLR007_SCHEMA),
         "pacs.008" => Some(&PACS008_SCHEMA),
         "pacs.002" => Some(&PACS002_SCHEMA),
         "pacs.004" => Some(&PACS004_SCHEMA),
@@ -452,6 +452,7 @@ const PACS008_SCHEMA: MessageSchema = MessageSchema {
 
 const PACS002_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("MsgId", FieldKind::Text),
+    FieldSpec::optional("StsId", FieldKind::Text),
     FieldSpec::required("OrgnlMsgId", FieldKind::Text),
     FieldSpec::optional(
         "TxSts",
@@ -468,7 +469,7 @@ const PACS002_ALIASES: &[AliasSpec] = &[
     },
     AliasSpec {
         alias: "Document/FIToFIPmtStsRpt/TxInfAndSts/StsId",
-        canonical: "MsgId",
+        canonical: "StsId",
     },
     AliasSpec {
         alias: "Document/FIToFIPmtStsRpt/OrgnlGrpInfAndSts/OrgnlMsgId",
@@ -2051,7 +2052,10 @@ pub mod norito_schemas {
         }
     }
 
-    /// Norito schema for `colr.007` collateral substitutions.
+    /// Norito schema for collateral substitution confirmations.
+    ///
+    /// The supported production message family is `colr.012`; the legacy
+    /// `colr.007` helper remains accepted for existing local fixtures.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     pub struct Colr007 {
         pub tx_id: String,
@@ -3235,7 +3239,7 @@ fn message_type_from_namespace(ns: &str) -> Option<String> {
 
 fn document_root_matches_message(message_type: &str, root: &str) -> Option<bool> {
     Some(match canonical_message_type(message_type).as_ref() {
-        "colr.007" => root == "CollSbstitnConf",
+        "colr.007" | "colr.012" => root == "CollSbstitnConf",
         "pacs.002" => root == "FIToFIPmtStsRpt",
         "pacs.004" => root == "PmtRtr",
         "pacs.007" => root == "FIToFIPmtRvsl",
@@ -4398,9 +4402,14 @@ mod tests {
         msg_set("Substitution/ReasonCd", b"HAIRCUT");
     }
 
+    const PACS002_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
+    const PACS004_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs004_fixture.xml");
+    const CAMT056_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/camt056_fixture.xml");
     const SESE023_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese023_fixture.xml");
+    const SESE024_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese024_fixture.xml");
     const SESE025_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
     const COLR007_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/colr007_fixture.xml");
+    const COLR012_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/colr012_fixture.xml");
 
     fn expected_sese023_schema() -> Sese023 {
         Sese023 {
@@ -5464,6 +5473,7 @@ mod tests {
     fn iso_xsd_document_roots_cover_supported_xml_families() {
         for (message_type, root) in [
             ("colr.007.001.08", "CollSbstitnConf"),
+            ("colr.012.001.05", "CollSbstitnConf"),
             ("pacs.002.001.10", "FIToFIPmtStsRpt"),
             ("pacs.004.001.09", "PmtRtr"),
             ("pacs.007.001.09", "FIToFIPmtRvsl"),
@@ -5629,6 +5639,27 @@ mod tests {
     }
 
     #[test]
+    fn camt056_fixture_parses_cancellation_fields() {
+        assert_validated("camt.056.001.08", CAMT056_FIXTURE);
+        assert_eq!(
+            msg_get("Assgnmt/Id").as_deref(),
+            Some(b"CANCEL-FIXTURE-1".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId").as_deref(),
+            Some(b"CANCEL-ORIG-1".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/CxlRsnInf/Rsn/Cd").as_deref(),
+            Some(b"CUST".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/CxlRsnInf/AddtlInf").as_deref(),
+            Some(b"customer requested recall".as_ref())
+        );
+    }
+
+    #[test]
     fn parse_camt029_resolution_of_investigation() {
         let xml = r#"
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">
@@ -5695,6 +5726,31 @@ mod tests {
     }
 
     #[test]
+    fn pacs004_fixture_parses_return_fields() {
+        assert_validated("pacs.004.001.09", PACS004_FIXTURE);
+        assert_eq!(
+            msg_get("MsgId").as_deref(),
+            Some(b"RETURN-FIXTURE-1".as_ref())
+        );
+        assert_eq!(
+            msg_get("OrgnlGrpInf/OrgnlMsgId").as_deref(),
+            Some(b"ORIGINAL-008".as_ref())
+        );
+        assert_eq!(
+            msg_get("TxInf[0]/RtrdInstdAmt").as_deref(),
+            Some(b"10.00".as_ref())
+        );
+        assert_eq!(
+            msg_get("TxInf[0]/RtrdInstdAmtCcy").as_deref(),
+            Some(b"USD".as_ref())
+        );
+        assert_eq!(
+            msg_get("TxInf[0]/RtrdRsn/Cd").as_deref(),
+            Some(b"AC01".as_ref())
+        );
+    }
+
+    #[test]
     fn parse_sample_pacs002_status() {
         assert_validated("pacs.002.001.10", SAMPLE_PACS002_STATUS_XML);
         assert_eq!(
@@ -5702,6 +5758,25 @@ mod tests {
             Some(b"ISO-SAMPLE-008".as_ref())
         );
         assert_eq!(msg_get("TxSts").as_deref(), Some(b"ACSP".as_ref()));
+    }
+
+    #[test]
+    fn pacs002_fixture_parses_status_fields() {
+        assert_validated("pacs.002.001.10", PACS002_FIXTURE);
+        assert_eq!(
+            msg_get("MsgId").as_deref(),
+            Some(b"STATUS-FIXTURE-1".as_ref())
+        );
+        assert_eq!(msg_get("StsId").as_deref(), Some(b"STATUS-TX-1".as_ref()));
+        assert_eq!(
+            msg_get("OrgnlMsgId").as_deref(),
+            Some(b"STATUS-ORIG-1".as_ref())
+        );
+        assert_eq!(msg_get("TxSts").as_deref(), Some(b"ACSC".as_ref()));
+        assert_eq!(
+            msg_get("AddtlInf[0]").as_deref(),
+            Some(b"settled by fixture report".as_ref())
+        );
     }
 
     #[test]
@@ -5908,6 +5983,21 @@ mod tests {
     }
 
     #[test]
+    fn sese024_fixture_parses_status_advice_fields() {
+        reset();
+        let parsed =
+            parse_message("sese.024", SESE024_FIXTURE.as_bytes()).expect("parse sese.024 fixture");
+        assert_eq!(parsed.field_text("TxId"), Some("DVP-FIXTURE-1"));
+        assert_eq!(parsed.field_text("SttlmDt"), Some("2024-02-02"));
+        assert_eq!(parsed.field_text("SttlmSts"), Some("PEND"));
+        assert_eq!(parsed.field_text("RsnCd"), Some("NORE"));
+        assert_eq!(
+            parsed.field_text("AddtlInf"),
+            Some("awaiting CSD matching confirmation")
+        );
+    }
+
+    #[test]
     fn sese025_validation_and_serialization() {
         reset();
         let schema = expected_sese025_schema();
@@ -5979,6 +6069,15 @@ mod tests {
     }
 
     #[test]
+    fn colr012_fixture_parses_into_schema() {
+        reset();
+        let parsed =
+            parse_message("colr.012", COLR012_FIXTURE.as_bytes()).expect("parse colr.012 fixture");
+        let schema = Colr007::from_parsed(&parsed).expect("materialize colr.012 from fixture");
+        assert_eq!(schema, expected_colr007_schema());
+    }
+
+    #[test]
     fn colr007_rejects_unknown_type() {
         reset();
         msg_create("colr.007");
@@ -6007,6 +6106,14 @@ mod tests {
     fn versioned_colr007_supported() {
         reset();
         msg_create("colr.007.001.08");
+        populate_colr007_minimal();
+        assert!(msg_validate());
+    }
+
+    #[test]
+    fn versioned_colr012_supported() {
+        reset();
+        msg_create("colr.012.001.05");
         populate_colr007_minimal();
         assert!(msg_validate());
     }

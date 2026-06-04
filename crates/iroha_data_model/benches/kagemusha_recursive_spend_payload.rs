@@ -1,5 +1,7 @@
 //! Kagemusha recursive spend D2D payload-size benchmarks.
 
+#![allow(clippy::option_if_let_else, clippy::too_many_lines)]
+
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -11,7 +13,8 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS, KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1, KagemushaFoldStep,
         KagemushaRecursiveAggregationEvidence, KagemushaRecursiveAggregationProof,
         KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
@@ -111,7 +114,15 @@ fn spend_lineage_proof_with_open_envelope(
     vk_label: &[u8],
 ) -> KagemushaRecursiveAggregationProof {
     let mut proof = spend_proof(accumulator);
-    proof.verifier_key_id.name = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+    let max_hops = u32::try_from(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS).expect("max hops fits u32");
+    let lineage_circuit_id = match accumulator.hop_count {
+        1 => KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        hop_count if (2..=max_hops).contains(&hop_count) => {
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        }
+        hop_count => panic!("unsupported reserved-lineage benchmark hop count {hop_count}"),
+    };
+    lineage_circuit_id.clone_into(&mut proof.verifier_key_id.name);
     proof
         .public_inputs
         .recursive_verifier_scalar_projection_digest = fixed_hash(scalar_projection_label);
@@ -119,11 +130,7 @@ fn spend_lineage_proof_with_open_envelope(
         .public_inputs
         .public_inputs_hash()
         .expect("lineage public-input hash");
-    attach_open_envelope(
-        &mut proof,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-        vk_label,
-    );
+    attach_open_envelope(&mut proof, lineage_circuit_id, vk_label);
     proof
 }
 

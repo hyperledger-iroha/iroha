@@ -70,6 +70,9 @@ pub fn zk_ace_stark_fri_params_v1() -> StarkFriParamsV1 {
 }
 
 /// Build the canonical STARK/FRI verifying-key payload for ZK-ACE v0.
+///
+/// # Errors
+/// Returns an error if the canonical verifier-key payload cannot be encoded.
 pub fn zk_ace_verifying_key_box_v1() -> Result<VerifyingKeyBox> {
     let params = zk_ace_stark_fri_params_v1();
     let payload = StarkFriVerifyingKeyV1 {
@@ -91,6 +94,9 @@ pub fn zk_ace_verifying_key_box_v1() -> Result<VerifyingKeyBox> {
 }
 
 /// Build an active verifier-key record suitable for registering the ZK-ACE v0 verifier.
+///
+/// # Errors
+/// Returns an error if the bundled verifier-key payload cannot be built.
 pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord> {
     let key = zk_ace_verifying_key_box_v1()?;
     let commitment = iroha_core::zk::hash_vk(&key);
@@ -102,7 +108,7 @@ pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord
         zk_ace_public_inputs_schema_hash_v1(),
         commitment,
     );
-    record.namespace = "zk-ace".to_owned();
+    "zk-ace".clone_into(&mut record.namespace);
     record.vk_len = u32::try_from(key.bytes.len()).unwrap_or(u32::MAX);
     record.max_proof_bytes = ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES;
     record.gas_schedule_id = Some("zk_ace_stark_default".to_owned());
@@ -112,12 +118,18 @@ pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord
 }
 
 /// Commitment of the canonical bundled ZK-ACE v0 verifier key.
+///
+/// # Errors
+/// Returns an error if the bundled verifier-key payload cannot be built.
 pub fn zk_ace_verifying_key_commitment_v1() -> Result<[u8; 32]> {
     let key = zk_ace_verifying_key_box_v1()?;
     Ok(iroha_core::zk::hash_vk(&key))
 }
 
 /// Verify that the private witness matches the declared public inputs.
+///
+/// # Errors
+/// Returns an error if any witness field is empty or inconsistent with the public inputs.
 pub fn validate_zk_ace_witness_v1(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -189,6 +201,9 @@ pub fn validate_zk_ace_witness_v1(
 }
 
 /// Build a STARK/FRI-backed ZK-ACE authorization proof attachment.
+///
+/// # Errors
+/// Returns an error if witness validation, verifier-key validation, or proof generation fails.
 pub fn build_zk_ace_authorization_proof_v1(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -225,6 +240,9 @@ pub fn build_zk_ace_authorization_proof_v1(
 }
 
 /// Build the canonical public inputs and proof for a transparent transfer.
+///
+/// # Errors
+/// Returns an error if the transfer inputs are invalid or proof generation fails.
 #[allow(clippy::too_many_arguments)]
 pub fn build_zk_ace_transfer_authorization_v1(
     from: AccountId,

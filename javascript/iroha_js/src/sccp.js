@@ -3,6 +3,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha256";
 import { keccak_256 } from "@noble/hashes/sha3";
+import { AccountAddress } from "./address.js";
 
 export const SCCP_DOMAIN_SORA = 0;
 export const SCCP_DOMAIN_ETH = 1;
@@ -36,6 +37,10 @@ export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1 =
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1";
 export const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
 export const SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
+export const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1 =
+  "norito:sccp-local-admission:v1";
+export const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1 = "local_admission";
+export const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1 = "SubmitBridgeProof";
 export const SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1 = "tron_abi_tuple_v1";
 export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1 =
   "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
@@ -111,6 +116,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1 = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1 = 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1 = "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1 = "xor";
+export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 = 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1 =
   "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1 = "burn_and_record";
@@ -121,7 +127,7 @@ export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 =
 export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 =
   "sccp-substrate-runtime-storage-v1";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1 =
-  "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+  "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1 =
   "burnToTaira(bytes32,bytes32,bytes,uint256)";
 
@@ -145,6 +151,7 @@ const SCCP_HUB_LEAF_PREFIX_V1 = "sccp:hub:leaf:v1";
 const SCCP_HUB_NODE_PREFIX_V1 = "sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1 = "sccp:payload:v1";
 const SCCP_EVM_RECEIPT_PROOF_PREFIX_V1 = "sccp:evm:receipt-proof:v1";
+const SCCP_EVM_SOURCE_EVENT_ABI_V1 = "SccpSourceEvent(bytes32)";
 const SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1 =
   "sccp:evm:groth16-proof-request:v1";
 const SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1 =
@@ -158,6 +165,10 @@ const SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1 =
   "sccp:eth:sync-committee-transition-message:v1";
 const SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1 =
   "sccp:eth:sync-committee-transition-signature:v1";
+export const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH = 32;
+export const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256;
+export const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD =
+  SCCP_ETH_MAINNET_SLOTS_PER_EPOCH * SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
 const SCCP_BSC_RECEIPT_PROOF_PREFIX_V1 = "sccp:bsc:receipt-proof:v1";
 const SCCP_BSC_VALIDATOR_SET_PREFIX_V1 = "sccp:bsc:validator-set:v1";
 const SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1 =
@@ -256,8 +267,6 @@ const SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3 =
   "iroha:sccp:tron-route-canary-evidence:v3";
 const SCCP_ROUTE_ALLOWLIST_LABEL_V1 = "sccp:route-allowlist:lane-evidence:v1";
 const SCCP_TRON_ROUTE_ALLOWLIST_ID_V1 = "sccp:tron:route-allowlist:tron-mainnet:v1";
-const SCCP_TAIRA_XOR_TRANSFER_PAYLOAD_LABEL_V1 =
-  "iroha:sccp:taira-xor:transfer-payload:v1";
 const SCCP_TAIRA_XOR_BURN_SOURCE_EVENT_LABEL_V1 =
   "iroha:sccp:taira-xor:burn-source-event:v1";
 const SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000n;
@@ -369,6 +378,8 @@ const SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1 =
 const SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1 =
   "type.googleapis.com/protocol.TriggerSmartContract";
 const SCCP_TRON_SOURCE_CALL_SIGNATURES = 1;
+const SCCP_ETH_SOURCE_BRIDGE_CONFIG_LABEL_V1 =
+  "iroha:sccp:eth-source-bridge-config:v1";
 const SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1 =
   "iroha:sccp:tron-source-bridge-config:v1";
 const SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1 =
@@ -465,6 +476,8 @@ const SCCP_TON_VALIDATORS_CONSTRUCTOR = 0x11;
 const SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR = 0x12;
 const SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR = 0x8e81278a;
 const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
+const SCCP_EVM_MAX_BLOCK_RECEIPTS = 4096;
+const SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
 const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48;
 const SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96;
@@ -558,6 +571,7 @@ const SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = [
 ];
 
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
 const normalizeHexInput = (value, label, byteLength = null) => {
   if (typeof value !== "string") {
@@ -1193,6 +1207,17 @@ const writeU128Le = (target, value) => {
   return concatBytes(target, out);
 };
 
+const readU128LeAt = (bytes, offset, label) => {
+  if (offset + 16 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  let value = 0n;
+  for (let index = 15; index >= 0; index -= 1) {
+    value = (value << 8n) | BigInt(bytes[offset + index]);
+  }
+  return value;
+};
+
 const writeBytes = (target, value) => {
   const bytes = toBytes(value, "bytes");
   return concatBytes(writeU32Le(target, bytes.length), bytes);
@@ -1718,16 +1743,103 @@ const normalizeCanonicalTextBytes = (value, label) => {
   return textEncoder.encode(text);
 };
 
+const normalizeCanonicalTairaAccountId = (value, label) => {
+  const text = normalizeNonEmptyString(value, label);
+  if (text !== value) {
+    throw new TypeError(`${label} must be canonical text`);
+  }
+  try {
+    const address = AccountAddress.fromAccountId(text, SCCP_TAIRA_NETWORK_PREFIX_V1);
+    if (address.toI105(SCCP_TAIRA_NETWORK_PREFIX_V1) !== text) {
+      throw new TypeError(`${label} must use canonical TAIRA I105 account id form`);
+    }
+    return text;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw error;
+    }
+    throw new TypeError(`${label} must be a canonical TAIRA I105 account id`);
+  }
+};
+
+const validateCanonicalEvmHexAddress = (text, label) => {
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(text)) {
+    throw new TypeError(`${label} must be a 0x-prefixed 20-byte EVM address`);
+  }
+  const payload = text.slice(2);
+  const lowercasePayload = payload.toLowerCase();
+  const checksum = keccak_256(textEncoder.encode(lowercasePayload));
+  for (let index = 0; index < payload.length; index += 1) {
+    const char = payload[index];
+    if (/[0-9]/u.test(char)) continue;
+    const checksumByte = checksum[Math.floor(index / 2)];
+    const checksumNibble = index % 2 === 0 ? checksumByte >> 4 : checksumByte & 0x0f;
+    const shouldBeUppercase = checksumNibble >= 8;
+    if (shouldBeUppercase ? char !== char.toUpperCase() : char !== char.toLowerCase()) {
+      throw new TypeError(`${label} must be a canonical EIP-55 EVM address`);
+    }
+  }
+};
+
+const decodeSolanaBase58FixedAllowZero = (value, label, byteLength) => {
+  const text = normalizeNonEmptyString(value, label);
+  if (text.length < 32 || text.length > 44) {
+    throw new TypeError(`${label} must be a canonical 32-byte Solana base58 address`);
+  }
+  const bytes = decodeSolanaBase58(text, label);
+  if (bytes.length !== byteLength) {
+    throw new TypeError(`${label} must decode to ${byteLength} bytes`);
+  }
+  return bytes;
+};
+
+const validateCanonicalTonRawAddress = (text, label) => {
+  const [workchain, accountHex, extra] = text.split(":");
+  if (extra !== undefined || accountHex === undefined) {
+    throw new TypeError(`${label} must be workchain:account_hex`);
+  }
+  if (
+    workchain === "" ||
+    workchain.startsWith("+") ||
+    (workchain.startsWith("-") && (workchain.length === 1 || workchain.slice(1) === "0")) ||
+    (/^-?0[0-9]/u.test(workchain))
+  ) {
+    throw new TypeError(`${label} workchain must be canonical i32`);
+  }
+  normalizeSignedI32(workchain, `${label} workchain`);
+  if (accountHex.length !== 64 || /[^0-9a-f]/u.test(accountHex)) {
+    throw new TypeError(`${label} account must be lowercase 32-byte hex`);
+  }
+};
+
 const normalizeSccpCodecValueBytes = (value, codec, label) => {
   switch (codec) {
     case SCCP_CODEC_TEXT_UTF8:
       return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_EVM_HEX:
-      return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_SOLANA_BASE58:
-      return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_TON_RAW:
-      return normalizeCanonicalTextBytes(value, label);
+    case SCCP_CODEC_EVM_HEX: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      validateCanonicalEvmHexAddress(text, label);
+      return textEncoder.encode(text);
+    }
+    case SCCP_CODEC_SOLANA_BASE58: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      decodeSolanaBase58FixedAllowZero(text, label, 32);
+      return textEncoder.encode(text);
+    }
+    case SCCP_CODEC_TON_RAW: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      validateCanonicalTonRawAddress(text, label);
+      return textEncoder.encode(text);
+    }
     case SCCP_CODEC_TRON_BASE58CHECK: {
       const text = normalizeNonEmptyString(value, label);
       if (text !== value) {
@@ -1745,6 +1857,212 @@ const normalizeSccpCodecValueBytes = (value, codec, label) => {
     }
     default:
       throw new RangeError(`${label} codec is unsupported`);
+  }
+};
+
+const readCanonicalSccpVec = (payload, offset, label) => {
+  const length = readU32LeAt(payload, offset, `${label}.length`);
+  const valueOffset = offset + 4;
+  if (valueOffset + length > payload.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return {
+    bytes: payload.subarray(valueOffset, valueOffset + length),
+    nextOffset: valueOffset + length,
+  };
+};
+
+const decodeCanonicalUtf8Bytes = (bytes, label) => {
+  let text;
+  try {
+    text = textDecoder.decode(bytes);
+  } catch (_error) {
+    throw new TypeError(`${label} must be valid UTF-8`);
+  }
+  if (!bytesEqual(textEncoder.encode(text), bytes)) {
+    throw new TypeError(`${label} must be canonical UTF-8`);
+  }
+  return text;
+};
+
+const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
+  const payload = toBytes(value, "canonicalPayloadBytes");
+  if (payload.length === 0) {
+    throw new TypeError("canonicalPayloadBytes must not be empty");
+  }
+  let offset = 0;
+  const version = readU8At(payload, offset, "canonicalPayloadBytes.version");
+  if (version !== 1) {
+    throw new TypeError("canonicalPayloadBytes.version must be 1");
+  }
+  offset += 1;
+
+  const sourceDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.source_domain");
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("canonicalPayloadBytes.source_domain must be SORA");
+  }
+  offset += 4;
+
+  const destDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.dest_domain");
+  if (destDomain !== SCCP_DOMAIN_TRON) {
+    throw new TypeError("canonicalPayloadBytes.dest_domain must be TRON");
+  }
+  offset += 4;
+
+  const nonce = readU64LeAt(payload, offset, "canonicalPayloadBytes.nonce");
+  offset += 8;
+
+  const assetHomeDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.asset_home_domain");
+  if (assetHomeDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("canonicalPayloadBytes.asset_home_domain must be SORA");
+  }
+  offset += 4;
+
+  const assetIdCodec = readU8At(payload, offset, "canonicalPayloadBytes.asset_id_codec");
+  if (assetIdCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.asset_id_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  let valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.asset_id");
+  offset = valueRange.nextOffset;
+  const assetId = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.asset_id");
+  if (assetId !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("canonicalPayloadBytes.asset_id must be xor");
+  }
+
+  const amount = readU128LeAt(payload, offset, "canonicalPayloadBytes.amount");
+  if (amount === 0n) {
+    throw new RangeError("canonicalPayloadBytes.amount must be greater than zero");
+  }
+  offset += 16;
+
+  const senderCodec = readU8At(payload, offset, "canonicalPayloadBytes.sender_codec");
+  if (senderCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.sender_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.sender");
+  offset = valueRange.nextOffset;
+  const sender = normalizeCanonicalTairaAccountId(
+    decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.sender"),
+    "canonicalPayloadBytes.sender",
+  );
+
+  const recipientCodec = readU8At(payload, offset, "canonicalPayloadBytes.recipient_codec");
+  if (recipientCodec !== SCCP_CODEC_TRON_BASE58CHECK) {
+    throw new TypeError("canonicalPayloadBytes.recipient_codec must be TRON_BASE58CHECK");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.recipient");
+  offset = valueRange.nextOffset;
+  const recipient = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.recipient");
+  decodeTronBase58CheckPayload(recipient, "canonicalPayloadBytes.recipient");
+
+  const routeIdCodec = readU8At(payload, offset, "canonicalPayloadBytes.route_id_codec");
+  if (routeIdCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.route_id_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.route_id");
+  offset = valueRange.nextOffset;
+  const routeId = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.route_id");
+  if (routeId !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("canonicalPayloadBytes.route_id must be taira_tron_xor");
+  }
+  if (offset !== payload.length) {
+    throw new TypeError("canonicalPayloadBytes must not contain trailing bytes");
+  }
+
+  return Object.freeze({
+    version,
+    source_domain: sourceDomain,
+    dest_domain: destDomain,
+    nonce,
+    asset_home_domain: assetHomeDomain,
+    asset_id_codec: assetIdCodec,
+    asset_id: assetId,
+    amount,
+    sender_codec: senderCodec,
+    sender,
+    recipient_codec: recipientCodec,
+    recipient,
+    route_id_codec: routeIdCodec,
+    route_id: routeId,
+  });
+};
+
+const requireOptionalTairaXorPayloadInputMatches = (input, parsedPayload) => {
+  const routeId = strictOptionalResultField(input, "routeId", "routeId", "route_id");
+  if (
+    routeId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeTairaXorRouteIdInput({ routeId }) !== parsedPayload.route_id
+  ) {
+    throw new TypeError("routeId must match canonicalPayloadBytes");
+  }
+
+  const assetKey = strictOptionalResultField(
+    input,
+    "assetKey",
+    "assetKey",
+    "asset_key",
+    "assetId",
+    "asset_id",
+  );
+  if (
+    assetKey !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeTairaXorAssetKeyInput({ assetKey }) !== parsedPayload.asset_id
+  ) {
+    throw new TypeError("assetKey must match canonicalPayloadBytes");
+  }
+
+  const sender = strictOptionalResultField(
+    input,
+    "sender",
+    "sender",
+    "tairaSender",
+    "taira_sender",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (
+    sender !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeCanonicalTairaAccountId(sender, "sender") !== parsedPayload.sender
+  ) {
+    throw new TypeError("sender must match canonicalPayloadBytes");
+  }
+
+  const recipient = strictOptionalResultField(
+    input,
+    "recipientAddress",
+    "recipientAddress",
+    "recipient_address",
+    "recipient",
+  );
+  if (recipient !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedRecipient = normalizeNonEmptyString(recipient, "recipientAddress");
+    if (normalizedRecipient !== recipient) {
+      throw new TypeError("recipientAddress must be canonical text");
+    }
+    decodeTronBase58CheckPayload(normalizedRecipient, "recipientAddress");
+    if (normalizedRecipient !== parsedPayload.recipient) {
+      throw new TypeError("recipientAddress must match canonicalPayloadBytes");
+    }
+  }
+
+  const amount = strictOptionalResultField(input, "amount", "amount");
+  if (
+    amount !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(amount, "amount", SCCP_U128_MAX, "u128") !== parsedPayload.amount
+  ) {
+    throw new TypeError("amount must match canonicalPayloadBytes");
+  }
+
+  const nonce = strictOptionalResultField(input, "nonce", "nonce");
+  if (
+    nonce !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(nonce, "nonce", SCCP_U64_MAX, "u64") !== parsedPayload.nonce
+  ) {
+    throw new TypeError("nonce must match canonicalPayloadBytes");
   }
 };
 
@@ -1886,7 +2204,7 @@ export const buildTairaXorTransferPayload = (input) => {
   }
   const routeId = normalizeTairaXorRouteIdInput(input);
   const assetKey = normalizeTairaXorAssetKeyInput(input);
-  const sender = normalizeNonEmptyString(
+  const sender = normalizeCanonicalTairaAccountId(
     strictResultField(
       input,
       "sender",
@@ -1957,6 +2275,88 @@ export const tairaXorCanonicalTransferPayloadBytes = (input) =>
 
 export const tairaXorTransferMessageId = (input, options = {}) =>
   sccpTransferMessageId(buildTairaXorTransferPayload(input), options);
+
+export const buildTairaXorTronToTairaTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR TRON-source transfer payload input must be an object");
+  }
+  const routeId = normalizeTairaXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeNonEmptyString(
+    strictResultField(
+      input,
+      "tronSender",
+      "tronSender",
+      "tron_sender",
+      "sender",
+      "senderAddress",
+      "sender_address",
+    ),
+    "tronSender",
+  );
+  const rawSender = strictResultField(
+    input,
+    "tronSender",
+    "tronSender",
+    "tron_sender",
+    "sender",
+    "senderAddress",
+    "sender_address",
+  );
+  if (sender !== rawSender) {
+    throw new TypeError("tronSender must be canonical text");
+  }
+  decodeTronBase58CheckPayload(sender, "tronSender");
+  const recipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_TRON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TRON_BASE58CHECK,
+    sender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorTronToTairaCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(buildTairaXorTronToTairaTransferPayload(input));
+
+export const tairaXorTronToTairaTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(buildTairaXorTronToTairaTransferPayload(input), options);
 
 export const buildTairaXorSccpRecordDescriptor = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -2147,7 +2547,7 @@ const normalizeTairaXorBurnRecordAuthority = (input, sender) => {
   if (authority === SCCP_OPTIONAL_FIELD_MISSING || authority == null) {
     return sender;
   }
-  const normalized = normalizeNonEmptyString(authority, "authority");
+  const normalized = normalizeCanonicalTairaAccountId(authority, "authority");
   if (normalized !== sender) {
     throw new TypeError("authority must match the TAIRA XOR record sender");
   }
@@ -6234,6 +6634,250 @@ export function buildBscMainnetSccpDestinationSubmission(input) {
   return submission;
 }
 
+const localAdmissionInputField = (input, proofResult, submissionPackage, label, ...names) => {
+  const direct = strictOptionalResultField(input, label, ...names);
+  if (direct !== SCCP_OPTIONAL_FIELD_MISSING) return direct;
+  if (proofResult && typeof proofResult === "object" && !Array.isArray(proofResult)) {
+    const resultValue = strictOptionalResultField(proofResult, `proofResult.${label}`, ...names);
+    if (resultValue !== SCCP_OPTIONAL_FIELD_MISSING) return resultValue;
+  }
+  if (submissionPackage && typeof submissionPackage === "object" && !Array.isArray(submissionPackage)) {
+    const packageValue = strictOptionalResultField(
+      submissionPackage,
+      `submissionPackage.${label}`,
+      ...names,
+    );
+    if (packageValue !== SCCP_OPTIONAL_FIELD_MISSING) return packageValue;
+    const payload = strictOptionalResultField(
+      submissionPackage,
+      "submissionPackage.platformPayload",
+      "localAdmission",
+      "local_admission",
+      "payload",
+    );
+    if (payload !== SCCP_OPTIONAL_FIELD_MISSING && payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const payloadValue = strictOptionalResultField(payload, `localAdmission.${label}`, ...names);
+      if (payloadValue !== SCCP_OPTIONAL_FIELD_MISSING) return payloadValue;
+    }
+  }
+  return undefined;
+};
+
+const localAdmissionStringField = (input, proofResult, submissionPackage, label, fallback, ...names) => {
+  const selected = localAdmissionInputField(input, proofResult, submissionPackage, label, ...names);
+  return selected === undefined || selected == null
+    ? fallback
+    : normalizeNonEmptyString(selected, label);
+};
+
+function buildEvmFamilyMainnetSccpLocalAdmissionSubmission(
+  input,
+  {
+    label,
+    expectedSourceDomain,
+    sourceDomainName,
+  },
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} local-admission submission input must be an object`);
+  }
+  const proofResult = strictResultField(input, "proofResult", "proofResult", "proof_result");
+  if (proofResult !== undefined && (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult))) {
+    throw new TypeError("proofResult must be an object");
+  }
+  const submissionPackage = strictResultField(
+    input,
+    "submissionPackage",
+    "submissionPackage",
+    "submission_package",
+  ) ?? (proofResult && typeof proofResult === "object"
+    ? strictResultField(proofResult, "proofResult.submissionPackage", "submissionPackage", "submission_package")
+    : undefined);
+  if (
+    submissionPackage !== undefined &&
+    (!submissionPackage || typeof submissionPackage !== "object" || Array.isArray(submissionPackage))
+  ) {
+    throw new TypeError("submissionPackage must be an object");
+  }
+
+  const normalizedSourceDomain = normalizeSccpDomainId(
+    localAdmissionInputField(input, proofResult, submissionPackage, "sourceDomain", "sourceDomain", "source_domain") ??
+      expectedSourceDomain,
+    "sourceDomain",
+  );
+  const normalizedTargetDomain = normalizeSccpDomainId(
+    localAdmissionInputField(input, proofResult, submissionPackage, "targetDomain", "targetDomain", "target_domain") ??
+      SCCP_DOMAIN_SORA,
+    "targetDomain",
+  );
+  if (normalizedSourceDomain !== expectedSourceDomain || normalizedTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError(`${label} local-admission submissions must route ${sourceDomainName} -> SORA`);
+  }
+
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(localAdmissionInputField(input, proofResult, submissionPackage, "proofBytes", "proofBytes", "proof_bytes", "proof"), "proofBytes"),
+    "proofBytes",
+  );
+  const publicInputsBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      localAdmissionInputField(
+        input,
+        proofResult,
+        submissionPackage,
+        "publicInputsBytes",
+        "publicInputsBytes",
+        "public_inputs_bytes",
+      ),
+      "publicInputsBytes",
+    ),
+    "publicInputsBytes",
+  );
+  const bundleBytes = requireNativeRecursiveProofBytes(
+    toBytes(localAdmissionInputField(input, proofResult, submissionPackage, "bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
+    "bundleBytes",
+  );
+  const envelopeBytes = requireNativeRecursiveProofBytes(
+    toBytes(localAdmissionInputField(input, proofResult, submissionPackage, "envelopeBytes", "envelopeBytes", "envelope_bytes"), "envelopeBytes"),
+    "envelopeBytes",
+  );
+  const statementHash = normalizeNonZeroHex32(
+    localAdmissionInputField(input, proofResult, submissionPackage, "statementHash", "statementHash", "statement_hash"),
+    "statementHash",
+  );
+  const sourceVerifierMaterialHash = normalizeNonZeroHex32(
+    localAdmissionInputField(
+      input,
+      proofResult,
+      submissionPackage,
+      "sourceVerifierMaterialHash",
+      "sourceVerifierMaterialHash",
+      "source_verifier_material_hash",
+    ),
+    "sourceVerifierMaterialHash",
+  );
+  const sourceAdapterEngineDeploymentHash = normalizeNonZeroHex32(
+    localAdmissionInputField(
+      input,
+      proofResult,
+      submissionPackage,
+      "sourceAdapterEngineDeploymentHash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+    ),
+    "sourceAdapterEngineDeploymentHash",
+  );
+  const proofFamily = localAdmissionStringField(
+    input,
+    proofResult,
+    submissionPackage,
+    "proofFamily",
+    SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    "proofFamily",
+    "proof_family",
+  );
+  const verifierBackend = localAdmissionStringField(
+    input,
+    proofResult,
+    submissionPackage,
+    "verifierBackend",
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    "verifierBackend",
+    "verifier_backend",
+  );
+  const envelopeEncoding = localAdmissionStringField(
+    input,
+    proofResult,
+    submissionPackage,
+    "envelopeEncoding",
+    SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+    "envelopeEncoding",
+    "envelope_encoding",
+  );
+  const submissionKind = localAdmissionStringField(
+    input,
+    proofResult,
+    submissionPackage,
+    "submissionKind",
+    SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+    "submissionKind",
+    "submission_kind",
+  );
+  const verifierEntrypoint = localAdmissionStringField(
+    input,
+    proofResult,
+    submissionPackage,
+    "verifierEntrypoint",
+    SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
+    "verifierEntrypoint",
+    "verifier_entrypoint",
+  );
+  if (
+    proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1 ||
+    verifierBackend !== SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1 ||
+    envelopeEncoding !== SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1 ||
+    submissionKind !== SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1 ||
+    verifierEntrypoint !== SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1
+  ) {
+    throw new TypeError(`${label} local-admission submission metadata is not canonical`);
+  }
+
+  const localAdmission = {
+    version: 1,
+    statementHash,
+    sourceVerifierMaterialHash,
+    sourceAdapterEngineDeploymentHash,
+    proofBytesHex: bytesToHex(proofBytes),
+    publicInputsBytesHex: bytesToHex(publicInputsBytes),
+    bundleBytesHex: bytesToHex(bundleBytes),
+  };
+  defineCopiedByteField(localAdmission, "proofBytes", proofBytes);
+  defineCopiedByteField(localAdmission, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(localAdmission, "bundleBytes", bundleBytes);
+  Object.freeze(localAdmission);
+
+  const submission = {
+    version: 1,
+    proofFamily,
+    verifierBackend,
+    platformPayload: SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+    envelopeEncoding,
+    submissionKind,
+    verifierEntrypoint,
+    sourceDomain: normalizedSourceDomain,
+    targetDomain: normalizedTargetDomain,
+    statementHash,
+    sourceVerifierMaterialHash,
+    sourceAdapterEngineDeploymentHash,
+    arguments: Object.freeze([]),
+    localAdmission,
+    envelopeHex: bytesToHex(envelopeBytes),
+    proofBytesHex: bytesToHex(proofBytes),
+    publicInputsBytesHex: bytesToHex(publicInputsBytes),
+    bundleBytesHex: bytesToHex(bundleBytes),
+  };
+  defineCopiedByteField(submission, "proofBytes", proofBytes);
+  defineCopiedByteField(submission, "publicInputsBytes", publicInputsBytes);
+  defineCopiedByteField(submission, "bundleBytes", bundleBytes);
+  defineCopiedByteField(submission, "envelopeBytes", envelopeBytes);
+  return Object.freeze(submission);
+}
+
+export function buildEthereumMainnetSccpLocalAdmissionSubmission(input) {
+  return buildEvmFamilyMainnetSccpLocalAdmissionSubmission(input, {
+    label: "Ethereum mainnet",
+    expectedSourceDomain: SCCP_DOMAIN_ETH,
+    sourceDomainName: "ETH",
+  });
+}
+
+export function buildBscMainnetSccpLocalAdmissionSubmission(input) {
+  return buildEvmFamilyMainnetSccpLocalAdmissionSubmission(input, {
+    label: "BSC mainnet",
+    expectedSourceDomain: SCCP_DOMAIN_BSC,
+    sourceDomainName: "BSC",
+  });
+}
+
 export class EvmSccpProver {
   constructor(options = {}) {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -6339,15 +6983,21 @@ const normalizeEthereumMainnetChainId = (chainId) => {
     return BigInt(chainId);
   }
   if (typeof chainId === "string") {
-    const trimmed = chainId.trim();
-    if (/^0x(?:0|[1-9a-f][0-9a-f]*)$/iu.test(trimmed)) {
-      return BigInt(trimmed);
+    if (/^0x(?:0|[1-9a-f][0-9a-f]*)$/u.test(chainId)) {
+      return BigInt(chainId);
     }
-    if (/^(?:0|[1-9][0-9]*)$/u.test(trimmed)) {
-      return BigInt(trimmed);
+    if (/^(?:0|[1-9][0-9]*)$/u.test(chainId)) {
+      return BigInt(chainId);
     }
   }
   throw new TypeError("eth_chainId must be a hex, decimal, number, or bigint chain id");
+};
+
+const normalizeEvmRpcChainId = (chainId) => {
+  if (typeof chainId === "string" && /^0x(?:0|[1-9a-f][0-9a-f]*)$/u.test(chainId)) {
+    return BigInt(chainId);
+  }
+  throw new TypeError("eth_chainId must be a canonical JSON-RPC quantity");
 };
 
 const requireEthereumMainnetChainId = (chainId) => {
@@ -6358,8 +7008,24 @@ const requireEthereumMainnetChainId = (chainId) => {
   return normalized;
 };
 
+const requireEthereumMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
+  if (normalized !== BigInt(SCCP_ETH_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("Ethereum mainnet SCCP requires eth_chainId == 0x1");
+  }
+  return normalized;
+};
+
 const requireBscMainnetChainId = (chainId) => {
   const normalized = normalizeEthereumMainnetChainId(chainId);
+  if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
+  }
+  return normalized;
+};
+
+const requireBscMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
   if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
     throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
   }
@@ -6382,6 +7048,32 @@ const requireEthereumRpcHexData = (value, label, byteLength = null, { nonzero = 
     throw new TypeError(`${label} must not be zero`);
   }
   return `0x${text}`;
+};
+
+const requireEthereumRpcHexBytes = (
+  value,
+  label,
+  byteLength = null,
+  { nonzero = true, allowEmpty = false } = {},
+) => {
+  if (typeof value !== "string" || value.trim() !== value || !value.startsWith("0x")) {
+    throw new TypeError(`${label} must be canonical lowercase 0x hex`);
+  }
+  const text = value.slice(2);
+  if ((!allowEmpty && text.length === 0) || text.length % 2 !== 0 || /[^0-9a-f]/u.test(text)) {
+    throw new TypeError(`${label} must be canonical lowercase 0x hex`);
+  }
+  if (byteLength !== null && text.length !== byteLength * 2) {
+    throw new TypeError(`${label} must be ${byteLength} bytes`);
+  }
+  const out = new Uint8Array(text.length / 2);
+  for (let index = 0; index < text.length; index += 2) {
+    out[index / 2] = Number.parseInt(text.slice(index, index + 2), 16);
+  }
+  if (nonzero && out.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return out;
 };
 
 const requireEthereumRpcQuantity = (value, label) => {
@@ -6419,6 +7111,219 @@ const ethereumJsonRpcRequest = (provider, method, params = []) =>
 
 const bscJsonRpcRequest = (provider, method, params = []) =>
   evmJsonRpcRequest(provider, method, params, "BSC mainnet SCCP");
+
+export const evmSccpSourceEventTopic = () =>
+  bytesToHex(keccak_256(textEncoder.encode(SCCP_EVM_SOURCE_EVENT_ABI_V1)));
+
+const normalizeEthereumMainnetSourceBridgeMaterial = (input, label) => {
+  if (input === undefined || input === null || input === SCCP_OPTIONAL_FIELD_MISSING) {
+    return undefined;
+  }
+  const material = normalizeSccpSourceVerifierMaterial(input);
+  if (material.sourceDomain !== SCCP_DOMAIN_ETH) {
+    throw new RangeError(`${label}.sourceDomain must be ETH`);
+  }
+  return material;
+};
+
+const sourceBridgeEmitterAddressInput = (input, label) =>
+  maybeStrictOptionalResultField(
+    input,
+    label,
+    "sourceBridgeEmitterAddress",
+    "source_bridge_emitter_address",
+    "expectedSourceBridgeEmitterAddress",
+    "expected_source_bridge_emitter_address",
+    "bridgeAddress",
+    "bridge_address",
+  );
+
+const ethereumMainnetReceiptSourceEventOptions = (input, options, sdk) => {
+  const sourceEventDigestInput = maybeStrictOptionalResultField(
+    input,
+    "sourceEventDigest",
+    "sourceEventDigest",
+    "source_event_digest",
+  );
+  const sourceEventDigest =
+    sourceEventDigestInput === undefined
+      ? undefined
+      : normalizeNonZeroHex32(sourceEventDigestInput, "sourceEventDigest");
+
+  const inputMaterial = normalizeEthereumMainnetSourceBridgeMaterial(
+    maybeStrictOptionalResultField(
+      input,
+      "sourceVerifierMaterial",
+      "sourceVerifierMaterial",
+      "source_verifier_material",
+    ),
+    "sourceVerifierMaterial",
+  );
+  const optionMaterial = normalizeEthereumMainnetSourceBridgeMaterial(
+    maybeStrictOptionalResultField(
+      options,
+      "sourceVerifierMaterial",
+      "sourceVerifierMaterial",
+      "source_verifier_material",
+    ),
+    "sourceVerifierMaterial",
+  );
+  const defaultMaterial = normalizeEthereumMainnetSourceBridgeMaterial(
+    sdk.sourceVerifierMaterial,
+    "sourceVerifierMaterial",
+  );
+
+  const suppliedAddresses = [
+    sourceBridgeEmitterAddressInput(input, "sourceBridgeEmitterAddress"),
+    sourceBridgeEmitterAddressInput(options, "sourceBridgeEmitterAddress"),
+    sdk.sourceBridgeEmitterAddress,
+    inputMaterial?.sourceBridgeEmitterAddress,
+    optionMaterial?.sourceBridgeEmitterAddress,
+    defaultMaterial?.sourceBridgeEmitterAddress,
+  ].filter((value) => value !== undefined && value !== SCCP_OPTIONAL_FIELD_MISSING && value != null);
+
+  let sourceBridgeEmitterAddress;
+  for (const suppliedAddress of suppliedAddresses) {
+    const normalized = requireEthereumRpcHexData(
+      suppliedAddress,
+      "sourceBridgeEmitterAddress",
+      20,
+    );
+    if (sourceBridgeEmitterAddress !== undefined && sourceBridgeEmitterAddress !== normalized) {
+      throw new TypeError("sourceBridgeEmitterAddress values must match");
+    }
+    sourceBridgeEmitterAddress = normalized;
+  }
+
+  return { sourceEventDigest, sourceBridgeEmitterAddress };
+};
+
+const ethereumMainnetReceiptSourceEventValidationRequested = (input, options) =>
+  maybeStrictOptionalResultField(
+    input,
+    "sourceEventDigest",
+    "sourceEventDigest",
+    "source_event_digest",
+  ) !== undefined ||
+  sourceBridgeEmitterAddressInput(input, "sourceBridgeEmitterAddress") !== undefined ||
+  sourceBridgeEmitterAddressInput(options, "sourceBridgeEmitterAddress") !== undefined ||
+  maybeStrictOptionalResultField(
+    input,
+    "sourceVerifierMaterial",
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+  ) !== undefined ||
+  maybeStrictOptionalResultField(
+    options,
+    "sourceVerifierMaterial",
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+  ) !== undefined;
+
+const ethereumMainnetReceiptLogSourceEventDigest = (
+  receipt,
+  { sourceEventDigest, sourceBridgeEmitterAddress },
+  { transactionHash, blockHash, blockNumber } = {},
+) => {
+  if (sourceEventDigest === undefined && sourceBridgeEmitterAddress === undefined) {
+    return {};
+  }
+  if (sourceBridgeEmitterAddress === undefined) {
+    throw new TypeError(
+      "sourceBridgeEmitterAddress is required when validating sourceEventDigest",
+    );
+  }
+  const logs = receipt.logs;
+  if (!Array.isArray(logs)) {
+    throw new TypeError("receipt.logs is required for SCCP source event validation");
+  }
+  const sourceEventTopic = evmSccpSourceEventTopic();
+  let matchedDigest;
+  for (const [index, log] of logs.entries()) {
+    if (!log || typeof log !== "object" || Array.isArray(log)) {
+      throw new TypeError(`receipt.logs[${index}] must be an object`);
+    }
+    if (log.removed === true) {
+      throw new TypeError("receipt.logs must not contain removed logs");
+    }
+    const logAddress = requireEthereumRpcHexData(
+      log.address,
+      `receipt.logs[${index}].address`,
+      20,
+      { nonzero: false },
+    );
+    const topics = log.topics;
+    if (!Array.isArray(topics)) {
+      throw new TypeError(`receipt.logs[${index}].topics must be an array`);
+    }
+    if (topics.length > 4) {
+      throw new RangeError(`receipt.logs[${index}].topics must contain at most 4 entries`);
+    }
+    const normalizedTopics = topics.map((topic, topicIndex) =>
+      requireEthereumRpcHexData(
+        topic,
+        `receipt.logs[${index}].topics[${topicIndex}]`,
+        32,
+        { nonzero: false },
+      ),
+    );
+    if (logAddress === sourceBridgeEmitterAddress && normalizedTopics[0] === sourceEventTopic) {
+      if (normalizedTopics.length !== 2) {
+        throw new TypeError("SCCP source event log must contain exactly 2 topics");
+      }
+      if (typeof log.data !== "string") {
+        throw new TypeError(`receipt.logs[${index}].data is required`);
+      }
+      if (log.data !== "0x") {
+        throw new TypeError("SCCP source event log data must be 0x");
+      }
+      const logTransactionHash = requireEthereumRpcHexData(
+        log.transactionHash ?? log.transaction_hash,
+        `receipt.logs[${index}].transactionHash`,
+        32,
+      );
+      if (transactionHash !== undefined && logTransactionHash !== transactionHash) {
+        throw new TypeError("receipt.logs transactionHash must match receipt.transactionHash");
+      }
+      const logBlockHash = requireEthereumRpcHexData(
+        log.blockHash ?? log.block_hash,
+        `receipt.logs[${index}].blockHash`,
+        32,
+      );
+      if (blockHash !== undefined && logBlockHash !== blockHash) {
+        throw new TypeError("receipt.logs blockHash must match receipt.blockHash");
+      }
+      const logBlockNumberValue = requireEthereumRpcQuantity(
+        log.blockNumber ?? log.block_number,
+        `receipt.logs[${index}].blockNumber`,
+      );
+      const logBlockNumber = `0x${logBlockNumberValue.toString(16)}`;
+      if (blockNumber !== undefined && logBlockNumber !== blockNumber) {
+        throw new TypeError("receipt.logs blockNumber must match receipt.blockNumber");
+      }
+      const candidateDigest = normalizedTopics[1];
+      if (hexToBytes(candidateDigest, `receipt.logs[${index}].topics[1]`, 32).every(
+        (byte) => byte === 0,
+      )) {
+        throw new TypeError("SCCP source event digest must not be zero");
+      }
+      if (sourceEventDigest !== undefined && candidateDigest !== sourceEventDigest) {
+        continue;
+      }
+      if (matchedDigest !== undefined) {
+        throw new TypeError("receipt.logs must contain exactly one matching SCCP source event");
+      }
+      matchedDigest = candidateDigest;
+    }
+  }
+  if (matchedDigest === undefined) {
+    throw new TypeError("receipt.logs must contain the expected SCCP source event");
+  }
+  return {
+    sourceEventDigest: matchedDigest,
+    sourceBridgeEmitterAddress,
+  };
+};
 
 const normalizeEvmMainnetReceipt = (receipt, suppliedTransactionHash, label) => {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
@@ -6566,12 +7471,729 @@ const normalizeEthereumMainnetBeaconFinality = (
   if (expectedReceiptsRoot !== undefined && executionReceiptsRoot !== expectedReceiptsRoot) {
     throw new TypeError("beaconFinality.executionReceiptsRoot must match block.receiptsRoot");
   }
+  const finalizedHeaderRootInput = strictOptionalResultField(
+    finality,
+    "beaconFinality.finalizedHeaderRoot",
+    "finalizedHeaderRoot",
+    "finalized_header_root",
+    "beaconFinalizedRoot",
+    "beacon_finalized_root",
+  );
+  const finalizedHeaderRoot =
+    finalizedHeaderRootInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? undefined
+      : requireEthereumRpcHexData(
+          finalizedHeaderRootInput,
+          "beaconFinality.finalizedHeaderRoot",
+          32,
+        );
+  const syncCommitteeRootInput = strictOptionalResultField(
+    finality,
+    "beaconFinality.syncCommitteeRoot",
+    "syncCommitteeRoot",
+    "sync_committee_root",
+  );
+  const syncCommitteeRoot =
+    syncCommitteeRootInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? undefined
+      : requireEthereumRpcHexData(
+          syncCommitteeRootInput,
+          "beaconFinality.syncCommitteeRoot",
+          32,
+        );
+  const beaconSlotInput = strictOptionalResultField(
+    finality,
+    "beaconFinality.beaconSlot",
+    "beaconSlot",
+    "beacon_slot",
+    "finalizedSlot",
+    "finalized_slot",
+    "slot",
+  );
+  const beaconSlot =
+    beaconSlotInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? undefined
+      : typeof beaconSlotInput === "string" && beaconSlotInput.startsWith("0x")
+        ? requireEthereumRpcQuantity(beaconSlotInput, "beaconFinality.beaconSlot")
+        : normalizeUnsignedBigInt(beaconSlotInput, "beaconFinality.beaconSlot");
+  if (beaconSlot === 0n) {
+    throw new RangeError("beaconFinality.beaconSlot must be positive");
+  }
   return Object.freeze({
     ...finality,
     executionBlockNumber: executionBlockNumber.toString(),
     executionBlockHash,
     executionReceiptsRoot,
+    ...(finalizedHeaderRoot === undefined ? {} : { finalizedHeaderRoot }),
+    ...(syncCommitteeRoot === undefined ? {} : { syncCommitteeRoot }),
+    ...(beaconSlot === undefined ? {} : { beaconSlot: beaconSlot.toString() }),
   });
+};
+
+const isPlainObjectLike = (value) => value && typeof value === "object" && !Array.isArray(value);
+
+const normalizeEthereumMainnetBeaconRestEndpoint = (value, label) => {
+  if (value instanceof URL) {
+    value = value.toString();
+  }
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0) {
+    throw new TypeError(`${label} must be a non-empty Beacon REST URL`);
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch (error) {
+    throw new TypeError(`${label} must be a valid Beacon REST URL`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new TypeError(`${label} must use http or https`);
+  }
+  url.hash = "";
+  return url.toString();
+};
+
+const ethereumMainnetBeaconRestUrl = (baseUrl, path) => {
+  const url = new URL(baseUrl);
+  const basePath = url.pathname.replace(/\/+$/u, "");
+  const apiPath = basePath.endsWith("/eth/v1") && path.startsWith("/eth/v1/")
+    ? path.slice("/eth/v1".length)
+    : path;
+  url.pathname = `${basePath}${apiPath}`;
+  url.hash = "";
+  return url;
+};
+
+const requireEthereumMainnetBeaconRestFetch = (fetchFn) => {
+  const resolved =
+    fetchFn ??
+    (typeof globalThis !== "undefined" && typeof globalThis.fetch === "function"
+      ? globalThis.fetch.bind(globalThis)
+      : undefined);
+  if (typeof resolved !== "function") {
+    throw new TypeError("Ethereum mainnet Beacon REST provider requires fetch");
+  }
+  return resolved;
+};
+
+const ethereumMainnetBeaconRestParseJsonText = (text, label) => {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new TypeError(`${label} response JSON must be an object`);
+  }
+  if (!isPlainObjectLike(payload)) {
+    throw new TypeError(`${label} response JSON must be an object`);
+  }
+  return payload;
+};
+
+const ethereumMainnetBeaconRestStreamBytes = async (body, label) => {
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (!next || typeof next !== "object") {
+        throw new TypeError(`${label} response body reader must return objects`);
+      }
+      if ("done" in next && typeof next.done !== "boolean") {
+        throw new TypeError(`${label} response body reader done must be a boolean`);
+      }
+      if (next.done === true) break;
+      const value = next.value;
+      let chunk;
+      if (value instanceof Uint8Array) {
+        chunk = value;
+      } else if (value instanceof ArrayBuffer) {
+        chunk = new Uint8Array(value);
+      } else if (ArrayBuffer.isView(value)) {
+        chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      } else {
+        throw new TypeError(`${label} response body chunks must be bytes`);
+      }
+      total += chunk.length;
+      if (total > SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES) {
+        if (typeof reader.cancel === "function") {
+          try {
+            await reader.cancel();
+          } catch {
+            // Ignore cancellation errors after the response has already failed closed.
+          }
+        }
+        throw new RangeError(
+          `${label} response body must be at most ${SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES} bytes`,
+        );
+      }
+      chunks.push(Uint8Array.from(chunk));
+    }
+  } finally {
+    if (typeof reader.releaseLock === "function") {
+      reader.releaseLock();
+    }
+  }
+  return concatBytes(...chunks);
+};
+
+const ethereumMainnetBeaconRestJson = async (fetchFn, url, headers, label) => {
+  const response = await fetchFn(url.toString(), {
+    method: "GET",
+    ...(headers == null ? {} : { headers }),
+  });
+  if (!response || typeof response !== "object") {
+    throw new TypeError(`${label} must return a fetch Response-like object`);
+  }
+  if ("ok" in response && typeof response.ok !== "boolean") {
+    throw new TypeError(`${label} response ok must be a boolean`);
+  }
+  if ("status" in response && response.status !== undefined) {
+    if (!Number.isSafeInteger(response.status)) {
+      throw new TypeError(`${label} response status must be an integer`);
+    }
+    if (response.status < 200 || response.status > 299) {
+      const statusText = "statusText" in response && response.statusText ? ` ${response.statusText}` : "";
+      throw new Error(`${label} request failed ${response.status}${statusText}`);
+    }
+  }
+  if ("ok" in response && response.ok === false) {
+    const status = "status" in response ? ` ${response.status}` : "";
+    const statusText = "statusText" in response && response.statusText ? ` ${response.statusText}` : "";
+    throw new Error(`${label} request failed${status}${statusText}`);
+  }
+  if (
+    response.body &&
+    typeof response.body === "object" &&
+    typeof response.body.getReader === "function"
+  ) {
+    const bytes = await ethereumMainnetBeaconRestStreamBytes(response.body, label);
+    let text;
+    try {
+      text = textDecoder.decode(bytes);
+    } catch {
+      throw new TypeError(`${label} response body must be valid UTF-8`);
+    }
+    return ethereumMainnetBeaconRestParseJsonText(text, label);
+  }
+  if (typeof response.text === "function") {
+    const text = await response.text();
+    if (typeof text !== "string") {
+      throw new TypeError(`${label} response text must be a string`);
+    }
+    const byteLength = textEncoder.encode(text).length;
+    if (byteLength > SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES) {
+      throw new RangeError(
+        `${label} response body must be at most ${SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES} bytes`,
+      );
+    }
+    return ethereumMainnetBeaconRestParseJsonText(text, label);
+  }
+  if (typeof response.json !== "function") {
+    throw new TypeError(`${label} response must expose text() or json()`);
+  }
+  const payload = await response.json();
+  if (!isPlainObjectLike(payload)) {
+    throw new TypeError(`${label} response JSON must be an object`);
+  }
+  return payload;
+};
+
+const requireEthereumMainnetBeaconRestObject = (value, label) => {
+  if (!isPlainObjectLike(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value;
+};
+
+const requireEthereumMainnetBeaconRestField = (value, label, field) => {
+  const container = requireEthereumMainnetBeaconRestObject(value, label);
+  if (!Object.prototype.hasOwnProperty.call(container, field)) {
+    throw new TypeError(`${label}.${field} is required`);
+  }
+  return container[field];
+};
+
+const rejectEthereumMainnetBeaconRestUnfinalized = (payload, label) => {
+  const executionOptimistic = payload.execution_optimistic;
+  if (
+    executionOptimistic !== undefined &&
+    typeof executionOptimistic !== "boolean"
+  ) {
+    throw new TypeError(`${label}.execution_optimistic must be a boolean`);
+  }
+  const executionOptimisticAlias = payload.executionOptimistic;
+  if (
+    executionOptimisticAlias !== undefined &&
+    typeof executionOptimisticAlias !== "boolean"
+  ) {
+    throw new TypeError(`${label}.executionOptimistic must be a boolean`);
+  }
+  const finalized = payload.finalized;
+  if (finalized !== undefined && typeof finalized !== "boolean") {
+    throw new TypeError(`${label}.finalized must be a boolean`);
+  }
+  if (executionOptimistic === true || executionOptimisticAlias === true) {
+    throw new TypeError(`${label} must not be execution optimistic`);
+  }
+  if (finalized === false) {
+    throw new TypeError(`${label} must be finalized`);
+  }
+};
+
+const rejectEthereumMainnetBeaconRestNonBooleanCanonical = (payload, label) => {
+  const canonical = payload.canonical;
+  if (canonical !== undefined && typeof canonical !== "boolean") {
+    throw new TypeError(`${label}.canonical must be a boolean`);
+  }
+  if (canonical === false) {
+    throw new TypeError(`${label} must be canonical`);
+  }
+};
+
+const normalizeEthereumMainnetBeaconRestHeaders = (headers) => {
+  if (headers === undefined || headers === null || headers === SCCP_OPTIONAL_FIELD_MISSING) {
+    return undefined;
+  }
+  if (typeof headers !== "object") {
+    throw new TypeError("Ethereum mainnet Beacon REST headers must be an object");
+  }
+  return headers;
+};
+
+const optionalEthereumMainnetBeaconRestMaterialField = (input, label, ...names) => {
+  const value = maybeStrictOptionalResultField(input, label, ...names);
+  return value === null ? undefined : value;
+};
+
+const optionalEthereumMainnetBeaconRestBoolean = (value, label, defaultValue) => {
+  if (
+    value === undefined ||
+    value === null ||
+    value === SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    return defaultValue;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} must be a boolean`);
+  }
+  return value;
+};
+
+const ethereumMainnetBeaconRestSyncCommitteeRoot = (input, options = {}) => {
+  const syncCommitteeRootInput =
+    optionalEthereumMainnetBeaconRestMaterialField(
+      options,
+      "syncCommitteeRoot",
+      "syncCommitteeRoot",
+      "sync_committee_root",
+    ) ??
+    optionalEthereumMainnetBeaconRestMaterialField(
+      input,
+      "syncCommitteeRoot",
+      "syncCommitteeRoot",
+      "sync_committee_root",
+    );
+  const syncCommitteePayloadInput =
+    optionalEthereumMainnetBeaconRestMaterialField(
+      options,
+      "syncCommitteePayload",
+      "syncCommitteePayload",
+      "sync_committee_payload",
+    ) ??
+    optionalEthereumMainnetBeaconRestMaterialField(
+      input,
+      "syncCommitteePayload",
+      "syncCommitteePayload",
+      "sync_committee_payload",
+    );
+  const syncCommitteePayloadRoot =
+    syncCommitteePayloadInput === undefined
+      ? undefined
+      : ethSyncCommitteeHashFromPayload(syncCommitteePayloadInput);
+  if (syncCommitteeRootInput !== undefined) {
+    const syncCommitteeRoot = requireEthereumRpcHexData(
+      syncCommitteeRootInput,
+      "syncCommitteeRoot",
+      32,
+    );
+    if (
+      syncCommitteePayloadRoot !== undefined &&
+      syncCommitteePayloadRoot !== syncCommitteeRoot
+    ) {
+      throw new TypeError("syncCommitteeRoot must match syncCommitteePayload");
+    }
+    return syncCommitteeRoot;
+  }
+  if (syncCommitteePayloadRoot !== undefined) {
+    return syncCommitteePayloadRoot;
+  }
+  throw new TypeError(
+    "Ethereum mainnet Beacon REST provider requires syncCommitteeRoot or syncCommitteePayload",
+  );
+};
+
+export class EthereumMainnetBeaconRestConsensusProvider {
+  constructor(options = {}) {
+    if (typeof options === "string" || options instanceof URL) {
+      options = { endpoint: options };
+    }
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("EthereumMainnetBeaconRestConsensusProvider options must be an object");
+    }
+    const endpoint = strictOptionalConstructorOption(
+      options,
+      "Ethereum mainnet Beacon REST endpoint",
+      "endpoint",
+      "baseUrl",
+      "baseURL",
+      "base_url",
+      "beaconRestUrl",
+      "beacon_rest_url",
+      "beaconRestEndpoint",
+      "beacon_rest_endpoint",
+    );
+    if (endpoint == null) {
+      throw new TypeError("Ethereum mainnet Beacon REST endpoint is required");
+    }
+    this.endpoint = normalizeEthereumMainnetBeaconRestEndpoint(
+      endpoint,
+      "Ethereum mainnet Beacon REST endpoint",
+    );
+    this.fetchFn = strictOptionalConstructorOption(
+      options,
+      "Ethereum mainnet Beacon REST fetch",
+      "fetch",
+      "fetchFn",
+      "fetch_fn",
+    );
+    this.headers = normalizeEthereumMainnetBeaconRestHeaders(
+      strictOptionalConstructorOption(
+        options,
+        "Ethereum mainnet Beacon REST headers",
+        "headers",
+      ),
+    );
+    this.syncCommitteeRoot = strictOptionalConstructorOption(
+      options,
+      "Ethereum mainnet Beacon REST syncCommitteeRoot",
+      "syncCommitteeRoot",
+      "sync_committee_root",
+    );
+    this.syncCommitteePayload = strictOptionalConstructorOption(
+      options,
+      "Ethereum mainnet Beacon REST syncCommitteePayload",
+      "syncCommitteePayload",
+      "sync_committee_payload",
+    );
+    const verifyFinalityCheckpoint = strictOptionalConstructorOption(
+      options,
+      "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+      "verifyFinalityCheckpoint",
+      "verify_finality_checkpoint",
+    );
+    this.verifyFinalityCheckpoint = optionalEthereumMainnetBeaconRestBoolean(
+      verifyFinalityCheckpoint,
+      "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+      true,
+    );
+  }
+
+  async collectFinalityEvidence(input = {}, options = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new TypeError("Ethereum mainnet Beacon REST finality input must be an object");
+    }
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("Ethereum mainnet Beacon REST finality options must be an object");
+    }
+    const blockInput = maybeStrictOptionalResultField(input, "block", "block");
+    if (blockInput === undefined) {
+      throw new TypeError("Ethereum mainnet Beacon REST finality collection requires block");
+    }
+    const blockHash = requireEthereumRpcHexData(blockInput.hash, "block.hash", 32);
+    const normalizedBlock = normalizeEthereumMainnetBlock(blockInput, blockHash);
+    const executionBlockNumber = `0x${requireEthereumRpcQuantity(
+      normalizedBlock.number ?? normalizedBlock.blockNumber ?? normalizedBlock.block_number,
+      "block.number",
+    ).toString(16)}`;
+    const executionReceiptsRoot = requireEthereumRpcHexData(
+      normalizedBlock.receiptsRoot ?? normalizedBlock.receipts_root,
+      "block.receiptsRoot",
+      32,
+    );
+    const fetchFn = requireEthereumMainnetBeaconRestFetch(
+      options.fetch ?? options.fetchFn ?? options.fetch_fn ?? this.fetchFn,
+    );
+    const headers = normalizeEthereumMainnetBeaconRestHeaders(
+      options.headers === undefined ? this.headers : options.headers,
+    );
+    const headerResponse = await ethereumMainnetBeaconRestJson(
+      fetchFn,
+      ethereumMainnetBeaconRestUrl(this.endpoint, "/eth/v1/beacon/headers/finalized"),
+      headers,
+      "Ethereum mainnet Beacon REST finalized header",
+    );
+    rejectEthereumMainnetBeaconRestUnfinalized(
+      headerResponse,
+      "Ethereum mainnet Beacon REST finalized header",
+    );
+    const headerData = requireEthereumMainnetBeaconRestObject(
+      requireEthereumMainnetBeaconRestField(
+        headerResponse,
+        "Ethereum mainnet Beacon REST finalized header",
+        "data",
+      ),
+      "Ethereum mainnet Beacon REST finalized header.data",
+    );
+    rejectEthereumMainnetBeaconRestNonBooleanCanonical(
+      headerData,
+      "Ethereum mainnet Beacon REST finalized header",
+    );
+    const finalizedHeaderRoot = requireEthereumRpcHexData(
+      requireEthereumMainnetBeaconRestField(
+        headerData,
+        "Ethereum mainnet Beacon REST finalized header.data",
+        "root",
+      ),
+      "finalizedHeaderRoot",
+      32,
+    );
+    const header = requireEthereumMainnetBeaconRestObject(
+      requireEthereumMainnetBeaconRestField(
+        headerData,
+        "Ethereum mainnet Beacon REST finalized header.data",
+        "header",
+      ),
+      "Ethereum mainnet Beacon REST finalized header.data.header",
+    );
+    const message = requireEthereumMainnetBeaconRestObject(
+      requireEthereumMainnetBeaconRestField(
+        header,
+        "Ethereum mainnet Beacon REST finalized header.data.header",
+        "message",
+      ),
+      "Ethereum mainnet Beacon REST finalized header.data.header.message",
+    );
+    const beaconSlot = normalizeUnsignedBigInt(
+      requireEthereumMainnetBeaconRestField(
+        message,
+        "Ethereum mainnet Beacon REST finalized header.data.header.message",
+        "slot",
+      ),
+      "beaconFinality.beaconSlot",
+    );
+    if (beaconSlot === 0n) {
+      throw new RangeError("beaconFinality.beaconSlot must be positive");
+    }
+    const verifyFinalityCheckpoint = optionalEthereumMainnetBeaconRestBoolean(
+      strictOptionalConstructorOption(
+        options,
+        "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+        "verifyFinalityCheckpoint",
+        "verify_finality_checkpoint",
+      ),
+      "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+      this.verifyFinalityCheckpoint,
+    );
+    if (verifyFinalityCheckpoint) {
+      const checkpointResponse = await ethereumMainnetBeaconRestJson(
+        fetchFn,
+        ethereumMainnetBeaconRestUrl(
+          this.endpoint,
+          "/eth/v1/beacon/states/finalized/finality_checkpoints",
+        ),
+        headers,
+        "Ethereum mainnet Beacon REST finality checkpoints",
+      );
+      rejectEthereumMainnetBeaconRestUnfinalized(
+        checkpointResponse,
+        "Ethereum mainnet Beacon REST finality checkpoints",
+      );
+      const checkpointData = requireEthereumMainnetBeaconRestObject(
+        requireEthereumMainnetBeaconRestField(
+          checkpointResponse,
+          "Ethereum mainnet Beacon REST finality checkpoints",
+          "data",
+        ),
+        "Ethereum mainnet Beacon REST finality checkpoints.data",
+      );
+      const finalizedCheckpoint = requireEthereumMainnetBeaconRestObject(
+        requireEthereumMainnetBeaconRestField(
+          checkpointData,
+          "Ethereum mainnet Beacon REST finality checkpoints.data",
+          "finalized",
+        ),
+        "Ethereum mainnet Beacon REST finality checkpoints.data.finalized",
+      );
+      const finalizedCheckpointRoot = requireEthereumRpcHexData(
+        requireEthereumMainnetBeaconRestField(
+          finalizedCheckpoint,
+          "Ethereum mainnet Beacon REST finality checkpoints.data.finalized",
+          "root",
+        ),
+        "finalizedCheckpointRoot",
+        32,
+      );
+      if (finalizedCheckpointRoot !== finalizedHeaderRoot) {
+        throw new TypeError(
+          "Ethereum mainnet Beacon REST finality checkpoint root must match finalized header root",
+        );
+      }
+    }
+    return normalizeEthereumMainnetBeaconFinality(
+      {
+        executionBlockNumber,
+        executionBlockHash: blockHash,
+        executionReceiptsRoot,
+        finalizedHeaderRoot,
+        syncCommitteeRoot: ethereumMainnetBeaconRestSyncCommitteeRoot(this, options),
+        beaconSlot: beaconSlot.toString(),
+      },
+      {
+        expectedBlockHash: blockHash,
+        expectedBlockNumber: executionBlockNumber,
+        expectedReceiptsRoot: executionReceiptsRoot,
+      },
+    );
+  }
+}
+
+const requireEthereumMainnetReceiptProofMatchesEvidence = (
+  receiptProof,
+  { blockHash, receiptBlockNumber, executionReceiptsRoot, beaconFinality, sourceEventDigest } = {},
+) => {
+  if (receiptProof === undefined) {
+    return;
+  }
+  const proofBlockNumber = normalizeUnsignedBigInt(
+    strictResultField(
+      receiptProof,
+      "receiptProof.executionBlockNumber",
+      "executionBlockNumber",
+      "execution_block_number",
+      "finalityHeight",
+      "finality_height",
+    ),
+    "receiptProof.executionBlockNumber",
+  );
+  if (
+    receiptBlockNumber !== undefined &&
+    proofBlockNumber !== requireEthereumRpcQuantity(receiptBlockNumber, "block.number")
+  ) {
+    throw new TypeError("receiptProof.executionBlockNumber must match block.number");
+  }
+  if (
+    beaconFinality !== undefined &&
+    proofBlockNumber !==
+      normalizeUnsignedBigInt(
+        beaconFinality.executionBlockNumber ?? beaconFinality.execution_block_number,
+        "beaconFinality.executionBlockNumber",
+      )
+  ) {
+    throw new TypeError("receiptProof.executionBlockNumber must match beaconFinality.executionBlockNumber");
+  }
+  const proofBlockHash = requireEthereumRpcHexData(
+    strictResultField(
+      receiptProof,
+      "receiptProof.executionBlockHash",
+      "executionBlockHash",
+      "execution_block_hash",
+      "finalityBlockHash",
+      "finality_block_hash",
+    ),
+    "receiptProof.executionBlockHash",
+    32,
+  );
+  if (blockHash !== undefined && proofBlockHash !== blockHash) {
+    throw new TypeError("receiptProof.executionBlockHash must match block.hash");
+  }
+  if (beaconFinality !== undefined && proofBlockHash !== beaconFinality.executionBlockHash) {
+    throw new TypeError("receiptProof.executionBlockHash must match beaconFinality.executionBlockHash");
+  }
+  const proofReceiptsRoot = requireEthereumRpcHexData(
+    strictResultField(
+      receiptProof,
+      "receiptProof.executionReceiptsRoot",
+      "executionReceiptsRoot",
+      "execution_receipts_root",
+      "receiptsRoot",
+      "receipts_root",
+      "receiptOrMessageRoot",
+      "receipt_or_message_root",
+    ),
+    "receiptProof.executionReceiptsRoot",
+    32,
+  );
+  if (executionReceiptsRoot !== undefined && proofReceiptsRoot !== executionReceiptsRoot) {
+    throw new TypeError("receiptProof.executionReceiptsRoot must match block.receiptsRoot");
+  }
+  if (beaconFinality !== undefined && proofReceiptsRoot !== beaconFinality.executionReceiptsRoot) {
+    throw new TypeError("receiptProof.executionReceiptsRoot must match beaconFinality.executionReceiptsRoot");
+  }
+  if (beaconFinality !== undefined && beaconFinality.finalizedHeaderRoot !== undefined) {
+    const proofFinalizedRoot = requireEthereumRpcHexData(
+      strictResultField(
+        receiptProof,
+        "receiptProof.beaconFinalizedRoot",
+        "beaconFinalizedRoot",
+        "beacon_finalized_root",
+      ),
+      "receiptProof.beaconFinalizedRoot",
+      32,
+    );
+    if (proofFinalizedRoot !== beaconFinality.finalizedHeaderRoot) {
+      throw new TypeError("receiptProof.beaconFinalizedRoot must match beaconFinality.finalizedHeaderRoot");
+    }
+  }
+  if (beaconFinality !== undefined && beaconFinality.syncCommitteeRoot !== undefined) {
+    const proofSyncCommitteeRoot = requireEthereumRpcHexData(
+      strictResultField(
+        receiptProof,
+        "receiptProof.syncCommitteeRoot",
+        "syncCommitteeRoot",
+        "sync_committee_root",
+      ),
+      "receiptProof.syncCommitteeRoot",
+      32,
+    );
+    if (proofSyncCommitteeRoot !== beaconFinality.syncCommitteeRoot) {
+      throw new TypeError("receiptProof.syncCommitteeRoot must match beaconFinality.syncCommitteeRoot");
+    }
+  }
+  if (beaconFinality !== undefined && beaconFinality.beaconSlot !== undefined) {
+    const proofBeaconSlot = normalizeUnsignedBigInt(
+      strictResultField(
+        receiptProof,
+        "receiptProof.beaconSlot",
+        "beaconSlot",
+        "beacon_slot",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+      ),
+      "receiptProof.beaconSlot",
+    );
+    if (
+      proofBeaconSlot !==
+      normalizeUnsignedBigInt(beaconFinality.beaconSlot, "beaconFinality.beaconSlot")
+    ) {
+      throw new TypeError("receiptProof.beaconSlot must match beaconFinality.beaconSlot");
+    }
+  }
+  if (sourceEventDigest !== undefined) {
+    const proofSourceEventDigest = requireEthereumRpcHexData(
+      strictResultField(
+        receiptProof,
+        "receiptProof.sourceEventDigest",
+        "sourceEventDigest",
+        "source_event_digest",
+      ),
+      "receiptProof.sourceEventDigest",
+      32,
+    );
+    if (proofSourceEventDigest !== sourceEventDigest) {
+      throw new TypeError("receiptProof.sourceEventDigest must match receipt source event");
+    }
+  }
 };
 
 const normalizeBscMainnetParliaFinality = (
@@ -6702,12 +8324,17 @@ const normalizeEthereumMainnetInboundEvidence = (input) => {
     "receiptProofHash",
     "receipt_proof_hash",
   );
-  const receiptProofHash =
-    receiptProofInput !== undefined
-      ? evmSccpReceiptProofHash(receiptProofInput)
-      : receiptProofHashInput === undefined
-        ? undefined
-        : normalizeNonZeroHex32(receiptProofHashInput, "receiptProofHash");
+  let receiptProofHash =
+    receiptProofHashInput === undefined
+      ? undefined
+      : normalizeNonZeroHex32(receiptProofHashInput, "receiptProofHash");
+  if (receiptProofInput !== undefined) {
+    const computedReceiptProofHash = evmSccpReceiptProofHash(receiptProofInput);
+    if (receiptProofHash !== undefined && receiptProofHash !== computedReceiptProofHash) {
+      throw new TypeError("receiptProofHash must match receiptProof");
+    }
+    receiptProofHash = computedReceiptProofHash;
+  }
 
   return Object.freeze({
     ...input,
@@ -6754,8 +8381,23 @@ const normalizeBscMainnetInboundEvidence = (input) => {
     "receiptProof",
     "receipt_proof",
   );
-  const receiptProofHash =
-    receiptProofInput === undefined ? undefined : bscSccpReceiptProofHash(receiptProofInput);
+  const receiptProofHashInput = maybeStrictOptionalResultField(
+    input,
+    "receiptProofHash",
+    "receiptProofHash",
+    "receipt_proof_hash",
+  );
+  let receiptProofHash =
+    receiptProofHashInput === undefined
+      ? undefined
+      : normalizeNonZeroHex32(receiptProofHashInput, "receiptProofHash");
+  if (receiptProofInput !== undefined) {
+    const computedReceiptProofHash = bscSccpReceiptProofHash(receiptProofInput);
+    if (receiptProofHash !== undefined && receiptProofHash !== computedReceiptProofHash) {
+      throw new TypeError("receiptProofHash must match receiptProof");
+    }
+    receiptProofHash = computedReceiptProofHash;
+  }
   const parliaFinalityInput = maybeStrictOptionalResultField(
     input,
     "parliaFinality",
@@ -6778,12 +8420,95 @@ const normalizeBscMainnetInboundEvidence = (input) => {
   });
 };
 
+const wrappedBscMainnetProofResultBridgeAddress = (input) => {
+  const proofResult = input?.proofResult ?? input?.proof_result;
+  const destinationBinding = proofResult?.destinationBinding ?? proofResult?.destination_binding;
+  if (destinationBinding === undefined || destinationBinding === null) {
+    return undefined;
+  }
+  return bscMainnetSccpDestinationBinding(destinationBinding).bridgeAddress;
+};
+
+const wrappedEthereumMainnetProofResultBridgeAddress = (input) => {
+  const proofResult = input?.proofResult ?? input?.proof_result;
+  const destinationBinding = proofResult?.destinationBinding ?? proofResult?.destination_binding;
+  if (destinationBinding === undefined || destinationBinding === null) {
+    return undefined;
+  }
+  return ethereumMainnetSccpDestinationBinding(destinationBinding).bridgeAddress;
+};
+
+const requireEthereumMainnetInboundReceiptProof = (evidence) => {
+  const receiptProof = maybeStrictOptionalResultField(
+    evidence,
+    "receiptProof",
+    "receiptProof",
+    "receipt_proof",
+  );
+  if (receiptProof === undefined) {
+    throw new TypeError("Ethereum mainnet SCCP inbound proof requires receiptProof");
+  }
+  const computedReceiptProofHash = evmSccpReceiptProofHash(receiptProof);
+  const receiptProofHashInput = maybeStrictOptionalResultField(
+    evidence,
+    "receiptProofHash",
+    "receiptProofHash",
+    "receipt_proof_hash",
+  );
+  if (
+    receiptProofHashInput !== undefined &&
+    normalizeNonZeroHex32(receiptProofHashInput, "receiptProofHash") !== computedReceiptProofHash
+  ) {
+    throw new TypeError("receiptProofHash must match receiptProof");
+  }
+  return receiptProof;
+};
+
+const requireEthereumMainnetReceiptSourceEventForProof = (evidence) => {
+  if ((evidence.receipt ?? evidence.receipt_proof_receipt) === undefined) {
+    return;
+  }
+  if ((evidence.sourceEventDigest ?? evidence.source_event_digest) === undefined) {
+    throw new TypeError(
+      "Ethereum mainnet SCCP inbound proof requires receipt source event validation",
+    );
+  }
+};
+
+const requireEthereumMainnetBeaconFinalityRootsForProof = (evidence) => {
+  const finality = evidence.beaconFinality ?? evidence.beacon_finality;
+  if (!finality || typeof finality !== "object" || Array.isArray(finality)) {
+    throw new TypeError("Ethereum mainnet SCCP inbound proof requires beaconFinality");
+  }
+  if (finality.finalizedHeaderRoot === undefined) {
+    throw new TypeError(
+      "Ethereum mainnet SCCP inbound proof requires beaconFinality.finalizedHeaderRoot",
+    );
+  }
+  if (finality.syncCommitteeRoot === undefined) {
+    throw new TypeError(
+      "Ethereum mainnet SCCP inbound proof requires beaconFinality.syncCommitteeRoot",
+    );
+  }
+  if (finality.beaconSlot === undefined) {
+    throw new TypeError(
+      "Ethereum mainnet SCCP inbound proof requires beaconFinality.beaconSlot",
+    );
+  }
+};
+
 const requireEthereumMainnetOutboundRequest = (request) => {
   requireProductionEvmProofRequest(request);
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("EthereumMainnetSccp outbound proofs must start from SORA");
+  }
   if (request.targetDomain !== SCCP_DOMAIN_ETH || request.publicInputs?.targetDomain !== SCCP_DOMAIN_ETH) {
     throw new RangeError("EthereumMainnetSccp outbound proofs must target Ethereum mainnet");
   }
   const binding = ethereumMainnetSccpDestinationBinding(request.destinationBinding);
+  if (binding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (request.destinationBindingHash !== binding.bindingHash) {
     throw new TypeError("destinationBindingHash must match Ethereum mainnet destinationBinding");
   }
@@ -6811,6 +8536,9 @@ const requireEthereumMainnetSubmission = (submission, input) => {
       "destination_binding",
     ),
   );
+  if (destinationBinding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
     throw new TypeError(
       "submission destinationBindingHash must match Ethereum mainnet destinationBinding",
@@ -6895,6 +8623,22 @@ export class EthereumMainnetSccp {
       "destinationBinding",
       "destination_binding",
     );
+    this.sourceVerifierMaterial = strictOptionalConstructorOption(
+      options,
+      "EthereumMainnetSccp sourceVerifierMaterial",
+      "sourceVerifierMaterial",
+      "source_verifier_material",
+    );
+    this.sourceBridgeEmitterAddress = strictOptionalConstructorOption(
+      options,
+      "EthereumMainnetSccp sourceBridgeEmitterAddress",
+      "sourceBridgeEmitterAddress",
+      "source_bridge_emitter_address",
+      "expectedSourceBridgeEmitterAddress",
+      "expected_source_bridge_emitter_address",
+      "bridgeAddress",
+      "bridge_address",
+    );
     this.defaultFrom = strictOptionalConstructorOption(
       options,
       "EthereumMainnetSccp from",
@@ -6918,7 +8662,7 @@ export class EthereumMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await ethereumJsonRpcRequest(provider, "eth_chainId", []);
-    requireEthereumMainnetChainId(chainId);
+    requireEthereumMainnetRpcChainId(chainId);
     return chainId;
   }
 
@@ -6948,18 +8692,13 @@ export class EthereumMainnetSccp {
         transactionHash,
       ]);
     }
-    const receiptProofInput = maybeStrictOptionalResultField(
+    let receiptProofInput = maybeStrictOptionalResultField(
       input,
       "receiptProof",
       "receiptProof",
       "receipt_proof",
     );
-    const receiptProofHashInput = maybeStrictOptionalResultField(
-      input,
-      "receiptProofHash",
-      "receiptProofHash",
-      "receipt_proof_hash",
-    );
+    const receiptProofHashInput = input.receiptProofHash;
     if (receipt === undefined && receiptProofInput === undefined && receiptProofHashInput === undefined) {
       throw new TypeError(
         "Ethereum mainnet inbound evidence requires a receipt, receiptProof, receiptProofHash, or transactionHash",
@@ -6975,6 +8714,8 @@ export class EthereumMainnetSccp {
           );
     let receiptBlockNumber;
     let executionReceiptsRoot;
+    let sourceEventDigest;
+    let sourceBridgeEmitterAddress;
     if (receipt !== undefined) {
       const normalizedReceipt = normalizeEthereumMainnetReceipt(receipt, transactionHash);
       receipt = normalizedReceipt.receipt;
@@ -6984,6 +8725,21 @@ export class EthereumMainnetSccp {
       }
       blockHash = normalizedReceipt.blockHash;
       receiptBlockNumber = normalizedReceipt.blockNumber;
+      const sourceEvent = ethereumMainnetReceiptLogSourceEventDigest(
+        receipt,
+        ethereumMainnetReceiptSourceEventOptions(input, options, this),
+        {
+          transactionHash,
+          blockHash,
+          blockNumber: receiptBlockNumber,
+        },
+      );
+      sourceEventDigest = sourceEvent.sourceEventDigest;
+      sourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress;
+    } else if (ethereumMainnetReceiptSourceEventValidationRequested(input, options)) {
+      throw new TypeError(
+        "Ethereum mainnet SCCP source event validation requires receipt logs",
+      );
     }
     let block = maybeStrictOptionalResultField(input, "block", "block");
     if (block === undefined && blockHash !== undefined) {
@@ -7019,14 +8775,120 @@ export class EthereumMainnetSccp {
             expectedBlockNumber: receiptBlockNumber,
             expectedReceiptsRoot: executionReceiptsRoot,
           });
-    return normalizeEthereumMainnetInboundEvidence({
+    const inclusionBranchInput = maybeStrictOptionalResultField(
+      input,
+      "inclusionBranch",
+      "inclusionBranch",
+      "inclusion_branch",
+    );
+    if (
+      receiptProofInput === undefined &&
+      receipt !== undefined &&
+      normalizedBeaconFinality !== undefined &&
+      sourceEventDigest !== undefined &&
+      inclusionBranchInput !== undefined
+    ) {
+      const blockReceiptsInput = maybeStrictOptionalResultField(
+        input,
+        "blockReceipts",
+        "blockReceipts",
+        "block_receipts",
+        "receiptBlockReceipts",
+        "receipt_block_receipts",
+      );
+      const blockReceipts =
+        blockReceiptsInput !== undefined
+          ? blockReceiptsInput
+          : await ethereumJsonRpcRequest(provider, "eth_getBlockReceipts", [
+              receiptBlockNumber,
+            ]);
+      const transactionIndex = requireEthereumRpcQuantity(
+        receipt.transactionIndex ?? receipt.transaction_index,
+        "receipt.transactionIndex",
+      );
+      const receiptTrieProof = buildEvmReceiptTrieProofFromReceipts(blockReceipts, {
+        transactionIndex: transactionIndex.toString(),
+      });
+      const expectedReceiptsRoot =
+        executionReceiptsRoot ?? normalizedBeaconFinality.executionReceiptsRoot;
+      if (receiptTrieProof.receiptsRoot !== expectedReceiptsRoot) {
+        throw new TypeError("computed receipt trie root must match block.receiptsRoot");
+      }
+      if (transactionIndex > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new RangeError("receipt.transactionIndex must fit a safe array index");
+      }
+      const indexedReceipt = blockReceipts[Number(transactionIndex)];
+      if (!indexedReceipt || typeof indexedReceipt !== "object" || Array.isArray(indexedReceipt)) {
+        throw new TypeError("eth_getBlockReceipts target receipt must be an object");
+      }
+      const indexedTransactionHash = requireEthereumRpcHexData(
+        indexedReceipt.transactionHash ?? indexedReceipt.transaction_hash,
+        "blockReceipts transactionHash",
+        32,
+      );
+      if (indexedTransactionHash !== transactionHash) {
+        throw new TypeError("eth_getBlockReceipts target receipt must match transactionHash");
+      }
+      const indexedBlockHash = requireEthereumRpcHexData(
+        indexedReceipt.blockHash ?? indexedReceipt.block_hash,
+        "blockReceipts blockHash",
+        32,
+      );
+      if (indexedBlockHash !== blockHash) {
+        throw new TypeError("eth_getBlockReceipts target receipt blockHash must match receipt");
+      }
+      const indexedBlockNumber = requireEthereumRpcQuantity(
+        indexedReceipt.blockNumber ?? indexedReceipt.block_number,
+        "blockReceipts blockNumber",
+      );
+      if (indexedBlockNumber !== requireEthereumRpcQuantity(receiptBlockNumber, "receipt.blockNumber")) {
+        throw new TypeError("eth_getBlockReceipts target receipt blockNumber must match receipt");
+      }
+      const receiptRlp = bytesToHex(canonicalEvmReceiptRlp(receipt));
+      if (receiptTrieProof.receiptRlp !== receiptRlp) {
+        throw new TypeError("eth_getBlockReceipts target receipt RLP must match receipt");
+      }
+      receiptProofInput = Object.freeze({
+        sourceDomain: SCCP_DOMAIN_ETH,
+        sourceEventDigest,
+        beaconSlot: normalizedBeaconFinality.beaconSlot,
+        executionBlockNumber: normalizedBeaconFinality.executionBlockNumber,
+        executionBlockHash: normalizedBeaconFinality.executionBlockHash,
+        executionReceiptsRoot: normalizedBeaconFinality.executionReceiptsRoot,
+        beaconFinalizedRoot: normalizedBeaconFinality.finalizedHeaderRoot,
+        syncCommitteeRoot: normalizedBeaconFinality.syncCommitteeRoot,
+        receiptRootIndex: transactionIndex.toString(),
+        receiptTrieProofNodes: receiptTrieProof.receiptTrieProofNodes,
+        inclusionBranch: inclusionBranchInput,
+      });
+    }
+    requireEthereumMainnetReceiptProofMatchesEvidence(receiptProofInput, {
+      blockHash,
+      receiptBlockNumber,
+      executionReceiptsRoot,
+      beaconFinality: normalizedBeaconFinality,
+      sourceEventDigest,
+    });
+    let receiptProofHash = receiptProofHashInput;
+    if (receiptProofInput !== undefined) {
+      const computedReceiptProofHash = evmSccpReceiptProofHash(receiptProofInput);
+      if (receiptProofHash !== undefined && receiptProofHash !== computedReceiptProofHash) {
+        throw new TypeError("receiptProofHash must match receiptProof");
+      }
+      receiptProofHash = computedReceiptProofHash;
+    }
+    return Object.freeze({
       ...input,
       sourceDomain: SCCP_DOMAIN_ETH,
       targetDomain: SCCP_DOMAIN_SORA,
       ...(transactionHash === undefined ? {} : { transactionHash }),
       ...(receipt === undefined ? {} : { receipt }),
       ...(block === undefined ? {} : { block }),
+      ...(sourceEventDigest === undefined ? {} : { sourceEventDigest }),
+      ...(sourceBridgeEmitterAddress === undefined ? {} : { sourceBridgeEmitterAddress }),
       ...(normalizedBeaconFinality === undefined ? {} : { beaconFinality: normalizedBeaconFinality }),
+      ...(receiptProofInput === undefined ? {} : { receiptProof: receiptProofInput }),
+      ...(receiptProofHash === undefined ? {} : { receiptProofHash }),
     });
   }
 
@@ -7047,6 +8909,9 @@ export class EthereumMainnetSccp {
     if (evidence.beaconFinality == null) {
       throw new TypeError("Ethereum mainnet SCCP inbound proof requires beaconFinality");
     }
+    requireEthereumMainnetInboundReceiptProof(evidence);
+    requireEthereumMainnetReceiptSourceEventForProof(evidence);
+    requireEthereumMainnetBeaconFinalityRootsForProof(evidence);
     return normalizeInboundProofBytes(await prove(evidence, options), "proofBytes");
   }
 
@@ -7066,6 +8931,10 @@ export class EthereumMainnetSccp {
     return submit(normalizeInboundProofBytes(input, "proofBytes"), options);
   }
 
+  buildLocalAdmissionSubmission(input) {
+    return buildEthereumMainnetSccpLocalAdmissionSubmission(input);
+  }
+
   buildOutboundProofRequest(input) {
     return requireEthereumMainnetOutboundRequest(buildEvmSccpProofRequest(input));
   }
@@ -7078,7 +8947,11 @@ export class EthereumMainnetSccp {
       error.code = "ERR_SCCP_ETH_OUTBOUND_PROVER_UNAVAILABLE";
       throw error;
     }
-    const proofResult = await this.outboundProver.prove(input, options);
+    const request = this.buildOutboundProofRequest(input);
+    const proofResult = normalizeEvmProofResult(
+      await this.outboundProver.prove(immutableGroth16ProofRequest(request), options),
+      request,
+    );
     requireEthereumMainnetSubmission(buildEvmSccpSubmission({ proofResult }), { proofResult });
     return proofResult;
   }
@@ -7094,28 +8967,38 @@ export class EthereumMainnetSccp {
       options.submit_outbound_to_ethereum ??
       options.submitToEthereum ??
       this.submitOutboundFn;
+    const provider =
+      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
+    let providerValidated = false;
+    if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      providerValidated = true;
+    }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
-    const provider =
-      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
-    await this.validateExecutionProviderMainnet({ executionProvider: provider });
-    const destinationBinding =
-      options.destinationBinding ??
-      options.destination_binding ??
-      input.destinationBinding ??
-      input.destination_binding ??
-      this.destinationBinding;
-    const to =
+    if (!providerValidated) {
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+    }
+    const boundBridgeAddress = wrappedEthereumMainnetProofResultBridgeAddress(input);
+    const explicitTo =
       options.to ??
       options.bridgeAddress ??
       options.bridge_address ??
       input.to ??
       input.bridgeAddress ??
-      input.bridge_address ??
-      destinationBinding?.bridgeAddress;
+      input.bridge_address;
+    const to =
+      explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
+        ? boundBridgeAddress
+        : nonZeroHex(explicitTo, "Ethereum mainnet SCCP outbound to", 20);
     if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
       throw new TypeError("Ethereum mainnet SCCP outbound submission requires a bridge address");
+    }
+    if (boundBridgeAddress !== undefined && to !== boundBridgeAddress) {
+      throw new TypeError(
+        "Ethereum mainnet SCCP outbound to address must match proofResult.destinationBinding.bridgeAddress",
+      );
     }
     const from =
       options.from ?? input.from ?? this.defaultFrom;
@@ -7195,7 +9078,7 @@ export class BscMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await bscJsonRpcRequest(provider, "eth_chainId", []);
-    requireBscMainnetChainId(chainId);
+    requireBscMainnetRpcChainId(chainId);
     return chainId;
   }
 
@@ -7231,9 +9114,10 @@ export class BscMainnetSccp {
       "receiptProof",
       "receipt_proof",
     );
-    if (receipt === undefined && receiptProofInput === undefined) {
+    const receiptProofHashInput = input.receiptProofHash;
+    if (receipt === undefined && receiptProofInput === undefined && receiptProofHashInput === undefined) {
       throw new TypeError(
-        "BSC mainnet inbound evidence requires a receipt, receiptProof, or transactionHash",
+        "BSC mainnet inbound evidence requires a receipt, receiptProof, receiptProofHash, or transactionHash",
       );
     }
     let blockHash =
@@ -7296,7 +9180,7 @@ export class BscMainnetSccp {
             expectedBlockNumber: receiptBlockNumber,
             expectedReceiptsRoot: executionReceiptsRoot,
           });
-    return normalizeBscMainnetInboundEvidence({
+    return Object.freeze({
       ...input,
       sourceDomain: SCCP_DOMAIN_BSC,
       targetDomain: SCCP_DOMAIN_SORA,
@@ -7349,6 +9233,10 @@ export class BscMainnetSccp {
     return submit(normalizeInboundProofBytes(input, "proofBytes"), options);
   }
 
+  buildLocalAdmissionSubmission(input) {
+    return buildBscMainnetSccpLocalAdmissionSubmission(input);
+  }
+
   buildOutboundProofRequest(input) {
     return requireBscMainnetOutboundRequest(buildBscMainnetSccpDestinationProofRequest(input));
   }
@@ -7361,7 +9249,11 @@ export class BscMainnetSccp {
       error.code = "ERR_SCCP_BSC_OUTBOUND_PROVER_UNAVAILABLE";
       throw error;
     }
-    const proofResult = await this.outboundProver.prove(input, options);
+    const request = this.buildOutboundProofRequest(input);
+    const proofResult = normalizeEvmProofResult(
+      await this.outboundProver.prove(immutableGroth16ProofRequest(request), options),
+      request,
+    );
     requireBscMainnetSubmission(buildBscMainnetSccpDestinationSubmission({ proofResult }), {
       proofResult,
     });
@@ -7385,22 +9277,25 @@ export class BscMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     await this.validateExecutionProviderMainnet({ executionProvider: provider });
-    const destinationBinding =
-      options.destinationBinding ??
-      options.destination_binding ??
-      input.destinationBinding ??
-      input.destination_binding ??
-      this.destinationBinding;
-    const to =
+    const boundBridgeAddress = wrappedBscMainnetProofResultBridgeAddress(input);
+    const explicitTo =
       options.to ??
       options.bridgeAddress ??
       options.bridge_address ??
       input.to ??
       input.bridgeAddress ??
-      input.bridge_address ??
-      destinationBinding?.bridgeAddress;
+      input.bridge_address;
+    const to =
+      explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
+        ? boundBridgeAddress
+        : nonZeroHex(explicitTo, "BSC mainnet SCCP outbound to", 20);
     if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
       throw new TypeError("BSC mainnet SCCP outbound submission requires a bridge address");
+    }
+    if (boundBridgeAddress !== undefined && to !== boundBridgeAddress) {
+      throw new TypeError(
+        "BSC mainnet SCCP outbound to address must match proofResult.destinationBinding.bridgeAddress",
+      );
     }
     const from = options.from ?? input.from ?? this.defaultFrom;
     const tx = {
@@ -8721,6 +10616,23 @@ export function evmSccpReceiptProofHash(input) {
   );
 }
 
+export function ethMainnetSyncCommitteePeriodForSlot(slot) {
+  return normalizeUnsignedBigInt(slot, "beaconSlot")
+    / BigInt(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD);
+}
+
+const requireEthMainnetTransitionPeriods = (fromSyncPeriod, toSyncPeriod, transitionSlot) => {
+  if (transitionSlot === 0n) {
+    throw new RangeError("transitionSlot must not be zero");
+  }
+  if (fromSyncPeriod + 1n !== toSyncPeriod) {
+    throw new RangeError("toSyncPeriod must equal fromSyncPeriod + 1");
+  }
+  if (ethMainnetSyncCommitteePeriodForSlot(transitionSlot) !== fromSyncPeriod) {
+    throw new RangeError("transitionSlot must belong to fromSyncPeriod");
+  }
+};
+
 const normalizeEthSyncCommitteeParts = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("ETH sync committee input must be an object");
@@ -8940,25 +10852,23 @@ export function canonicalEthSyncCommitteeTransitionMessageBytes(input) {
   if (sourceDomain !== SCCP_DOMAIN_ETH) {
     throw new RangeError("sourceDomain must be ETH");
   }
+  const fromSyncPeriod = normalizeUnsignedBigInt(
+    strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+    "fromSyncPeriod",
+  );
+  const toSyncPeriod = normalizeUnsignedBigInt(
+    strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+    "toSyncPeriod",
+  );
+  const transitionSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
+    "transitionSlot",
+  );
+  requireEthMainnetTransitionPeriods(fromSyncPeriod, toSyncPeriod, transitionSlot);
   out = writeU32Le(out, sourceDomain);
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(
-      strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
-      "fromSyncPeriod",
-    ),
-  );
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"), "toSyncPeriod"),
-  );
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(
-      strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
-      "transitionSlot",
-    ),
-  );
+  out = writeU64Le(out, fromSyncPeriod);
+  out = writeU64Le(out, toSyncPeriod);
+  out = writeU64Le(out, transitionSlot);
   return concatBytes(
     out,
     hexToBytes(
@@ -9152,25 +11062,23 @@ export function canonicalEthSyncCommitteeTransitionSignatureBytes(input) {
   if (sourceDomain !== SCCP_DOMAIN_ETH) {
     throw new RangeError("sourceDomain must be ETH");
   }
+  const fromSyncPeriod = normalizeUnsignedBigInt(
+    strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+    "fromSyncPeriod",
+  );
+  const toSyncPeriod = normalizeUnsignedBigInt(
+    strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+    "toSyncPeriod",
+  );
+  const transitionSlot = normalizeUnsignedBigInt(
+    strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
+    "transitionSlot",
+  );
+  requireEthMainnetTransitionPeriods(fromSyncPeriod, toSyncPeriod, transitionSlot);
   out = writeU32Le(out, sourceDomain);
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(
-      strictResultField(input, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
-      "fromSyncPeriod",
-    ),
-  );
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(strictResultField(input, "toSyncPeriod", "toSyncPeriod", "to_sync_period"), "toSyncPeriod"),
-  );
-  out = writeU64Le(
-    out,
-    normalizeUnsignedBigInt(
-      strictResultField(input, "transitionSlot", "transitionSlot", "transition_slot"),
-      "transitionSlot",
-    ),
-  );
+  out = writeU64Le(out, fromSyncPeriod);
+  out = writeU64Le(out, toSyncPeriod);
+  out = writeU64Le(out, transitionSlot);
   return concatBytes(
     out,
     hexToBytes(
@@ -10154,6 +12062,349 @@ const rlpList = (fields) => {
   const payload = concatBytes(...fields);
   return concatBytes(encodeRlpLength(payload.length, 0xc0, 0xf7), payload);
 };
+
+const minimalBigEndianBytes = (value, label) => {
+  let numeric = normalizeUnsignedBigInt(value, label);
+  if (numeric === 0n) {
+    return new Uint8Array();
+  }
+  const out = [];
+  while (numeric > 0n) {
+    out.unshift(Number(numeric & 0xffn));
+    numeric >>= 8n;
+  }
+  return Uint8Array.from(out);
+};
+
+const rlpEncodeValue = (value, label = "RLP value") => {
+  if (value instanceof Uint8Array) {
+    return rlpBytes(value);
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return rlpBytes(toBytes(value, label));
+  }
+  if (Array.isArray(value)) {
+    return rlpList(value.map((item, index) => rlpEncodeValue(item, `${label}[${index}]`)));
+  }
+  throw new TypeError(`${label} must be bytes or an array`);
+};
+
+const evmReceiptType = (receipt) => {
+  const typeInput = receipt.type;
+  if (typeInput === undefined || typeInput === null) {
+    return null;
+  }
+  const receiptType = requireEthereumRpcQuantity(typeInput, "receipt.type");
+  if (receiptType === 0n) {
+    return null;
+  }
+  if (receiptType > 0x7fn) {
+    throw new RangeError("typed receipt type must fit one byte below 0x80");
+  }
+  if (![1n, 2n, 3n, 4n].includes(receiptType)) {
+    throw new RangeError(
+      "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+    );
+  }
+  return Number(receiptType);
+};
+
+const evmReceiptLogsForRlp = (receipt) => {
+  const logs = receipt.logs;
+  if (!Array.isArray(logs)) {
+    throw new TypeError("receipt.logs must be an array");
+  }
+  return logs.map((log, index) => {
+    if (!log || typeof log !== "object" || Array.isArray(log)) {
+      throw new TypeError(`receipt.logs[${index}] must be an object`);
+    }
+    if (log.removed === true) {
+      throw new TypeError(`receipt.logs[${index}] must not be removed`);
+    }
+    const topics = log.topics;
+    if (!Array.isArray(topics)) {
+      throw new TypeError(`receipt.logs[${index}].topics must be an array`);
+    }
+    if (topics.length > 4) {
+      throw new RangeError(`receipt.logs[${index}].topics must contain at most 4 entries`);
+    }
+    return [
+      hexToBytes(
+        requireEthereumRpcHexData(
+          log.address,
+          `receipt.logs[${index}].address`,
+          20,
+          { nonzero: false },
+        ),
+        `receipt.logs[${index}].address`,
+        20,
+      ),
+      topics.map((topic, topicIndex) =>
+        hexToBytes(
+          requireEthereumRpcHexData(
+            topic,
+            `receipt.logs[${index}].topics[${topicIndex}]`,
+            32,
+            { nonzero: false },
+          ),
+          `receipt.logs[${index}].topics[${topicIndex}]`,
+          32,
+        ),
+      ),
+      requireEthereumRpcHexBytes(
+        log.data,
+        `receipt.logs[${index}].data`,
+        null,
+        { nonzero: false, allowEmpty: true },
+      ),
+    ];
+  });
+};
+
+export function canonicalEvmReceiptRlp(receipt) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw new TypeError("receipt must be an object");
+  }
+  const status = requireEthereumRpcQuantity(receipt.status, "receipt.status");
+  if (status !== 0n && status !== 1n) {
+    throw new RangeError("receipt.status must be 0x0 or 0x1");
+  }
+  const payload = rlpEncodeValue(
+    [
+      minimalBigEndianBytes(status, "receipt.status"),
+      minimalBigEndianBytes(
+        requireEthereumRpcQuantity(receipt.cumulativeGasUsed, "receipt.cumulativeGasUsed"),
+        "receipt.cumulativeGasUsed",
+      ),
+      hexToBytes(
+        requireEthereumRpcHexData(
+          receipt.logsBloom,
+          "receipt.logsBloom",
+          256,
+          { nonzero: false },
+        ),
+        "receipt.logsBloom",
+        256,
+      ),
+      evmReceiptLogsForRlp(receipt),
+    ],
+    "receipt",
+  );
+  const receiptType = evmReceiptType(receipt);
+  return receiptType === null ? payload : concatBytes(Uint8Array.from([receiptType]), payload);
+}
+
+const encodeTrieCompactPath = (nibbles, { leaf }) => {
+  for (const nibble of nibbles) {
+    if (!Number.isInteger(nibble) || nibble < 0 || nibble > 15) {
+      throw new RangeError("trie path nibble out of range");
+    }
+  }
+  const flags = leaf ? 2 : 0;
+  const bytes = [];
+  let start = 0;
+  if (nibbles.length % 2 === 1) {
+    bytes.push(((flags + 1) << 4) | nibbles[0]);
+    start = 1;
+  } else {
+    bytes.push(flags << 4);
+  }
+  for (let index = start; index < nibbles.length; index += 2) {
+    bytes.push((nibbles[index] << 4) | nibbles[index + 1]);
+  }
+  return Uint8Array.from(bytes);
+};
+
+const bytesToNibbles = (bytes) => {
+  const nibbles = [];
+  for (const byte of bytes) {
+    nibbles.push(byte >> 4, byte & 0x0f);
+  }
+  return Object.freeze(nibbles);
+};
+
+const longestCommonNibblePrefix = (paths) => {
+  if (paths.length === 0) {
+    return [];
+  }
+  const prefix = [...paths[0]];
+  for (const path of paths.slice(1)) {
+    let index = 0;
+    const limit = Math.min(prefix.length, path.length);
+    while (index < limit && prefix[index] === path[index]) {
+      index += 1;
+    }
+    prefix.length = index;
+    if (prefix.length === 0) {
+      break;
+    }
+  }
+  return prefix;
+};
+
+const buildTrieNode = (items) => {
+  if (items.length === 0) {
+    throw new TypeError("cannot build an empty trie node");
+  }
+  if (items.length === 1) {
+    return { kind: "leaf", path: items[0].path, value: items[0].value, rlp: null };
+  }
+  const prefix = longestCommonNibblePrefix(items.map((item) => item.path));
+  if (prefix.length > 0) {
+    return {
+      kind: "extension",
+      path: prefix,
+      child: buildTrieNode(items.map((item) => ({
+        path: item.path.slice(prefix.length),
+        value: item.value,
+      }))),
+      rlp: null,
+    };
+  }
+  const grouped = Array.from({ length: 16 }, () => []);
+  let branchValue = new Uint8Array();
+  for (const item of items) {
+    if (item.path.length === 0) {
+      branchValue = item.value;
+    } else {
+      grouped[item.path[0]].push({ path: item.path.slice(1), value: item.value });
+    }
+  }
+  return {
+    kind: "branch",
+    value: branchValue,
+    children: grouped.map((group) => (group.length === 0 ? null : buildTrieNode(group))),
+    rlp: null,
+  };
+};
+
+const encodeTrieNode = (node) => {
+  if (node.rlp !== null) {
+    return node.rlp;
+  }
+  if (node.kind === "leaf") {
+    node.rlp = rlpEncodeValue([
+      encodeTrieCompactPath(node.path, { leaf: true }),
+      node.value,
+    ]);
+  } else if (node.kind === "extension") {
+    node.rlp = rlpEncodeValue([
+      encodeTrieCompactPath(node.path, { leaf: false }),
+      trieNodeReference(node.child),
+    ]);
+  } else if (node.kind === "branch") {
+    node.rlp = rlpEncodeValue([
+      ...node.children.map((child) => (child === null ? new Uint8Array() : trieNodeReference(child))),
+      node.value,
+    ]);
+  } else {
+    throw new TypeError(`unknown trie node kind ${node.kind}`);
+  }
+  return node.rlp;
+};
+
+const trieNodeReference = (node) => {
+  const rlp = encodeTrieNode(node);
+  return rlp.length < 32 ? rlp : keccak_256(rlp);
+};
+
+const collectTrieProofNodes = (node, path) => {
+  const proof = [encodeTrieNode(node)];
+  if (node.kind === "leaf") {
+    if (node.path.length !== path.length || node.path.some((nibble, index) => nibble !== path[index])) {
+      throw new TypeError("receipt trie proof path does not end at requested receipt");
+    }
+    return proof;
+  }
+  if (node.kind === "extension") {
+    if (
+      path.length < node.path.length ||
+      node.path.some((nibble, index) => nibble !== path[index])
+    ) {
+      throw new TypeError("receipt trie proof path does not match extension");
+    }
+    return proof.concat(collectTrieProofNodes(node.child, path.slice(node.path.length)));
+  }
+  if (node.kind === "branch") {
+    if (path.length === 0) {
+      if (node.value.length === 0) {
+        throw new TypeError("receipt trie branch has no value for requested receipt");
+      }
+      return proof;
+    }
+    const child = node.children[path[0]];
+    if (child === null) {
+      throw new TypeError("receipt trie proof path is missing child");
+    }
+    return proof.concat(collectTrieProofNodes(child, path.slice(1)));
+  }
+  throw new TypeError(`unknown trie node kind ${node.kind}`);
+};
+
+export function evmReceiptTrieKey(transactionIndex) {
+  const index = normalizeUnsignedBigIntMax(
+    transactionIndex,
+    "transactionIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return bytesToHex(rlpEncodeValue(minimalBigEndianBytes(index, "transactionIndex")));
+}
+
+export function buildEvmReceiptTrieProofFromReceipts(receipts, options = {}) {
+  if (!Array.isArray(receipts) || receipts.length === 0) {
+    throw new TypeError("blockReceipts must be a non-empty array");
+  }
+  if (receipts.length > SCCP_EVM_MAX_BLOCK_RECEIPTS) {
+    throw new RangeError(`blockReceipts must contain at most ${SCCP_EVM_MAX_BLOCK_RECEIPTS} entries`);
+  }
+  const transactionIndex = normalizeUnsignedBigIntMax(
+    strictResultField(options, "transactionIndex", "transactionIndex", "transaction_index"),
+    "transactionIndex",
+    BigInt(receipts.length - 1),
+    "block receipt index",
+  );
+  const items = [];
+  let receiptRlp;
+  for (const [index, receipt] of receipts.entries()) {
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      throw new TypeError(`blockReceipts[${index}] must be an object`);
+    }
+    const receiptIndex = requireEthereumRpcQuantity(
+      receipt.transactionIndex ?? receipt.transaction_index,
+      `blockReceipts[${index}].transactionIndex`,
+    );
+    if (receiptIndex !== BigInt(index)) {
+      throw new TypeError("block receipt transactionIndex must match receipt order");
+    }
+    const encodedReceipt = canonicalEvmReceiptRlp(receipt);
+    if (receiptIndex === transactionIndex) {
+      receiptRlp = encodedReceipt;
+    }
+    const key = rlpEncodeValue(minimalBigEndianBytes(BigInt(index), "transactionIndex"));
+    items.push({ path: bytesToNibbles(key), value: encodedReceipt });
+  }
+  const root = buildTrieNode(items);
+  const receiptsRoot = keccak_256(encodeTrieNode(root));
+  const receiptTrieKey = rlpEncodeValue(minimalBigEndianBytes(transactionIndex, "transactionIndex"));
+  const receiptTrieProofNodes = collectTrieProofNodes(root, bytesToNibbles(receiptTrieKey));
+  if (receiptTrieProofNodes.length > SCCP_TRON_MAX_MPT_PROOF_NODES) {
+    throw new RangeError(`receiptTrieProofNodes must contain at most ${SCCP_TRON_MAX_MPT_PROOF_NODES} entries`);
+  }
+  for (const [index, node] of receiptTrieProofNodes.entries()) {
+    if (node.length === 0 || node.length > SCCP_TRON_MAX_MPT_NODE_BYTES) {
+      throw new RangeError(
+        `receiptTrieProofNodes[${index}] must contain 1..${SCCP_TRON_MAX_MPT_NODE_BYTES} bytes`,
+      );
+    }
+  }
+  return Object.freeze({
+    receiptsRoot: bytesToHex(receiptsRoot),
+    receiptRlp: bytesToHex(receiptRlp),
+    receiptTrieKey: bytesToHex(receiptTrieKey),
+    receiptTrieProofNodes: Object.freeze(receiptTrieProofNodes.map((node) => copyBytes(node))),
+  });
+}
 
 export function bscValidatorSetPayloadFromHeaderRlp(headerRlp) {
   const fields = rlpListByteFields(headerRlp, "headerRlp");
@@ -18369,7 +20620,7 @@ export function tonValidatorSetTransitionSignatureHash(input) {
 }
 
 export function canonicalEvmReceiptRootMptValue(receiptRoot) {
-  const root = hexToBytes(receiptRoot, "receiptRoot", 32);
+  const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
   const value = rlpList([
     rlpBytes(textEncoder.encode(SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1)),
     rlpBytes(root),
@@ -18532,6 +20783,232 @@ const protobufFieldNumber = (key, label) => {
   }
   return Number(fieldNumber);
 };
+
+const normalizeTronAddress20Bytes = (value, label) => {
+  const bytes = toBytes(value, label);
+  if (bytes.length === 21 && bytes[0] === 0x41 && isNonZeroTronAddress(bytes)) {
+    return bytes.slice(1);
+  }
+  if (bytes.length === 20 && bytes.some((byte) => byte !== 0)) {
+    return Uint8Array.from(bytes);
+  }
+  throw new TypeError(`${label} must be a non-zero TRON address as 20 bytes or 0x41-prefixed 21 bytes`);
+};
+
+const normalizeOptionalTronAddress20Bytes = (options, label, ...names) => {
+  const selected = strictOptionalResultField(options, label, ...names);
+  return selected === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : normalizeTronAddress20Bytes(selected, label);
+};
+
+const parseTronTriggerSmartContractParameter = (trigger, label) => {
+  const cursor = { offset: 0 };
+  let ownerAddress = null;
+  let contractAddress = null;
+  let data = null;
+  let callValueSeen = false;
+  let callTokenValueSeen = false;
+  let tokenIdSeen = false;
+  while (cursor.offset < trigger.length) {
+    const key = readCanonicalProtobufVarint(trigger, cursor, label);
+    const fieldNumber = protobufFieldNumber(key, label);
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && ownerAddress === null) {
+      ownerAddress = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 2 && wireType === 2 && contractAddress === null) {
+      contractAddress = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 3 && wireType === 0 && !callValueSeen) {
+      callValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} call_value must be zero`);
+      }
+    } else if (fieldNumber === 4 && wireType === 2 && data === null) {
+      data = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 5 && wireType === 0 && !callTokenValueSeen) {
+      callTokenValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} call_token_value must be zero`);
+      }
+    } else if (fieldNumber === 6 && wireType === 0 && !tokenIdSeen) {
+      tokenIdSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} token_id must be zero`);
+      }
+    } else {
+      throw new TypeError(`${label} contains an unsupported protobuf field`);
+    }
+  }
+  if (!isNonZeroTronAddress(ownerAddress ?? new Uint8Array())) {
+    throw new TypeError(`${label} owner_address must be a non-zero TRON address`);
+  }
+  if (!isNonZeroTronAddress(contractAddress ?? new Uint8Array())) {
+    throw new TypeError(`${label} contract_address must be a non-zero TRON address`);
+  }
+  if (data === null || data.length === 0) {
+    throw new TypeError(`${label} data must not be empty`);
+  }
+  return {
+    ownerAddress,
+    contractAddress,
+    data,
+  };
+};
+
+const parseTronTriggerSmartContractContract = (contract, label) => {
+  const cursor = { offset: 0 };
+  let contractType = null;
+  let parameter = null;
+  while (cursor.offset < contract.length) {
+    const key = readCanonicalProtobufVarint(contract, cursor, label);
+    const fieldNumber = protobufFieldNumber(key, label);
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 0 && contractType === null) {
+      contractType = readCanonicalProtobufVarint(contract, cursor, label);
+    } else if (fieldNumber === 2 && wireType === 2 && parameter === null) {
+      parameter = readProtobufBytesField(contract, cursor, label);
+    } else {
+      throw new TypeError(`${label} contains an unsupported protobuf field`);
+    }
+  }
+  if (contractType !== 31n) {
+    throw new TypeError(`${label} contract must be TriggerSmartContract`);
+  }
+  const trigger = parameter ? readTronProtobufAnyValue(parameter) : null;
+  if (trigger === null) {
+    throw new TypeError(`${label} TriggerSmartContract parameter type_url mismatch`);
+  }
+  return parseTronTriggerSmartContractParameter(
+    trigger,
+    `${label}.TriggerSmartContract`,
+  );
+};
+
+export function parseTronTriggerSmartContractRawData(rawDataInput, options = {}) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("TRON TriggerSmartContract raw-data parse options must be an object");
+  }
+  const rawData = toBytes(rawDataInput, "rawData");
+  if (rawData.length === 0 || rawData.length > SCCP_TRON_MAX_TRANSACTION_BYTES) {
+    throw new RangeError(
+      `rawData must contain 1..${SCCP_TRON_MAX_TRANSACTION_BYTES} bytes`,
+    );
+  }
+  const expectedOwnerAddress = normalizeOptionalTronAddress20Bytes(
+    options,
+    "expectedOwnerAddress",
+    "expectedOwnerAddress",
+    "expected_owner_address",
+    "ownerAddress",
+    "owner_address",
+  );
+  const expectedContractAddress = normalizeOptionalTronAddress20Bytes(
+    options,
+    "expectedContractAddress",
+    "expectedContractAddress",
+    "expected_contract_address",
+    "contractAddress",
+    "contract_address",
+  );
+  const expectedCallDataInput = strictOptionalResultField(
+    options,
+    "expectedCallData",
+    "expectedCallData",
+    "expected_call_data",
+    "callData",
+    "call_data",
+  );
+  const expectedCallData = expectedCallDataInput === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : toBytes(expectedCallDataInput, "expectedCallData");
+
+  const cursor = { offset: 0 };
+  let refBlockBytesSeen = false;
+  let refBlockNum = null;
+  let refBlockHashSeen = false;
+  let expirationMs = null;
+  let timestampMs = null;
+  let feeLimit = null;
+  let parsedContract = null;
+  let contractCount = 0;
+  while (cursor.offset < rawData.length) {
+    const key = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    const fieldNumber = protobufFieldNumber(key, "rawData");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && !refBlockBytesSeen) {
+      refBlockBytesSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 2 || value.every((byte) => byte === 0)) {
+        throw new TypeError("rawData ref_block_bytes must be two non-zero bytes");
+      }
+    } else if (fieldNumber === 3 && wireType === 0 && refBlockNum === null) {
+      refBlockNum = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    } else if (fieldNumber === 4 && wireType === 2 && !refBlockHashSeen) {
+      refBlockHashSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 8 || value.every((byte) => byte === 0)) {
+        throw new TypeError("rawData ref_block_hash must be eight non-zero bytes");
+      }
+    } else if (fieldNumber === 8 && wireType === 0 && expirationMs === null) {
+      expirationMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (expirationMs === 0n) throw new TypeError("rawData expiration must be non-zero");
+    } else if (fieldNumber === 11 && wireType === 2) {
+      contractCount += 1;
+      if (contractCount > 1) {
+        throw new TypeError("rawData must contain exactly one contract");
+      }
+      parsedContract = parseTronTriggerSmartContractContract(
+        readProtobufBytesField(rawData, cursor, "rawData"),
+        "rawData.contract",
+      );
+    } else if (fieldNumber === 14 && wireType === 0 && timestampMs === null) {
+      timestampMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (timestampMs === 0n) throw new TypeError("rawData timestamp must be non-zero");
+    } else if (fieldNumber === 18 && wireType === 0 && feeLimit === null) {
+      feeLimit = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (feeLimit === 0n) throw new TypeError("rawData fee_limit must be non-zero");
+    } else {
+      throw new TypeError("rawData contains an unsupported protobuf field");
+    }
+  }
+  if (
+    !refBlockBytesSeen ||
+    !refBlockHashSeen ||
+    expirationMs === null ||
+    timestampMs === null ||
+    feeLimit === null ||
+    contractCount !== 1 ||
+    parsedContract === null
+  ) {
+    throw new TypeError("rawData must be a canonical TRON TriggerSmartContract transaction");
+  }
+  if (expirationMs <= timestampMs) {
+    throw new TypeError("rawData expiration must be after timestamp");
+  }
+  const ownerAddress20 = parsedContract.ownerAddress.subarray(1);
+  const contractAddress20 = parsedContract.contractAddress.subarray(1);
+  if (expectedOwnerAddress !== null && !bytesEqual(ownerAddress20, expectedOwnerAddress)) {
+    throw new TypeError("rawData owner_address does not match expectedOwnerAddress");
+  }
+  if (expectedContractAddress !== null && !bytesEqual(contractAddress20, expectedContractAddress)) {
+    throw new TypeError("rawData contract_address does not match expectedContractAddress");
+  }
+  if (expectedCallData !== null && !bytesEqual(parsedContract.data, expectedCallData)) {
+    throw new TypeError("rawData call data does not match expectedCallData");
+  }
+  return Object.freeze({
+    rawDataHash: bytesToHex(sha256(rawData)),
+    ownerAddress: bytesToHex(parsedContract.ownerAddress),
+    ownerAddress20: bytesToHex(ownerAddress20),
+    contractAddress: bytesToHex(parsedContract.contractAddress),
+    contractAddress20: bytesToHex(contractAddress20),
+    callData: bytesToHex(parsedContract.data),
+    refBlockNum: refBlockNum === null ? null : refBlockNum.toString(10),
+    timestampMs: timestampMs.toString(10),
+    expirationMs: expirationMs.toString(10),
+    feeLimit: feeLimit.toString(10),
+  });
+}
 
 const tronTransactionResultSuccess = (result) => {
   const cursor = { offset: 0 };
@@ -22740,7 +25217,11 @@ const normalizeTairaXorRouteIdHash = (input) => {
     "route_id_hash",
   );
   if (routeIdHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    return normalizeNonZeroHex32(routeIdHash, "routeIdHash");
+    const normalizedRouteIdHash = normalizeNonZeroHex32(routeIdHash, "routeIdHash");
+    if (normalizedRouteIdHash !== tairaXorRouteIdHash()) {
+      throw new TypeError("routeIdHash must match taira_tron_xor");
+    }
+    return normalizedRouteIdHash;
   }
   const routeId = strictOptionalResultField(input, "routeId", "routeId", "route_id");
   return tairaXorRouteIdHash(
@@ -22756,12 +25237,25 @@ const normalizeTairaXorAssetKeyHash = (input) => {
     "asset_key_hash",
   );
   if (assetKeyHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    return normalizeNonZeroHex32(assetKeyHash, "assetKeyHash");
+    const normalizedAssetKeyHash = normalizeNonZeroHex32(assetKeyHash, "assetKeyHash");
+    if (normalizedAssetKeyHash !== tairaXorAssetKeyHash()) {
+      throw new TypeError("assetKeyHash must match xor");
+    }
+    return normalizedAssetKeyHash;
   }
   const assetKey = strictOptionalResultField(input, "assetKey", "assetKey", "asset_key");
   return tairaXorAssetKeyHash(
     assetKey === SCCP_OPTIONAL_FIELD_MISSING ? SCCP_TAIRA_XOR_ASSET_KEY_V1 : assetKey,
   );
+};
+
+const requireTairaRecipientBytesWithinLimit = (bytes, label) => {
+  if (bytes.length > SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1) {
+    throw new RangeError(
+      `${label} must be at most ${SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1} bytes`,
+    );
+  }
+  return bytes;
 };
 
 const normalizeTairaRecipientHash = (input) => {
@@ -22783,6 +25277,7 @@ const normalizeTairaRecipientHash = (input) => {
   if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
     const bytes = toBytes(recipientBytes, "tairaRecipientBytes");
     if (bytes.length === 0) throw new TypeError("tairaRecipientBytes must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipientBytes");
     return bytesToHex(keccak_256(bytes));
   }
   const recipient = strictResultField(
@@ -22796,15 +25291,19 @@ const normalizeTairaRecipientHash = (input) => {
   if (typeof recipient === "string" && recipient.trim().toLowerCase().startsWith("0x")) {
     const bytes = toBytes(recipient, "tairaRecipient");
     if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     return bytesToHex(keccak_256(bytes));
   }
   if (typeof recipient !== "string") {
     const bytes = toBytes(recipient, "tairaRecipient");
     if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     return bytesToHex(keccak_256(bytes));
   }
-  const text = normalizeNonEmptyString(recipient, "tairaRecipient");
-  return bytesToHex(keccak_256(textEncoder.encode(text)));
+  const text = normalizeCanonicalTairaAccountId(recipient, "tairaRecipient");
+  const bytes = textEncoder.encode(text);
+  requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
+  return bytesToHex(keccak_256(bytes));
 };
 
 const normalizeTairaRecipientBytes = (input) => {
@@ -22817,7 +25316,7 @@ const normalizeTairaRecipientBytes = (input) => {
   if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
     const bytes = toBytes(recipientBytes, "tairaRecipientBytes");
     if (bytes.length === 0) throw new TypeError("tairaRecipientBytes must not be empty");
-    return bytes;
+    return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipientBytes");
   }
   const recipient = strictResultField(
     input,
@@ -22831,52 +25330,68 @@ const normalizeTairaRecipientBytes = (input) => {
     if (recipient.trim().toLowerCase().startsWith("0x")) {
       const bytes = toBytes(recipient, "tairaRecipient");
       if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
-      return bytes;
+      return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     }
-    return textEncoder.encode(normalizeNonEmptyString(recipient, "tairaRecipient"));
+    return requireTairaRecipientBytesWithinLimit(
+      textEncoder.encode(normalizeCanonicalTairaAccountId(recipient, "tairaRecipient")),
+      "tairaRecipient",
+    );
   }
   const bytes = toBytes(recipient, "tairaRecipient");
   if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
-  return bytes;
+  return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
+};
+
+const normalizeTairaRecipientAccountText = (input) => {
+  const recipientBytes = strictOptionalResultField(
+    input,
+    "tairaRecipientBytes",
+    "tairaRecipientBytes",
+    "taira_recipient_bytes",
+  );
+  if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError(
+      "tairaRecipientBytes is not accepted here; pass a canonical TAIRA I105 account id string.",
+    );
+  }
+  const recipient = strictResultField(
+    input,
+    "tairaRecipient",
+    "tairaRecipient",
+    "taira_recipient",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (typeof recipient !== "string") {
+    throw new TypeError("tairaRecipient must be a canonical TAIRA I105 account id string");
+  }
+  if (recipient.trim().toLowerCase().startsWith("0x")) {
+    throw new TypeError("tairaRecipient must be a canonical TAIRA I105 account id string");
+  }
+  return normalizeCanonicalTairaAccountId(recipient, "tairaRecipient");
 };
 
 export function tairaXorRouteIdHash(routeId = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
-  return textHash32(routeId, "routeId");
+  const hash = textHash32(routeId, "routeId");
+  if (routeId !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("routeId must be taira_tron_xor");
+  }
+  return hash;
 }
 
 export function tairaXorAssetKeyHash(assetKey = SCCP_TAIRA_XOR_ASSET_KEY_V1) {
-  return textHash32(assetKey, "assetKey");
+  const hash = textHash32(assetKey, "assetKey");
+  if (assetKey !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("assetKey must be xor");
+  }
+  return hash;
 }
 
-export function tairaXorTransferPayloadHash(input) {
+export function tairaXorTransferPayloadHash(input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("TAIRA XOR transfer payload input must be an object");
   }
-  const routeIdHash = normalizeTairaXorRouteIdHash(input);
-  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
-  const bridgeAddress = strictResultField(
-    input,
-    "bridgeAddress",
-    "bridgeAddress",
-    "bridge_address",
-  );
-  const recipientAddress = strictResultField(
-    input,
-    "recipientAddress",
-    "recipientAddress",
-    "recipient_address",
-    "recipient",
-  );
-  const amount = strictResultField(input, "amount", "amount");
-  const payload = concatBytes(
-    keccak_256(textEncoder.encode(SCCP_TAIRA_XOR_TRANSFER_PAYLOAD_LABEL_V1)),
-    hexToBytes(routeIdHash, "routeIdHash", 32),
-    hexToBytes(assetKeyHash, "assetKeyHash", 32),
-    tronAddressAbiWord(bridgeAddress, "bridgeAddress"),
-    tronAddressAbiWord(recipientAddress, "recipientAddress"),
-    abiWordU256(amount, "amount"),
-  );
-  return bytesToHex(keccak_256(payload));
+  return sccpPayloadHash(tairaXorCanonicalTransferPayloadBytes(input), options);
 }
 
 export function tairaXorBurnSourceEventDigest(input) {
@@ -22926,33 +25441,53 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   const publicInputs = normalizeSccpMessageTransparentPublicInputs(
     strictResultField(input, "publicInputs", "publicInputs", "public_inputs"),
   );
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_TRON) {
+    throw new TypeError("publicInputs.targetDomain must be TRON");
+  }
   const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
   const statementHash = normalizeNonZeroHex32(
     strictResultField(input, "statementHash", "statementHash", "statement_hash"),
     "statementHash",
   );
-  const routeIdHash = normalizeTairaXorRouteIdHash(input);
-  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
-  const recipientAddress = strictResultField(
+  const canonicalPayloadInput = strictOptionalResultField(
     input,
-    "recipientAddress",
-    "recipientAddress",
-    "recipient_address",
-    "recipient",
+    "canonicalPayloadBytes",
+    "canonicalPayloadBytes",
+    "canonical_payload_bytes",
+    "canonicalPayloadHex",
+    "canonical_payload_hex",
+    "payloadBytes",
+    "payload_bytes",
   );
-  const amount = strictResultField(input, "amount", "amount");
-  const proofBytesOffset = 12 * 32;
+  const canonicalPayloadBytes =
+    canonicalPayloadInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? tairaXorCanonicalTransferPayloadBytes(input)
+      : toBytes(canonicalPayloadInput, "canonicalPayloadBytes");
+  const parsedPayload = parseTairaXorCanonicalTransferPayloadBytes(canonicalPayloadBytes);
+  requireOptionalTairaXorPayloadInputMatches(input, parsedPayload);
+  const expectedMessageId = bytesToHex(
+    prefixedKeccak(SCCP_MSG_PREFIX_TRANSFER_V1, canonicalPayloadBytes),
+  );
+  if (publicInputs.messageId !== expectedMessageId) {
+    throw new TypeError("publicInputs.messageId must match canonicalPayloadBytes");
+  }
+  const expectedPayloadHash = sccpPayloadHash(canonicalPayloadBytes);
+  if (publicInputs.payloadHash !== expectedPayloadHash) {
+    throw new TypeError("publicInputs.payloadHash must match canonicalPayloadBytes");
+  }
+  const proofBytesTail = abiDynamicBytes(proofBytes, "proofBytes");
+  const canonicalPayloadTail = abiDynamicBytes(canonicalPayloadBytes, "canonicalPayloadBytes");
+  const proofBytesOffset = 9 * 32;
+  const canonicalPayloadBytesOffset = proofBytesOffset + proofBytesTail.length;
   return bytesToHex(
     concatBytes(
       TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_BYTES_V1,
       abiWordU256(proofBytesOffset, "proofBytes.offset"),
       ...publicInputWords,
       hexToBytes(statementHash, "statementHash", 32),
-      hexToBytes(routeIdHash, "routeIdHash", 32),
-      hexToBytes(assetKeyHash, "assetKeyHash", 32),
-      tronAddressAbiWord(recipientAddress, "recipientAddress"),
-      abiWordU256(amount, "amount"),
-      abiDynamicBytes(proofBytes, "proofBytes"),
+      abiWordU256(canonicalPayloadBytesOffset, "canonicalPayloadBytes.offset"),
+      proofBytesTail,
+      canonicalPayloadTail,
     ),
   );
 }
@@ -22976,6 +25511,773 @@ export function tairaXorBurnToTairaCallData(input) {
       abiDynamicBytes(tairaRecipient, "tairaRecipient"),
     ),
   );
+}
+
+export function tairaXorBurnToTairaAccountCallData(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR burn account call input must be an object");
+  }
+  const routeIdHash = normalizeTairaXorRouteIdHash(input);
+  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
+  const tairaRecipient = normalizeTairaRecipientAccountText(input);
+  const amount = strictResultField(input, "amount", "amount");
+  return tairaXorBurnToTairaCallData({
+    routeIdHash,
+    assetKeyHash,
+    tairaRecipient,
+    amount,
+  });
+}
+
+const requirePlainObject = (value, label) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value;
+};
+
+const optionalStringAlias = (record, label, ...names) => {
+  const value = strictOptionalResultField(record, label, ...names);
+  if (value === SCCP_OPTIONAL_FIELD_MISSING || value === undefined || value === null) {
+    return "";
+  }
+  return normalizeNonEmptyString(value, label);
+};
+
+const normalizeTairaXorTronToTairaSettlementFragment = (value, label) => {
+  if (
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null
+  ) {
+    return {};
+  }
+  const settlement = requirePlainObject(value, label);
+  const entrypoint = optionalStringAlias(settlement, `${label}.entrypoint`, "entrypoint");
+  if (entrypoint && entrypoint !== "finalize_inbound") {
+    throw new TypeError(`${label}.entrypoint must be finalize_inbound`);
+  }
+  const route = optionalStringAlias(settlement, `${label}.route`, "route", "route_id");
+  if (route && route !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label}.route must be taira_tron_xor`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadJson") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_bytes") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadBytes")
+  ) {
+    throw new TypeError(`${label} payload must be generated by Torii`);
+  }
+  return settlement;
+};
+
+const normalizeTairaXorTronEventName = (value, label = "eventName") =>
+  normalizeNonEmptyString(value, label)
+    .replace(/[^a-z0-9]/giu, "")
+    .toLowerCase();
+
+export function isTairaXorTronBurnStartedEventName(value) {
+  try {
+    return ["tairaxorburnstarted", "burntotaira"].includes(
+      normalizeTairaXorTronEventName(value),
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+const readTairaXorTronEventResult = (event) => {
+  const result = strictOptionalResultField(
+    event,
+    "event.result",
+    "result",
+    "args",
+    "returnValues",
+  );
+  return result === SCCP_OPTIONAL_FIELD_MISSING ||
+    result === undefined ||
+    result === null
+    ? null
+    : requirePlainObject(result, "event.result");
+};
+
+const readTairaXorTronEventField = (event, label, ...names) => {
+  const result = readTairaXorTronEventResult(event);
+  const resultValue = result
+    ? strictOptionalResultField(result, label, ...names)
+    : SCCP_OPTIONAL_FIELD_MISSING;
+  const eventValue = strictOptionalResultField(event, label, ...names);
+  if (
+    resultValue !== SCCP_OPTIONAL_FIELD_MISSING &&
+    eventValue !== SCCP_OPTIONAL_FIELD_MISSING &&
+    resultValue !== eventValue
+  ) {
+    throw new TypeError(`${label} must not conflict between event and result`);
+  }
+  const selected =
+    resultValue !== SCCP_OPTIONAL_FIELD_MISSING ? resultValue : eventValue;
+  return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+};
+
+const requireTairaXorTronEventField = (event, label, ...names) => {
+  const selected = readTairaXorTronEventField(event, label, ...names);
+  if (selected === undefined || selected === null || selected === "") {
+    throw new TypeError(`TRON burn event is missing ${label}`);
+  }
+  return selected;
+};
+
+const normalizeTairaXorTronEventAddressPayload = (value, label) => {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text !== value) {
+      throw new TypeError(`${label} must be canonical`);
+    }
+    const hexText = text.replace(/^0x/i, "");
+    if (/^[0-9a-fA-F]{64}$/u.test(hexText)) {
+      if (!hexText.startsWith("0".repeat(24))) {
+        throw new TypeError(`${label} must be a left-padded TRON address`);
+      }
+      return normalizeTronAddressPayload(`0x41${hexText.slice(24)}`, label);
+    }
+  }
+  return normalizeTronAddressPayload(value, label);
+};
+
+const normalizeTairaXorTronEventUint = (value, label, max, typeLabel) => {
+  const normalized =
+    typeof value === "string" && /^0x[0-9a-fA-F]+$/u.test(value)
+      ? BigInt(value)
+      : normalizeUnsignedBigIntMax(value, label, max, typeLabel);
+  if (normalized > max) {
+    throw new RangeError(`${label} must fit ${typeLabel}`);
+  }
+  return normalized;
+};
+
+const decodeTairaXorEventRecipientText = (value, label) => {
+  if (typeof value === "string" && value.startsWith("0x")) {
+    return normalizeCanonicalTairaAccountId(
+      textDecoder.decode(toBytes(value, label)),
+      label,
+    );
+  }
+  if (typeof value === "string") {
+    return normalizeCanonicalTairaAccountId(value, label);
+  }
+  return normalizeCanonicalTairaAccountId(
+    textDecoder.decode(toBytes(value, label)),
+    label,
+  );
+};
+
+export function bindTairaXorTronBurnStartedEvent(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TRON burn event binding input must be an object",
+    );
+  }
+  const event = requirePlainObject(
+    strictResultField(input, "event", "event"),
+    "event",
+  );
+  const eventName = normalizeTairaXorTronEventName(
+    requireTairaXorTronEventField(
+      event,
+      "event name",
+      "event_name",
+      "eventName",
+      "name",
+    ),
+    "event name",
+  );
+  if (!["tairaxorburnstarted", "burntotaira"].includes(eventName)) {
+    throw new TypeError("TRON event must be TairaXorBurnStarted");
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    requireTairaXorTronEventField(
+      event,
+      "source event digest",
+      "sourceEventDigest",
+      "source_event_digest",
+      "source_event_digest_hex",
+      "_sourceEventDigest",
+      "_source_event_digest",
+      "eventDigest",
+      "event_digest",
+      "0",
+    ),
+    "sourceEventDigest",
+  );
+  const expectedSourceEventDigest = strictOptionalResultField(
+    input,
+    "sourceEventDigest",
+    "sourceEventDigest",
+    "source_event_digest",
+    "expectedSourceEventDigest",
+    "expected_source_event_digest",
+  );
+  if (
+    expectedSourceEventDigest !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeNonZeroHex32(
+      expectedSourceEventDigest,
+      "expectedSourceEventDigest",
+    ) !== sourceEventDigest
+  ) {
+    throw new TypeError(
+      "TRON burn event sourceEventDigest must match the expected digest",
+    );
+  }
+
+  const routeIdHash = normalizeTairaXorRouteIdHash(input);
+  const eventRouteIdHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "route hash",
+      "routeIdHash",
+      "route_id_hash",
+      "submittedRouteIdHash",
+      "submitted_route_id_hash",
+      "_routeIdHash",
+      "_route_id_hash",
+      "5",
+    ),
+    "event.routeIdHash",
+  );
+  if (eventRouteIdHash !== routeIdHash) {
+    throw new TypeError("TRON burn event route hash must match taira_tron_xor");
+  }
+
+  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
+  const eventAssetKeyHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "asset hash",
+      "assetKeyHash",
+      "asset_key_hash",
+      "submittedAssetKeyHash",
+      "submitted_asset_key_hash",
+      "_assetKeyHash",
+      "_asset_key_hash",
+      "6",
+    ),
+    "event.assetKeyHash",
+  );
+  if (eventAssetKeyHash !== assetKeyHash) {
+    throw new TypeError("TRON burn event asset hash must match xor");
+  }
+
+  const burnerAddress = bytesToHex(
+    normalizeTairaXorTronEventAddressPayload(
+      requireTairaXorTronEventField(
+        event,
+        "burner address",
+        "burner",
+        "_burner",
+        "sender",
+        "_sender",
+        "from",
+        "_from",
+        "1",
+      ),
+      "event.burner",
+    ),
+  );
+  const expectedBurner = strictOptionalResultField(
+    input,
+    "burnerAddress",
+    "burnerAddress",
+    "burner_address",
+    "burner",
+    "tronSender",
+    "tron_sender",
+    "sender",
+  );
+  if (
+    expectedBurner !== SCCP_OPTIONAL_FIELD_MISSING &&
+    bytesToHex(normalizeTronAddressPayload(expectedBurner, "burnerAddress")) !==
+      burnerAddress
+  ) {
+    throw new TypeError(
+      "TRON burn event burner must match the expected TRON sender",
+    );
+  }
+
+  const amount = normalizeTairaXorTronEventUint(
+    requireTairaXorTronEventField(
+      event,
+      "amount",
+      "amount",
+      "_amount",
+      "value",
+      "_value",
+      "3",
+    ),
+    "event.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("event.amount must be greater than zero");
+  }
+  const expectedAmount = strictOptionalResultField(input, "amount", "amount");
+  if (
+    expectedAmount !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(
+      expectedAmount,
+      "amount",
+      SCCP_U128_MAX,
+      "u128",
+    ) !== amount
+  ) {
+    throw new TypeError(
+      "TRON burn event amount must match the expected bridge amount",
+    );
+  }
+
+  const nonce = normalizeTairaXorTronEventUint(
+    requireTairaXorTronEventField(
+      event,
+      "burn nonce",
+      "nonce",
+      "_nonce",
+      "burnNonce",
+      "burn_nonce",
+      "_burnNonce",
+      "_burn_nonce",
+      "4",
+    ),
+    "event.nonce",
+    (1n << 256n) - 1n,
+    "u256",
+  );
+
+  const tairaRecipient = decodeTairaXorEventRecipientText(
+    requireTairaXorTronEventField(
+      event,
+      "TAIRA recipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "_tairaRecipient",
+      "_taira_recipient",
+      "recipient",
+      "_recipient",
+      "7",
+    ),
+    "event.tairaRecipient",
+  );
+  const expectedRecipient = strictOptionalResultField(
+    input,
+    "tairaRecipient",
+    "tairaRecipient",
+    "taira_recipient",
+    "recipient",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (
+    expectedRecipient !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeCanonicalTairaAccountId(expectedRecipient, "tairaRecipient") !==
+      tairaRecipient
+  ) {
+    throw new TypeError(
+      "TRON burn event TAIRA recipient must match the expected account",
+    );
+  }
+
+  const recipientHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "TAIRA recipient hash",
+      "tairaRecipientHash",
+      "taira_recipient_hash",
+      "_tairaRecipientHash",
+      "_taira_recipient_hash",
+      "recipientHash",
+      "recipient_hash",
+      "2",
+    ),
+    "event.tairaRecipientHash",
+  );
+  const expectedRecipientHash = bytesToHex(
+    keccak_256(textEncoder.encode(tairaRecipient)),
+  );
+  if (recipientHash !== expectedRecipientHash) {
+    throw new TypeError(
+      "TRON burn event TAIRA recipient hash must match the recipient",
+    );
+  }
+
+  const contractAddress = readTairaXorTronEventField(
+    event,
+    "contract address",
+    "contract_address",
+    "contractAddress",
+    "caller_contract_address",
+    "callerContractAddress",
+  );
+  const bridgeAddress = strictOptionalResultField(
+    input,
+    "bridgeAddress",
+    "bridgeAddress",
+    "bridge_address",
+    "tronBridgeAddress",
+    "tron_bridge_address",
+  );
+  const normalizedBridgeAddress =
+    bridgeAddress === SCCP_OPTIONAL_FIELD_MISSING
+      ? null
+      : bytesToHex(normalizeTronAddressPayload(bridgeAddress, "bridgeAddress"));
+  const normalizedContractAddress =
+    contractAddress === undefined ||
+    contractAddress === null ||
+    contractAddress === ""
+      ? null
+      : bytesToHex(
+          normalizeTairaXorTronEventAddressPayload(
+            contractAddress,
+            "event.contractAddress",
+          ),
+        );
+  if (
+    normalizedBridgeAddress &&
+    normalizedContractAddress &&
+    normalizedBridgeAddress !== normalizedContractAddress
+  ) {
+    throw new TypeError(
+      "TRON burn event contract address must match the bridge address",
+    );
+  }
+  if (normalizedBridgeAddress) {
+    const expectedDigest = tairaXorBurnSourceEventDigest({
+      routeIdHash,
+      assetKeyHash,
+      bridgeAddress: normalizedBridgeAddress,
+      burnerAddress,
+      tairaRecipient,
+      amount,
+      nonce,
+    });
+    if (sourceEventDigest !== expectedDigest) {
+      throw new TypeError("TRON burn event digest must match the event fields");
+    }
+  }
+
+  return Object.freeze({
+    eventName,
+    sourceEventDigest,
+    routeIdHash,
+    assetKeyHash,
+    bridgeAddress: normalizedBridgeAddress ?? normalizedContractAddress,
+    burnerAddress,
+    tairaRecipient,
+    tairaRecipientHash: recipientHash,
+    amount: amount.toString(),
+    nonce: nonce.toString(),
+  });
+}
+
+const normalizeTairaXorTronTxId = (value, label) =>
+  normalizeHex32(value, label).slice(2);
+
+const requireTransferCodec = (transfer, key, expected, label) => {
+  const value = strictOptionalResultField(transfer, label, key);
+  if (value === SCCP_OPTIONAL_FIELD_MISSING || value === undefined || value === null) {
+    return;
+  }
+  const normalized = normalizeSccpCodecId(value, label);
+  if (normalized !== expected) {
+    throw new TypeError(`${label} must match the TAIRA XOR TRON-source route`);
+  }
+};
+
+const requireTransferDomain = (transfer, key, expected, label) => {
+  const actual = normalizeSccpDomainId(
+    strictResultField(transfer, label, key),
+    label,
+  );
+  if (actual !== expected) {
+    throw new TypeError(`${label} must match the TAIRA XOR TRON-source route`);
+  }
+};
+
+const readTairaXorTextValue = (value, label) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TextUtf8") {
+      throw new TypeError(`${label} must be a TextUtf8 SCCP codec value`);
+    }
+    return normalizeNonEmptyString(
+      strictResultField(value, `${label}.value`, "value"),
+      `${label}.value`,
+    );
+  }
+  return normalizeNonEmptyString(value, label);
+};
+
+const readTairaXorTronAddressPayload = (value, label) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TronBase58Check") {
+      throw new TypeError(`${label} must be a TronBase58Check SCCP codec value`);
+    }
+    const payload = strictOptionalResultField(value, `${label}.payload`, "payload");
+    if (payload !== SCCP_OPTIONAL_FIELD_MISSING) {
+      return bytesToHex(normalizeTronAddressPayload(payload, `${label}.payload`));
+    }
+    return bytesToHex(
+      normalizeTronAddressPayload(
+        strictResultField(value, `${label}.value`, "value"),
+        `${label}.value`,
+      ),
+    );
+  }
+  return bytesToHex(normalizeTronAddressPayload(value, label));
+};
+
+export function bindTairaXorTronToTairaSourceProofPackage(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR TRON-source proof package input must be an object");
+  }
+  const proofPackage = requirePlainObject(
+    strictResultField(input, "proofPackage", "proofPackage", "proof_package"),
+    "proofPackage",
+  );
+  const messageBundle = requirePlainObject(
+    strictResultField(proofPackage, "proofPackage.messageBundle", "messageBundle", "message_bundle"),
+    "proofPackage.messageBundle",
+  );
+  const settlementInput = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.settlement",
+    "settlement",
+  );
+  const settlementDefaultsInput = strictOptionalResultField(
+    input,
+    "settlementDefaults",
+    "settlementDefaults",
+    "settlement_defaults",
+  );
+  const settlementDefaults = normalizeTairaXorTronToTairaSettlementFragment(
+    settlementDefaultsInput,
+    "settlementDefaults",
+  );
+  const settlement = normalizeTairaXorTronToTairaSettlementFragment(
+    settlementInput,
+    "proofPackage.settlement",
+  );
+
+  const expectedTxId = normalizeTairaXorTronTxId(
+    strictResultField(input, "txId", "txId", "txID", "transactionId", "transaction_id"),
+    "txId",
+  );
+  const packageTxId = normalizeTairaXorTronTxId(
+    strictResultField(
+      proofPackage,
+      "proofPackage.txId",
+      "txId",
+      "txID",
+      "transactionId",
+      "transaction_id",
+    ),
+    "proofPackage.txId",
+  );
+  if (packageTxId !== expectedTxId) {
+    throw new TypeError("proofPackage.txId must match txId");
+  }
+
+  const normalizedCommitment = normalizeMessageBundleCommitment(messageBundle.commitment);
+  const commitmentMessageId = normalizeHex32(
+    normalizedCommitment.message_id,
+    "messageBundle.commitment.message_id",
+  );
+  const commitmentPayloadHash = normalizeHex32(
+    normalizedCommitment.payload_hash,
+    "messageBundle.commitment.payload_hash",
+  );
+  const commitmentTargetDomain = normalizeSccpDomainId(
+    normalizedCommitment.target_domain,
+    "messageBundle.commitment.target_domain",
+  );
+  if (commitmentTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("messageBundle must target TAIRA/SORA");
+  }
+
+  const payloadEnvelope = normalizeSccpPayloadEnvelope(messageBundle.payload);
+  if (payloadEnvelope.kind !== "Transfer") {
+    throw new TypeError("messageBundle payload must be a Transfer");
+  }
+  const transfer = payloadEnvelope.value;
+  requireV1Version(strictResultField(transfer, "payload.version", "version"), "payload.version");
+  requireTransferDomain(transfer, "source_domain", SCCP_DOMAIN_TRON, "payload.source_domain");
+  requireTransferDomain(transfer, "dest_domain", SCCP_DOMAIN_SORA, "payload.dest_domain");
+  requireTransferDomain(
+    transfer,
+    "asset_home_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.asset_home_domain",
+  );
+  requireTransferCodec(transfer, "asset_id_codec", SCCP_CODEC_TEXT_UTF8, "payload.asset_id_codec");
+  requireTransferCodec(
+    transfer,
+    "sender_codec",
+    SCCP_CODEC_TRON_BASE58CHECK,
+    "payload.sender_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "recipient_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.recipient_codec",
+  );
+  requireTransferCodec(transfer, "route_id_codec", SCCP_CODEC_TEXT_UTF8, "payload.route_id_codec");
+
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const transferAmount = normalizeUnsignedBigIntMax(
+    strictResultField(transfer, "payload.amount", "amount"),
+    "payload.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (transferAmount !== amount) {
+    throw new TypeError("payload.amount must match amount");
+  }
+
+  const tronSender = strictResultField(input, "tronSender", "tronSender", "tron_sender", "sender");
+  const expectedSenderPayload = bytesToHex(
+    normalizeTronAddressPayload(tronSender, "tronSender"),
+  );
+  if (readTairaXorTronAddressPayload(transfer.sender, "payload.sender") !== expectedSenderPayload) {
+    throw new TypeError("payload.sender must match tronSender");
+  }
+  const tairaRecipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  if (readTairaXorTextValue(transfer.recipient, "payload.recipient") !== tairaRecipient) {
+    throw new TypeError("payload.recipient must match tairaRecipient");
+  }
+  if (readTairaXorTextValue(transfer.asset_id, "payload.asset_id") !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("payload.asset_id must be xor");
+  }
+  if (readTairaXorTextValue(transfer.route_id, "payload.route_id") !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("payload.route_id must be taira_tron_xor");
+  }
+
+  const transferNonce = strictResultField(transfer, "payload.nonce", "nonce");
+  const expectedPayload = buildTairaXorTronToTairaTransferPayload({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce: transferNonce,
+  });
+  const expectedPayloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(expectedPayload));
+  if (commitmentPayloadHash !== expectedPayloadHash) {
+    throw new TypeError("messageBundle commitment payload hash must match the TAIRA XOR payload");
+  }
+  const expectedMessageId = sccpTransferMessageId(expectedPayload);
+  if (commitmentMessageId !== expectedMessageId) {
+    throw new TypeError("messageBundle commitment message id must match the TAIRA XOR payload");
+  }
+
+  const bundleCommitmentRoot = normalizeHex32(
+    strictResultField(
+      messageBundle,
+      "messageBundle.commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "messageBundle.commitmentRoot",
+  );
+  const packageMessageId = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.messageId",
+    "messageId",
+    "message_id",
+  );
+  if (
+    packageMessageId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageMessageId, "proofPackage.messageId") !== commitmentMessageId
+  ) {
+    throw new TypeError("proofPackage.messageId must match the message bundle");
+  }
+  const packageCommitmentRoot = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.commitmentRoot",
+    "commitmentRoot",
+    "commitment_root",
+  );
+  if (
+    packageCommitmentRoot !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageCommitmentRoot, "proofPackage.commitmentRoot") !== bundleCommitmentRoot
+  ) {
+    throw new TypeError("proofPackage.commitmentRoot must match the message bundle");
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      proofPackage,
+      "proofPackage.sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "proofPackage.sourceEventDigest",
+  );
+  const bridgeAddress = strictOptionalResultField(
+    input,
+    "bridgeAddress",
+    "bridgeAddress",
+    "bridge_address",
+    "tronBridgeAddress",
+    "tron_bridge_address",
+  );
+  if (bridgeAddress !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const expectedSourceEventDigest = tairaXorBurnSourceEventDigest({
+      bridgeAddress,
+      burnerAddress: tronSender,
+      tairaRecipient,
+      amount,
+      nonce: transferNonce,
+    });
+    if (sourceEventDigest !== expectedSourceEventDigest) {
+      throw new TypeError(
+        "proofPackage.sourceEventDigest must match the TAIRA XOR burn source event digest",
+      );
+    }
+  }
+
+  canonicalSccpMessageProofBundleBytes(messageBundle);
+  return Object.freeze({
+    messageBundle,
+    settlement: Object.freeze({
+      ...settlementDefaults,
+      ...settlement,
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    }),
+    sourceEventDigest,
+    txId: expectedTxId,
+    messageId: commitmentMessageId,
+    commitmentRoot: bundleCommitmentRoot,
+    amount: amount.toString(),
+  });
 }
 
 const normalizeBridgeProofSubmitPayloadBase = (input, context) => {
@@ -23325,7 +26627,7 @@ const sourceRecordProfile = (sourceDomain) => {
         sourceStateVerifierId: "",
         sourceBridgeEmitterId: "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
         requiresSourceBridge: true,
-        requiresSourceBridgeConfig: false,
+        requiresSourceBridgeConfig: true,
       };
     case SCCP_DOMAIN_BSC:
       return {
@@ -23550,6 +26852,36 @@ const tronSourceBridgeConfigHash = (material) =>
     ),
   );
 
+const ethSourceBridgeConfigHash = (material) =>
+  keccak_256(
+    concatBytes(
+      keccak_256(textEncoder.encode(SCCP_ETH_SOURCE_BRIDGE_CONFIG_LABEL_V1)),
+      abiWordAddress20(
+        hexToBytes(material.sourceBridgeEmitterAddress, "sourceBridgeEmitterAddress", 20),
+        "sourceBridgeEmitterAddress",
+      ),
+      hexToBytes(material.sourceBridgeNetworkId, "sourceBridgeNetworkId", 32),
+      abiWordU32(material.sourceDomain, "sourceDomain"),
+      abiWordU32(SCCP_DOMAIN_SORA, "targetDomain"),
+      hexToBytes(material.sourceBridgeEmitterCodeHash, "sourceBridgeEmitterCodeHash", 32),
+    ),
+  );
+
+const rejectMismatchedEthSourceBridgeConfigHash = (material) => {
+  if (material.sourceDomain !== SCCP_DOMAIN_ETH) return;
+  if (material.sourceBridgeNetworkId !== SCCP_ETH_MAINNET_NETWORK_ID) {
+    throw new TypeError("sourceBridgeNetworkId must be Ethereum mainnet chain id");
+  }
+  if (material.sourceBridgeOwnerAddress !== "0x") {
+    throw new TypeError("sourceBridgeOwnerAddress is not used for sourceDomain");
+  }
+  const supplied = hexToBytes(material.sourceBridgeConfigHash, "sourceBridgeConfigHash", 32);
+  const expected = ethSourceBridgeConfigHash(material);
+  if (!bytesEqual(supplied, expected)) {
+    throw new TypeError("sourceBridgeConfigHash must match ETH source bridge config fields");
+  }
+};
+
 const rejectMismatchedTronSourceBridgeConfigHash = (material) => {
   if (material.sourceDomain !== SCCP_DOMAIN_TRON) return;
   const supplied = hexToBytes(material.sourceBridgeConfigHash, "sourceBridgeConfigHash", 32);
@@ -23678,7 +27010,7 @@ export function normalizeSccpSourceVerifierMaterial(input) {
       "sourceBridgeNetworkId",
     ),
     sourceBridgeOwnerAddress: materialDomainBytesHex(
-      profile.requiresSourceBridgeConfig,
+      profile.requiresSourceBridgeConfig && sourceDomain !== SCCP_DOMAIN_ETH,
       materialOptionalField(
         "sourceBridgeOwnerAddress",
         "sourceBridgeOwnerAddress",
@@ -23705,6 +27037,7 @@ export function normalizeSccpSourceVerifierMaterial(input) {
   rejectSolanaTemplateSourceMaterialComponents(material);
   rejectTonTemplateSourceMaterialComponents(material);
   rejectTronTemplateSourceMaterialComponents(material);
+  rejectMismatchedEthSourceBridgeConfigHash(material);
   rejectMismatchedTronSourceBridgeConfigHash(material);
   requireSccpRoleHashSeparation(
     material,

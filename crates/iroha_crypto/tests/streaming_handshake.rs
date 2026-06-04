@@ -2,6 +2,10 @@
 
 use std::convert::{TryFrom, TryInto};
 
+use chacha20poly1305::{
+    ChaCha20Poly1305, XChaCha20Poly1305,
+    aead::{Aead, KeyInit, Payload},
+};
 use iroha_crypto::{
     Algorithm, KeyPair, Signature,
     streaming::{
@@ -11,7 +15,8 @@ use iroha_crypto::{
 };
 use norito::streaming::{
     CapabilityFlags, CapabilityRole, ChunkDescriptor, ContentKeyUpdate, EncryptionSuite, FecScheme,
-    Hash, HpkeSuite, PrivacyBucketGranularity, StreamMetadata, TransportCapabilityResolution,
+    FeedbackHintFrame, Hash, HpkeSuite, PrivacyBucketGranularity, ReceiverReport, Resolution,
+    StreamMetadata, TransportCapabilityResolution,
     chunk::merkle_root,
     codec::{
         BaselineEncoder, BaselineEncoderConfig, BaselineManifestParams, FrameDimensions, RawFrame,
@@ -39,8 +44,66 @@ fn mlkem_keypair_bytes() -> (Vec<u8>, Vec<u8>) {
     (public_key, secret_key.as_slice().to_vec())
 }
 
+fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
+    bytes[0] = 0xFF;
+    bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+}
+
 fn fingerprint(bytes: &[u8]) -> Hash {
     kyber_public_fingerprint_with_suite(bytes, TEST_KEM_SUITE).expect("fingerprint derivation")
+}
+
+fn wrap_gck_without_length_check(
+    suite: &EncryptionSuite,
+    transport_send_key: &[u8; 32],
+    nonce: &[u8],
+    gck_plaintext: &[u8],
+    content_key_id: u64,
+    valid_from_segment: u64,
+) -> Vec<u8> {
+    let mut aad = [0u8; 23];
+    aad[..7].copy_from_slice(b"nsc-gck");
+    aad[7..15].copy_from_slice(&content_key_id.to_le_bytes());
+    aad[15..].copy_from_slice(&valid_from_segment.to_le_bytes());
+
+    let ciphertext = match suite {
+        EncryptionSuite::X25519ChaCha20Poly1305(_) => {
+            let key: chacha20poly1305::Key = (*transport_send_key).into();
+            let nonce: chacha20poly1305::Nonce = <[u8; 12]>::try_from(nonce)
+                .expect("valid chacha nonce")
+                .into();
+            let cipher = ChaCha20Poly1305::new(&key);
+            cipher
+                .encrypt(
+                    &nonce,
+                    Payload {
+                        msg: gck_plaintext,
+                        aad: &aad,
+                    },
+                )
+                .expect("manual gck wrap")
+        }
+        EncryptionSuite::Kyber768XChaCha20Poly1305(_) => {
+            let key: chacha20poly1305::Key = (*transport_send_key).into();
+            let nonce: chacha20poly1305::XNonce = <[u8; 24]>::try_from(nonce)
+                .expect("valid xchacha nonce")
+                .into();
+            let cipher = XChaCha20Poly1305::new(&key);
+            cipher
+                .encrypt(
+                    &nonce,
+                    Payload {
+                        msg: gck_plaintext,
+                        aad: &aad,
+                    },
+                )
+                .expect("manual gck wrap")
+        }
+    };
+    let mut wrapped = Vec::with_capacity(nonce.len() + ciphertext.len());
+    wrapped.extend_from_slice(nonce);
+    wrapped.extend_from_slice(&ciphertext);
+    wrapped
 }
 
 #[test]
@@ -97,6 +160,49 @@ fn transport_resolution_hash_matches_manual_derivation() {
         resolution.capabilities_hash(),
         resolution.capabilities_hash()
     );
+}
+
+#[test]
+fn record_transport_capabilities_rejects_invalid_shape_without_state_change() {
+    let mut session = StreamingSession::new(CapabilityRole::Viewer);
+    let valid = sample_resolution();
+    session
+        .record_transport_capabilities(valid)
+        .expect("valid transport capabilities");
+
+    for (invalid_transport, expected_reason) in [
+        (
+            TransportCapabilityResolution {
+                use_datagram: true,
+                max_segment_datagram_size: 0,
+                ..valid
+            },
+            "datagram transport resolution requires nonzero datagram size",
+        ),
+        (
+            TransportCapabilityResolution {
+                use_datagram: false,
+                max_segment_datagram_size: 1_024,
+                ..valid
+            },
+            "stream transport resolution must not carry datagram size",
+        ),
+    ] {
+        let err = session
+            .record_transport_capabilities(invalid_transport)
+            .expect_err("invalid transport capabilities rejected");
+        match err {
+            HandshakeError::InvalidTransportCapabilities(reason) => {
+                assert!(reason.contains(expected_reason));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(session.transport_capabilities().copied(), Some(valid));
+        assert_eq!(
+            session.transport_capabilities_hash(),
+            Some(valid.capabilities_hash())
+        );
+    }
 }
 
 #[test]
@@ -177,6 +283,163 @@ fn session_cadence_enforces_thresholds() {
     let restored = SessionCadence::from_snapshot(snapshot);
     assert_eq!(restored, cadence);
 }
+
+#[test]
+fn feedback_hint_parity_is_clamped_to_fec_budget() {
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    let hint = FeedbackHintFrame {
+        stream_id: [0x61; 32],
+        loss_ewma_q16: 0,
+        latency_gradient_q16: 0,
+        observed_rtt_ms: 12,
+        report_interval_ms: 100,
+        parity_chunks: u8::MAX,
+    };
+
+    session
+        .process_feedback_hint(&hint)
+        .expect("feedback hint stream id matches session");
+    let snapshot = session
+        .feedback_snapshot()
+        .expect("feedback hint should snapshot");
+    assert_eq!(snapshot.parity_chunks, 6);
+}
+
+#[test]
+fn feedback_samples_are_clamped_to_documented_bounds() {
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    let stream_id = [0x62; 32];
+    let hint = FeedbackHintFrame {
+        stream_id,
+        loss_ewma_q16: u32::MAX,
+        latency_gradient_q16: 0,
+        observed_rtt_ms: 16,
+        report_interval_ms: 100,
+        parity_chunks: u8::MAX,
+    };
+    session
+        .process_feedback_hint(&hint)
+        .expect("feedback hint stream id matches session");
+
+    let report = ReceiverReport {
+        stream_id,
+        latest_segment: 9,
+        layer_mask: 0,
+        measured_throughput_kbps: 2_000,
+        rtt_ms: 33,
+        loss_percent_x100: u16::MAX,
+        decoder_buffer_ms: 120,
+        active_resolution: Resolution::R720p,
+        hdr_active: false,
+        ecn_ce_count: 0,
+        jitter_ms: 4,
+        delivered_sequence: 512,
+        parity_applied: u8::MAX,
+        fec_budget: u8::MAX,
+        sync_diagnostics: None,
+    };
+    let parity = session
+        .process_receiver_report(&report)
+        .expect("receiver report stream id matches session");
+    let snapshot = session
+        .feedback_snapshot()
+        .expect("feedback state should snapshot");
+
+    assert_eq!(parity, 6);
+    assert_eq!(snapshot.loss_ewma_q16, Some(1 << 16));
+    assert_eq!(snapshot.parity_chunks, 6);
+    assert_eq!(snapshot.latest_parity_applied, Some(6));
+    assert_eq!(snapshot.latest_fec_budget, Some(6));
+}
+
+#[test]
+fn feedback_hint_rejects_stream_id_switch_without_state_change() {
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    let stream_id = [0x63; 32];
+    let mut hint = FeedbackHintFrame {
+        stream_id,
+        loss_ewma_q16: 1 << 15,
+        latency_gradient_q16: 4,
+        observed_rtt_ms: 18,
+        report_interval_ms: 100,
+        parity_chunks: 2,
+    };
+
+    session
+        .process_feedback_hint(&hint)
+        .expect("initial feedback hint binds stream id");
+    let before = session
+        .feedback_snapshot()
+        .expect("initial feedback hint should snapshot");
+
+    let mismatched_stream_id = [0x64; 32];
+    hint.stream_id = mismatched_stream_id;
+    hint.loss_ewma_q16 = u32::MAX;
+    hint.latency_gradient_q16 = -8;
+    hint.observed_rtt_ms = 250;
+    hint.report_interval_ms = 1_000;
+    hint.parity_chunks = u8::MAX;
+
+    let err = session
+        .process_feedback_hint(&hint)
+        .expect_err("mismatched feedback hint stream id rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::FeedbackStreamMismatch { expected, found }
+            if expected == stream_id && found == mismatched_stream_id
+    ));
+    assert_eq!(session.feedback_snapshot(), Some(before));
+}
+
+#[test]
+fn receiver_report_rejects_stream_id_switch_without_state_change() {
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    let stream_id = [0x65; 32];
+    let mut report = ReceiverReport {
+        stream_id,
+        latest_segment: 9,
+        layer_mask: 0,
+        measured_throughput_kbps: 2_000,
+        rtt_ms: 33,
+        loss_percent_x100: 150,
+        decoder_buffer_ms: 120,
+        active_resolution: Resolution::R720p,
+        hdr_active: false,
+        ecn_ce_count: 0,
+        jitter_ms: 4,
+        delivered_sequence: 512,
+        parity_applied: 1,
+        fec_budget: 3,
+        sync_diagnostics: None,
+    };
+
+    let parity = session
+        .process_receiver_report(&report)
+        .expect("initial receiver report binds stream id");
+    let before = session
+        .feedback_snapshot()
+        .expect("initial receiver report should snapshot");
+    assert_eq!(session.latest_feedback_parity(), Some(parity));
+
+    let mismatched_stream_id = [0x66; 32];
+    report.stream_id = mismatched_stream_id;
+    report.loss_percent_x100 = u16::MAX;
+    report.delivered_sequence = 2_048;
+    report.parity_applied = u8::MAX;
+    report.fec_budget = u8::MAX;
+
+    let err = session
+        .process_receiver_report(&report)
+        .expect_err("mismatched receiver report stream id rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::FeedbackStreamMismatch { expected, found }
+            if expected == stream_id && found == mismatched_stream_id
+    ));
+    assert_eq!(session.feedback_snapshot(), Some(before));
+    assert_eq!(session.latest_feedback_parity(), Some(parity));
+}
+
 #[allow(clippy::too_many_lines)]
 #[test]
 fn streaming_handshake_and_chunk_encryption_roundtrip() {
@@ -433,6 +696,362 @@ fn x25519_process_remote_key_update_resets_on_session_change() {
 }
 
 #[test]
+fn x25519_process_remote_key_update_lazily_generates_local_ephemeral() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x03; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer lazily prepares local x25519 material");
+    assert_eq!(viewer_session.negotiated_suite(), Some(&suite));
+    assert!(viewer_session.transport_keys().is_some());
+    assert!(viewer_session.sts_root().is_some());
+    assert!(viewer_session.snapshot_state().is_some());
+}
+
+#[test]
+fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    let mut key_update = publisher_session
+        .build_key_update([0x03; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("key update");
+    key_update.pub_ephemeral = vec![0u8; 32];
+    let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    key_update.signature.copy_from_slice(signature.payload());
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+    let err = viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect_err("low-order x25519 ephemeral must be rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::InvalidX25519EphemeralPublicKey
+    ));
+    assert!(viewer_session.transport_keys().is_none());
+    assert!(viewer_session.negotiated_suite().is_none());
+}
+
+#[test]
+fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x13; 32]);
+    let mut key_update = publisher_session
+        .build_key_update([0x13; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("key update");
+    key_update.key_counter = 0;
+    let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    key_update.signature.copy_from_slice(signature.payload());
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x24; 32]);
+    let err = viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect_err("zero counter rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::InvalidKeyCounter { found }) => {
+            assert_eq!(found, 0);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), None);
+    assert!(viewer_session.transport_keys().is_none());
+}
+
+#[test]
+fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAE; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x14; 32]);
+    let mut key_update = publisher_session
+        .build_key_update([0x14; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("key update");
+    key_update.protocol_version = 0;
+    let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    key_update.signature.copy_from_slice(signature.payload());
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x25; 32]);
+    let err = viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect_err("zero protocol version rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::InvalidProtocolVersion { found }) => {
+            assert_eq!(found, 0);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), None);
+    assert!(viewer_session.transport_keys().is_none());
+}
+
+#[test]
+fn x25519_content_key_update_authenticates_before_recording_state() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xBC; 32]);
+
+    let publisher_secret_bytes = [0x31u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let key_update = publisher_session
+        .build_key_update([0x04; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x42u8; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let nonce = vec![0x54; nonce_len_for_suite(&suite)];
+    let gck = [0x63u8; 32];
+    let content_key_id = 31;
+    let valid_from_segment = 640;
+    let wrapped = wrap_gck(
+        &suite,
+        &publisher_transport.send,
+        &nonce,
+        &gck,
+        content_key_id,
+        valid_from_segment,
+    )
+    .expect("wrap gck");
+    let update = ContentKeyUpdate {
+        content_key_id,
+        gck_wrapped: wrapped,
+        valid_from_segment,
+    };
+    let mut tampered = update.clone();
+    *tampered
+        .gck_wrapped
+        .last_mut()
+        .expect("wrapped key contains authentication tag") ^= 0x01;
+
+    let err = viewer_session
+        .process_content_key_update(&tampered)
+        .expect_err("tampered wrapped gck rejected");
+    assert!(matches!(err, HandshakeError::Crypto(_)));
+    assert!(viewer_session.latest_gck().is_none());
+
+    let unwrapped = viewer_session
+        .process_content_key_update(&update)
+        .expect("valid update with same id still accepted");
+    assert_eq!(unwrapped.as_slice(), gck);
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+}
+
+#[test]
+fn x25519_content_key_update_rejects_invalid_gck_length_before_recording_state() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xBD; 32]);
+
+    let publisher_secret_bytes = [0x32u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let key_update = publisher_session
+        .build_key_update([0x1C; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x43u8; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid gck");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let nonce = vec![0x55; nonce_len_for_suite(&suite)];
+    let short_gck = [0x64u8; 31];
+    let wrapped = wrap_gck_without_length_check(
+        &suite,
+        &publisher_transport.send,
+        &nonce,
+        &short_gck,
+        32,
+        700,
+    );
+    let err = viewer_session
+        .process_content_key_update(&ContentKeyUpdate {
+            content_key_id: 32,
+            gck_wrapped: wrapped,
+            valid_from_segment: 700,
+        })
+        .expect_err("short gck rejected");
+    match err {
+        HandshakeError::InvalidGroupContentKeyLength { expected, found } => {
+            assert_eq!(expected, 32);
+            assert_eq!(found, short_gck.len());
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(viewer_session.latest_gck().is_none());
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xCD; 32]);
+
+    let publisher_secret_bytes = [0x51u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let first_update = publisher_session
+        .build_key_update([0x05; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("first key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x62u8; 32]);
+    let initial_transport = *viewer_session
+        .process_remote_key_update(&first_update, publisher_keys.public_key())
+        .expect("initial key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let gck = [0x73u8; 32];
+    let nonce = vec![0x84; nonce_len_for_suite(&suite)];
+    let wrapped =
+        wrap_gck(&suite, &publisher_transport.send, &nonce, &gck, 41, 900).expect("wrap gck");
+    let content_update = ContentKeyUpdate {
+        content_key_id: 41,
+        gck_wrapped: wrapped,
+        valid_from_segment: 900,
+    };
+    viewer_session
+        .process_content_key_update(&content_update)
+        .expect("content key accepted");
+
+    let mut restarted_session = StreamingSession::new(CapabilityRole::Publisher);
+    restarted_session.set_local_ephemeral_x25519([0x91; 32]);
+    let mut malformed_restart = restarted_session
+        .build_key_update([0x06; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("restart key update");
+    malformed_restart.pub_ephemeral = vec![0u8; 32];
+    let transcript =
+        key_update_transcript_bytes(&malformed_restart).expect("serialize malformed restart");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    malformed_restart
+        .signature
+        .copy_from_slice(signature.payload());
+
+    let err = viewer_session
+        .process_remote_key_update(&malformed_restart, publisher_keys.public_key())
+        .expect_err("malformed restart rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::InvalidX25519EphemeralPublicKey
+    ));
+    assert_eq!(viewer_session.transport_keys(), Some(&initial_transport));
+    assert_eq!(viewer_session.negotiated_suite(), Some(&suite));
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+}
+
+#[test]
+fn outbound_key_update_failure_preserves_existing_session() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xEF; 32]);
+
+    let publisher_secret_bytes = [0x71u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let key_update = publisher_session
+        .build_key_update([0x08; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x82u8; 32]);
+    let initial_transport = *viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let gck = [0x93u8; 32];
+    let nonce = vec![0xA4; nonce_len_for_suite(&suite)];
+    let wrapped =
+        wrap_gck(&suite, &publisher_transport.send, &nonce, &gck, 61, 1_200).expect("wrap gck");
+    viewer_session
+        .process_content_key_update(&ContentKeyUpdate {
+            content_key_id: 61,
+            gck_wrapped: wrapped,
+            valid_from_segment: 1_200,
+        })
+        .expect("content key accepted");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("established session snapshot");
+
+    let kyber_suite = EncryptionSuite::Kyber768XChaCha20Poly1305([0xAA; 32]);
+    let err = viewer_session
+        .build_key_update([0x09; 32], &kyber_suite, 1, 2, viewer_keys.private_key())
+        .expect_err("missing Kyber remote public must fail");
+    assert!(matches!(err, HandshakeError::MissingKyberRemotePublic));
+    assert_eq!(viewer_session.transport_keys(), Some(&initial_transport));
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
 fn set_kyber_remote_public_rejects_fingerprint_mismatch() {
     let MlKemKeyPair {
         public_key: pk_bytes,
@@ -503,6 +1122,79 @@ fn streaming_key_material_configures_session_for_hpke() {
         .expect("key update signed");
     assert_eq!(key_update.key_counter, 7);
     assert_eq!(key_update.session_id, [0x10; 32]);
+}
+
+#[test]
+fn streaming_key_material_rejects_mismatched_kyber_key_pair() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
+    let (public_key, _secret_key) = mlkem_keypair_bytes();
+    let (_wrong_public, wrong_secret) = mlkem_keypair_bytes();
+
+    let err = material
+        .set_kyber_keys(public_key.as_slice(), wrong_secret.as_slice())
+        .expect_err("mismatched Kyber key pair must fail");
+    assert!(matches!(err, KeyMaterialError::KyberKeyPairMismatch));
+    assert_eq!(material.kyber_public(), None);
+    assert_eq!(material.kyber_fingerprint(), None);
+    assert!(material.kyber_secret().is_none());
+}
+
+#[test]
+fn streaming_key_material_rejects_noncanonical_kyber_public_key() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
+    let (mut public_key, secret_key) = mlkem_keypair_bytes();
+    set_first_mlkem_12_bit_coefficient_noncanonical(&mut public_key);
+
+    let err = material
+        .set_kyber_keys(public_key.as_slice(), secret_key.as_slice())
+        .expect_err("noncanonical Kyber public key must fail");
+    assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
+    assert_eq!(material.kyber_public(), None);
+    assert_eq!(material.kyber_fingerprint(), None);
+    assert!(material.kyber_secret().is_none());
+}
+
+#[test]
+fn streaming_key_material_rejects_noncanonical_kyber_secret_key() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
+    let (public_key, mut secret_key) = mlkem_keypair_bytes();
+    set_first_mlkem_12_bit_coefficient_noncanonical(&mut secret_key);
+
+    let err = material
+        .set_kyber_keys(public_key.as_slice(), secret_key.as_slice())
+        .expect_err("noncanonical Kyber secret key must fail");
+    assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
+    assert_eq!(material.kyber_public(), None);
+    assert_eq!(material.kyber_fingerprint(), None);
+    assert!(material.kyber_secret().is_none());
+}
+
+#[test]
+fn streaming_session_rejects_noncanonical_kyber_remote_public() {
+    let (mut public_key, _secret_key) = mlkem_keypair_bytes();
+    let expected_fingerprint = fingerprint(public_key.as_slice());
+    set_first_mlkem_12_bit_coefficient_noncanonical(&mut public_key);
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+
+    let err = session
+        .set_kyber_remote_public(expected_fingerprint, public_key.as_slice())
+        .expect_err("noncanonical remote Kyber public key must fail");
+    assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
+}
+
+#[test]
+fn streaming_session_rejects_noncanonical_kyber_local_secret() {
+    let (_public_key, mut secret_key) = mlkem_keypair_bytes();
+    set_first_mlkem_12_bit_coefficient_noncanonical(&mut secret_key);
+    let mut session = StreamingSession::new(CapabilityRole::Viewer);
+
+    let err = session
+        .set_kyber_local_secret(secret_key.as_slice())
+        .expect_err("noncanonical local Kyber secret key must fail");
+    assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
 }
 
 #[test]
@@ -619,6 +1311,281 @@ fn build_key_update_records_outbound_snapshot_for_kyber() {
 }
 
 #[test]
+fn kyber_outbound_snapshot_restores_with_local_fingerprint_metadata() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity");
+    let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
+    let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
+    material
+        .set_kyber_keys(
+            publisher_hpke_public.as_slice(),
+            publisher_hpke_secret.as_slice(),
+        )
+        .expect("publisher kyber material");
+    let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
+    let viewer_fp = fingerprint(viewer_hpke_public.as_slice());
+    let publisher_suite = EncryptionSuite::Kyber768XChaCha20Poly1305(publisher_fp);
+
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    material
+        .install_into_session(&mut session)
+        .expect("local kyber material installed");
+    session
+        .set_kyber_remote_public(viewer_fp, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public");
+    material
+        .build_key_update(&mut session, [0xCB; 32], &publisher_suite, 1, 3)
+        .expect("publisher outbound key update");
+
+    let snapshot = session.snapshot_state().expect("snapshot recorded");
+    assert_eq!(snapshot.suite, publisher_suite);
+    assert_eq!(
+        snapshot.kyber_local_public.as_deref(),
+        Some(publisher_hpke_public.as_slice())
+    );
+    assert_eq!(snapshot.kyber_local_fingerprint, Some(publisher_fp));
+    assert_eq!(snapshot.kyber_remote_fingerprint, Some(viewer_fp));
+
+    let mut restored = StreamingSession::new(CapabilityRole::Publisher);
+    material
+        .install_into_session(&mut restored)
+        .expect("local kyber material installed before restore");
+    restored
+        .restore_from_snapshot(snapshot.clone())
+        .expect("outbound kyber snapshot restores");
+    assert_eq!(restored.snapshot_state(), Some(snapshot));
+}
+
+#[test]
+fn kyber_outbound_snapshot_restore_requires_matching_local_secret() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity");
+    let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
+    let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
+    material
+        .set_kyber_keys(
+            publisher_hpke_public.as_slice(),
+            publisher_hpke_secret.as_slice(),
+        )
+        .expect("publisher kyber material");
+    let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
+    let viewer_fp = fingerprint(viewer_hpke_public.as_slice());
+    let publisher_suite = EncryptionSuite::Kyber768XChaCha20Poly1305(publisher_fp);
+
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    material
+        .install_into_session(&mut session)
+        .expect("local kyber material installed");
+    session
+        .set_kyber_remote_public(viewer_fp, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public");
+    material
+        .build_key_update(&mut session, [0xCD; 32], &publisher_suite, 1, 3)
+        .expect("publisher outbound key update");
+    let snapshot = session.snapshot_state().expect("snapshot recorded");
+
+    let mut missing_secret = StreamingSession::new(CapabilityRole::Publisher);
+    let err = missing_secret
+        .restore_from_snapshot(snapshot.clone())
+        .expect_err("local Kyber metadata requires an installed secret");
+    assert!(matches!(err, HandshakeError::MissingKyberLocalSecret));
+    assert_eq!(missing_secret.snapshot_state(), None);
+
+    let (wrong_public, wrong_secret) = mlkem_keypair_bytes();
+    let mut wrong_secret_session = StreamingSession::new(CapabilityRole::Publisher);
+    wrong_secret_session
+        .set_kyber_local_key_pair(wrong_public.as_slice(), wrong_secret.as_slice())
+        .expect("wrong but internally paired local kyber material");
+    let err = wrong_secret_session
+        .restore_from_snapshot(snapshot)
+        .expect_err("snapshot local public must match installed local secret");
+    assert!(matches!(err, HandshakeError::KyberKeyPairMismatch));
+    assert_eq!(wrong_secret_session.snapshot_state(), None);
+}
+
+#[test]
+fn set_kyber_local_secret_clears_local_snapshot_metadata() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (local_public, local_secret) = mlkem_keypair_bytes();
+    let (remote_public, _remote_secret) = mlkem_keypair_bytes();
+    let local_fp = fingerprint(local_public.as_slice());
+    let remote_fp = fingerprint(remote_public.as_slice());
+    let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(remote_fp);
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    session
+        .set_kyber_local_key_pair(local_public.as_slice(), local_secret.as_slice())
+        .expect("local kyber key pair");
+    session
+        .set_kyber_local_secret(local_secret.as_slice())
+        .expect("secret-only install clears local public metadata");
+    session
+        .set_kyber_remote_public(remote_fp, remote_public.as_slice())
+        .expect("remote kyber public");
+    session
+        .build_key_update([0xCC; 32], &suite, 1, 5, publisher_keys.private_key())
+        .expect("kyber key update");
+
+    let snapshot = session.snapshot_state().expect("snapshot recorded");
+    assert_eq!(snapshot.kyber_local_public, None);
+    assert_eq!(snapshot.kyber_local_fingerprint, None);
+    assert_ne!(snapshot.kyber_remote_fingerprint, Some(local_fp));
+}
+
+#[test]
+fn outbound_key_update_rejects_zero_counter_without_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xC0; 32]);
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+
+    let err = session
+        .build_key_update([0xC0; 32], &suite, 1, 0, publisher_keys.private_key())
+        .expect_err("zero counter rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::InvalidKeyCounter { found }) => {
+            assert_eq!(found, 0);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(session.snapshot_state(), None);
+    assert!(session.transport_keys().is_none());
+}
+
+#[test]
+fn outbound_key_update_rejects_zero_protocol_version_without_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xC1; 32]);
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+
+    let err = session
+        .build_key_update([0xC1; 32], &suite, 0, 1, publisher_keys.private_key())
+        .expect_err("zero protocol version rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::InvalidProtocolVersion { found }) => {
+            assert_eq!(found, 0);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(session.snapshot_state(), None);
+    assert!(session.transport_keys().is_none());
+}
+
+#[test]
+fn outbound_key_update_rejects_key_counter_regression() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
+    let session_id = [0xCB; 32];
+    let fingerprint = fingerprint(viewer_hpke_public.as_slice());
+    let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(fingerprint);
+
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    session
+        .set_kyber_remote_public(fingerprint, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public configured");
+    session
+        .build_key_update(session_id, &suite, 1, 7, publisher_keys.private_key())
+        .expect("initial kyber key update");
+    let snapshot_before = session.snapshot_state().expect("snapshot recorded");
+
+    let err = session
+        .build_key_update(session_id, &suite, 1, 7, publisher_keys.private_key())
+        .expect_err("same counter rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::NonMonotonicKeyCounter {
+            previous,
+            found,
+        }) => {
+            assert_eq!(previous, 7);
+            assert_eq!(found, 7);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn outbound_content_key_update_rejects_regression_before_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAC; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x19; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x0A; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x29; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let first_gck = [0x39u8; 32];
+    viewer_session
+        .build_content_key_update(&first_gck, 71, 1_400)
+        .expect("initial content key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot after content key");
+
+    let regressed_gck = [0x49u8; 32];
+    let err = viewer_session
+        .build_content_key_update(&regressed_gck, 71, 1_401)
+        .expect_err("same content key id rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::ContentKeyRegression {
+            previous,
+            found,
+        }) => {
+            assert_eq!(previous, 71);
+            assert_eq!(found, 71);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.latest_gck(), Some(first_gck.as_ref()));
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn outbound_content_key_update_rejects_invalid_gck_length_before_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x0B; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x2A; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid gck");
+
+    let short_gck = [0x4Au8; 31];
+    let err = viewer_session
+        .build_content_key_update(&short_gck, 72, 1_500)
+        .expect_err("short outbound gck rejected");
+    match err {
+        HandshakeError::InvalidGroupContentKeyLength { expected, found } => {
+            assert_eq!(expected, 32);
+            assert_eq!(found, short_gck.len());
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(viewer_session.latest_gck().is_none());
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+
+    let valid_gck = [0x5Au8; 32];
+    viewer_session
+        .build_content_key_update(&valid_gck, 72, 1_500)
+        .expect("same rotation metadata accepted after rejected short gck");
+}
+
+#[test]
 fn kyber_local_ephemeral_requires_remote_public() {
     let (_pk, sk) = mlkem_keypair_bytes();
     let mut session = StreamingSession::new(CapabilityRole::Publisher);
@@ -629,6 +1596,83 @@ fn kyber_local_ephemeral_requires_remote_public() {
         .local_ephemeral_public(&EncryptionSuite::Kyber768XChaCha20Poly1305([0x11; 32]))
         .expect_err("remote public must be configured first");
     assert!(matches!(err, HandshakeError::MissingKyberRemotePublic));
+}
+
+#[test]
+fn kyber_local_ephemeral_public_does_not_commit_transport_state() {
+    let (remote_public, _remote_secret) = mlkem_keypair_bytes();
+    let remote_fingerprint = fingerprint(remote_public.as_slice());
+    let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(remote_fingerprint);
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    session
+        .set_kyber_remote_public(remote_fingerprint, remote_public.as_slice())
+        .expect("remote kyber public");
+
+    let ciphertext = session
+        .local_ephemeral_public(&suite)
+        .expect("kyber encapsulation payload");
+    assert_eq!(ciphertext.len(), TEST_KEM_SUITE.ciphertext_len());
+    assert_eq!(session.negotiated_suite(), None);
+    assert!(session.transport_keys().is_none());
+    assert!(session.sts_root().is_none());
+    assert_eq!(session.snapshot_state(), None);
+
+    let err = session
+        .build_content_key_update(&[0xA5; 32], 1, 1)
+        .expect_err("content key update still requires a signed key update");
+    assert!(matches!(err, HandshakeError::SuiteNotNegotiated));
+}
+
+#[test]
+fn session_kem_suite_change_clears_configured_kyber_material() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
+    let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
+    let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
+    let viewer_fp = fingerprint(viewer_hpke_public.as_slice());
+    let publisher_suite = EncryptionSuite::Kyber768XChaCha20Poly1305(publisher_fp);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session
+        .set_kyber_local_secret(publisher_hpke_secret.as_slice())
+        .expect("publisher kyber secret");
+    publisher_session
+        .set_kyber_remote_public(viewer_fp, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public");
+    let publisher_update = publisher_session
+        .build_key_update(
+            [0x43; 32],
+            &publisher_suite,
+            1,
+            1,
+            publisher_keys.private_key(),
+        )
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session
+        .set_kyber_local_secret(viewer_hpke_secret.as_slice())
+        .expect("viewer kyber secret");
+    viewer_session
+        .set_kyber_remote_public(publisher_fp, publisher_hpke_public.as_slice())
+        .expect("publisher kyber public");
+
+    viewer_session.set_kem_suite(MlKemSuite::MlKem512);
+    viewer_session.set_kem_suite(MlKemSuite::MlKem768);
+
+    let err = viewer_session
+        .process_remote_key_update(&publisher_update, publisher_keys.public_key())
+        .expect_err("suite switch clears remote public metadata");
+    assert!(matches!(err, HandshakeError::MissingKyberRemotePublic));
+
+    viewer_session
+        .set_kyber_remote_public(publisher_fp, publisher_hpke_public.as_slice())
+        .expect("publisher kyber public after suite switch");
+    let err = viewer_session
+        .process_remote_key_update(&publisher_update, publisher_keys.public_key())
+        .expect_err("suite switch clears local secret material");
+    assert!(matches!(err, HandshakeError::MissingKyberLocalSecret));
+    assert_eq!(viewer_session.snapshot_state(), None);
 }
 
 #[test]
@@ -814,6 +1858,368 @@ fn streaming_session_snapshot_roundtrip() {
 }
 
 #[test]
+fn restore_from_snapshot_rejects_zero_key_counter_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x2A; 32], &suite, 1, 3, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x3A; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.key_counter = 0;
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("zero snapshot key counter rejected");
+    match err {
+        HandshakeError::InvalidSnapshot(reason) => {
+            assert!(reason.contains("key counter must be nonzero"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x24; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x14; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x44; 32], &suite, 1, 3, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x34; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.kem_suite_id = u8::MAX;
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("invalid kem suite rejected");
+    match err {
+        HandshakeError::UnsupportedKemSuite(found) => assert_eq!(found, u8::MAX),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_invalid_transport_capabilities_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2B; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x1B; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x4B; 32], &suite, 1, 10, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x3B; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    viewer_session
+        .record_transport_capabilities(sample_resolution())
+        .expect("valid transport capabilities");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+    let transport = snapshot_before
+        .transport_capabilities
+        .expect("transport capabilities snapshot");
+
+    let mut datagram_zero = transport;
+    datagram_zero.use_datagram = true;
+    datagram_zero.max_segment_datagram_size = 0;
+    let mut stream_with_datagram_size = transport;
+    stream_with_datagram_size.use_datagram = false;
+    stream_with_datagram_size.max_segment_datagram_size = 1_024;
+
+    for (invalid_transport, expected_reason) in [
+        (
+            datagram_zero,
+            "datagram transport snapshot requires nonzero datagram size",
+        ),
+        (
+            stream_with_datagram_size,
+            "stream transport snapshot must not carry datagram size",
+        ),
+    ] {
+        let mut invalid_snapshot = snapshot_before.clone();
+        invalid_snapshot.transport_capabilities = Some(invalid_transport);
+        let err = viewer_session
+            .restore_from_snapshot(invalid_snapshot)
+            .expect_err("invalid transport snapshot rejected");
+        match err {
+            HandshakeError::InvalidSnapshot(reason) => {
+                assert!(reason.contains(expected_reason));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            viewer_session.snapshot_state(),
+            Some(snapshot_before.clone())
+        );
+    }
+}
+
+#[test]
+fn restore_from_snapshot_rejects_kyber_suite_kem_mismatch_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x29; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x19; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x49; 32], &suite, 1, 8, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x39; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let MlKemKeyPair {
+        public_key: mlkem512_public,
+        ..
+    } = generate_mlkem_keypair_from_os(MlKemSuite::MlKem512).expect("ML-KEM-512 keypair");
+    let mlkem512_fingerprint =
+        kyber_public_fingerprint_with_suite(&mlkem512_public, MlKemSuite::MlKem512)
+            .expect("ML-KEM-512 fingerprint");
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.suite = EncryptionSuite::Kyber768XChaCha20Poly1305(mlkem512_fingerprint);
+    invalid_snapshot.kem_suite_id = 0;
+    invalid_snapshot.kyber_remote_public = Some(mlkem512_public);
+    invalid_snapshot.kyber_remote_fingerprint = Some(mlkem512_fingerprint);
+
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("kyber768 suite must bind to mlkem768 metadata");
+    match err {
+        HandshakeError::InvalidSnapshot(reason) => {
+            assert!(reason.contains("kyber768 suite requires mlkem768"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_kyber_suite_fingerprint_drift_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x4A; 32], &suite, 1, 9, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x3A; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
+    let remote_fingerprint = fingerprint(kyber_public.as_slice());
+    let mut suite_fingerprint = remote_fingerprint;
+    suite_fingerprint[0] ^= 0xA5;
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.suite = EncryptionSuite::Kyber768XChaCha20Poly1305(suite_fingerprint);
+    invalid_snapshot.kem_suite_id = 1;
+    invalid_snapshot.kyber_remote_public = Some(kyber_public);
+    invalid_snapshot.kyber_remote_fingerprint = Some(remote_fingerprint);
+
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("suite fingerprint must bind to kyber metadata");
+    match err {
+        HandshakeError::KyberFingerprintMismatch { expected, found } => {
+            assert_eq!(expected, suite_fingerprint);
+            assert_eq!(found, remote_fingerprint);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_partial_content_key_metadata() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x25; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x15; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x45; 32], &suite, 1, 4, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x35; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.last_content_key_id = Some(11);
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("partial content-key metadata rejected");
+    match err {
+        HandshakeError::InvalidSnapshot(reason) => {
+            assert!(reason.contains("content key metadata"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_invalid_gck_length_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x28; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x18; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x48; 32], &suite, 1, 7, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x38; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let gck = [0x58u8; 32];
+    viewer_session
+        .build_content_key_update(&gck, 12, 88)
+        .expect("content key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.latest_gck = Some(vec![0x68; 31]);
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("short restored gck rejected");
+    match err {
+        HandshakeError::InvalidGroupContentKeyLength { expected, found } => {
+            assert_eq!(expected, 32);
+            assert_eq!(found, 31);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_partial_kyber_remote_metadata() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x26; 32]);
+    let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x16; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x46; 32], &suite, 1, 5, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x36; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.kyber_remote_public = Some(kyber_public);
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("partial kyber metadata rejected");
+    match err {
+        HandshakeError::InvalidSnapshot(reason) => {
+            assert!(reason.contains("kyber remote metadata"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_kyber_remote_fingerprint_drift() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x27; 32]);
+    let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
+    let mut wrong_fingerprint = fingerprint(kyber_public.as_slice());
+    wrong_fingerprint[0] ^= 0x5A;
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x17; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x47; 32], &suite, 1, 6, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x37; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.kyber_remote_public = Some(kyber_public);
+    invalid_snapshot.kyber_remote_fingerprint = Some(wrong_fingerprint);
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("fingerprint drift rejected");
+    match err {
+        HandshakeError::KyberFingerprintMismatch { expected, found } => {
+            assert_eq!(expected, wrong_fingerprint);
+            assert_ne!(found, expected);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
 fn kyber_content_key_update_roundtrip() {
     if cfg!(feature = "sm") {
         eprintln!("skipping kyber_content_key_update_roundtrip under sm feature");
@@ -960,6 +2366,140 @@ fn kyber_process_remote_key_update_rejects_suite_change() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn kyber_replay_after_restore_rejects_counter_before_decapsulation_secret() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
+    let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
+    let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
+    let viewer_fp = fingerprint(viewer_hpke_public.as_slice());
+    let publisher_suite = EncryptionSuite::Kyber768XChaCha20Poly1305(publisher_fp);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session
+        .set_kyber_local_secret(publisher_hpke_secret.as_slice())
+        .expect("publisher kyber secret");
+    publisher_session
+        .set_kyber_remote_public(viewer_fp, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public");
+    let update = publisher_session
+        .build_key_update(
+            [0x41; 32],
+            &publisher_suite,
+            1,
+            1,
+            publisher_keys.private_key(),
+        )
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session
+        .set_kyber_local_secret(viewer_hpke_secret.as_slice())
+        .expect("viewer kyber secret");
+    viewer_session
+        .set_kyber_remote_public(publisher_fp, publisher_hpke_public.as_slice())
+        .expect("publisher kyber public");
+    viewer_session
+        .process_remote_key_update(&update, publisher_keys.public_key())
+        .expect("first update succeeds");
+    let snapshot = viewer_session
+        .snapshot_state()
+        .expect("viewer session snapshot");
+
+    let mut restored_without_secret = StreamingSession::new(CapabilityRole::Viewer);
+    restored_without_secret
+        .restore_from_snapshot(snapshot.clone())
+        .expect("snapshot restores without local kyber secret");
+    assert_eq!(
+        restored_without_secret.snapshot_state(),
+        Some(snapshot.clone())
+    );
+
+    let replay_err = restored_without_secret
+        .process_remote_key_update(&update, publisher_keys.public_key())
+        .expect_err("replay must fail before kyber decapsulation");
+    match replay_err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::NonMonotonicKeyCounter {
+            previous,
+            found,
+        }) => {
+            assert_eq!(previous, 1);
+            assert_eq!(found, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(restored_without_secret.snapshot_state(), Some(snapshot));
+}
+
+#[test]
+fn kyber_suite_change_after_restore_rejects_state_drift_before_decapsulation() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
+    let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
+    let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
+    let viewer_fp = fingerprint(viewer_hpke_public.as_slice());
+    let publisher_suite = EncryptionSuite::Kyber768XChaCha20Poly1305(publisher_fp);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session
+        .set_kyber_local_secret(publisher_hpke_secret.as_slice())
+        .expect("publisher kyber secret");
+    publisher_session
+        .set_kyber_remote_public(viewer_fp, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public");
+    let update = publisher_session
+        .build_key_update(
+            [0x42; 32],
+            &publisher_suite,
+            1,
+            1,
+            publisher_keys.private_key(),
+        )
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session
+        .set_kyber_local_secret(viewer_hpke_secret.as_slice())
+        .expect("viewer kyber secret");
+    viewer_session
+        .set_kyber_remote_public(publisher_fp, publisher_hpke_public.as_slice())
+        .expect("publisher kyber public");
+    viewer_session
+        .process_remote_key_update(&update, publisher_keys.public_key())
+        .expect("first update succeeds");
+    let snapshot = viewer_session
+        .snapshot_state()
+        .expect("viewer session snapshot");
+
+    let mut restored_without_secret = StreamingSession::new(CapabilityRole::Viewer);
+    restored_without_secret
+        .restore_from_snapshot(snapshot.clone())
+        .expect("snapshot restores without local kyber secret");
+
+    let mut drifted = update.clone();
+    let mut drifted_fingerprint = publisher_fp;
+    drifted_fingerprint[0] ^= 0x5A;
+    drifted.suite = EncryptionSuite::Kyber768XChaCha20Poly1305(drifted_fingerprint);
+    drifted.key_counter = 2;
+    drifted.pub_ephemeral = vec![0xA5; TEST_KEM_SUITE.ciphertext_len()];
+    let mutated_suite = drifted.suite;
+    let transcript = key_update_transcript_bytes(&drifted).expect("serialize drifted frame");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    drifted.signature.copy_from_slice(signature.payload());
+
+    let err = restored_without_secret
+        .process_remote_key_update(&drifted, publisher_keys.public_key())
+        .expect_err("suite drift must fail before kyber decapsulation");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::SuiteChanged { expected, found }) => {
+            assert_eq!(expected, publisher_suite);
+            assert_eq!(found, mutated_suite);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(restored_without_secret.snapshot_state(), Some(snapshot));
 }
 
 #[test]

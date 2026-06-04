@@ -2757,6 +2757,26 @@ impl Executor {
                             "pending-production proof backends are not supported".to_owned(),
                         ));
                     }
+                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "production-claim proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "trusted-setup proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if crate::zk::is_developer_only_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "developer-only proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if !crate::zk::is_production_verify_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "unsupported proof backends are not supported".to_owned(),
+                        ));
+                    }
 
                     // If a VK reference is provided without a commitment, check existence in
                     // WSV. If a commitment is provided, skip the lookup to keep pre-verify
@@ -6365,6 +6385,75 @@ mod tests {
             let res =
                 executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache);
             assert!(res.is_err(), "duplicate proof should be rejected");
+        }
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn preverify_attachments_reject_non_production_backend_labels_before_vk_lookup() {
+        use iroha_data_model::{
+            proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+            transaction::{Executable, TransactionBuilder},
+        };
+        use iroha_schema::Ident;
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        for (idx, (backend, expected_msg)) in [
+            (
+                "halo2/ipa:production-ready",
+                "production-claim proof backends",
+            ),
+            ("halo2/ipa:kzg", "trusted-setup proof backends"),
+            ("halo2/ipa:dev-fixture", "developer-only proof backends"),
+            ("halo2/unknown-native-v1", "unsupported proof backends"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let backend_ident: Ident = backend.parse().expect("backend ident");
+            let proof = ProofBox::new(
+                backend_ident.clone(),
+                vec![0xA0 | u8::try_from(idx).unwrap()],
+            );
+            let attachment = ProofAttachment::new_ref(
+                backend_ident.clone(),
+                proof,
+                VerifyingKeyId::new(backend_ident, format!("missing_vk_{idx}")),
+            );
+            let tx = TransactionBuilder::new("test-chain".parse().unwrap(), ALICE_ID.clone())
+                .with_executable(Executable::Instructions(Vec::new().into()))
+                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .sign(ALICE_KEYPAIR.private_key());
+
+            let mut state_tx = block.transaction();
+            let err = executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .expect_err("non-production proof backend label must fail before vk lookup");
+            match err {
+                ValidationFail::NotPermitted(msg) => {
+                    assert!(
+                        msg.contains(expected_msg),
+                        "unexpected msg for {backend}: {msg}"
+                    );
+                    assert!(
+                        !msg.contains("referenced verifying key missing"),
+                        "backend classification for {backend} must precede vk lookup: {msg}"
+                    );
+                }
+                other => panic!("unexpected error for {backend}: {other:?}"),
+            }
         }
     }
 

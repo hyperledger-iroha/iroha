@@ -76,8 +76,12 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             ("groth16-bls12-377", .groth16Bls12377),
             ("groth16/bls12-377", .groth16Bls12377),
             ("penumbra-masp", .groth16Bls12377),
+            ("halo2/ipa/penumbra", .groth16Bls12377),
+            ("halo2/ipa/masp", .groth16Bls12377),
             ("monero-fcmp++", .fcmpPlusPlusCurveTree),
             ("fcmp-plus-plus-curve-tree", .fcmpPlusPlusCurveTree),
+            ("halo2/ipa/monero", .fcmpPlusPlusCurveTree),
+            ("halo2/ipa/curve-tree", .fcmpPlusPlusCurveTree),
             ("lattice-pcs-sis", .latticePcsSis),
             ("jindo-lattice-pcs-zk", .latticePcsSis),
             ("miden-stark", .midenStark),
@@ -130,25 +134,21 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
         }
     }
 
-    func testAdversarialPendingAliasSplicesRemainFailClosed() {
-        let aliases: [(String, VerifyingKeyBackendTag)] = [
-            ("halo2/ipa/orchard/dev-fixture", .halo2IpaOrchard),
-            ("stark/fri/miden/claimed-production", .midenStark),
-            ("anonymous-pgc-k-out-of-n-v1-production", .anonymousPgc),
-            ("sis-hints-anoncred-pq-v0-devfixture", .sisWithHints),
-            ("groth16/bls12-377/../../prod", .groth16Bls12377),
-            ("post-quantum-masp/audit-claimed", .pqMaspStarkFri),
-            ("halo2/ipa/penumbra", .groth16Bls12377),
-            ("halo2/ipa/masp", .groth16Bls12377),
-            ("halo2/ipa/monero", .fcmpPlusPlusCurveTree),
-            ("halo2/ipa/curve-tree", .fcmpPlusPlusCurveTree)
+    func testAdversarialPendingAliasSplicesStayUnsupported() {
+        let aliases = [
+            "halo2/ipa/orchard/dev-fixture",
+            "stark/fri/miden/claimed-production",
+            "anonymous-pgc-k-out-of-n-v1-production",
+            "sis-hints-anoncred-pq-v0-devfixture",
+            "groth16/bls12-377/../../prod",
+            "post-quantum-masp/audit-claimed"
         ]
 
-        for (label, expected) in aliases {
+        for label in aliases {
             let parsed = VerifyingKeyBackendTag(catalogLabel: label)
-            XCTAssertEqual(parsed, expected, "\(label) must classify to the exact pending backend")
-            XCTAssertTrue(parsed.isPendingProductionBackend, "\(label) must remain fail-closed")
-            XCTAssertTrue(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            XCTAssertEqual(parsed, .unsupported, "\(label) must stay unsupported")
+            XCTAssertFalse(parsed.isPendingProductionBackend)
+            XCTAssertFalse(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
         }
     }
 
@@ -228,6 +228,9 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "stark/fri/random-profile",
             "stark/fri/sha512-goldilocks",
             "stark/fri/audit-proof-v1",
+            "stark/fri/sha256 goldilocks",
+            "stark/fri/sha256+goldilocks",
+            "halo2/ipa+mock",
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",

@@ -65,7 +65,7 @@ final class ConfidentialEncryptedPayloadTests: XCTestCase {
         XCTAssertThrowsError(
             try ConfidentialEncryptedPayload(ephemeralPublicKey: Data([0x00]),
                                              nonce: Data(repeating: 0x00, count: 24),
-                                             ciphertext: Data())
+                                             ciphertext: Data([0x01]))
         ) { error in
             guard case ConfidentialEncryptedPayloadError.invalidEphemeralKeyLength(1) = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -75,9 +75,48 @@ final class ConfidentialEncryptedPayloadTests: XCTestCase {
         XCTAssertThrowsError(
             try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x00, count: 32),
                                              nonce: Data([0x00]),
-                                             ciphertext: Data())
+                                             ciphertext: Data([0x01]))
         ) { error in
             guard case ConfidentialEncryptedPayloadError.invalidNonceLength(1) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testInitializerRejectsEmptyCiphertext() {
+        XCTAssertThrowsError(
+            try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x07, count: 32),
+                                             nonce: Data(repeating: 0x22, count: 24),
+                                             ciphertext: Data())
+        ) { error in
+            guard case ConfidentialEncryptedPayloadError.emptyCiphertext = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testInitializerRejectsLowOrderEphemeralPublicKey() {
+        XCTAssertThrowsError(
+            try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x00, count: 32),
+                                             nonce: Data(repeating: 0x22, count: 24),
+                                             ciphertext: Data([0x01]))
+        ) { error in
+            guard case ConfidentialEncryptedPayloadError.invalidEphemeralPublicKey = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testDeserializeRejectsLowOrderEphemeralPublicKey() {
+        var encoded = Data()
+        encoded.append(ConfidentialEncryptedPayload.v1)
+        encoded.append(Data(repeating: 0x00, count: 32))
+        encoded.append(Data(repeating: 0x22, count: 24))
+        encoded.append(0x01)
+        encoded.append(0xAA)
+
+        XCTAssertThrowsError(try ConfidentialEncryptedPayload.deserialize(from: encoded)) { error in
+            guard case ConfidentialEncryptedPayloadError.invalidEphemeralPublicKey = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
         }

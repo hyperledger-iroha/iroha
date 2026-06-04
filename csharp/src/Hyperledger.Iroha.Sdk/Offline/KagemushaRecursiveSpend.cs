@@ -41,6 +41,8 @@ public static class KagemushaRecursiveSpendNative
 {
     public const string RecursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1";
     public const string RecursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1";
+    public const string RecursiveSpendLineageOneHopProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-onehop-v1";
+    public const string RecursiveSpendLineageAppendProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-append-v1";
 
     public const uint RequiredBridgeAbiVersion = 6;
     public const uint CompactTokenMaxHops = 64;
@@ -124,9 +126,22 @@ public static class KagemushaRecursiveSpendNative
     public static bool CanRedeemWitnessless(string? circuitId, uint hopCount)
     {
         return RecursiveSpendLineageTransitionCircuitWiredV1
-            && circuitId == RecursiveSpendLineageProofCircuitIdV1
+            && IsLineageProofCircuitId(circuitId)
             && hopCount >= 1
             && hopCount <= RecursiveSpendLineageWitnesslessMaxHopsV1;
+    }
+
+    public static bool IsLineageProofCircuitId(string? circuitId)
+    {
+        return circuitId == RecursiveSpendLineageProofCircuitIdV1
+            || circuitId == RecursiveSpendLineageOneHopProofCircuitIdV1
+            || circuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
+    }
+
+    public static bool IsLineageAppendOutputCircuitId(string? outputCircuitId)
+    {
+        return outputCircuitId == RecursiveSpendLineageProofCircuitIdV1
+            || outputCircuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
     }
 
     public static bool RequiresLineageWitnessForRedeem(string? circuitId, uint hopCount)
@@ -143,8 +158,12 @@ public static class KagemushaRecursiveSpendNative
 
     public static string NormalizeAppendOutputCircuitId(string? outputCircuitId)
     {
-        return string.IsNullOrEmpty(outputCircuitId)
-            ? RecursiveAggregationProofCircuitIdV1
+        if (string.IsNullOrEmpty(outputCircuitId))
+        {
+            return RecursiveAggregationProofCircuitIdV1;
+        }
+        return outputCircuitId == RecursiveSpendLineageProofCircuitIdV1
+            ? RecursiveSpendLineageAppendProofCircuitIdV1
             : outputCircuitId!;
     }
 
@@ -152,18 +171,18 @@ public static class KagemushaRecursiveSpendNative
     {
         var normalized = NormalizeAppendOutputCircuitId(outputCircuitId);
         return normalized == RecursiveAggregationProofCircuitIdV1
-            || normalized == RecursiveSpendLineageProofCircuitIdV1;
+            || normalized == RecursiveSpendLineageAppendProofCircuitIdV1;
     }
 
     public static bool IsSupportedPreviousProofCircuitId(string? previousProofCircuitId)
     {
         return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
-            || previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1;
+            || IsLineageProofCircuitId(previousProofCircuitId);
     }
 
     public static bool RequiresPreviousLineageVerifierRecordForAppend(string? previousProofCircuitId)
     {
-        return previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1;
+        return IsLineageProofCircuitId(previousProofCircuitId);
     }
 
     public static bool IsSupportedAppendProofTransition(
@@ -173,16 +192,16 @@ public static class KagemushaRecursiveSpendNative
         var normalizedOutput = NormalizeAppendOutputCircuitId(outputCircuitId);
         return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
             && normalizedOutput == RecursiveAggregationProofCircuitIdV1
-            || previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1
+            || IsLineageProofCircuitId(previousProofCircuitId)
             && (
                 normalizedOutput == RecursiveAggregationProofCircuitIdV1
-                || normalizedOutput == RecursiveSpendLineageProofCircuitIdV1);
+                || normalizedOutput == RecursiveSpendLineageAppendProofCircuitIdV1);
     }
 
     public static string PreferredAppendOutputCircuitId(uint previousHopCount)
     {
         return CanAppendWitnesslessLineage(previousHopCount)
-            ? RecursiveSpendLineageProofCircuitIdV1
+            ? RecursiveSpendLineageAppendProofCircuitIdV1
             : RecursiveAggregationProofCircuitIdV1;
     }
 
@@ -196,7 +215,7 @@ public static class KagemushaRecursiveSpendNative
         return normalized switch
         {
             RecursiveAggregationProofCircuitIdV1 => previousHopCount < CompactTokenMaxHops,
-            RecursiveSpendLineageProofCircuitIdV1 => CanAppendWitnesslessLineage(previousHopCount),
+            RecursiveSpendLineageAppendProofCircuitIdV1 => CanAppendWitnesslessLineage(previousHopCount),
             _ => false,
         };
     }
@@ -219,7 +238,7 @@ public static class KagemushaRecursiveSpendNative
 
     public static bool RequiresPreviousProofOpenEnvelopesForAppend(string? outputCircuitId, uint previousHopCount)
     {
-        return NormalizeAppendOutputCircuitId(outputCircuitId) == RecursiveSpendLineageProofCircuitIdV1
+        return IsLineageAppendOutputCircuitId(NormalizeAppendOutputCircuitId(outputCircuitId))
             && previousHopCount >= 1;
     }
 

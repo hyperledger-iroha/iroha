@@ -803,6 +803,11 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
         "sis-with-hints",
     ),
     (
+        "zk-ace-pq-authorization-v0",
+        "stark/fri/sha256-goldilocks",
+        "stark-fri",
+    ),
+    (
         "orchard-halo2-actions-v1",
         "halo2-pasta-action-bundle",
         "halo2-ipa-orchard",
@@ -831,6 +836,14 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
 ];
 
 const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
+const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[
+    "orchard-halo2-actions-v1",
+    "penumbra-masp-v1",
+    "monero-fcmp-plus-plus-v1",
+    "miden-stark-note-v1",
+    "aztec-private-rollup-v1",
+    "pq-masp-stark-v0",
+];
 const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
@@ -924,9 +937,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildRotateZkAceIdentityCommitmentInstruction",
             "buildRevokeZkAceIdentityCommitmentInstruction",
             "buildZkAceAuthorizedTransferInstruction",
-            "buildZkAceAuthorizationProofV1",
         ],
-        planned_entrypoints: &["buildShieldedZkAceAuthorizedTransferInstruction"],
+        planned_entrypoints: &[
+            "buildZkAceAuthorizationProofV1",
+            "buildShieldedZkAceAuthorizedTransferInstruction",
+        ],
     },
     PrivacyAlgorithmEntry {
         id: "anonymous-pgc-k-out-of-n-v1",
@@ -1116,12 +1131,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         id: "pq-masp-stark-v0",
         proof_family: "stark-fri",
         backend_family: "pq-masp-stark-fri",
-        sdk_entrypoints: &[
-            "buildRegisterAssetHiddenZkPoolInstruction",
-            "buildAssetHiddenZkTransferInstruction",
-        ],
+        sdk_entrypoints: &[],
         planned_entrypoints: &[
             "buildPqMaspStarkTransferProofV0",
+            "buildPqMaspStarkRegisterPoolInstruction",
+            "buildPqMaspStarkTransferInstruction",
             "generateMlDsaKeyPair",
             "encapsulateMlKem",
         ],
@@ -1268,10 +1282,13 @@ fn privacy_entrypoint_planned(entry: &PrivacyAlgorithmEntry, entrypoint: &str) -
         .any(|candidate| *candidate == entrypoint)
 }
 
-fn privacy_catalog_label_is_portable(label: &str) -> bool {
+fn privacy_proof_family_is_portable(label: &str) -> bool {
     !label.is_empty()
-        && label.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        && label.split(['-', '/']).all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
         })
 }
 
@@ -1338,7 +1355,12 @@ fn privacy_entrypoint_is_explicit_dev_fixture(entrypoint: &str) -> bool {
 
 fn privacy_entrypoint_is_local_verifier(entrypoint: &str) -> bool {
     let name = privacy_entrypoint_name(entrypoint);
-    name.starts_with("verify") && name.ends_with("Locally")
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("verify")
+        && (lower.ends_with("locally")
+            || lower.ends_with("local")
+            || lower.contains("localverifier")
+            || lower.contains("localonly"))
 }
 
 fn privacy_entrypoint_is_instruction_builder(entrypoint: &str) -> bool {
@@ -1362,17 +1384,33 @@ fn privacy_entrypoint_is_untyped_ledger_mutation(entrypoint: &str) -> bool {
         && !name.ends_with("Transaction")
 }
 
+fn privacy_entrypoint_is_proof_helper(entrypoint: &str) -> bool {
+    let name = privacy_entrypoint_name(entrypoint);
+    name.contains("ProofEnvelope")
+        || name.contains("ProofWitness")
+        || name.contains("ProofPublicInputs")
+        || name.contains("ProofRequest")
+        || name.contains("ProofCommitment")
+}
+
 fn privacy_entrypoint_is_production_proof_builder(entrypoint: &str) -> bool {
     let name = privacy_entrypoint_name(entrypoint);
     name.starts_with("build")
         && name.contains("Proof")
         && !privacy_entrypoint_is_instruction_builder(entrypoint)
         && !privacy_entrypoint_is_ledger_mutation(entrypoint)
+        && !privacy_entrypoint_is_proof_helper(entrypoint)
         && !privacy_entrypoint_is_dev_fixture(entrypoint)
 }
 
 fn privacy_algorithm_entry_is_component(entry: &PrivacyAlgorithmEntry) -> bool {
     PRIVACY_COMPONENT_ALGORITHM_IDS
+        .iter()
+        .any(|algorithm_id| *algorithm_id == entry.id)
+}
+
+fn privacy_algorithm_entry_is_research_target(entry: &PrivacyAlgorithmEntry) -> bool {
+    PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS
         .iter()
         .any(|algorithm_id| *algorithm_id == entry.id)
 }
@@ -1429,9 +1467,9 @@ fn privacy_algorithm_entry_invariants_hold(entry: &PrivacyAlgorithmEntry) -> boo
         privacy_entrypoints_include_untyped_ledger_mutation(entry.sdk_entrypoints)
             || privacy_entrypoints_include_untyped_ledger_mutation(entry.planned_entrypoints);
 
-    privacy_text_field_is_portable_identifier(entry.id)
-        && privacy_catalog_label_is_portable(entry.proof_family)
-        && privacy_catalog_label_is_portable(entry.backend_family)
+    privacy_algorithm_id_is_portable(entry.id)
+        && privacy_proof_family_is_portable(entry.proof_family)
+        && privacy_vk_ref_backend_family_is_portable(entry.backend_family)
         && !privacy_exposed_label_claims_production_readiness(entry.id)
         && !privacy_exposed_label_claims_production_readiness(entry.proof_family)
         && !privacy_exposed_label_claims_production_readiness(entry.backend_family)
@@ -1439,11 +1477,11 @@ fn privacy_algorithm_entry_invariants_hold(entry: &PrivacyAlgorithmEntry) -> boo
         && entry
             .sdk_entrypoints
             .iter()
-            .all(|entrypoint| privacy_text_field_is_portable_identifier(entrypoint))
+            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
         && entry
             .planned_entrypoints
             .iter()
-            .all(|entrypoint| privacy_text_field_is_portable_identifier(entrypoint))
+            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
         && entry
             .sdk_entrypoints
             .iter()
@@ -1474,6 +1512,7 @@ fn privacy_algorithm_entry_invariants_hold(entry: &PrivacyAlgorithmEntry) -> boo
         && (!privacy_algorithm_entry_is_component(entry)
             || (!privacy_entrypoints_include_ledger_mutation(entry.sdk_entrypoints)
                 && !privacy_entrypoints_include_ledger_mutation(entry.planned_entrypoints)))
+        && (!privacy_algorithm_entry_is_research_target(entry) || entry.sdk_entrypoints.is_empty())
 }
 
 fn privacy_algorithm_catalog_entries_are_valid(entries: &[PrivacyAlgorithmEntry]) -> bool {
@@ -1504,7 +1543,9 @@ fn privacy_required_production_plan_rows_are_present(entries: &[PrivacyAlgorithm
                 entry.id == *algorithm_id
                     && entry.proof_family == *proof_family
                     && entry.backend_family == *backend_family
-                    && !entry.planned_entrypoints.is_empty()
+                    && privacy_entrypoints_include_production_proof_builder(
+                        entry.planned_entrypoints,
+                    )
             })
         },
     )
@@ -1631,14 +1672,13 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
         return false;
     };
 
-    !capability.algorithm_id.is_empty()
-        && privacy_text_field_is_portable_identifier(&capability.algorithm_id)
+    privacy_algorithm_id_is_portable(&capability.algorithm_id)
         && !privacy_exposed_label_claims_production_readiness(&capability.algorithm_id)
         && capability.proof_family.as_str() == entry.proof_family
-        && privacy_catalog_label_is_portable(&capability.proof_family)
+        && privacy_proof_family_is_portable(&capability.proof_family)
         && !privacy_exposed_label_claims_production_readiness(&capability.proof_family)
         && capability.backend_family.as_str() == entry.backend_family
-        && privacy_catalog_label_is_portable(&capability.backend_family)
+        && privacy_vk_ref_backend_family_is_portable(&capability.backend_family)
         && !privacy_exposed_label_claims_production_readiness(&capability.backend_family)
         && privacy_string_vec_matches_slice(&capability.sdk_entrypoints, entry.sdk_entrypoints)
         && privacy_string_vec_matches_slice(
@@ -1648,7 +1688,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
         && capability
             .sdk_entrypoints
             .iter()
-            .all(|entrypoint| privacy_text_field_is_portable_identifier(entrypoint))
+            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
         && capability
             .sdk_entrypoints
             .iter()
@@ -1656,7 +1696,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
         && capability
             .planned_entrypoints
             .iter()
-            .all(|entrypoint| privacy_text_field_is_portable_identifier(entrypoint))
+            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
         && capability
             .planned_entrypoints
             .iter()
@@ -1719,10 +1759,66 @@ fn privacy_text_field_is_portable_identifier(field: &str) -> bool {
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
+fn privacy_vk_ref_backend_family_is_portable(field: &str) -> bool {
+    let Some(first) = field.bytes().next() else {
+        return false;
+    };
+    let Some(last) = field.bytes().last() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && (last.is_ascii_lowercase() || last.is_ascii_digit())
+        && field.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
+        })
+}
+
+fn privacy_vk_ref_name_is_portable(field: &str) -> bool {
+    let Some(first) = field.bytes().next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && field
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn privacy_algorithm_id_is_portable(field: &str) -> bool {
+    let Some(first) = field.bytes().next() else {
+        return false;
+    };
+    let Some(last) = field.bytes().last() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && (last.is_ascii_lowercase() || last.is_ascii_digit())
+        && field.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+fn privacy_sdk_entrypoint_is_portable(field: &str) -> bool {
+    !field.is_empty()
+        && field.split('.').all(|segment| {
+            let Some(first) = segment.bytes().next() else {
+                return false;
+            };
+            (first.is_ascii_alphabetic() || first == b'_')
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+}
+
 fn privacy_request_has_unportable_text_field(request: &PrivacyProofRequestV1) -> bool {
     privacy_request_text_fields(request)
         .iter()
         .any(|field| !privacy_text_field_is_portable_identifier(field))
+}
+
+fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) -> bool {
+    !privacy_algorithm_id_is_portable(&request.algorithm_id)
+        || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
 }
 
 fn privacy_request_has_exposed_production_claim_text_field(
@@ -1739,6 +1835,15 @@ fn privacy_vk_ref_parts(vk_ref: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((backend, name))
+}
+
+fn privacy_vk_ref_is_well_formed(vk_ref: &str) -> bool {
+    matches!(
+        privacy_vk_ref_parts(vk_ref),
+        Some((backend, name))
+            if privacy_vk_ref_backend_family_is_portable(backend)
+                && privacy_vk_ref_name_is_portable(name)
+    )
 }
 
 fn privacy_vk_ref_matches_backend(entry: &PrivacyAlgorithmEntry, vk_ref: &str) -> bool {
@@ -1777,7 +1882,7 @@ fn privacy_catalog_vk_ref_name(entry: &PrivacyAlgorithmEntry) -> &'static str {
 
 fn privacy_catalog_vk_ref_name_is_registered(entry: &PrivacyAlgorithmEntry) -> bool {
     let name = privacy_catalog_vk_ref_name(entry);
-    name != "unknown" && privacy_text_field_is_portable_identifier(name)
+    name != "unknown" && privacy_vk_ref_name_is_portable(name)
 }
 
 fn privacy_canonical_vk_ref_name(entry: &PrivacyAlgorithmEntry) -> String {
@@ -1913,6 +2018,30 @@ fn privacy_result_for_request(
         );
     }
 
+    if privacy_request_has_invalid_catalog_shape(&request) {
+        return privacy_failure_result(
+            PRIVACY_FFI_ERROR_INVALID_REQUEST,
+            "privacy proof request algorithm_id and entrypoint must use catalog identifier shapes",
+            None,
+        );
+    }
+
+    if request.vk_ref.trim().is_empty() {
+        return privacy_failure_result(
+            PRIVACY_FFI_ERROR_INVALID_REQUEST,
+            "privacy proof request must include non-empty vk_ref",
+            Some(&request),
+        );
+    }
+
+    if !privacy_vk_ref_is_well_formed(&request.vk_ref) {
+        return privacy_failure_result(
+            PRIVACY_FFI_ERROR_INVALID_REQUEST,
+            "privacy proof request vk_ref must use backend:name with portable verifier-key components",
+            None,
+        );
+    }
+
     let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
         return privacy_failure_result(
             PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
@@ -1941,14 +2070,6 @@ fn privacy_result_for_request(
         return privacy_failure_result(
             PRIVACY_FFI_ERROR_INVALID_REQUEST,
             "privacy proof request entrypoint must be a production proof builder",
-            Some(&request),
-        );
-    }
-
-    if request.vk_ref.trim().is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request must include non-empty vk_ref",
             Some(&request),
         );
     }
@@ -3123,6 +3244,18 @@ unsafe fn read_vec_bytes(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Vec<
     Ok(slice.to_vec())
 }
 
+fn build_confidential_encrypted_payload(
+    ephemeral: [u8; 32],
+    nonce: [u8; 24],
+    ciphertext: Vec<u8>,
+) -> BridgeResult<ConfidentialEncryptedPayload> {
+    let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
+    payload
+        .validate()
+        .map_err(|_| BridgeError::ConfidentialPayload)?;
+    Ok(payload)
+}
+
 fn decode_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
     let body = hex_str.trim().trim_start_matches("0x");
     let bytes = hex::decode(body).map_err(|_| BridgeError::ProofAttachment)?;
@@ -3492,19 +3625,28 @@ pub unsafe extern "C" fn connect_norito_encode_confidential_encrypted_payload(
         return -2;
     }
     // Safety: caller guarantees buffers are valid for the declared length.
-    let ephemeral = unsafe { slice::from_raw_parts(ephemeral_ptr, 32) };
-    let nonce = unsafe { slice::from_raw_parts(nonce_ptr, 24) };
-    let ciphertext = if ciphertext_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { slice::from_raw_parts(ciphertext_ptr, ciphertext_len as usize) }.to_vec()
+    let mut ephemeral = [0u8; 32];
+    ephemeral.copy_from_slice(unsafe { slice::from_raw_parts(ephemeral_ptr, 32) });
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(unsafe { slice::from_raw_parts(nonce_ptr, 24) });
+    let ciphertext = match unsafe { read_vec_bytes(ciphertext_ptr, ciphertext_len) } {
+        Ok(ciphertext) => ciphertext,
+        Err(BridgeError::NullPtr) => return -1,
+        Err(_) => return -3,
     };
-    let mut encoded = Vec::with_capacity(1 + ephemeral.len() + nonce.len() + ciphertext.len() + 10);
+    let payload = match build_confidential_encrypted_payload(ephemeral, nonce, ciphertext) {
+        Ok(payload) => payload,
+        Err(_) => return -3,
+    };
+    let ciphertext = payload.ciphertext();
+    let mut encoded = Vec::with_capacity(
+        1 + payload.ephemeral_pubkey().len() + payload.nonce().len() + ciphertext.len() + 10,
+    );
     encoded.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
-    encoded.extend_from_slice(ephemeral);
-    encoded.extend_from_slice(nonce);
+    encoded.extend_from_slice(payload.ephemeral_pubkey());
+    encoded.extend_from_slice(payload.nonce());
     encode_varint(ciphertext.len() as u64, &mut encoded);
-    encoded.extend_from_slice(&ciphertext);
+    encoded.extend_from_slice(ciphertext);
     unsafe { write_bytes(out_ptr, out_len, &encoded) }.map_or_else(|err| err, |_| 0)
 }
 
@@ -5960,8 +6102,8 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
     use iroha_core::zk::{
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
-        ZK_BACKEND_HALO2_IPA, kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive,
     };
@@ -5978,7 +6120,11 @@ fn kagemusha_recursive_spend_append_from_request_archive(
             kagemusha_recursive_aggregation_proof_vk_box()
                 .map_err(|_| BridgeError::KagemushaProve)?
         }
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
+        output_circuit
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+                output_circuit,
+            ) =>
+        {
             if iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 output_proof_circuit_id.as_str(),
                 request.previous_bundle.accumulator.hop_count,
@@ -6041,7 +6187,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_transition_pro
 fn kagemusha_recursive_spend_transition_profile_init_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1> {
-    use iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes;
+    use iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive;
     use iroha_data_model::offline::{
         KagemushaRecursiveSpendInitRequestV1,
         kagemusha_recursive_spend_transition_profile_from_initial_evidence,
@@ -6052,12 +6198,9 @@ fn kagemusha_recursive_spend_transition_profile_init_from_request_archive(
     request
         .validate_public_binding()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-        norito::decode_from_bytes(&request.pallas_open_envelopes_archive)
-            .map_err(|_| BridgeError::KagemushaProve)?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
         &request.record_bundle,
-        &envelopes,
+        &request.pallas_open_envelopes_archive,
     )
     .map_err(|_| BridgeError::KagemushaProve)?;
     kagemusha_recursive_spend_transition_profile_from_initial_evidence(
@@ -6101,7 +6244,7 @@ fn kagemusha_recursive_spend_transition_profile_append_from_request_archive(
     use iroha_core::zk::{
         kagemusha_fold_step_proof_hash,
         kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives,
-        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes,
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive,
     };
     use iroha_data_model::offline::{
         KagemushaRecursiveSpendAppendRequestV1,
@@ -6114,12 +6257,9 @@ fn kagemusha_recursive_spend_transition_profile_append_from_request_archive(
     request
         .validate_public_binding()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-        norito::decode_from_bytes(&request.pallas_open_envelopes_archive)
-            .map_err(|_| BridgeError::KagemushaProve)?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
         &request.record_bundle,
-        &envelopes,
+        &request.pallas_open_envelopes_archive,
     )
     .map_err(|_| BridgeError::KagemushaProve)?;
     if request
@@ -6412,8 +6552,8 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
     use iroha_core::zk::{
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
-        ZK_BACKEND_HALO2_IPA, ensure_kagemusha_recursive_spend_chain_admission_proves_lineage,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage,
         kagemusha_recursive_aggregation_proof_vk_box,
         preverify_kagemusha_recursive_spend_bundle_with_record,
         verify_kagemusha_recursive_spend_bundle,
@@ -6461,7 +6601,11 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
                     .map_err(|_| BridgeError::KagemushaProve)?;
                 }
             }
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
+            circuit_id
+                if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                    circuit_id,
+                ) =>
+            {
                 let record = request
                     .lineage_verifier_record
                     .as_ref()
@@ -6485,9 +6629,9 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     } else {
         ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&request.bundle)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        if request.bundle.recursive_proof.verifier_key_id.name
-            == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID
-        {
+        if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            &request.bundle.recursive_proof.verifier_key_id.name,
+        ) {
             let record = request
                 .lineage_verifier_record
                 .as_ref()
@@ -10788,7 +10932,7 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
         };
         let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
 
-        let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
         let asset = inputs.asset_definition.clone();
         let from_account = inputs.from_account.clone();
         let ttl = inputs.ttl;
@@ -10906,9 +11050,8 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
                 BridgeError::ConfidentialPayload,
             )?
         };
-        let ciphertext = unsafe {
-            slice::from_raw_parts(payload_ciphertext_ptr, payload_ciphertext_len as usize).to_vec()
-        };
+        let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
 
         let ShieldTxInputs {
             chain_id,
@@ -10927,7 +11070,6 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
             ttl,
             private_key,
             || {
-                let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
                 let instruction = zk::Shield::new(
                     asset_definition,
                     from_account,
@@ -13129,6 +13271,109 @@ mod accel_tests {
         cstring(&asset_definition_literal(domain, name))
     }
 
+    fn call_shield_encoder(
+        ephemeral: &[u8; 32],
+        ciphertext: &[u8],
+        algorithm: Option<Algorithm>,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let amount = cstring("7");
+        let note_commitment = [0x33_u8; 32];
+        let nonce = [0x44_u8; 24];
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0_u8; 32];
+        let result = unsafe {
+            if let Some(algorithm) = algorithm {
+                connect_norito_encode_shield_signed_transaction_alg(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    note_commitment.as_ptr(),
+                    note_commitment.len() as c_ulong,
+                    ephemeral.as_ptr(),
+                    ephemeral.len() as c_ulong,
+                    nonce.as_ptr(),
+                    nonce.len() as c_ulong,
+                    ciphertext.as_ptr(),
+                    ciphertext.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    algorithm as u8,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            } else {
+                connect_norito_encode_shield_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    note_commitment.as_ptr(),
+                    note_commitment.len() as c_ulong,
+                    ephemeral.as_ptr(),
+                    ephemeral.len() as c_ulong,
+                    nonce.as_ptr(),
+                    nonce.len() as c_ulong,
+                    ciphertext.as_ptr(),
+                    ciphertext.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            }
+        };
+        (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+
+    fn call_confidential_payload_encoder(
+        ephemeral: &[u8; 32],
+        ciphertext: &[u8],
+    ) -> (c_int, *mut u8, c_ulong) {
+        let nonce = [0x44_u8; 24];
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let result = unsafe {
+            connect_norito_encode_confidential_encrypted_payload(
+                ephemeral.as_ptr(),
+                ephemeral.len() as c_ulong,
+                nonce.as_ptr(),
+                nonce.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        (result, out_ptr, out_len)
+    }
+
     #[test]
     fn decode_asset_id_json_returns_canonical_fields() {
         let _guard = chain_guard();
@@ -14074,6 +14319,105 @@ mod accel_tests {
         unsafe {
             free(out_signed_ptr as *mut _);
         }
+    }
+
+    #[test]
+    fn shield_encoder_accepts_valid_confidential_payload() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x07; 32], &[0x09, 0x0A], algorithm);
+            assert_eq!(result, 0, "expected shield encoder success");
+            assert!(!out_signed_ptr.is_null());
+            assert!(out_signed_len > 0);
+            assert_ne!(out_hash, [0u8; 32]);
+            unsafe {
+                free(out_signed_ptr as *mut _);
+            }
+        }
+    }
+
+    #[test]
+    fn shield_encoder_rejects_low_order_confidential_payload_key() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x00; 32], &[0x09, 0x0A], algorithm);
+            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
+            assert!(out_signed_ptr.is_null());
+            assert_eq!(out_signed_len, 0);
+            assert_eq!(out_hash, [0u8; 32]);
+        }
+    }
+
+    #[test]
+    fn shield_encoder_rejects_empty_confidential_ciphertext() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x07; 32], &[], algorithm);
+            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
+            assert!(out_signed_ptr.is_null());
+            assert_eq!(out_signed_len, 0);
+            assert_eq!(out_hash, [0u8; 32]);
+        }
+    }
+
+    #[test]
+    fn confidential_payload_encoder_accepts_valid_payload() {
+        let (result, out_ptr, out_len) =
+            call_confidential_payload_encoder(&[0x07; 32], &[0x09, 0x0A]);
+        assert_eq!(result, 0);
+        assert!(!out_ptr.is_null());
+        let encoded = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
+        assert_eq!(encoded[0], CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+        assert_eq!(&encoded[1..33], &[0x07; 32]);
+        assert_eq!(&encoded[33..57], &[0x44; 24]);
+        assert_eq!(encoded[57], 2);
+        assert_eq!(&encoded[58..], &[0x09, 0x0A]);
+        unsafe {
+            free(out_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn confidential_payload_encoder_rejects_low_order_ephemeral_key() {
+        let (result, out_ptr, out_len) =
+            call_confidential_payload_encoder(&[0x00; 32], &[0x09, 0x0A]);
+        assert_eq!(result, -3);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn confidential_payload_encoder_rejects_empty_ciphertext() {
+        let (result, out_ptr, out_len) = call_confidential_payload_encoder(&[0x07; 32], &[]);
+        assert_eq!(result, -3);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn connect_derive_keys_rejects_low_order_peer_public_key() {
+        let local_private_key = [0x01_u8; 32];
+        let low_order_peer_public_key = [0x00_u8; 32];
+        let session_id = [0x02_u8; 32];
+        let mut app_key = [0xA5_u8; 32];
+        let mut wallet_key = [0x5A_u8; 32];
+
+        let result = unsafe {
+            connect_norito_connect_derive_keys(
+                local_private_key.as_ptr(),
+                low_order_peer_public_key.as_ptr(),
+                session_id.as_ptr(),
+                app_key.as_mut_ptr(),
+                wallet_key.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(result, -2);
+        assert_eq!(app_key, [0xA5_u8; 32]);
+        assert_eq!(wallet_key, [0x5A_u8; 32]);
     }
 
     #[test]
@@ -18764,7 +19108,8 @@ mod tests {
         assert!(privacy_required_production_plan_rows_are_present(
             PRIVACY_ALGORITHM_ENTRIES
         ));
-        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 15);
+        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 16);
+        assert_eq!(PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.len(), 6);
         assert!(
             PRIVACY_ALGORITHM_ENTRIES
                 .iter()
@@ -18774,6 +19119,14 @@ mod tests {
                         && !privacy_entrypoints_include_ledger_mutation(entry.planned_entrypoints)
                 ),
             "component privacy rows must remain proof-only",
+        );
+        assert!(
+            PRIVACY_ALGORITHM_ENTRIES
+                .iter()
+                .filter(|entry| privacy_algorithm_entry_is_research_target(entry))
+                .all(|entry| entry.sdk_entrypoints.is_empty()
+                    && !entry.planned_entrypoints.is_empty()),
+            "research privacy rows must keep executable SDK entrypoints planned-only",
         );
     }
 
@@ -18812,10 +19165,15 @@ mod tests {
         const SDK_ALPHA: &[&str] = &["buildAlphaProof"];
         const SDK_BETA: &[&str] = &["buildBetaProof"];
         const SDK_DUPLICATE: &[&str] = &["buildAlphaProof", "buildAlphaProof"];
+        const SDK_EMPTY: &[&str] = &[""];
+        const SDK_DELIMITED: &[&str] = &["buildAlphaProof:shadow"];
+        const SDK_HYPHENATED: &[&str] = &["build-AlphaProof"];
+        const SDK_DOLLAR: &[&str] = &["build$AlphaProof"];
         const SDK_UNPORTABLE: &[&str] = &["build Alpha Proof"];
         const SDK_MAINNET_READY: &[&str] = &["buildMainnetReadyProof"];
         const PLANNED_ALPHA: &[&str] = &["buildAlphaProof"];
         const PLANNED_BETA: &[&str] = &["verifyBetaProof"];
+        const PLANNED_EMPTY: &[&str] = &[""];
         const PLANNED_AUDIT_SIGNOFF: &[&str] = &["buildAuditSignoffProof"];
 
         let duplicate_ids = [
@@ -18878,11 +19236,151 @@ mod tests {
                 ),
             ),
             (
+                "delimited algorithm id",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2:shadow",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "uppercase algorithm id",
+                privacy_catalog_entry_for_test(
+                    "Confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "leading underscore algorithm id",
+                privacy_catalog_entry_for_test(
+                    "_confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "leading hyphen algorithm id",
+                privacy_catalog_entry_for_test(
+                    "-confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing underscore algorithm id",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2_",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing hyphen algorithm id",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2-",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
                 "unportable proof family",
                 privacy_catalog_entry_for_test(
                     "confidential-transfer-v2",
                     "halo2 ipa pasta",
                     "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "uppercase proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "Halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "delimited proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2:ipa:pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "empty proof-family segment",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2//ipa",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "unportable backend family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2/ipa/pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "delimited backend family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2:ipa:pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "uppercase backend family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "Halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "leading separator backend family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "-halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing separator backend family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta.",
                     SDK_ALPHA,
                     PLANNED_BETA,
                 ),
@@ -18915,6 +19413,56 @@ mod tests {
                     "halo2-ipa-pasta",
                     SDK_UNPORTABLE,
                     PLANNED_BETA,
+                ),
+            ),
+            (
+                "delimited entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_DELIMITED,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "hyphenated entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_HYPHENATED,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "dollar entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_DOLLAR,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "empty sdk entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_EMPTY,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "empty planned entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_EMPTY,
                 ),
             ),
             (
@@ -18967,6 +19515,9 @@ mod tests {
 
     #[test]
     fn privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows() {
+        const HELPER_ONLY_PLANNED: &[&str] = &["deriveOrchardWitness"];
+        const PROOF_HELPER_ONLY_PLANNED: &[&str] = &["buildAnonymousPgcProofEnvelope"];
+
         let missing_required: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES
             .iter()
             .copied()
@@ -19010,7 +19561,31 @@ mod tests {
             .planned_entrypoints = &[];
         assert!(
             !privacy_required_production_plan_rows_are_present(&missing_planned),
-            "required production plan rows must keep planned entrypoints until gates pass",
+            "required production plan rows must keep planned production proof builders until gates pass",
+        );
+
+        let mut helper_only_planned: Vec<PrivacyAlgorithmEntry> =
+            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+        helper_only_planned
+            .iter_mut()
+            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+            .expect("required production plan row")
+            .planned_entrypoints = HELPER_ONLY_PLANNED;
+        assert!(
+            !privacy_required_production_plan_rows_are_present(&helper_only_planned),
+            "required production plan rows must reject helper-only planned entrypoints",
+        );
+
+        let mut proof_helper_only_planned: Vec<PrivacyAlgorithmEntry> =
+            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+        proof_helper_only_planned
+            .iter_mut()
+            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+            .expect("required production plan row")
+            .planned_entrypoints = PROOF_HELPER_ONLY_PLANNED;
+        assert!(
+            !privacy_required_production_plan_rows_are_present(&proof_helper_only_planned),
+            "required production plan rows must reject proof-helper planned entrypoints",
         );
     }
 
@@ -19019,15 +19594,31 @@ mod tests {
         const SDK_ALPHA: &[&str] = &["buildShapeCommitment"];
         const SDK_IMPLICIT_FIXTURE: &[&str] = &["buildMockProof"];
         const SDK_LOCAL_ONLY: &[&str] = &["verifyShapeProofLocally"];
+        const SDK_LOCAL_SUFFIX: &[&str] = &["verifyShapeProofLocal"];
+        const SDK_LOCAL_VERIFIER_SUFFIX: &[&str] = &["verifyShapeProofLocalVerifier"];
         const SDK_DEV_ONLY: &[&str] = &["buildShapeDevProofFixture"];
         const SDK_DEV_AND_LOCAL: &[&str] =
             &["buildShapeDevProofFixture", "verifyShapeProofLocally"];
         const PLANNED_PROOF: &[&str] = &["buildShapeProductionProofV1"];
         const PLANNED_FIXTURE: &[&str] = &["buildShapeDevProofFixture"];
         const PLANNED_LOCAL: &[&str] = &["verifyShapeProofLocally"];
+        const PLANNED_LOCAL_SUFFIX: &[&str] = &["verifyShapeProofLocal"];
+        const PLANNED_LOCAL_VERIFIER_SUFFIX: &[&str] = &["verifyShapeProofLocalVerifier"];
         const PLANNED_INSTRUCTION: &[&str] = &["buildShapeProductionInstruction"];
+        const PLANNED_PROOF_HELPER: &[&str] = &["buildShapeProofEnvelope"];
+        const RESEARCH_SDK: &[&str] = &["verifySharedResearchProof"];
 
         for (case, entry) in [
+            (
+                "research target executable entrypoint",
+                privacy_catalog_entry_for_test(
+                    "pq-masp-stark-v0",
+                    "stark-fri",
+                    "pq-masp-stark-fri",
+                    RESEARCH_SDK,
+                    PLANNED_PROOF,
+                ),
+            ),
             (
                 "planned fixture entrypoint",
                 privacy_catalog_entry_for_test(
@@ -19046,6 +19637,26 @@ mod tests {
                     "halo2-ipa-pasta",
                     SDK_ALPHA,
                     PLANNED_LOCAL,
+                ),
+            ),
+            (
+                "planned local verifier short suffix",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_LOCAL_SUFFIX,
+                ),
+            ),
+            (
+                "planned local verifier alias suffix",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_LOCAL_VERIFIER_SUFFIX,
                 ),
             ),
             (
@@ -19069,6 +19680,26 @@ mod tests {
                 ),
             ),
             (
+                "local verifier short suffix without DevFixture",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_LOCAL_SUFFIX,
+                    PLANNED_PROOF,
+                ),
+            ),
+            (
+                "local verifier alias suffix without DevFixture",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_LOCAL_VERIFIER_SUFFIX,
+                    PLANNED_PROOF,
+                ),
+            ),
+            (
                 "DevFixture without local verifier",
                 privacy_catalog_entry_for_test(
                     "confidential-transfer-v2",
@@ -19086,6 +19717,16 @@ mod tests {
                     "halo2-ipa-pasta",
                     SDK_DEV_AND_LOCAL,
                     PLANNED_INSTRUCTION,
+                ),
+            ),
+            (
+                "DevFixture with proof helper only",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_DEV_AND_LOCAL,
+                    PLANNED_PROOF_HELPER,
                 ),
             ),
         ] {
@@ -19476,6 +20117,49 @@ mod tests {
                 marker.as_bytes(),
                 "unportable text failure result",
             );
+        }
+    }
+
+    #[test]
+    fn privacy_request_rejects_invalid_catalog_shapes_without_reflection() {
+        let marker = "catalog-shape-text-never-echo";
+        for (field, value) in [
+            ("algorithm_id", format!("confidential-transfer-v2:{marker}")),
+            ("algorithm_id", format!("Confidential-transfer-v2{marker}")),
+            ("algorithm_id", format!("confidential.transfer.v2{marker}")),
+            ("algorithm_id", format!("_confidential-transfer-v2{marker}")),
+            ("algorithm_id", format!("-confidential-transfer-v2{marker}")),
+            ("algorithm_id", format!("confidential-transfer-v2_{marker}")),
+            ("algorithm_id", format!("confidential-transfer-v2-{marker}")),
+            (
+                "entrypoint",
+                format!("buildConfidentialTransferProofV2:{marker}"),
+            ),
+            (
+                "entrypoint",
+                format!("build-ConfidentialTransferProofV2{marker}"),
+            ),
+        ] {
+            let mut request = privacy_request(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                Vec::new(),
+            );
+            match field {
+                "algorithm_id" => request.algorithm_id = value,
+                "entrypoint" => request.entrypoint = value,
+                _ => unreachable!("unexpected privacy request field"),
+            }
+
+            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+
+            assert_unreflected_invalid_privacy_request_result(
+                &result,
+                "catalog identifier shapes",
+                field,
+            );
+            let encoded = norito::to_bytes(&result).expect("encode privacy result");
+            assert_subslice_absent(&encoded, marker.as_bytes(), "catalog-shape failure result");
         }
     }
 
@@ -20034,6 +20718,19 @@ mod tests {
             "production-ready proof-family labels must be rejected",
         );
 
+        for (case, proof_family) in [
+            ("uppercase proof family", "Halo2-ipa-pasta"),
+            ("delimited proof family", "halo2:ipa:pasta"),
+            ("empty proof-family segment", "halo2//ipa"),
+        ] {
+            let mut forged_proof_family = base.clone();
+            forged_proof_family.proof_family = proof_family.to_owned();
+            assert!(
+                !privacy_capability_invariants_hold(&forged_proof_family),
+                "{case} must be rejected"
+            );
+        }
+
         let mut audit_signoff_backend = base.clone();
         audit_signoff_backend.backend_family = "audit-signoff-pasta".to_owned();
         assert!(
@@ -20543,22 +21240,120 @@ mod tests {
     }
 
     #[test]
-    fn privacy_proof_ffi_rejects_malformed_or_wrong_backend_vk_ref_before_production_gate() {
+    fn privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection() {
+        let marker = "vk-ref-shape-never-echo";
         for (case, vk_ref) in [
             (
                 "missing-separator",
-                "halo2-ipa-pasta-confidential_transfer_v2",
+                format!("halo2-ipa-pasta-confidential_transfer_v2-{marker}"),
             ),
-            ("empty-vk-name", "halo2-ipa-pasta:"),
-            (
-                "wrong-backend",
-                "groth16-bls12-377:confidential_transfer_v2",
-            ),
+            ("empty-vk-name", "halo2-ipa-pasta:".to_owned()),
             (
                 "extra-separator",
-                "halo2-ipa-pasta:confidential_transfer_v2:shadow",
+                format!("halo2-ipa-pasta:confidential_transfer_v2:{marker}"),
+            ),
+            (
+                "delimited-backend",
+                format!("halo2:ipa:confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "uppercase-backend",
+                format!("Halo2-ipa-pasta:confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "leading-separator-backend",
+                format!("-halo2-ipa-pasta:confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "trailing-separator-backend",
+                format!("halo2-ipa-pasta.:confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "uppercase-vk-name",
+                format!("halo2-ipa-pasta:Confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "dotted-vk-name",
+                format!("halo2-ipa-pasta:confidential.transfer.v2_{marker}"),
+            ),
+            (
+                "dashed-vk-name",
+                format!("halo2-ipa-pasta:confidential-transfer-v2-{marker}"),
+            ),
+            (
+                "leading-underscore-vk-name",
+                format!("halo2-ipa-pasta:_confidential_transfer_v2_{marker}"),
             ),
         ] {
+            let mut request = privacy_request(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                Vec::new(),
+            );
+            request.vk_ref = vk_ref;
+
+            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            let encoded = norito::to_bytes(&result).expect("encode privacy result");
+            assert_subslice_absent(
+                &encoded,
+                marker.as_bytes(),
+                "malformed vk_ref failure result",
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection() {
+        let marker = "vk-ref-order-never-echo";
+        for (case, algorithm_id, entrypoint, vk_ref) in [
+            (
+                "unsupported-algorithm",
+                "future-privacy-row",
+                "buildFuturePrivacyProof",
+                format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
+            ),
+            (
+                "planned-entrypoint",
+                "asset-hidden-confidential-transfer-v1",
+                "buildConfidentialAssetHiddenTransferProofV1",
+                format!("halo2-ipa-pasta:bad.vk.name_{marker}"),
+            ),
+            (
+                "unregistered-entrypoint",
+                "confidential-transfer-v2",
+                "buildUnregisteredPrivacyProof",
+                format!("halo2-ipa-pasta:bad-vk-name-{marker}"),
+            ),
+            (
+                "non-proof-entrypoint",
+                "verange-transparent-range-v1",
+                "buildRangeCommitment",
+                format!("verange:_bad_vk_name_{marker}"),
+            ),
+        ] {
+            let mut request = privacy_request(algorithm_id, entrypoint, Vec::new());
+            request.vk_ref = vk_ref;
+
+            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            let encoded = norito::to_bytes(&result).expect("encode privacy result");
+            assert_subslice_absent(
+                &encoded,
+                marker.as_bytes(),
+                "vk_ref validation-order failure result",
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_proof_ffi_rejects_wrong_backend_vk_ref_before_production_gate() {
+        for (case, vk_ref) in [(
+            "wrong-backend",
+            "groth16-bls12-377:confidential_transfer_v2",
+        )] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
                 "buildConfidentialTransferProofV2",
@@ -20597,10 +21392,6 @@ mod tests {
             (
                 "legacy-vk-prefix",
                 "halo2-ipa-pasta:vk_confidential_transfer_v2",
-            ),
-            (
-                "dash-normalized-vk-name",
-                "halo2-ipa-pasta:confidential-transfer-v2",
             ),
         ] {
             let mut request = privacy_request(

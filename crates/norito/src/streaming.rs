@@ -1529,6 +1529,10 @@ pub mod crypto {
     const CEK_LABEL: &[u8] = b"nsc-cek";
     const NONCE_LABEL: &[u8] = b"nsc-nonce";
     const GCK_AAD_LABEL: &[u8] = b"nsc-gck";
+    const STS_SHARED_SECRET_LEN: usize = 32;
+    const GROUP_CONTENT_KEY_LEN: usize = 32;
+    const X25519_EPHEMERAL_PUBLIC_LEN: usize = 32;
+    const KYBER768_CIPHERTEXT_LEN: usize = 1088;
 
     /// Errors emitted by NSC crypto helpers.
     #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1539,12 +1543,20 @@ pub mod crypto {
         HkdfExpand,
         #[error("invalid ephemeral public key length (expected {expected}, found {found})")]
         InvalidEphemeralPublicKey { expected: usize, found: usize },
+        #[error("invalid shared secret length (expected {expected}, found {found})")]
+        InvalidSharedSecretLength { expected: usize, found: usize },
         #[error("nonce length mismatch: expected {expected}, found {found}")]
         InvalidNonceLength { expected: usize, found: usize },
+        #[error("invalid group content key length (expected {expected}, found {found})")]
+        InvalidGroupContentKeyLength { expected: usize, found: usize },
         #[error("aead operation failed")]
         AeadFailure,
         #[error("key counter must be strictly increasing (previous {previous}, found {found})")]
         NonMonotonicKeyCounter { previous: u64, found: u64 },
+        #[error("key counter must be nonzero (found {found})")]
+        InvalidKeyCounter { found: u64 },
+        #[error("protocol version must be nonzero (found {found})")]
+        InvalidProtocolVersion { found: u16 },
         #[error("encryption suite changed from {expected:?} to {found:?}")]
         SuiteChanged {
             expected: EncryptionSuite,
@@ -1556,6 +1568,8 @@ pub mod crypto {
         InvalidWrappedKey,
         #[error("content key valid_from must advance (previous {previous}, found {found})")]
         InvalidValidFrom { previous: u64, found: u64 },
+        #[error("invalid content key state: {0}")]
+        InvalidContentKeyState(&'static str),
     }
 
     /// Session transport keys derived for a given endpoint role.
@@ -1572,6 +1586,42 @@ pub mod crypto {
             .copy_from_slice(&content_key_id.to_le_bytes());
         ad[GCK_AAD_LABEL.len() + 8..].copy_from_slice(&valid_from_segment.to_le_bytes());
         ad
+    }
+
+    fn validate_group_content_key(gck: &[u8]) -> Result<(), CryptoError> {
+        if gck.len() != GROUP_CONTENT_KEY_LEN {
+            return Err(CryptoError::InvalidGroupContentKeyLength {
+                expected: GROUP_CONTENT_KEY_LEN,
+                found: gck.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_shared_secret(shared_secret: &[u8]) -> Result<(), CryptoError> {
+        if shared_secret.len() != STS_SHARED_SECRET_LEN {
+            return Err(CryptoError::InvalidSharedSecretLength {
+                expected: STS_SHARED_SECRET_LEN,
+                found: shared_secret.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn key_update_ephemeral_len_for_suite(suite: &EncryptionSuite) -> usize {
+        match suite {
+            EncryptionSuite::X25519ChaCha20Poly1305(_) => X25519_EPHEMERAL_PUBLIC_LEN,
+            EncryptionSuite::Kyber768XChaCha20Poly1305(_) => KYBER768_CIPHERTEXT_LEN,
+        }
+    }
+
+    fn validate_key_update_ephemeral(frame: &KeyUpdate) -> Result<(), CryptoError> {
+        let expected = key_update_ephemeral_len_for_suite(&frame.suite);
+        let found = frame.pub_ephemeral.len();
+        if found != expected {
+            return Err(CryptoError::InvalidEphemeralPublicKey { expected, found });
+        }
+        Ok(())
     }
 
     /// Track monotonic key update counters and negotiated suite.
@@ -1592,6 +1642,16 @@ pub mod crypto {
 
     impl KeyUpdateState {
         pub fn record(&mut self, frame: &KeyUpdate) -> Result<(), CryptoError> {
+            if frame.protocol_version == 0 {
+                return Err(CryptoError::InvalidProtocolVersion {
+                    found: frame.protocol_version,
+                });
+            }
+            if frame.key_counter == 0 {
+                return Err(CryptoError::InvalidKeyCounter {
+                    found: frame.key_counter,
+                });
+            }
             if let Some(prev) = self.last_counter
                 && frame.key_counter <= prev
             {
@@ -1600,14 +1660,16 @@ pub mod crypto {
                     found: frame.key_counter,
                 });
             }
-            if let Some(suite) = self.suite {
-                if suite != frame.suite {
-                    return Err(CryptoError::SuiteChanged {
-                        expected: suite,
-                        found: frame.suite,
-                    });
-                }
-            } else {
+            if let Some(suite) = self.suite
+                && suite != frame.suite
+            {
+                return Err(CryptoError::SuiteChanged {
+                    expected: suite,
+                    found: frame.suite,
+                });
+            }
+            validate_key_update_ephemeral(frame)?;
+            if self.suite.is_none() {
                 self.suite = Some(frame.suite);
             }
             self.last_counter = Some(frame.key_counter);
@@ -1622,9 +1684,17 @@ pub mod crypto {
             self.last_counter
         }
 
-        pub fn restore(&mut self, last_counter: Option<u64>, suite: Option<EncryptionSuite>) {
+        pub fn restore(
+            &mut self,
+            last_counter: Option<u64>,
+            suite: Option<EncryptionSuite>,
+        ) -> Result<(), CryptoError> {
+            if matches!(last_counter, Some(0)) {
+                return Err(CryptoError::InvalidKeyCounter { found: 0 });
+            }
             self.last_counter = last_counter;
             self.suite = suite;
+            Ok(())
         }
 
         /// Produce a snapshot capturing the negotiated suite and last accepted counter.
@@ -1639,11 +1709,10 @@ pub mod crypto {
         }
 
         /// Rehydrate a [`KeyUpdateState`] from a snapshot.
-        #[must_use]
-        pub fn from_snapshot(snapshot: KeyUpdateSnapshot) -> Self {
+        pub fn from_snapshot(snapshot: KeyUpdateSnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
-            state.restore(Some(snapshot.last_counter), Some(snapshot.suite));
-            state
+            state.restore(Some(snapshot.last_counter), Some(snapshot.suite))?;
+            Ok(state)
         }
     }
 
@@ -1697,9 +1766,19 @@ pub mod crypto {
             self.last_valid_from
         }
 
-        pub fn restore(&mut self, last_id: Option<u64>, last_valid_from: Option<u64>) {
+        pub fn restore(
+            &mut self,
+            last_id: Option<u64>,
+            last_valid_from: Option<u64>,
+        ) -> Result<(), CryptoError> {
+            if last_id.is_some() != last_valid_from.is_some() {
+                return Err(CryptoError::InvalidContentKeyState(
+                    "content key id and valid-from must be restored together",
+                ));
+            }
             self.last_id = last_id;
             self.last_valid_from = last_valid_from;
+            Ok(())
         }
 
         /// Produce a snapshot capturing the last accepted identifiers.
@@ -1714,11 +1793,10 @@ pub mod crypto {
         }
 
         /// Rehydrate a [`ContentKeyState`] from a snapshot.
-        #[must_use]
-        pub fn from_snapshot(snapshot: ContentKeySnapshot) -> Self {
+        pub fn from_snapshot(snapshot: ContentKeySnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
-            state.restore(Some(snapshot.last_id), Some(snapshot.last_valid_from));
-            state
+            state.restore(Some(snapshot.last_id), Some(snapshot.last_valid_from))?;
+            Ok(state)
         }
     }
 
@@ -1773,8 +1851,10 @@ pub mod crypto {
         ad
     }
 
-    /// Derive the session transport secret root from the shared secret output of the handshake.
+    /// Derive the session transport secret root from the 32-byte shared secret output of the
+    /// handshake.
     pub fn derive_sts_root(shared_secret: &[u8]) -> Result<[u8; 32], CryptoError> {
+        validate_shared_secret(shared_secret)?;
         let hk = Hkdf::<Sha3_256>::new(Some(STS_SALT), shared_secret);
         let mut root = [0u8; 32];
         hk.expand(STS_ROOT_LABEL, &mut root)
@@ -1949,7 +2029,8 @@ pub mod crypto {
         }
     }
 
-    /// Wrap a Group Content Key (GCK) using the negotiated transport send key and explicit nonce.
+    /// Wrap a 32-byte Group Content Key (GCK) using the negotiated transport send key and explicit
+    /// nonce.
     ///
     /// The returned vector concatenates `nonce || ciphertext`, matching the payload layout used in
     /// [`ContentKeyUpdate::gck_wrapped`].
@@ -1961,6 +2042,7 @@ pub mod crypto {
         content_key_id: u64,
         valid_from_segment: u64,
     ) -> Result<Vec<u8>, CryptoError> {
+        validate_group_content_key(gck_plaintext)?;
         let aad = gck_associated_data(content_key_id, valid_from_segment);
         let ciphertext = match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => {
@@ -1998,7 +2080,7 @@ pub mod crypto {
         Ok(out)
     }
 
-    /// Unwrap a Group Content Key (GCK) using the transport receive key and inline nonce.
+    /// Unwrap a 32-byte Group Content Key (GCK) using the transport receive key and inline nonce.
     pub fn unwrap_gck(
         suite: &EncryptionSuite,
         transport_recv_key: &[u8; 32],
@@ -2008,7 +2090,7 @@ pub mod crypto {
         valid_from_segment: u64,
     ) -> Result<Vec<u8>, CryptoError> {
         let aad = gck_associated_data(content_key_id, valid_from_segment);
-        match suite {
+        let plaintext = match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => {
                 let key = chacha_key_from_bytes(transport_recv_key);
                 let nonce = chacha_nonce_from_slice(nonce)?;
@@ -2037,7 +2119,9 @@ pub mod crypto {
                     )
                     .map_err(|_| CryptoError::AeadFailure)
             }
-        }
+        }?;
+        validate_group_content_key(plaintext.as_slice())?;
+        Ok(plaintext)
     }
 
     /// Build the associated data commitments for a ciphertext batch.
@@ -2080,17 +2164,81 @@ pub mod crypto {
             sig
         }
 
+        fn encrypt_gck_without_length_check(
+            suite: &EncryptionSuite,
+            transport_key: &[u8; 32],
+            nonce: &[u8],
+            gck_plaintext: &[u8],
+            content_key_id: u64,
+            valid_from_segment: u64,
+        ) -> Vec<u8> {
+            let aad = gck_associated_data(content_key_id, valid_from_segment);
+            match suite {
+                EncryptionSuite::X25519ChaCha20Poly1305(_) => {
+                    let key = chacha_key_from_bytes(transport_key);
+                    let nonce = chacha_nonce_from_slice(nonce).expect("valid chacha nonce");
+                    let cipher = ChaCha20Poly1305::new(&key);
+                    cipher
+                        .encrypt(
+                            &nonce,
+                            Payload {
+                                msg: gck_plaintext,
+                                aad: &aad,
+                            },
+                        )
+                        .expect("manual gck encrypt")
+                }
+                EncryptionSuite::Kyber768XChaCha20Poly1305(_) => {
+                    let key = chacha_key_from_bytes(transport_key);
+                    let nonce = xchacha_nonce_from_slice(nonce).expect("valid xchacha nonce");
+                    let cipher = XChaCha20Poly1305::new(&key);
+                    cipher
+                        .encrypt(
+                            &nonce,
+                            Payload {
+                                msg: gck_plaintext,
+                                aad: &aad,
+                            },
+                        )
+                        .expect("manual gck encrypt")
+                }
+            }
+        }
+
         #[test]
         fn transport_keys_deterministic() {
-            let secret = b"shared secret demo";
+            let secret = sample_hash(0x13);
             let publisher_keys =
-                derive_transport_keys_for_role(secret, CapabilityRole::Publisher).unwrap();
+                derive_transport_keys_for_role(&secret, CapabilityRole::Publisher).unwrap();
             let viewer_keys =
-                derive_transport_keys_for_role(secret, CapabilityRole::Viewer).unwrap();
+                derive_transport_keys_for_role(&secret, CapabilityRole::Viewer).unwrap();
             assert_eq!(publisher_keys.send, viewer_keys.recv);
             assert_eq!(publisher_keys.recv, viewer_keys.send);
             assert_ne!(publisher_keys.send, publisher_keys.recv);
             assert_ne!(viewer_keys.send, viewer_keys.recv);
+        }
+
+        #[test]
+        fn transport_secret_derivation_rejects_invalid_shared_secret_length() {
+            let short_secret = [0x14u8; 31];
+            let err = derive_sts_root(&short_secret).expect_err("short STS secret rejected");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidSharedSecretLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
+
+            let err = derive_transport_keys_for_role(&short_secret, CapabilityRole::Publisher)
+                .expect_err("short transport secret rejected");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidSharedSecretLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
         }
 
         #[test]
@@ -2183,6 +2331,154 @@ pub mod crypto {
         }
 
         #[test]
+        fn key_update_state_rejects_zero_counter_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(13),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 0,
+                signature: sample_signature(14),
+            };
+
+            let err = state.record(&frame).expect_err("zero counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.key_counter = 1;
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
+        fn key_update_state_restore_rejects_zero_counter_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let frame = KeyUpdate {
+                session_id: sample_hash(17),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(18),
+            };
+            state.record(&frame).unwrap();
+
+            let err = state
+                .restore(Some(0), Some(suite))
+                .expect_err("zero restore counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+
+            let snapshot = KeyUpdateSnapshot {
+                suite,
+                last_counter: 0,
+            };
+            let err = KeyUpdateState::from_snapshot(snapshot)
+                .expect_err("zero snapshot counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+        }
+
+        #[test]
+        fn key_update_state_rejects_zero_protocol_version_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(15),
+                suite,
+                protocol_version: 0,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(16),
+            };
+
+            let err = state
+                .record(&frame)
+                .expect_err("zero protocol version rejected");
+            assert_eq!(err, CryptoError::InvalidProtocolVersion { found: 0 });
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.protocol_version = 1;
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
+        fn key_update_state_rejects_invalid_x25519_ephemeral_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(11),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(12),
+            };
+            state.record(&frame).unwrap();
+
+            frame.key_counter = 2;
+            frame
+                .pub_ephemeral
+                .truncate(X25519_EPHEMERAL_PUBLIC_LEN - 1);
+            let err = state
+                .record(&frame)
+                .expect_err("short x25519 ephemeral rejected");
+            assert_eq!(
+                err,
+                CryptoError::InvalidEphemeralPublicKey {
+                    expected: X25519_EPHEMERAL_PUBLIC_LEN,
+                    found: X25519_EPHEMERAL_PUBLIC_LEN - 1
+                }
+            );
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+
+            frame.pub_ephemeral.resize(X25519_EPHEMERAL_PUBLIC_LEN, 0);
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(2));
+        }
+
+        #[test]
+        fn key_update_state_rejects_invalid_kyber_ephemeral_without_state_change() {
+            let suite = sample_suite_xchacha();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(21),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(22),
+            };
+
+            let err = state
+                .record(&frame)
+                .expect_err("short kyber ciphertext rejected");
+            assert_eq!(
+                err,
+                CryptoError::InvalidEphemeralPublicKey {
+                    expected: KYBER768_CIPHERTEXT_LEN,
+                    found: X25519_EPHEMERAL_PUBLIC_LEN
+                }
+            );
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.pub_ephemeral.resize(KYBER768_CIPHERTEXT_LEN, 0);
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
         fn content_key_state_enforces_rotation_rules() {
             let mut state = ContentKeyState::default();
             let mut update = ContentKeyUpdate {
@@ -2224,6 +2520,45 @@ pub mod crypto {
         }
 
         #[test]
+        fn content_key_state_restore_rejects_partial_state_without_state_change() {
+            let mut state = ContentKeyState::default();
+            state
+                .record(&ContentKeyUpdate {
+                    content_key_id: 5,
+                    gck_wrapped: vec![1, 2, 3],
+                    valid_from_segment: 20,
+                })
+                .unwrap();
+
+            for (last_id, last_valid_from) in [(Some(6), None), (None, Some(30))] {
+                let err = state
+                    .restore(last_id, last_valid_from)
+                    .expect_err("partial content-key restore rejected");
+                assert_eq!(
+                    err,
+                    CryptoError::InvalidContentKeyState(
+                        "content key id and valid-from must be restored together"
+                    )
+                );
+                assert_eq!(state.last_id(), Some(5));
+                assert_eq!(state.last_valid_from(), Some(20));
+            }
+
+            state.restore(Some(6), Some(30)).unwrap();
+            assert_eq!(state.last_id(), Some(6));
+            assert_eq!(state.last_valid_from(), Some(30));
+
+            let snapshot = ContentKeySnapshot {
+                last_id: 7,
+                last_valid_from: 40,
+            };
+            let restored =
+                ContentKeyState::from_snapshot(snapshot).expect("complete snapshot restores");
+            assert_eq!(restored.last_id(), Some(7));
+            assert_eq!(restored.last_valid_from(), Some(40));
+        }
+
+        #[test]
         fn gck_wrap_unwrap_roundtrip() {
             let suite = sample_suite();
             let transport_key = sample_hash(33);
@@ -2240,6 +2575,49 @@ pub mod crypto {
             let unwrapped = unwrap_gck(&suite, &transport_key, nonce_part, ciphertext_part, 9, 128)
                 .expect("unwrap");
             assert_eq!(unwrapped, gck);
+        }
+
+        #[test]
+        fn gck_wrap_rejects_invalid_plaintext_length() {
+            let suite = sample_suite();
+            let transport_key = sample_hash(45);
+            let nonce = vec![0x11; nonce_len_for_suite(&suite)];
+            let short_gck = [0x22u8; 31];
+            let err = wrap_gck(&suite, &transport_key, &nonce, &short_gck, 10, 129)
+                .expect_err("short gck rejected before wrapping");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidGroupContentKeyLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
+        }
+
+        #[test]
+        fn gck_unwrap_rejects_invalid_plaintext_length() {
+            let transport_key = sample_hash(46);
+            let short_gck = [0x33u8; 31];
+            for suite in [sample_suite(), sample_suite_xchacha()] {
+                let nonce = vec![0x44; nonce_len_for_suite(&suite)];
+                let ciphertext = encrypt_gck_without_length_check(
+                    &suite,
+                    &transport_key,
+                    &nonce,
+                    &short_gck,
+                    11,
+                    130,
+                );
+                let err = unwrap_gck(&suite, &transport_key, &nonce, &ciphertext, 11, 130)
+                    .expect_err("short decrypted gck rejected");
+                assert!(matches!(
+                    err,
+                    CryptoError::InvalidGroupContentKeyLength {
+                        expected: 32,
+                        found: 31
+                    }
+                ));
+            }
         }
     }
 }
@@ -2677,9 +3055,7 @@ pub mod chunk {
                 if chunk.len() < FRAME_HEADER_LEN {
                     return Err(CodecError::ChunkTooShort);
                 }
-                let mut index_bytes = [0u8; 4];
-                index_bytes.copy_from_slice(&chunk[..4]);
-                let frame_index = u32::from_le_bytes(index_bytes);
+                let frame_index = read_frame_header_u32_le(chunk, 0)?;
                 if frame_index != idx as u32 {
                     return Err(CodecError::FrameIndexMismatch(
                         super::chunk::FrameIndexMismatchInfo {
@@ -2688,9 +3064,7 @@ pub mod chunk {
                         },
                     ));
                 }
-                let mut pts_bytes = [0u8; 8];
-                pts_bytes.copy_from_slice(&chunk[4..12]);
-                let pts_ns = u64::from_le_bytes(pts_bytes);
+                let pts_ns = read_frame_header_u64_le(chunk, 4)?;
                 let delta = frame_step
                     .checked_mul(idx as u64)
                     .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
@@ -2710,8 +3084,7 @@ pub mod chunk {
                 }
                 let frame_type = FrameType::from_byte(chunk[12])?;
                 let quantizer = chunk[13];
-                let block_count =
-                    u16::from_le_bytes(chunk[14..16].try_into().expect("header has enough bytes"));
+                let block_count = read_frame_header_u16_le(chunk, 14)?;
                 if block_count as usize != expected_blocks {
                     return Err(CodecError::BlockCountMismatch(BlockCountMismatchInfo {
                         expected: saturating_usize_to_u32(expected_blocks),
@@ -2757,13 +3130,20 @@ pub mod chunk {
                             ChromaPayloadTruncatedInfo,
                         ));
                     }
-                    let mut u_len_bytes = [0u8; 4];
-                    u_len_bytes.copy_from_slice(&chunk[offset..offset + 4]);
-                    let u_len = u32::from_le_bytes(u_len_bytes) as usize;
-                    let mut v_len_bytes = [0u8; 4];
-                    v_len_bytes.copy_from_slice(&chunk[offset + 4..offset + 8]);
-                    let v_len = u32::from_le_bytes(v_len_bytes) as usize;
-                    let chroma_start = offset + 8;
+                    let u_len = read_chroma_len(chunk, offset)?;
+                    let v_len_offset =
+                        offset
+                            .checked_add(4)
+                            .ok_or(CodecError::ChromaPayloadTruncated(
+                                ChromaPayloadTruncatedInfo,
+                            ))?;
+                    let v_len = read_chroma_len(chunk, v_len_offset)?;
+                    let chroma_start =
+                        offset
+                            .checked_add(8)
+                            .ok_or(CodecError::ChromaPayloadTruncated(
+                                ChromaPayloadTruncatedInfo,
+                            ))?;
                     let u_end = chroma_start.checked_add(u_len).ok_or(
                         CodecError::ChromaPayloadTruncated(ChromaPayloadTruncatedInfo),
                     )?;
@@ -2810,6 +3190,45 @@ pub mod chunk {
             }
             Ok(frames)
         }
+    }
+
+    pub(crate) fn read_frame_header_field<const N: usize>(
+        chunk: &[u8],
+        offset: usize,
+    ) -> Result<[u8; N], CodecError> {
+        let end = offset.checked_add(N).ok_or(CodecError::ChunkTooShort)?;
+        let slice = chunk.get(offset..end).ok_or(CodecError::ChunkTooShort)?;
+        let mut raw = [0u8; N];
+        raw.copy_from_slice(slice);
+        Ok(raw)
+    }
+
+    pub(crate) fn read_frame_header_u16_le(chunk: &[u8], offset: usize) -> Result<u16, CodecError> {
+        Ok(u16::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_frame_header_u32_le(chunk: &[u8], offset: usize) -> Result<u32, CodecError> {
+        Ok(u32::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_frame_header_u64_le(chunk: &[u8], offset: usize) -> Result<u64, CodecError> {
+        Ok(u64::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_chroma_len(chunk: &[u8], offset: usize) -> Result<usize, CodecError> {
+        let end = offset
+            .checked_add(4)
+            .ok_or(CodecError::ChromaPayloadTruncated(
+                ChromaPayloadTruncatedInfo,
+            ))?;
+        let slice = chunk
+            .get(offset..end)
+            .ok_or(CodecError::ChromaPayloadTruncated(
+                ChromaPayloadTruncatedInfo,
+            ))?;
+        let mut raw = [0u8; 4];
+        raw.copy_from_slice(slice);
+        Ok(u32::from_le_bytes(raw) as usize)
     }
 
     fn decode_chroma_plane(
@@ -7636,13 +8055,7 @@ pub mod codec {
         let mut cursor = header_len;
         let mut lengths = [0usize; 4];
         for slot in lengths.iter_mut() {
-            let mut buf = [0u8; 4];
-            if cursor + 4 > stream.len() {
-                return Err(BundleDecodeError::InvalidSimdHeader);
-            }
-            buf.copy_from_slice(&stream[cursor..cursor + 4]);
-            *slot = u32::from_le_bytes(buf) as usize;
-            cursor += 4;
+            *slot = read_simd_bundle_lane_len(stream, &mut cursor)?;
         }
         let total_len = lengths
             .iter()
@@ -7676,6 +8089,22 @@ pub mod codec {
             out.push(decoder.decode_record(record)?);
         }
         Ok(out)
+    }
+
+    fn read_simd_bundle_lane_len(
+        stream: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, BundleDecodeError> {
+        let end = (*cursor)
+            .checked_add(4)
+            .ok_or(BundleDecodeError::InvalidSimdHeader)?;
+        let slice = stream
+            .get(*cursor..end)
+            .ok_or(BundleDecodeError::InvalidSimdHeader)?;
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(slice);
+        *cursor = end;
+        Ok(u32::from_le_bytes(buf) as usize)
     }
 
     fn bundle_bits(value: i16, width: u8) -> (BundleType, u8, u8) {
@@ -7825,18 +8254,48 @@ pub mod codec {
         hooks.record_eob();
     }
 
+    fn take_block_i16_le(
+        bytes: &[u8],
+        offset: &mut usize,
+        block_index: u32,
+    ) -> Result<i16, CodecError> {
+        let end = (*offset)
+            .checked_add(2)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let slice = bytes
+            .get(*offset..end)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let mut raw = [0u8; 2];
+        raw.copy_from_slice(slice);
+        *offset = end;
+        Ok(i16::from_le_bytes(raw))
+    }
+
+    fn take_rle_record(
+        bytes: &[u8],
+        offset: &mut usize,
+        block_index: u32,
+    ) -> Result<(u8, i16), CodecError> {
+        let end = (*offset)
+            .checked_add(3)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let record = bytes
+            .get(*offset..end)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let mut raw = [0u8; 2];
+        raw.copy_from_slice(&record[1..3]);
+        *offset = end;
+        Ok((record[0], i16::from_le_bytes(raw)))
+    }
+
     pub(crate) fn decode_block_rle(
         bytes: &[u8],
         offset: &mut usize,
         prev_dc: &mut i16,
         block_index: u32,
     ) -> Result<[i16; BLOCK_PIXELS], CodecError> {
-        if *offset + 2 > bytes.len() {
-            return Err(CodecError::TruncatedBlock(block_index));
-        }
         let mut coeffs = [0i16; BLOCK_PIXELS];
-        let dc_diff = i16::from_le_bytes(bytes[*offset..*offset + 2].try_into().unwrap());
-        *offset += 2;
+        let dc_diff = take_block_i16_le(bytes, offset, block_index)?;
         let dc = prev_dc.wrapping_add(dc_diff);
         coeffs[0] = dc;
         *prev_dc = dc;
@@ -7844,12 +8303,7 @@ pub mod codec {
         let mut pos = 1usize;
         let mut finished = false;
         while pos < BLOCK_PIXELS {
-            if *offset + 3 > bytes.len() {
-                return Err(CodecError::TruncatedBlock(block_index));
-            }
-            let run = bytes[*offset];
-            let value = i16::from_le_bytes(bytes[*offset + 1..*offset + 3].try_into().unwrap());
-            *offset += 3;
+            let (run, value) = take_rle_record(bytes, offset, block_index)?;
 
             if run == RLE_EOB {
                 finished = true;
@@ -8246,7 +8700,13 @@ pub mod codec {
         use std::{str::FromStr, sync::Arc};
 
         use super::*;
-        use crate::streaming::{Hash, chunk::BaselineDecoder};
+        use crate::streaming::{
+            Hash,
+            chunk::{
+                BaselineDecoder, read_chroma_len, read_frame_header_u16_le,
+                read_frame_header_u32_le, read_frame_header_u64_le,
+            },
+        };
 
         fn hash_seed(seed: u8) -> Hash {
             let mut bytes = [0u8; 32];
@@ -9287,6 +9747,28 @@ pub mod codec {
         }
 
         #[test]
+        fn simd_bundle_lane_len_reader_rejects_truncated_or_overflowed_offsets() {
+            let bytes = 13u32.to_le_bytes();
+            let mut cursor = 0usize;
+            assert_eq!(read_simd_bundle_lane_len(&bytes, &mut cursor).unwrap(), 13);
+            assert_eq!(cursor, 4);
+
+            for len in 0..4 {
+                let mut cursor = 0usize;
+                let err = read_simd_bundle_lane_len(&bytes[..len], &mut cursor)
+                    .expect_err("truncated lane length should fail closed");
+                assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
+                assert_eq!(cursor, 0);
+            }
+
+            let mut overflow_cursor = usize::MAX;
+            let err = read_simd_bundle_lane_len(&[], &mut overflow_cursor)
+                .expect_err("cursor overflow should fail closed");
+            assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
+            assert_eq!(overflow_cursor, usize::MAX);
+        }
+
+        #[test]
         fn bundle_stream_acceleration_matches_header() {
             let tables = default_bundle_tables();
             let bundles = sample_bundles();
@@ -9914,6 +10396,71 @@ pub mod codec {
             let err = decode_block_rle(&payload, &mut offset2, &mut prev_dc2, 4)
                 .expect_err("missing run payload");
             assert!(matches!(err, CodecError::TruncatedBlock(4)));
+
+            let mut overflow_offset = usize::MAX;
+            let mut prev_dc3 = 0i16;
+            let err = decode_block_rle(&[], &mut overflow_offset, &mut prev_dc3, 6)
+                .expect_err("offset arithmetic overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(6)));
+            assert_eq!(overflow_offset, usize::MAX);
+        }
+
+        #[test]
+        fn rle_block_readers_reject_offset_overflow_without_advancing() {
+            let mut i16_offset = usize::MAX;
+            let err = take_block_i16_le(&[], &mut i16_offset, 7)
+                .expect_err("i16 reader offset overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(7)));
+            assert_eq!(i16_offset, usize::MAX);
+
+            let mut record_offset = usize::MAX;
+            let err = take_rle_record(&[], &mut record_offset, 8)
+                .expect_err("RLE record reader offset overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(8)));
+            assert_eq!(record_offset, usize::MAX);
+        }
+
+        #[test]
+        fn frame_header_readers_reject_truncated_or_overflowed_offsets() {
+            let mut header = [0u8; FRAME_HEADER_LEN];
+            header[..4].copy_from_slice(&42u32.to_le_bytes());
+            header[4..12].copy_from_slice(&1234u64.to_le_bytes());
+            header[14..16].copy_from_slice(&9u16.to_le_bytes());
+
+            assert_eq!(read_frame_header_u32_le(&header, 0).unwrap(), 42);
+            assert_eq!(read_frame_header_u64_le(&header, 4).unwrap(), 1234);
+            assert_eq!(read_frame_header_u16_le(&header, 14).unwrap(), 9);
+
+            assert!(matches!(
+                read_frame_header_u32_le(&header[..3], 0),
+                Err(CodecError::ChunkTooShort)
+            ));
+            assert!(matches!(
+                read_frame_header_u64_le(&header[..11], 4),
+                Err(CodecError::ChunkTooShort)
+            ));
+            assert!(matches!(
+                read_frame_header_u16_le(&header, usize::MAX),
+                Err(CodecError::ChunkTooShort)
+            ));
+        }
+
+        #[test]
+        fn chroma_len_reader_rejects_truncated_or_overflowed_offsets() {
+            let mut metadata = [0u8; 8];
+            metadata[..4].copy_from_slice(&5u32.to_le_bytes());
+            metadata[4..8].copy_from_slice(&7u32.to_le_bytes());
+
+            assert_eq!(read_chroma_len(&metadata, 0).unwrap(), 5);
+            assert_eq!(read_chroma_len(&metadata, 4).unwrap(), 7);
+            assert!(matches!(
+                read_chroma_len(&metadata[..3], 0),
+                Err(CodecError::ChromaPayloadTruncated(_))
+            ));
+            assert!(matches!(
+                read_chroma_len(&metadata, usize::MAX),
+                Err(CodecError::ChromaPayloadTruncated(_))
+            ));
         }
 
         fn deterministic_payloads(seed: u8, count: usize) -> Vec<Vec<u8>> {

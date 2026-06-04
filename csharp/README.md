@@ -16,6 +16,11 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - low-level `ToriiClient.SubmitSignedQueryAsync(...)`, `OpenEventSseAsync(...)`, and parsed `StreamEventsAsync(...)` helpers plus a managed `SignedQueryBuilder` for the full current singular-query set (`FindExecutorDataModel`, `FindParameters`, `FindAliasesByAccountId`, `FindProofRecordById`, `FindContractManifestByCodeHash`, `FindAbiVersion`, `FindAssetById`, `FindAssetDefinitionById`, `FindTwitterBindingByHash`, `FindDomainEndorsements`, `FindDomainEndorsementPolicy`, `FindDomainCommittee`, `FindDaPinIntentByTicket`, `FindDaPinIntentByManifest`, `FindDaPinIntentByAlias`, `FindDaPinIntentByLaneEpochSequence`, `FindSorafsProviderOwner`, `FindDataspaceNameOwnerById`), a managed `SignedIterableQueryBuilder` for the current fast_dsl iterable subset (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`, `FindProofRecords`, and cursor `Continue(...)`), and typed `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` plus typed explorer block/transaction/instruction SSE projections
 - a managed faucet PoW solver for `scrypt-leading-zero-bits-v1`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for an account id
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and response body
+- native Ethereum mainnet SCCP helpers for execution-provider chain-id
+  validation, inbound receipt/source-event evidence, outbound Groth16 calldata,
+  typed receipt RLP/MPT proof construction from `eth_getBlockReceipts`, and
+  source verifier/source-adapter material hashes bound to Ethereum chain id `1`,
+  the source bridge address, and deployed bridge code hash
 - `IrohaClient`, `LedgerClient`, and `ToriiClient` entry points, with raw JSON helpers still available for uncovered endpoints
 - fixture-backed unit tests against the repo's canonical address vectors
 

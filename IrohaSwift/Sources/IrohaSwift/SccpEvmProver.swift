@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Proof backend id expected by EVM-family SCCP Groth16 verifier contracts.
 public let sccpEvmGroth16Bn254ProofBackendV1 = "evm-groth16-bn254-v1"
@@ -6,14 +9,28 @@ public let sccpEvmGroth16Bn254ProofBackendV1 = "evm-groth16-bn254-v1"
 public let sccpGroth16Bn254ProofAbiByteLengthV1 = 384
 /// EVM-family contract-call envelope encoding used by SCCP verifier submissions.
 public let sccpEvmContractCallAbiTupleV1 = "abi_tuple_v1"
+/// Local-admission Norito envelope encoding used by EVM-family inbound submissions.
+public let sccpLocalAdmissionEnvelopeEncodingV1 = "norito:sccp-local-admission:v1"
+/// Local-admission submission kind used by EVM-family inbound submissions.
+public let sccpLocalAdmissionSubmissionKindV1 = "local_admission"
+/// Local-admission Torii/core entrypoint used by EVM-family inbound submissions.
+public let sccpLocalAdmissionEntrypointV1 = "SubmitBridgeProof"
 /// Solidity ABI signature for SCCP Groth16 message proof submission.
 public let sccpSubmitMessageProofAbiV1 = "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
 /// Keccak function selector for `submitSccpMessageProof(bytes,bytes32[6],bytes32)`.
 public let sccpSubmitMessageProofSelectorV1 = "0xbd57826c"
+/// Solidity ABI signature for SCCP EVM-family source-event logs.
+public let sccpEvmSourceEventAbiV1 = "SccpSourceEvent(bytes32)"
+
+/// Return the EVM SCCP source-event topic for `SccpSourceEvent(bytes32)`.
+public func evmSccpSourceEventTopic() -> String {
+    "0x" + irohaKeccak256(Data(sccpEvmSourceEventAbiV1.utf8)).hexEncodedString()
+}
 
 private let sccpSubmitMessageProofSelectorBytesV1 = Data([0xbd, 0x57, 0x82, 0x6c])
 private let sccpEvmSubmitMessageProofEntrypointV1 =
     "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)"
+private let ethereumMainnetBeaconRestMaxResponseBytes = 1024 * 1024
 
 /// SCCP public inputs shared by EVM-family Groth16 proof requests.
 public struct EvmSccpPublicInputsInput: Equatable {
@@ -297,6 +314,182 @@ public struct EvmSccpSubmission: Equatable {
     public let envelopeHex: String
 }
 
+/// Inputs used to package BSC -> SORA local-admission verifier output.
+public struct BscMainnetLocalAdmissionSubmissionInput: Equatable {
+    public let proofBytes: Data
+    public let publicInputsBytes: Data
+    public let bundleBytes: Data
+    public let envelopeBytes: Data
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+
+    public init(proofBytes: Data,
+                publicInputsBytes: Data,
+                bundleBytes: Data,
+                envelopeBytes: Data,
+                statementHash: String,
+                sourceVerifierMaterialHash: String,
+                sourceAdapterEngineDeploymentHash: String,
+                sourceDomain: UInt32 = sccpDomainBsc,
+                targetDomain: UInt32 = sccpDomainSora,
+                proofFamily: String = sccpStarkFriProofFamilyV1,
+                verifierBackend: String = sccpEvmGroth16Bn254ProofBackendV1,
+                envelopeEncoding: String = sccpLocalAdmissionEnvelopeEncodingV1,
+                submissionKind: String = sccpLocalAdmissionSubmissionKindV1,
+                verifierEntrypoint: String = sccpLocalAdmissionEntrypointV1) {
+        self.proofBytes = proofBytes
+        self.publicInputsBytes = publicInputsBytes
+        self.bundleBytes = bundleBytes
+        self.envelopeBytes = envelopeBytes
+        self.statementHash = statementHash
+        self.sourceVerifierMaterialHash = sourceVerifierMaterialHash
+        self.sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash
+        self.sourceDomain = sourceDomain
+        self.targetDomain = targetDomain
+        self.proofFamily = proofFamily
+        self.verifierBackend = verifierBackend
+        self.envelopeEncoding = envelopeEncoding
+        self.submissionKind = submissionKind
+        self.verifierEntrypoint = verifierEntrypoint
+    }
+}
+
+/// BSC local-admission payload mirrored from the core SCCP package.
+public struct BscMainnetLocalAdmissionPayload: Equatable {
+    public let version: UInt8
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+}
+
+/// BSC -> SORA local-admission package ready for Torii bridge-proof submission.
+public struct BscMainnetLocalAdmissionSubmission: Equatable {
+    public let version: UInt8
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let platformPayload: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let arguments: [EvmSccpSubmissionArgument]
+    public let localAdmission: BscMainnetLocalAdmissionPayload
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let envelopeBytes: Data
+    public let envelopeHex: String
+}
+
+/// Inputs used to package Ethereum mainnet -> SORA local-admission verifier output.
+public struct EthereumMainnetLocalAdmissionSubmissionInput: Equatable {
+    public let proofBytes: Data
+    public let publicInputsBytes: Data
+    public let bundleBytes: Data
+    public let envelopeBytes: Data
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+
+    public init(proofBytes: Data,
+                publicInputsBytes: Data,
+                bundleBytes: Data,
+                envelopeBytes: Data,
+                statementHash: String,
+                sourceVerifierMaterialHash: String,
+                sourceAdapterEngineDeploymentHash: String,
+                sourceDomain: UInt32 = sccpDomainEthereum,
+                targetDomain: UInt32 = sccpDomainSora,
+                proofFamily: String = sccpStarkFriProofFamilyV1,
+                verifierBackend: String = sccpEvmGroth16Bn254ProofBackendV1,
+                envelopeEncoding: String = sccpLocalAdmissionEnvelopeEncodingV1,
+                submissionKind: String = sccpLocalAdmissionSubmissionKindV1,
+                verifierEntrypoint: String = sccpLocalAdmissionEntrypointV1) {
+        self.proofBytes = proofBytes
+        self.publicInputsBytes = publicInputsBytes
+        self.bundleBytes = bundleBytes
+        self.envelopeBytes = envelopeBytes
+        self.statementHash = statementHash
+        self.sourceVerifierMaterialHash = sourceVerifierMaterialHash
+        self.sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash
+        self.sourceDomain = sourceDomain
+        self.targetDomain = targetDomain
+        self.proofFamily = proofFamily
+        self.verifierBackend = verifierBackend
+        self.envelopeEncoding = envelopeEncoding
+        self.submissionKind = submissionKind
+        self.verifierEntrypoint = verifierEntrypoint
+    }
+}
+
+/// Ethereum mainnet local-admission payload mirrored from the core SCCP package.
+public struct EthereumMainnetLocalAdmissionPayload: Equatable {
+    public let version: UInt8
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+}
+
+/// Ethereum mainnet -> SORA local-admission package ready for Torii bridge-proof submission.
+public struct EthereumMainnetLocalAdmissionSubmission: Equatable {
+    public let version: UInt8
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let platformPayload: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let arguments: [EvmSccpSubmissionArgument]
+    public let localAdmission: EthereumMainnetLocalAdmissionPayload
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let envelopeBytes: Data
+    public let envelopeHex: String
+}
+
 /// Error cases for EVM-family SCCP local proof request construction.
 public enum EvmSccpProverError: Error, Equatable {
     case invalidHex32(String)
@@ -376,6 +569,10 @@ public final class EvmSccpProver {
 
     public func prove(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
         let request = try await buildRequest(input)
+        return try await prove(request)
+    }
+
+    public func prove(_ request: EvmSccpProofRequest) async throws -> EvmSccpProofResult {
         guard let proveFunction else {
             throw EvmSccpProverError.localProverUnavailable
         }
@@ -445,6 +642,142 @@ public func buildBscMainnetSccpDestinationSubmission(
         throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
     }
     return submission
+}
+
+/// Build a BSC -> SORA local-admission package from native verifier output.
+public func buildBscMainnetSccpLocalAdmissionSubmission(
+    _ input: BscMainnetLocalAdmissionSubmissionInput
+) throws -> BscMainnetLocalAdmissionSubmission {
+    guard input.sourceDomain == sccpDomainBsc, input.targetDomain == sccpDomainSora else {
+        throw EvmSccpProverError.invalidPublicInputs("BSC -> SORA")
+    }
+    guard input.proofFamily == sccpStarkFriProofFamilyV1,
+          input.verifierBackend == sccpEvmGroth16Bn254ProofBackendV1,
+          input.envelopeEncoding == sccpLocalAdmissionEnvelopeEncodingV1,
+          input.submissionKind == sccpLocalAdmissionSubmissionKindV1,
+          input.verifierEntrypoint == sccpLocalAdmissionEntrypointV1 else {
+        throw EvmSccpProverError.invalidPublicInputs("localAdmission.metadata")
+    }
+    let proofBytes = try requireEvmLocalAdmissionBytes(input.proofBytes, field: "proofBytes")
+    let publicInputsBytes = try requireEvmLocalAdmissionBytes(
+        input.publicInputsBytes,
+        field: "publicInputsBytes"
+    )
+    let bundleBytes = try requireEvmLocalAdmissionBytes(input.bundleBytes, field: "bundleBytes")
+    let envelopeBytes = try requireEvmLocalAdmissionBytes(input.envelopeBytes, field: "envelopeBytes")
+    let statementHash = try evmNormalizeHex32(input.statementHash, field: "statementHash")
+    let sourceVerifierMaterialHash = try evmNormalizeHex32(
+        input.sourceVerifierMaterialHash,
+        field: "sourceVerifierMaterialHash"
+    )
+    let sourceAdapterEngineDeploymentHash = try evmNormalizeHex32(
+        input.sourceAdapterEngineDeploymentHash,
+        field: "sourceAdapterEngineDeploymentHash"
+    )
+    let payload = BscMainnetLocalAdmissionPayload(
+        version: 1,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash
+    )
+    return BscMainnetLocalAdmissionSubmission(
+        version: 1,
+        proofFamily: input.proofFamily,
+        verifierBackend: input.verifierBackend,
+        platformPayload: sccpLocalAdmissionSubmissionKindV1,
+        envelopeEncoding: sccpLocalAdmissionEnvelopeEncodingV1,
+        submissionKind: sccpLocalAdmissionSubmissionKindV1,
+        verifierEntrypoint: sccpLocalAdmissionEntrypointV1,
+        sourceDomain: sccpDomainBsc,
+        targetDomain: sccpDomainSora,
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+        arguments: [],
+        localAdmission: payload,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        envelopeBytes: envelopeBytes,
+        envelopeHex: "0x" + envelopeBytes.hexEncodedString()
+    )
+}
+
+/// Build an Ethereum mainnet -> SORA local-admission package from native verifier output.
+public func buildEthereumMainnetSccpLocalAdmissionSubmission(
+    _ input: EthereumMainnetLocalAdmissionSubmissionInput
+) throws -> EthereumMainnetLocalAdmissionSubmission {
+    guard input.sourceDomain == sccpDomainEthereum, input.targetDomain == sccpDomainSora else {
+        throw EvmSccpProverError.invalidPublicInputs("ETH -> SORA")
+    }
+    guard input.proofFamily == sccpStarkFriProofFamilyV1,
+          input.verifierBackend == sccpEvmGroth16Bn254ProofBackendV1,
+          input.envelopeEncoding == sccpLocalAdmissionEnvelopeEncodingV1,
+          input.submissionKind == sccpLocalAdmissionSubmissionKindV1,
+          input.verifierEntrypoint == sccpLocalAdmissionEntrypointV1 else {
+        throw EvmSccpProverError.invalidPublicInputs("localAdmission.metadata")
+    }
+    let proofBytes = try requireEvmLocalAdmissionBytes(input.proofBytes, field: "proofBytes")
+    let publicInputsBytes = try requireEvmLocalAdmissionBytes(
+        input.publicInputsBytes,
+        field: "publicInputsBytes"
+    )
+    let bundleBytes = try requireEvmLocalAdmissionBytes(input.bundleBytes, field: "bundleBytes")
+    let envelopeBytes = try requireEvmLocalAdmissionBytes(input.envelopeBytes, field: "envelopeBytes")
+    let statementHash = try evmNormalizeHex32(input.statementHash, field: "statementHash")
+    let sourceVerifierMaterialHash = try evmNormalizeHex32(
+        input.sourceVerifierMaterialHash,
+        field: "sourceVerifierMaterialHash"
+    )
+    let sourceAdapterEngineDeploymentHash = try evmNormalizeHex32(
+        input.sourceAdapterEngineDeploymentHash,
+        field: "sourceAdapterEngineDeploymentHash"
+    )
+    let payload = EthereumMainnetLocalAdmissionPayload(
+        version: 1,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash
+    )
+    return EthereumMainnetLocalAdmissionSubmission(
+        version: 1,
+        proofFamily: input.proofFamily,
+        verifierBackend: input.verifierBackend,
+        platformPayload: sccpLocalAdmissionSubmissionKindV1,
+        envelopeEncoding: sccpLocalAdmissionEnvelopeEncodingV1,
+        submissionKind: sccpLocalAdmissionSubmissionKindV1,
+        verifierEntrypoint: sccpLocalAdmissionEntrypointV1,
+        sourceDomain: sccpDomainEthereum,
+        targetDomain: sccpDomainSora,
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+        arguments: [],
+        localAdmission: payload,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        envelopeBytes: envelopeBytes,
+        envelopeHex: "0x" + envelopeBytes.hexEncodedString()
+    )
 }
 
 /// Local-first BSC mainnet SCCP proof wrapper. It enforces BSC target domain and chain id 56.
@@ -616,7 +949,7 @@ public final class BscMainnetSccp {
             throw EvmSccpProverError.localProverUnavailable
         }
         let chainId = try await selectedProvider.request(method: "eth_chainId", params: [])
-        try Self.requireMainnetChainId(Self.normalizeMainnetChainId(chainId))
+        try Self.requireMainnetChainId(Self.normalizeRpcChainId(chainId))
         return chainId
     }
 
@@ -640,7 +973,10 @@ public final class BscMainnetSccp {
             try Self.normalizeRpcHex($0, label: "transactionHash", byteLength: 32)
         }
         var receipt = input.receipt
-        if receipt == nil, let transactionHash, let selectedProvider {
+        if receipt == nil, let transactionHash {
+            guard let selectedProvider else {
+                throw EvmSccpProverError.invalidPublicInputs("executionProvider")
+            }
             guard let fetched = try await selectedProvider.request(
                 method: "eth_getTransactionReceipt",
                 params: [transactionHash]
@@ -799,6 +1135,12 @@ public final class BscMainnetSccp {
         try buildBscMainnetSccpDestinationSubmission(input)
     }
 
+    public func buildLocalAdmissionSubmission(
+        _ input: BscMainnetLocalAdmissionSubmissionInput
+    ) throws -> BscMainnetLocalAdmissionSubmission {
+        try buildBscMainnetSccpLocalAdmissionSubmission(input)
+    }
+
     public func submitOutboundToBsc(_ input: EvmSccpSubmissionInput) async throws -> Any {
         let submission = try buildBscCalldata(input)
         guard let outboundSubmitFunction else {
@@ -807,37 +1149,9 @@ public final class BscMainnetSccp {
         return try await outboundSubmitFunction(submission)
     }
 
-    private static func normalizeMainnetChainId(_ value: Any) throws -> UInt64 {
-        if let value = value as? UInt64 {
-            return value
-        }
-        if let value = value as? UInt32 {
-            return UInt64(value)
-        }
-        if let value = value as? UInt {
-            return UInt64(value)
-        }
-        if let value = value as? Int {
-            guard value >= 0 else {
-                throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-            }
-            return UInt64(value)
-        }
-        guard let text = value as? String, text.trimmingCharacters(in: .whitespacesAndNewlines) == text else {
-            throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-        }
-        if text.hasPrefix("0x") {
-            let hex = String(text.dropFirst(2))
-            guard !hex.isEmpty,
-                  hex == "0" || (hex.first != "0" && hex.allSatisfy { Self.isLowerHex($0) }),
-                  let parsed = UInt64(hex, radix: 16) else {
-                throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-            }
-            return parsed
-        }
-        guard !text.isEmpty,
-              text == "0" || (text.first != "0" && text.allSatisfy { Self.isDecimalDigit($0) }),
-              let parsed = UInt64(text, radix: 10) else {
+    private static func normalizeRpcChainId(_ value: Any) throws -> UInt64 {
+        let quantity = try Self.normalizeRpcQuantity(value, label: "eth_chainId")
+        guard let parsed = UInt64(String(quantity.dropFirst(2)), radix: 16) else {
             throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
         }
         return parsed
@@ -848,6 +1162,24 @@ public final class BscMainnetSccp {
             return input[key]
         }
         return nil
+    }
+
+    private static func requireMapList(_ value: Any, label: String) throws -> [[String: Any]] {
+        if let maps = value as? [[String: Any]] {
+            return maps
+        }
+        if let values = value as? [Any] {
+            var maps: [[String: Any]] = []
+            maps.reserveCapacity(values.count)
+            for item in values {
+                guard let map = item as? [String: Any] else {
+                    throw EvmSccpProverError.invalidPublicInputs(label)
+                }
+                maps.append(map)
+            }
+            return maps
+        }
+        throw EvmSccpProverError.invalidPublicInputs(label)
     }
 
     private static func normalizeUnsignedInteger(_ value: Any?, label: String) throws -> UInt64 {
@@ -886,7 +1218,12 @@ public final class BscMainnetSccp {
         return parsed
     }
 
-    private static func normalizeRpcHex(_ value: Any?, label: String, byteLength: Int) throws -> String {
+    private static func normalizeRpcHex(
+        _ value: Any?,
+        label: String,
+        byteLength: Int,
+        allowZero: Bool = false
+    ) throws -> String {
         guard let text = value as? String,
               text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
               text.hasPrefix("0x") else {
@@ -897,7 +1234,7 @@ public final class BscMainnetSccp {
               hex.allSatisfy({ Self.isLowerHex($0) }) else {
             throw EvmSccpProverError.invalidPublicInputs(label)
         }
-        guard hex.contains(where: { $0 != "0" }) else {
+        guard allowZero || hex.contains(where: { $0 != "0" }) else {
             throw EvmSccpProverError.zeroField(label)
         }
         return text
@@ -991,20 +1328,472 @@ public protocol EthereumMainnetConsensusProvider {
     ) async throws -> [String: Any]
 }
 
+/// HTTP response returned by an Ethereum Beacon REST transport.
+public struct EthereumMainnetBeaconRestResponse {
+    public let statusCode: Int
+    public let body: Data
+    public let statusMessage: String?
+
+    public init(statusCode: Int,
+                body: Data,
+                statusMessage: String? = nil) {
+        self.statusCode = statusCode
+        self.body = body
+        self.statusMessage = statusMessage
+    }
+}
+
+/// Fetch transport used by the Ethereum mainnet Beacon REST consensus provider.
+public protocol EthereumMainnetBeaconRestTransport {
+    func get(url: URL, headers: [String: String]) async throws -> EthereumMainnetBeaconRestResponse
+}
+
+/// URLSession-backed Ethereum Beacon REST transport.
+public final class EthereumMainnetBeaconRestURLSessionTransport: EthereumMainnetBeaconRestTransport {
+    private let session: URLSession
+
+    public init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    public func get(url: URL, headers: [String: String]) async throws -> EthereumMainnetBeaconRestResponse {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        for (header, value) in headers {
+            request.setValue(value, forHTTPHeaderField: header)
+        }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        if http.expectedContentLength > Int64(ethereumMainnetBeaconRestMaxResponseBytes) {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        var data = Data()
+        if http.expectedContentLength > 0 {
+            data.reserveCapacity(Int(http.expectedContentLength))
+        }
+        for try await byte in bytes {
+            guard data.count < ethereumMainnetBeaconRestMaxResponseBytes else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+            }
+            data.append(byte)
+        }
+        return EthereumMainnetBeaconRestResponse(
+            statusCode: http.statusCode,
+            body: data,
+            statusMessage: HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+        )
+    }
+}
+
+/// Ethereum mainnet Beacon REST finality collector.
+public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetConsensusProvider {
+    private let endpoint: URL
+    private let syncCommitteeRoot: String?
+    private let syncCommitteePayload: Data?
+    private let headers: [String: String]
+    private let verifyFinalityCheckpoint: Bool
+    private let transport: EthereumMainnetBeaconRestTransport
+
+    public init(endpoint: String,
+                syncCommitteeRoot: String? = nil,
+                syncCommitteePayload: Data? = nil,
+                headers: [String: String] = [:],
+                verifyFinalityCheckpoint: Bool = true,
+                transport: EthereumMainnetBeaconRestTransport = EthereumMainnetBeaconRestURLSessionTransport()) throws {
+        self.endpoint = try Self.normalizeEndpoint(endpoint)
+        self.syncCommitteeRoot = try syncCommitteeRoot.map {
+            try Self.normalizeRpcHex($0, label: "syncCommitteeRoot", byteLength: 32)
+        }
+        self.syncCommitteePayload = syncCommitteePayload
+        self.headers = try Self.normalizeHeaders(headers)
+        self.verifyFinalityCheckpoint = verifyFinalityCheckpoint
+        self.transport = transport
+        if self.syncCommitteeRoot == nil, syncCommitteePayload == nil {
+            throw EvmSccpProverError.invalidPublicInputs("syncCommitteeRoot")
+        }
+        if let root = self.syncCommitteeRoot, let payload = syncCommitteePayload {
+            guard try ethSyncCommitteeHashFromPayload(payload: payload) == root else {
+                throw EvmSccpProverError.invalidPublicInputs("syncCommitteePayload")
+            }
+        }
+    }
+
+    public convenience init(endpoint: URL,
+                            syncCommitteeRoot: String? = nil,
+                            syncCommitteePayload: Data? = nil,
+                            headers: [String: String] = [:],
+                            verifyFinalityCheckpoint: Bool = true,
+                            transport: EthereumMainnetBeaconRestTransport = EthereumMainnetBeaconRestURLSessionTransport()) throws {
+        try self.init(
+            endpoint: endpoint.absoluteString,
+            syncCommitteeRoot: syncCommitteeRoot,
+            syncCommitteePayload: syncCommitteePayload,
+            headers: headers,
+            verifyFinalityCheckpoint: verifyFinalityCheckpoint,
+            transport: transport
+        )
+    }
+
+    public func collectFinalityEvidence(
+        receipt: [String: Any]?,
+        block: [String: Any]?,
+        transactionHash: String?
+    ) async throws -> [String: Any] {
+        guard let block else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.block")
+        }
+        let blockHash = try Self.normalizeRpcHex(block["hash"], label: "block.hash", byteLength: 32)
+        let blockNumber = try Self.normalizeRpcQuantity(
+            Self.firstPresent(block, "number", "blockNumber", "block_number"),
+            label: "block.number"
+        )
+        guard blockNumber != "0x0" else {
+            throw EvmSccpProverError.zeroField("block.number")
+        }
+        let receiptsRoot = try Self.normalizeRpcHex(
+            Self.firstPresent(block, "receiptsRoot", "receipts_root"),
+            label: "block.receiptsRoot",
+            byteLength: 32
+        )
+        let headerRoot = try await fetchJsonObject(
+            path: "/eth/v1/beacon/headers/finalized",
+            label: "Ethereum mainnet Beacon REST finalized header"
+        )
+        try Self.rejectUnsafeBeaconRestPayload(
+            headerRoot,
+            label: "Ethereum mainnet Beacon REST finalized header"
+        )
+        let headerData = try Self.expectObject(
+            Self.requireField(
+                headerRoot,
+                label: "Ethereum mainnet Beacon REST finalized header",
+                field: "data"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized header.data"
+        )
+        try Self.rejectNonBooleanBeaconRestCanonical(
+            headerData,
+            label: "Ethereum mainnet Beacon REST finalized header"
+        )
+        let finalizedHeaderRoot = try Self.normalizeRpcHex(
+            Self.requireField(
+                headerData,
+                label: "Ethereum mainnet Beacon REST finalized header.data",
+                field: "root"
+            ),
+            label: "finalizedHeaderRoot",
+            byteLength: 32
+        )
+        let header = try Self.expectObject(
+            Self.requireField(
+                headerData,
+                label: "Ethereum mainnet Beacon REST finalized header.data",
+                field: "header"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized header.data.header"
+        )
+        let message = try Self.expectObject(
+            Self.requireField(
+                header,
+                label: "Ethereum mainnet Beacon REST finalized header.data.header",
+                field: "message"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized header.data.header.message"
+        )
+        let beaconSlot = try Self.normalizeUnsignedInteger(
+            Self.requireField(
+                message,
+                label: "Ethereum mainnet Beacon REST finalized header.data.header.message",
+                field: "slot"
+            ),
+            label: "beaconFinality.beaconSlot"
+        )
+        guard beaconSlot != 0 else {
+            throw EvmSccpProverError.zeroField("beaconFinality.beaconSlot")
+        }
+        if verifyFinalityCheckpoint {
+            let checkpointRoot = try await fetchJsonObject(
+                path: "/eth/v1/beacon/states/finalized/finality_checkpoints",
+                label: "Ethereum mainnet Beacon REST finality checkpoints"
+            )
+            try Self.rejectUnsafeBeaconRestPayload(
+                checkpointRoot,
+                label: "Ethereum mainnet Beacon REST finality checkpoints"
+            )
+            let checkpointData = try Self.expectObject(
+                Self.requireField(
+                    checkpointRoot,
+                    label: "Ethereum mainnet Beacon REST finality checkpoints",
+                    field: "data"
+                ),
+                label: "Ethereum mainnet Beacon REST finality checkpoints.data"
+            )
+            let finalizedCheckpoint = try Self.expectObject(
+                Self.requireField(
+                    checkpointData,
+                    label: "Ethereum mainnet Beacon REST finality checkpoints.data",
+                    field: "finalized"
+                ),
+                label: "Ethereum mainnet Beacon REST finality checkpoints.data.finalized"
+            )
+            let checkpointFinalizedRoot = try Self.normalizeRpcHex(
+                Self.requireField(
+                    finalizedCheckpoint,
+                    label: "Ethereum mainnet Beacon REST finality checkpoints.data.finalized",
+                    field: "root"
+                ),
+                label: "finalizedCheckpointRoot",
+                byteLength: 32
+            )
+            guard checkpointFinalizedRoot == finalizedHeaderRoot else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalityCheckpoint")
+            }
+        }
+        return [
+            "executionBlockNumber": String(
+                try Self.normalizeUnsignedInteger(blockNumber, label: "block.number")
+            ),
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "finalizedHeaderRoot": finalizedHeaderRoot,
+            "syncCommitteeRoot": try resolvedSyncCommitteeRoot(),
+            "beaconSlot": String(beaconSlot),
+        ]
+    }
+
+    private func fetchJsonObject(path: String, label: String) async throws -> [String: Any] {
+        let response = try await transport.get(url: beaconRestUrl(path), headers: headers)
+        guard (200..<300).contains(response.statusCode) else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        guard response.body.count <= ethereumMainnetBeaconRestMaxResponseBytes else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        let parsed = try JSONSerialization.jsonObject(with: response.body)
+        return try Self.expectObject(parsed, label: label)
+    }
+
+    private func beaconRestUrl(_ path: String) throws -> URL {
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.endpoint")
+        }
+        var basePath = components.path
+        while basePath.hasSuffix("/") {
+            basePath.removeLast()
+        }
+        var suffix = path
+        if basePath.hasSuffix("/eth/v1"), suffix.hasPrefix("/eth/v1/") {
+            suffix = String(suffix.dropFirst("/eth/v1".count))
+        }
+        components.path = basePath + suffix
+        components.fragment = nil
+        guard let url = components.url else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.endpoint")
+        }
+        return url
+    }
+
+    private func resolvedSyncCommitteeRoot() throws -> String {
+        if let syncCommitteeRoot {
+            return syncCommitteeRoot
+        }
+        guard let syncCommitteePayload else {
+            throw EvmSccpProverError.invalidPublicInputs("syncCommitteeRoot")
+        }
+        return try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
+    }
+
+    private static func normalizeEndpoint(_ value: String) throws -> URL {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == value,
+              let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.endpoint")
+        }
+        return url
+    }
+
+    private static func normalizeHeaders(_ input: [String: String]) throws -> [String: String] {
+        var headers: [String: String] = [:]
+        for (name, value) in input {
+            guard !name.isEmpty,
+                  name.trimmingCharacters(in: .whitespacesAndNewlines) == name,
+                  value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconRest.headers")
+            }
+            headers[name] = value
+        }
+        return headers
+    }
+
+    private static func rejectUnsafeBeaconRestPayload(_ payload: [String: Any], label: String) throws {
+        let executionOptimistic = try optionalBeaconRestBoolean(
+            payload,
+            field: "execution_optimistic",
+            label: label
+        )
+        let executionOptimisticAlias = try optionalBeaconRestBoolean(
+            payload,
+            field: "executionOptimistic",
+            label: label
+        )
+        let finalized = try optionalBeaconRestBoolean(payload, field: "finalized", label: label)
+        if executionOptimistic == true || executionOptimisticAlias == true {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
+        }
+        if finalized == false {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
+        }
+        guard payload["data"] != nil else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+    }
+
+    private static func rejectNonBooleanBeaconRestCanonical(_ payload: [String: Any], label: String) throws {
+        if try optionalBeaconRestBoolean(payload, field: "canonical", label: label) == false {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
+        }
+    }
+
+    private static func optionalBeaconRestBoolean(
+        _ payload: [String: Any],
+        field: String,
+        label: String
+    ) throws -> Bool? {
+        guard let value = payload[field] else {
+            return nil
+        }
+        guard let boolean = value as? Bool else {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).\(field)")
+        }
+        return boolean
+    }
+
+    private static func expectObject(_ value: Any, label: String) throws -> [String: Any] {
+        guard let object = value as? [String: Any] else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        return object
+    }
+
+    private static func requireField(_ object: [String: Any], label: String, field: String) throws -> Any {
+        guard let value = object[field] else {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).\(field)")
+        }
+        return value
+    }
+
+    private static func firstPresent(_ input: [String: Any], _ keys: String...) -> Any? {
+        for key in keys where input.keys.contains(key) {
+            return input[key]
+        }
+        return nil
+    }
+
+    private static func normalizeUnsignedInteger(_ value: Any?, label: String) throws -> UInt64 {
+        if let value = value as? UInt64 {
+            return value
+        }
+        if let value = value as? UInt32 {
+            return UInt64(value)
+        }
+        if let value = value as? UInt {
+            return UInt64(value)
+        }
+        if let value = value as? Int {
+            guard value >= 0 else {
+                throw EvmSccpProverError.invalidPublicInputs(label)
+            }
+            return UInt64(value)
+        }
+        guard let text = value as? String,
+              text.trimmingCharacters(in: .whitespacesAndNewlines) == text else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        if text.hasPrefix("0x") {
+            let hex = String(text.dropFirst(2))
+            guard !hex.isEmpty,
+                  hex == "0" || (hex.first != "0" && hex.allSatisfy { Self.isLowerHex($0) }),
+                  let parsed = UInt64(hex, radix: 16) else {
+                throw EvmSccpProverError.invalidPublicInputs(label)
+            }
+            return parsed
+        }
+        guard !text.isEmpty,
+              text == "0" || (text.first != "0" && text.allSatisfy { Self.isDecimalDigit($0) }),
+              let parsed = UInt64(text, radix: 10) else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        return parsed
+    }
+
+    private static func normalizeRpcHex(
+        _ value: Any?,
+        label: String,
+        byteLength: Int,
+        allowZero: Bool = false
+    ) throws -> String {
+        guard let text = value as? String,
+              text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+              text.hasPrefix("0x") else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        let hex = String(text.dropFirst(2))
+        guard hex.count == byteLength * 2,
+              hex.allSatisfy({ Self.isLowerHex($0) }) else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        guard allowZero || hex.contains(where: { $0 != "0" }) else {
+            throw EvmSccpProverError.zeroField(label)
+        }
+        return text
+    }
+
+    private static func normalizeRpcQuantity(_ value: Any?, label: String) throws -> String {
+        guard let text = value as? String,
+              text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+              text.hasPrefix("0x") else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        let hex = String(text.dropFirst(2))
+        guard !hex.isEmpty,
+              hex == "0" || (hex.first != "0" && hex.allSatisfy { Self.isLowerHex($0) }),
+              let parsed = UInt64(hex, radix: 16) else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        return "0x" + String(parsed, radix: 16)
+    }
+
+    private static func isLowerHex(_ character: Character) -> Bool {
+        "0123456789abcdef".contains(character)
+    }
+
+    private static func isDecimalDigit(_ character: Character) -> Bool {
+        "0123456789".contains(character)
+    }
+}
+
 /// Typed Ethereum beacon finality evidence required before inbound source proving.
 public struct EthereumMainnetBeaconFinalityEvidence {
     public let executionBlockNumber: String
     public let executionBlockHash: String
     public let executionReceiptsRoot: String
+    public let beaconSlot: String?
     public let additionalFields: [String: Any]
 
     public init(executionBlockNumber: String,
                 executionBlockHash: String,
                 executionReceiptsRoot: String,
+                beaconSlot: String? = nil,
                 additionalFields: [String: Any] = [:]) {
         self.executionBlockNumber = executionBlockNumber
         self.executionBlockHash = executionBlockHash
         self.executionReceiptsRoot = executionReceiptsRoot
+        self.beaconSlot = beaconSlot
         self.additionalFields = additionalFields
     }
 
@@ -1013,7 +1802,49 @@ public struct EthereumMainnetBeaconFinalityEvidence {
         value["executionBlockNumber"] = executionBlockNumber
         value["executionBlockHash"] = executionBlockHash
         value["executionReceiptsRoot"] = executionReceiptsRoot
+        if let beaconSlot {
+            value["beaconSlot"] = beaconSlot
+        }
         return value
+    }
+}
+
+/// Ethereum mainnet receipt-proof transcript collected from app-supplied RPC and Beacon REST providers.
+public struct EthereumMainnetReceiptProof {
+    public let sourceDomain: UInt32
+    public let sourceEventDigest: String
+    public let beaconSlot: UInt64
+    public let executionBlockNumber: UInt64
+    public let executionBlockHash: String
+    public let executionReceiptsRoot: String
+    public let beaconFinalizedRoot: String
+    public let syncCommitteeRoot: String
+    public let receiptRootIndex: UInt64
+    public let receiptTrieProofNodes: [Data]
+    public let inclusionBranch: [Data]
+
+    public init(sourceDomain: UInt32 = sccpDomainEthereum,
+                sourceEventDigest: String,
+                beaconSlot: UInt64,
+                executionBlockNumber: UInt64,
+                executionBlockHash: String,
+                executionReceiptsRoot: String,
+                beaconFinalizedRoot: String,
+                syncCommitteeRoot: String,
+                receiptRootIndex: UInt64,
+                receiptTrieProofNodes: [Data],
+                inclusionBranch: [Data]) {
+        self.sourceDomain = sourceDomain
+        self.sourceEventDigest = sourceEventDigest
+        self.beaconSlot = beaconSlot
+        self.executionBlockNumber = executionBlockNumber
+        self.executionBlockHash = executionBlockHash
+        self.executionReceiptsRoot = executionReceiptsRoot
+        self.beaconFinalizedRoot = beaconFinalizedRoot
+        self.syncCommitteeRoot = syncCommitteeRoot
+        self.receiptRootIndex = receiptRootIndex
+        self.receiptTrieProofNodes = receiptTrieProofNodes
+        self.inclusionBranch = inclusionBranch
     }
 }
 
@@ -1025,7 +1856,12 @@ public struct EthereumMainnetInboundEvidence {
     public let receipt: [String: Any]?
     public let block: [String: Any]?
     public let beaconFinality: [String: Any]?
+    public let blockReceipts: [[String: Any]]?
+    public let inclusionBranch: [Data]?
+    public let receiptProof: EthereumMainnetReceiptProof?
     public let receiptProofHash: String?
+    public let sourceEventDigest: String?
+    public let sourceBridgeEmitterAddress: String?
 
     public init(sourceDomain: UInt32 = sccpDomainEthereum,
                 targetDomain: UInt32 = sccpDomainSora,
@@ -1033,14 +1869,24 @@ public struct EthereumMainnetInboundEvidence {
                 receipt: [String: Any]? = nil,
                 block: [String: Any]? = nil,
                 beaconFinality: [String: Any]? = nil,
-                receiptProofHash: String? = nil) {
+                blockReceipts: [[String: Any]]? = nil,
+                inclusionBranch: [Data]? = nil,
+                receiptProof: EthereumMainnetReceiptProof? = nil,
+                receiptProofHash: String? = nil,
+                sourceEventDigest: String? = nil,
+                sourceBridgeEmitterAddress: String? = nil) {
         self.sourceDomain = sourceDomain
         self.targetDomain = targetDomain
         self.transactionHash = transactionHash
         self.receipt = receipt
         self.block = block
         self.beaconFinality = beaconFinality
+        self.blockReceipts = blockReceipts
+        self.inclusionBranch = inclusionBranch
+        self.receiptProof = receiptProof
         self.receiptProofHash = receiptProofHash
+        self.sourceEventDigest = sourceEventDigest
+        self.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress
     }
 
     public init(sourceDomain: UInt32 = sccpDomainEthereum,
@@ -1049,7 +1895,12 @@ public struct EthereumMainnetInboundEvidence {
                 receipt: [String: Any]? = nil,
                 block: [String: Any]? = nil,
                 beaconFinalityEvidence: EthereumMainnetBeaconFinalityEvidence?,
-                receiptProofHash: String? = nil) {
+                blockReceipts: [[String: Any]]? = nil,
+                inclusionBranch: [Data]? = nil,
+                receiptProof: EthereumMainnetReceiptProof? = nil,
+                receiptProofHash: String? = nil,
+                sourceEventDigest: String? = nil,
+                sourceBridgeEmitterAddress: String? = nil) {
         self.init(
             sourceDomain: sourceDomain,
             targetDomain: targetDomain,
@@ -1057,7 +1908,12 @@ public struct EthereumMainnetInboundEvidence {
             receipt: receipt,
             block: block,
             beaconFinality: beaconFinalityEvidence?.dictionary,
-            receiptProofHash: receiptProofHash
+            blockReceipts: blockReceipts,
+            inclusionBranch: inclusionBranch,
+            receiptProof: receiptProof,
+            receiptProofHash: receiptProofHash,
+            sourceEventDigest: sourceEventDigest,
+            sourceBridgeEmitterAddress: sourceBridgeEmitterAddress
         )
     }
 }
@@ -1075,6 +1931,7 @@ public final class EthereumMainnetSccp {
     private let inboundProveFunction: InboundProveFunction?
     private let inboundSubmitFunction: InboundSubmitFunction?
     private let outboundSubmitFunction: OutboundSubmitFunction?
+    private let sourceBridgeEmitterAddress: String?
 
     public init(witnessProvider: EvmSccpWitnessProvider? = nil,
                 proveFunction: ProveFunction? = nil,
@@ -1082,13 +1939,15 @@ public final class EthereumMainnetSccp {
                 consensusProvider: EthereumMainnetConsensusProvider? = nil,
                 inboundProveFunction: InboundProveFunction? = nil,
                 inboundSubmitFunction: InboundSubmitFunction? = nil,
-                outboundSubmitFunction: OutboundSubmitFunction? = nil) {
+                outboundSubmitFunction: OutboundSubmitFunction? = nil,
+                sourceBridgeEmitterAddress: String? = nil) {
         self.prover = EvmSccpProver(witnessProvider: witnessProvider, proveFunction: proveFunction)
         self.executionProvider = executionProvider
         self.consensusProvider = consensusProvider
         self.inboundProveFunction = inboundProveFunction
         self.inboundSubmitFunction = inboundSubmitFunction
         self.outboundSubmitFunction = outboundSubmitFunction
+        self.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress
     }
 
     public static func requireMainnetChainId(_ chainId: UInt64) throws {
@@ -1116,8 +1975,123 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.localProverUnavailable
         }
         let chainId = try await selectedProvider.request(method: "eth_chainId", params: [])
-        try Self.requireMainnetChainId(Self.normalizeMainnetChainId(chainId))
+        try Self.requireMainnetChainId(Self.normalizeRpcChainId(chainId))
         return chainId
+    }
+
+    private static func ethereumReceiptSourceEvent(
+        receipt: [String: Any],
+        sourceEventDigest inputDigest: String?,
+        sourceBridgeEmitterAddress inputAddress: String?,
+        transactionHash expectedTransactionHash: String?,
+        blockHash expectedBlockHash: String?,
+        blockNumber expectedBlockNumber: String?
+    ) throws -> (sourceEventDigest: String?, sourceBridgeEmitterAddress: String?) {
+        let expectedDigest = try inputDigest.map {
+            try normalizeRpcHex($0, label: "sourceEventDigest", byteLength: 32)
+        }
+        let expectedAddress = try inputAddress.map {
+            try normalizeRpcHex($0, label: "sourceBridgeEmitterAddress", byteLength: 20)
+        }
+        if expectedDigest == nil && expectedAddress == nil {
+            return (nil, nil)
+        }
+        guard let expectedAddress else {
+            throw EvmSccpProverError.invalidPublicInputs("sourceBridgeEmitterAddress")
+        }
+        guard let logs = receipt["logs"] as? [[String: Any]] else {
+            throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+        }
+        let sourceEventTopic = evmSccpSourceEventTopic()
+        var matchedDigest: String?
+        for (index, log) in logs.enumerated() {
+            if (log["removed"] as? Bool) == true {
+                throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+            }
+            let address = try normalizeRpcHex(
+                log["address"],
+                label: "receipt.logs[\(index)].address",
+                byteLength: 20,
+                allowZero: true
+            )
+            guard let topics = log["topics"] as? [Any], topics.count <= 4 else {
+                throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].topics")
+            }
+            let normalizedTopics = try topics.enumerated().map { topicIndex, topic in
+                try normalizeRpcHex(
+                    topic,
+                    label: "receipt.logs[\(index)].topics[\(topicIndex)]",
+                    byteLength: 32,
+                    allowZero: true
+                )
+            }
+            if address == expectedAddress,
+               normalizedTopics.first == sourceEventTopic {
+                guard normalizedTopics.count == 2 else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].topics")
+                }
+                guard let data = log["data"] as? String else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].data")
+                }
+                guard data == "0x" else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].data")
+                }
+                let logTransactionHash = try normalizeRpcHex(
+                    firstPresent(log, "transactionHash", "transaction_hash"),
+                    label: "receipt.logs[\(index)].transactionHash",
+                    byteLength: 32
+                )
+                if let expectedTransactionHash, logTransactionHash != expectedTransactionHash {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                let logBlockHash = try normalizeRpcHex(
+                    firstPresent(log, "blockHash", "block_hash"),
+                    label: "receipt.logs[\(index)].blockHash",
+                    byteLength: 32
+                )
+                if let expectedBlockHash, logBlockHash != expectedBlockHash {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                let logBlockNumber = try normalizePositiveRpcQuantity(
+                    firstPresent(log, "blockNumber", "block_number"),
+                    label: "receipt.logs[\(index)].blockNumber"
+                )
+                if let expectedBlockNumber, logBlockNumber != expectedBlockNumber {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                let candidateDigest = normalizedTopics[1]
+                guard !candidateDigest.dropFirst(2).allSatisfy({ $0 == "0" }) else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].topics[1]")
+                }
+                if let expectedDigest, candidateDigest != expectedDigest {
+                    continue
+                }
+                if matchedDigest != nil {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                matchedDigest = candidateDigest
+            }
+        }
+        guard let matchedDigest else {
+            throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+        }
+        return (matchedDigest, expectedAddress)
+    }
+
+    private static func resolveSourceBridgeEmitterAddress(
+        _ inputAddress: String?,
+        defaultAddress: String?
+    ) throws -> String? {
+        let normalizedInput = try inputAddress.map {
+            try normalizeRpcHex($0, label: "sourceBridgeEmitterAddress", byteLength: 20)
+        }
+        let normalizedDefault = try defaultAddress.map {
+            try normalizeRpcHex($0, label: "sourceBridgeEmitterAddress", byteLength: 20)
+        }
+        if let normalizedInput, let normalizedDefault, normalizedInput != normalizedDefault {
+            throw EvmSccpProverError.invalidPublicInputs("sourceBridgeEmitterAddress")
+        }
+        return normalizedInput ?? normalizedDefault
     }
 
     public func collectInboundEvidenceFromReceipt(
@@ -1140,7 +2114,10 @@ public final class EthereumMainnetSccp {
             try Self.normalizeRpcHex($0, label: "transactionHash", byteLength: 32)
         }
         var receipt = input.receipt
-        if receipt == nil, let transactionHash, let selectedProvider {
+        if receipt == nil, let transactionHash {
+            guard let selectedProvider else {
+                throw EvmSccpProverError.invalidPublicInputs("executionProvider")
+            }
             guard let fetched = try await selectedProvider.request(
                 method: "eth_getTransactionReceipt",
                 params: [transactionHash]
@@ -1149,13 +2126,16 @@ public final class EthereumMainnetSccp {
             }
             receipt = fetched
         }
-        if receipt == nil, input.receiptProofHash == nil {
+        var receiptProof = input.receiptProof
+        if receipt == nil, receiptProof == nil, input.receiptProofHash == nil {
             throw EvmSccpProverError.invalidPublicInputs("receipt")
         }
 
         var blockHash: String?
         var receiptBlockNumber: String?
         var blockReceiptsRoot: String?
+        var sourceEventDigest: String?
+        var sourceBridgeEmitterAddress: String?
         if let currentReceipt = receipt {
             guard currentReceipt["status"] as? String == "0x1" else {
                 throw EvmSccpProverError.invalidPublicInputs("receipt.status")
@@ -1178,6 +2158,21 @@ public final class EthereumMainnetSccp {
                 Self.firstPresent(currentReceipt, "blockNumber", "block_number"),
                 label: "receipt.blockNumber"
             )
+            let sourceEvent = try Self.ethereumReceiptSourceEvent(
+                receipt: currentReceipt,
+                sourceEventDigest: input.sourceEventDigest,
+                sourceBridgeEmitterAddress: try Self.resolveSourceBridgeEmitterAddress(
+                    input.sourceBridgeEmitterAddress,
+                    defaultAddress: self.sourceBridgeEmitterAddress
+                ),
+                transactionHash: transactionHash,
+                blockHash: blockHash,
+                blockNumber: receiptBlockNumber
+            )
+            sourceEventDigest = sourceEvent.sourceEventDigest
+            sourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress
+        } else if input.sourceEventDigest != nil || input.sourceBridgeEmitterAddress != nil {
+            throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
         }
 
         var block = input.block
@@ -1239,6 +2234,157 @@ public final class EthereumMainnetSccp {
             beaconFinality = nil
         }
 
+        var blockReceipts = input.blockReceipts
+        if receiptProof == nil,
+           let currentReceipt = receipt,
+           let beaconFinality,
+           let sourceEventDigest,
+           let inclusionBranch = input.inclusionBranch {
+            if blockReceipts == nil {
+                guard let selectedProvider else {
+                    throw EvmSccpProverError.invalidPublicInputs("executionProvider")
+                }
+                guard let receiptBlockNumber else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.blockNumber")
+                }
+                guard let fetched = try await selectedProvider.request(
+                    method: "eth_getBlockReceipts",
+                    params: [receiptBlockNumber]
+                ) as? [[String: Any]] else {
+                    throw EvmSccpProverError.invalidPublicInputs("eth_getBlockReceipts")
+                }
+                blockReceipts = fetched
+            }
+            guard let blockReceipts else {
+                throw EvmSccpProverError.invalidPublicInputs("blockReceipts")
+            }
+            guard let receiptTransactionIndex = Self.firstPresent(
+                currentReceipt,
+                "transactionIndex",
+                "transaction_index"
+            ) else {
+                throw EvmSccpProverError.invalidPublicInputs("receipt.transactionIndex")
+            }
+            let receiptTrieProof = try buildEvmReceiptTrieProofFromReceipts(
+                blockReceipts,
+                transactionIndex: receiptTransactionIndex
+            )
+            let expectedReceiptsRoot = blockReceiptsRoot ?? (
+                Self.firstPresent(beaconFinality, "executionReceiptsRoot", "execution_receipts_root") as? String
+            )
+            guard let expectedReceiptsRoot, receiptTrieProof.receiptsRoot == expectedReceiptsRoot else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionReceiptsRoot")
+            }
+            let targetIndex = try Self.normalizeUnsignedInteger(
+                receiptTransactionIndex,
+                label: "receipt.transactionIndex"
+            )
+            guard targetIndex < UInt64(blockReceipts.count),
+                  targetIndex <= UInt64(Int.max) else {
+                throw EvmSccpProverError.invalidPublicInputs("receipt.transactionIndex")
+            }
+            let indexedReceipt = blockReceipts[Int(targetIndex)]
+            let indexedTransactionHash = try Self.normalizeRpcHex(
+                Self.firstPresent(indexedReceipt, "transactionHash", "transaction_hash"),
+                label: "blockReceipts.transactionHash",
+                byteLength: 32
+            )
+            guard let transactionHash else {
+                throw EvmSccpProverError.invalidPublicInputs("transactionHash")
+            }
+            guard indexedTransactionHash == transactionHash else {
+                throw EvmSccpProverError.invalidPublicInputs("blockReceipts.transactionHash")
+            }
+            let indexedBlockHash = try Self.normalizeRpcHex(
+                Self.firstPresent(indexedReceipt, "blockHash", "block_hash"),
+                label: "blockReceipts.blockHash",
+                byteLength: 32
+            )
+            guard indexedBlockHash == blockHash else {
+                throw EvmSccpProverError.invalidPublicInputs("blockReceipts.blockHash")
+            }
+            let indexedBlockNumber = try Self.normalizePositiveRpcQuantity(
+                Self.firstPresent(indexedReceipt, "blockNumber", "block_number"),
+                label: "blockReceipts.blockNumber"
+            )
+            guard indexedBlockNumber == receiptBlockNumber else {
+                throw EvmSccpProverError.invalidPublicInputs("blockReceipts.blockNumber")
+            }
+            let receiptRlp = "0x" + (try canonicalEvmReceiptRlp(currentReceipt)).hexEncodedString()
+            guard receiptTrieProof.receiptRlp == receiptRlp else {
+                throw EvmSccpProverError.invalidPublicInputs("blockReceipts.receiptRlp")
+            }
+            guard let beaconSlotInput = Self.firstPresent(
+                beaconFinality,
+                "beaconSlot",
+                "beacon_slot",
+                "finalizedSlot",
+                "finalized_slot",
+                "slot"
+            ) else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconFinality.beaconSlot")
+            }
+            guard let finalizedRootInput = Self.firstPresent(
+                beaconFinality,
+                "finalizedHeaderRoot",
+                "finalized_header_root",
+                "beaconFinalizedRoot",
+                "beacon_finalized_root"
+            ) else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconFinality.finalizedHeaderRoot")
+            }
+            guard let syncCommitteeRootInput = Self.firstPresent(
+                beaconFinality,
+                "syncCommitteeRoot",
+                "sync_committee_root"
+            ) else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconFinality.syncCommitteeRoot")
+            }
+            receiptProof = EthereumMainnetReceiptProof(
+                sourceEventDigest: sourceEventDigest,
+                beaconSlot: try Self.normalizeUnsignedInteger(
+                    beaconSlotInput,
+                    label: "beaconFinality.beaconSlot"
+                ),
+                executionBlockNumber: try Self.normalizeUnsignedInteger(
+                    Self.firstPresent(beaconFinality, "executionBlockNumber", "execution_block_number"),
+                    label: "beaconFinality.executionBlockNumber"
+                ),
+                executionBlockHash: try Self.normalizeRpcHex(
+                    Self.firstPresent(beaconFinality, "executionBlockHash", "execution_block_hash"),
+                    label: "beaconFinality.executionBlockHash",
+                    byteLength: 32
+                ),
+                executionReceiptsRoot: try Self.normalizeRpcHex(
+                    Self.firstPresent(beaconFinality, "executionReceiptsRoot", "execution_receipts_root"),
+                    label: "beaconFinality.executionReceiptsRoot",
+                    byteLength: 32
+                ),
+                beaconFinalizedRoot: try Self.normalizeRpcHex(
+                    finalizedRootInput,
+                    label: "beaconFinality.finalizedHeaderRoot",
+                    byteLength: 32
+                ),
+                syncCommitteeRoot: try Self.normalizeRpcHex(
+                    syncCommitteeRootInput,
+                    label: "beaconFinality.syncCommitteeRoot",
+                    byteLength: 32
+                ),
+                receiptRootIndex: targetIndex,
+                receiptTrieProofNodes: receiptTrieProof.receiptTrieProofNodes,
+                inclusionBranch: inclusionBranch.map { Data($0) }
+            )
+        }
+
+        try Self.requireReceiptProofMatchesEvidence(
+            receiptProof,
+            blockHash: blockHash,
+            receiptBlockNumber: receiptBlockNumber,
+            blockReceiptsRoot: blockReceiptsRoot,
+            beaconFinality: beaconFinality,
+            sourceEventDigest: sourceEventDigest
+        )
+
         return EthereumMainnetInboundEvidence(
             sourceDomain: sccpDomainEthereum,
             targetDomain: sccpDomainSora,
@@ -1246,9 +2392,15 @@ public final class EthereumMainnetSccp {
             receipt: receipt,
             block: block,
             beaconFinality: beaconFinality,
-            receiptProofHash: try input.receiptProofHash.map {
-                try Self.normalizeRpcHex($0, label: "receiptProofHash", byteLength: 32)
-            }
+            blockReceipts: blockReceipts,
+            inclusionBranch: input.inclusionBranch?.map { Data($0) },
+            receiptProof: receiptProof,
+            receiptProofHash: try Self.normalizeReceiptProofHash(
+                receiptProof: receiptProof,
+                suppliedHash: input.receiptProofHash
+            ),
+            sourceEventDigest: sourceEventDigest,
+            sourceBridgeEmitterAddress: sourceBridgeEmitterAddress
         )
     }
 
@@ -1268,7 +2420,29 @@ public final class EthereumMainnetSccp {
         guard evidence.beaconFinality != nil else {
             throw EvmSccpProverError.invalidPublicInputs("beaconFinality")
         }
-        return try await inboundProveFunction(evidence)
+        guard evidence.receiptProof != nil else {
+            throw EvmSccpProverError.invalidPublicInputs("receiptProof")
+        }
+        if evidence.receipt != nil, evidence.sourceEventDigest == nil {
+            throw EvmSccpProverError.invalidPublicInputs("receipt.sourceEvent")
+        }
+        guard evidence.beaconFinality?["finalizedHeaderRoot"] != nil else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconFinality.finalizedHeaderRoot")
+        }
+        guard evidence.beaconFinality?["syncCommitteeRoot"] != nil else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconFinality.syncCommitteeRoot")
+        }
+        guard evidence.beaconFinality?["beaconSlot"] != nil else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconFinality.beaconSlot")
+        }
+        let proofBytes = try await inboundProveFunction(evidence)
+        guard !proofBytes.isEmpty else {
+            throw EvmSccpProverError.emptyProof
+        }
+        guard proofBytes.contains(where: { $0 != 0 }) else {
+            throw EvmSccpProverError.allZeroProof
+        }
+        return Data(proofBytes)
     }
 
     public func submitInboundToIroha(_ proofBytes: Data) async throws -> Any {
@@ -1291,9 +2465,13 @@ public final class EthereumMainnetSccp {
     }
 
     public func proveOutboundToEthereum(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
-        let result = try await prover.prove(input)
+        let request = try await buildOutboundProofRequest(input)
+        let result = try await prover.prove(request)
         guard result.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.publicInputs.targetDomain")
+        }
+        guard result.destinationBinding?.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding.sourceDomain")
         }
         guard result.destinationBinding?.networkId == sccpEthereumMainnetNetworkId else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding.networkId")
@@ -1311,6 +2489,7 @@ public final class EthereumMainnetSccp {
         }
         guard let proofResult = input.proofResult,
               let destinationBinding = proofResult.destinationBinding,
+              destinationBinding.sourceDomain == sccpDomainSora,
               destinationBinding.targetDomain == sccpDomainEthereum,
               destinationBinding.networkId == sccpEthereumMainnetNetworkId,
               destinationBinding.hash == proofResult.destinationBindingHash else {
@@ -1319,26 +2498,208 @@ public final class EthereumMainnetSccp {
         return submission
     }
 
+    public func buildLocalAdmissionSubmission(
+        _ input: EthereumMainnetLocalAdmissionSubmissionInput
+    ) throws -> EthereumMainnetLocalAdmissionSubmission {
+        try buildEthereumMainnetSccpLocalAdmissionSubmission(input)
+    }
+
     public func submitOutboundToEthereum(_ input: EvmSccpSubmissionInput) async throws -> Any {
         let submission = try buildEthereumCalldata(input)
         guard let outboundSubmitFunction else {
             throw EvmSccpProverError.localProverUnavailable
         }
+        if let executionProvider {
+            _ = try await validateExecutionProviderMainnet(executionProvider)
+        }
         return try await outboundSubmitFunction(submission)
     }
 
     private static func requireEthereumMainnetRequest(_ request: EvmSccpProofRequest) throws {
+        guard request.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("request.sourceDomain")
+        }
         guard request.targetDomain == sccpDomainEthereum,
               request.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("request.targetDomain")
+        }
+        guard request.destinationBinding?.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.sourceDomain")
         }
         guard request.destinationBinding?.networkId == sccpEthereumMainnetNetworkId else {
             throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.networkId")
         }
     }
 
-    private static func normalizeMainnetChainId(_ value: Any) throws -> UInt64 {
-        try Self.normalizeUnsignedInteger(value, label: "eth_chainId")
+    private static func normalizeRpcChainId(_ value: Any) throws -> UInt64 {
+        let quantity = try Self.normalizeRpcQuantity(value, label: "eth_chainId")
+        guard let parsed = UInt64(String(quantity.dropFirst(2)), radix: 16) else {
+            throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
+        }
+        return parsed
+    }
+
+    private static func normalizeReceiptProofHash(
+        receiptProof: EthereumMainnetReceiptProof?,
+        suppliedHash: String?
+    ) throws -> String? {
+        var normalizedHash = try suppliedHash.map {
+            try normalizeRpcHex($0, label: "receiptProofHash", byteLength: 32)
+        }
+        guard let receiptProof else {
+            return normalizedHash
+        }
+        guard receiptProof.sourceDomain == sccpDomainEthereum else {
+            throw EvmSccpProverError.invalidPublicInputs("receiptProof.sourceDomain")
+        }
+        let computedHash = try evmSccpReceiptProofHash(
+            sourceDomain: receiptProof.sourceDomain,
+            sourceEventDigest: receiptProof.sourceEventDigest,
+            beaconSlot: receiptProof.beaconSlot,
+            executionBlockNumber: receiptProof.executionBlockNumber,
+            executionBlockHash: receiptProof.executionBlockHash,
+            executionReceiptsRoot: receiptProof.executionReceiptsRoot,
+            beaconFinalizedRoot: receiptProof.beaconFinalizedRoot,
+            syncCommitteeRoot: receiptProof.syncCommitteeRoot,
+            receiptRootIndex: receiptProof.receiptRootIndex,
+            receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+            inclusionBranch: receiptProof.inclusionBranch
+        )
+        if let normalizedHash, normalizedHash != computedHash {
+            throw EvmSccpProverError.invalidPublicInputs("receiptProofHash")
+        }
+        normalizedHash = computedHash
+        return normalizedHash
+    }
+
+    private static func requireReceiptProofMatchesEvidence(
+        _ receiptProof: EthereumMainnetReceiptProof?,
+        blockHash: String?,
+        receiptBlockNumber: String?,
+        blockReceiptsRoot: String?,
+        beaconFinality: [String: Any]?,
+        sourceEventDigest: String?
+    ) throws {
+        guard let receiptProof else {
+            return
+        }
+        if let receiptBlockNumber {
+            let expected = try normalizeUnsignedInteger(receiptBlockNumber, label: "block.number")
+            guard receiptProof.executionBlockNumber == expected else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionBlockNumber")
+            }
+        }
+        if let beaconFinality {
+            let finalityBlockNumber = try normalizeUnsignedInteger(
+                firstPresent(beaconFinality, "executionBlockNumber", "execution_block_number"),
+                label: "beaconFinality.executionBlockNumber"
+            )
+            guard receiptProof.executionBlockNumber == finalityBlockNumber else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionBlockNumber")
+            }
+        }
+        let proofBlockHash = try normalizeRpcHex(
+            receiptProof.executionBlockHash,
+            label: "receiptProof.executionBlockHash",
+            byteLength: 32
+        )
+        if let blockHash, proofBlockHash != blockHash {
+            throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionBlockHash")
+        }
+        if let beaconFinality {
+            let finalityBlockHash = try normalizeRpcHex(
+                firstPresent(beaconFinality, "executionBlockHash", "execution_block_hash"),
+                label: "beaconFinality.executionBlockHash",
+                byteLength: 32
+            )
+            guard proofBlockHash == finalityBlockHash else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionBlockHash")
+            }
+        }
+        let proofReceiptsRoot = try normalizeRpcHex(
+            receiptProof.executionReceiptsRoot,
+            label: "receiptProof.executionReceiptsRoot",
+            byteLength: 32
+        )
+        if let blockReceiptsRoot, proofReceiptsRoot != blockReceiptsRoot {
+            throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionReceiptsRoot")
+        }
+        if let beaconFinality {
+            let finalityReceiptsRoot = try normalizeRpcHex(
+                firstPresent(beaconFinality, "executionReceiptsRoot", "execution_receipts_root"),
+                label: "beaconFinality.executionReceiptsRoot",
+                byteLength: 32
+            )
+            guard proofReceiptsRoot == finalityReceiptsRoot else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.executionReceiptsRoot")
+            }
+            if let finalityFinalizedRootInput = firstPresent(
+                beaconFinality,
+                "finalizedHeaderRoot",
+                "finalized_header_root",
+                "beaconFinalizedRoot",
+                "beacon_finalized_root"
+            ) {
+                let finalityFinalizedRoot = try normalizeRpcHex(
+                    finalityFinalizedRootInput,
+                    label: "beaconFinality.finalizedHeaderRoot",
+                    byteLength: 32
+                )
+                let proofFinalizedRoot = try normalizeRpcHex(
+                    receiptProof.beaconFinalizedRoot,
+                    label: "receiptProof.beaconFinalizedRoot",
+                    byteLength: 32
+                )
+                guard proofFinalizedRoot == finalityFinalizedRoot else {
+                    throw EvmSccpProverError.invalidPublicInputs("receiptProof.beaconFinalizedRoot")
+                }
+            }
+            if let finalitySyncCommitteeRootInput = firstPresent(
+                beaconFinality,
+                "syncCommitteeRoot",
+                "sync_committee_root"
+            ) {
+                let finalitySyncCommitteeRoot = try normalizeRpcHex(
+                    finalitySyncCommitteeRootInput,
+                    label: "beaconFinality.syncCommitteeRoot",
+                    byteLength: 32
+                )
+                let proofSyncCommitteeRoot = try normalizeRpcHex(
+                    receiptProof.syncCommitteeRoot,
+                    label: "receiptProof.syncCommitteeRoot",
+                    byteLength: 32
+                )
+                guard proofSyncCommitteeRoot == finalitySyncCommitteeRoot else {
+                    throw EvmSccpProverError.invalidPublicInputs("receiptProof.syncCommitteeRoot")
+                }
+            }
+            if let finalityBeaconSlotInput = firstPresent(
+                beaconFinality,
+                "beaconSlot",
+                "beacon_slot",
+                "finalizedSlot",
+                "finalized_slot",
+                "slot"
+            ) {
+                let finalityBeaconSlot = try normalizeUnsignedInteger(
+                    finalityBeaconSlotInput,
+                    label: "beaconFinality.beaconSlot"
+                )
+                guard receiptProof.beaconSlot == finalityBeaconSlot else {
+                    throw EvmSccpProverError.invalidPublicInputs("receiptProof.beaconSlot")
+                }
+            }
+        }
+        if let sourceEventDigest {
+            let proofSourceEventDigest = try normalizeRpcHex(
+                receiptProof.sourceEventDigest,
+                label: "receiptProof.sourceEventDigest",
+                byteLength: 32
+            )
+            guard proofSourceEventDigest == sourceEventDigest else {
+                throw EvmSccpProverError.invalidPublicInputs("receiptProof.sourceEventDigest")
+            }
+        }
     }
 
     private static func normalizeUnsignedInteger(_ value: Any?, label: String) throws -> UInt64 {
@@ -1384,7 +2745,30 @@ public final class EthereumMainnetSccp {
         return nil
     }
 
-    private static func normalizeRpcHex(_ value: Any?, label: String, byteLength: Int) throws -> String {
+    private static func requireMapList(_ value: Any, label: String) throws -> [[String: Any]] {
+        if let maps = value as? [[String: Any]] {
+            return maps
+        }
+        if let values = value as? [Any] {
+            var maps: [[String: Any]] = []
+            maps.reserveCapacity(values.count)
+            for item in values {
+                guard let map = item as? [String: Any] else {
+                    throw EvmSccpProverError.invalidPublicInputs(label)
+                }
+                maps.append(map)
+            }
+            return maps
+        }
+        throw EvmSccpProverError.invalidPublicInputs(label)
+    }
+
+    private static func normalizeRpcHex(
+        _ value: Any?,
+        label: String,
+        byteLength: Int,
+        allowZero: Bool = false
+    ) throws -> String {
         guard let text = value as? String,
               text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
               text.hasPrefix("0x") else {
@@ -1395,7 +2779,7 @@ public final class EthereumMainnetSccp {
               hex.allSatisfy({ Self.isLowerHex($0) }) else {
             throw EvmSccpProverError.invalidPublicInputs(label)
         }
-        guard hex.contains(where: { $0 != "0" }) else {
+        guard allowZero || hex.contains(where: { $0 != "0" }) else {
             throw EvmSccpProverError.zeroField(label)
         }
         return text
@@ -1463,6 +2847,47 @@ public final class EthereumMainnetSccp {
         normalized["executionBlockNumber"] = String(executionBlockNumber)
         normalized["executionBlockHash"] = executionBlockHash
         normalized["executionReceiptsRoot"] = executionReceiptsRoot
+        if let finalizedHeaderRootInput = Self.firstPresent(
+            finality,
+            "finalizedHeaderRoot",
+            "finalized_header_root",
+            "beaconFinalizedRoot",
+            "beacon_finalized_root"
+        ) {
+            normalized["finalizedHeaderRoot"] = try Self.normalizeRpcHex(
+                finalizedHeaderRootInput,
+                label: "beaconFinality.finalizedHeaderRoot",
+                byteLength: 32
+            )
+        }
+        if let syncCommitteeRootInput = Self.firstPresent(
+            finality,
+            "syncCommitteeRoot",
+            "sync_committee_root"
+        ) {
+            normalized["syncCommitteeRoot"] = try Self.normalizeRpcHex(
+                syncCommitteeRootInput,
+                label: "beaconFinality.syncCommitteeRoot",
+                byteLength: 32
+            )
+        }
+        if let beaconSlotInput = Self.firstPresent(
+            finality,
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot"
+        ) {
+            let beaconSlot = try Self.normalizeUnsignedInteger(
+                beaconSlotInput,
+                label: "beaconFinality.beaconSlot"
+            )
+            guard beaconSlot != 0 else {
+                throw EvmSccpProverError.zeroField("beaconFinality.beaconSlot")
+            }
+            normalized["beaconSlot"] = String(beaconSlot)
+        }
         return normalized
     }
 
@@ -1886,6 +3311,19 @@ private func requireEvmOptionalSourceProofBytes(_ bytes: Data, field: String) th
         throw EvmSccpProverError.invalidPublicInputs(field)
     }
     return bytes
+}
+
+private func requireEvmLocalAdmissionBytes(_ bytes: Data, field: String) throws -> Data {
+    guard !bytes.isEmpty else {
+        throw EvmSccpProverError.emptyProof
+    }
+    guard bytes.contains(where: { $0 != 0 }) else {
+        throw EvmSccpProverError.allZeroProof
+    }
+    guard bytes.count <= sccpNativeRecursiveMaxProofBytes else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    return Data(bytes)
 }
 
 private func requireProductionEvmDestinationBinding(_ request: EvmSccpProofRequest) throws {

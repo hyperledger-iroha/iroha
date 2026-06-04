@@ -187,4 +187,5 @@ def test_checked_in_example_matches_rendered_example_roster() -> None:
     rendered = MODULE.render_edge_nginx_conf(validators)
     checked_in = CHECKED_IN_EXAMPLE_PATH.read_text(encoding="utf-8")
 
+    assert validators[0].upstream_address == "127.0.0.1:29080"
     assert checked_in.rstrip("\n") == rendered.rstrip("\n")

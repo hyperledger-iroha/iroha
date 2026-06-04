@@ -3083,6 +3083,126 @@ mod tests {
     }
 
     #[test]
+    fn overlay_rejects_ivm_proved_backend_tag_mismatches_before_verify() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
+            transaction::{Executable, IvmProved},
+            zk::BackendTag,
+        };
+
+        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let bytecode = IvmBytecode::from_compiled(program);
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = ivm_cache
+            .summarize_program(bytecode.as_ref())
+            .expect("summarize IVM program");
+        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
+        let overlay_hash = {
+            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
+            Hash::new(&bytes)
+        };
+        let events_commitment = Hash::new(b"events");
+        let gas_policy_commitment = Hash::new(b"gas-policy");
+        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+            code_hash,
+            overlay_hash,
+            events_commitment,
+            gas_policy_commitment,
+        );
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture provides vk bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture provides vk hash");
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.status = ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+        vk_record.key = Some(vk_box);
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(kp.public_key().clone());
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
+        let account = build_wonderland_account(&authority);
+        let mut world = crate::state::World::with([domain], [account], []);
+        world
+            .verifying_keys
+            .insert(vk_id.clone(), vk_record.clone());
+        world.verifying_keys_by_circuit.insert(
+            (vk_record.circuit_id.clone(), vk_record.version),
+            vk_id.clone(),
+        );
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
+        state.zk.verify_timeout = std::time::Duration::ZERO;
+        state.pipeline.ivm_proved.enabled = true;
+        state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        let chain_id = state.chain_id.clone();
+        let build_tx = |vk_ref: VerifyingKeyId| {
+            let attachment = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                fixture.proof_box("halo2/ipa"),
+                vk_ref,
+            );
+            TransactionBuilder::new(chain_id.clone(), authority.clone())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment,
+                    gas_policy_commitment,
+                }))
+                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .sign(kp.private_key())
+        };
+
+        let wrong_ref_tx = build_tx(VerifyingKeyId::new("stark/fri", "ivm_execution"));
+        let err = build_overlay_for_transaction(&wrong_ref_tx, &state.view())
+            .expect_err("mismatched attachment verifier-key backend must reject before lookup");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("proof attachment verifier-key backend mismatch")
+        ));
+
+        let mut bad_record = vk_record;
+        bad_record.backend = BackendTag::Stark;
+        state.world.verifying_keys.insert(vk_id.clone(), bad_record);
+        let bad_record_tx = build_tx(vk_id.clone());
+        let err = build_overlay_for_transaction(&bad_record_tx, &state.view())
+            .expect_err("mismatched verifier record backend tag must reject before verify");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg) if msg.contains("verifying key backend tag mismatch")
+        ));
+    }
+
+    #[test]
     #[cfg(feature = "zk-stark")]
     fn overlay_accepts_stark_ivm_proved_binding_air_proof() {
         use std::sync::Arc;
@@ -5771,6 +5891,11 @@ where
             "proof attachment backend mismatch".to_owned(),
         ));
     }
+    if attachment.backend != attachment.vk_ref.backend {
+        return Err(OverlayBuildError::ZkProof(
+            "proof attachment verifier-key backend mismatch".to_owned(),
+        ));
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum IvmProvedBackendKind {
         Halo2Ipa,
@@ -5832,6 +5957,18 @@ where
     if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
         return Err(OverlayBuildError::ZkProof(
             "verifying key is not Active".to_owned(),
+        ));
+    }
+    let expected_record_backend =
+        crate::zk::production_verify_backend_tag(attachment.backend.as_str()).ok_or_else(|| {
+            OverlayBuildError::ZkProof(
+                "proof attachment backend is not admitted by the production verifier registry"
+                    .to_owned(),
+            )
+        })?;
+    if vk_record.backend != expected_record_backend {
+        return Err(OverlayBuildError::ZkProof(
+            "verifying key backend tag mismatch".to_owned(),
         ));
     }
     let gas_schedule_id = vk_record.gas_schedule_id.as_deref().ok_or_else(|| {

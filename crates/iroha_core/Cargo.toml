@@ -75,7 +75,7 @@ zk-ipa-native = []
 # Note: feature gating for Poseidon path is no longer used; runtime backend
 # selection is supported via backend tags. Kept as a no-op to avoid breaking
 # dependent tooling.
-zk-halo2-ipa-poseidon = ["zk-halo2-ipa", "dep:halo2_gadgets"]
+zk-halo2-ipa-poseidon = ["zk-halo2-ipa"]
 # Temporary helper to match halo2's default circuit-params toggle.
 circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless pre-verify + dedup wiring (mock via metadata)
@@ -149,7 +149,6 @@ rust_decimal = { workspace = true }
 regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
-halo2_gadgets = { version = "0.3.1", optional = true }
 ff = "0.13.1"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
@@ -188,6 +187,7 @@ arc-swap = "1.7.1"
 criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 
 hex = { workspace = true }
 expect-test = { workspace = true }

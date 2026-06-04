@@ -26681,6 +26681,8 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/kagemusha-folded-v1",
   "halo2/pasta/kagemusha-recursive-aggregation-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
   "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -26744,42 +26746,72 @@ function compactPrivacyBackendLabel(value) {
 
 function isPendingProductionVerifierBackendLabel(value) {
   const compact = compactPrivacyBackendLabel(value);
-  return (
-    compact.includes("pqmasp") ||
-    compact.includes("postquantummasp") ||
-    compact.includes("anonymouspgc") ||
-    compact.includes("pgckoutofn") ||
-    compact.includes("verange") ||
-    compact.includes("zkat") ||
-    compact.includes("policyprivateauthenticator") ||
-    compact.includes("zkams") ||
-    compact.includes("recursiveanonymousadmission") ||
-    compact.includes("vega") ||
-    compact.includes("existingcredentialzk") ||
-    compact.includes("silentthreshold") ||
-    compact.includes("thresholdanonymouscredential") ||
-    compact.includes("zkx509") ||
-    compact.includes("x509") ||
-    compact.includes("zkvmx509") ||
-    compact.includes("siswithhints") ||
-    compact.includes("sishints") ||
-    compact.includes("latticeanonymouscredentials") ||
-    compact.includes("orchard") ||
-    compact.includes("zcashorchard") ||
-    compact.includes("penumbra") ||
-    compact.includes("masp") ||
-    compact.includes("bls12377") ||
-    compact.includes("decaf377") ||
-    compact.includes("fcmp") ||
-    compact.includes("monero") ||
-    compact.includes("curvetree") ||
-    compact.includes("lattice") ||
-    compact.includes("pcssis") ||
-    compact.includes("jindo") ||
-    compact.includes("miden") ||
-    compact.includes("aztec")
-  );
+  return PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES.has(compact);
 }
+
+const PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES = new Set([
+  "halo2ipaorchard",
+  "orchard",
+  "zcashorchard",
+  "groth16bls12377",
+  "groth16bls12377decaf377",
+  "bls12377",
+  "decaf377",
+  "masp",
+  "penumbra",
+  "penumbramasp",
+  "halo2ipapenumbra",
+  "halo2ipamasp",
+  "fcmppluspluscurvetree",
+  "fcmp",
+  "monero",
+  "monerofcmp",
+  "monerofcmpplusplus",
+  "curvetree",
+  "halo2ipamonero",
+  "halo2ipacurvetree",
+  "latticepcssis",
+  "latticepcszk",
+  "jindo",
+  "jindolatticepcszk",
+  "jindolatticepcszkv0",
+  "jindolatticepcssis",
+  "starkfrimiden",
+  "midenstark",
+  "aztecplonkishprivatekernel",
+  "aztecprivatekernel",
+  "pqmaspstarkfri",
+  "pqmaspstark",
+  "starkfripqmaspstarkfri",
+  "postquantummasp",
+  "anonymouspgc",
+  "anonymouspgckoutofn",
+  "anonymouspgckoutofnv1",
+  "verange",
+  "verangetransparentrange",
+  "verangetransparentrangev1",
+  "zkat",
+  "zkatpolicyprivateauthenticator",
+  "zkatpolicyprivateauthv1",
+  "recursiveanonymousadmission",
+  "recursiveanonymousadmissionv0",
+  "zkamsrecursiveadmission",
+  "zkamsrecursiveadmissionv0",
+  "vegaexistingcredentialzk",
+  "vegaexistingcredentialzkv0",
+  "silentthresholdanoncred",
+  "silentthresholdanoncredv0",
+  "silentthresholdanonymouscredential",
+  "thresholdanonymouscredentials",
+  "zkx509",
+  "zkvmx509identity",
+  "zkx509onchainidentity",
+  "zkx509onchainidentityv0",
+  "siswithhints",
+  "sishints",
+  "sishintsanoncredpqv0",
+  "latticeanonymouscredentials",
+]);
 
 function hasTrustedSetupBackendSegment(value) {
   return String(value)

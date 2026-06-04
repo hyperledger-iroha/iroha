@@ -15,6 +15,8 @@ _PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = frozenset(
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kagemusha-recursive-aggregation-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+        "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+        "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
         "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -74,6 +76,71 @@ _PRODUCTION_CLAIM_BACKEND_FRAGMENTS = (
     "claimedaudit",
     "securityreviewpassed",
 )
+_PENDING_PRODUCTION_BACKEND_ALIASES = frozenset(
+    {
+        "halo2ipaorchard",
+        "orchard",
+        "zcashorchard",
+        "groth16bls12377",
+        "groth16bls12377decaf377",
+        "bls12377",
+        "decaf377",
+        "masp",
+        "penumbra",
+        "penumbramasp",
+        "halo2ipapenumbra",
+        "halo2ipamasp",
+        "fcmppluspluscurvetree",
+        "fcmp",
+        "monero",
+        "monerofcmp",
+        "monerofcmpplusplus",
+        "curvetree",
+        "halo2ipamonero",
+        "halo2ipacurvetree",
+        "latticepcssis",
+        "latticepcszk",
+        "jindo",
+        "jindolatticepcszk",
+        "jindolatticepcszkv0",
+        "jindolatticepcssis",
+        "starkfrimiden",
+        "midenstark",
+        "aztecplonkishprivatekernel",
+        "aztecprivatekernel",
+        "pqmaspstarkfri",
+        "pqmaspstark",
+        "starkfripqmaspstarkfri",
+        "postquantummasp",
+        "anonymouspgc",
+        "anonymouspgckoutofn",
+        "anonymouspgckoutofnv1",
+        "verange",
+        "verangetransparentrange",
+        "verangetransparentrangev1",
+        "zkat",
+        "zkatpolicyprivateauthenticator",
+        "zkatpolicyprivateauthv1",
+        "recursiveanonymousadmission",
+        "recursiveanonymousadmissionv0",
+        "zkamsrecursiveadmission",
+        "zkamsrecursiveadmissionv0",
+        "vegaexistingcredentialzk",
+        "vegaexistingcredentialzkv0",
+        "silentthresholdanoncred",
+        "silentthresholdanoncredv0",
+        "silentthresholdanonymouscredential",
+        "thresholdanonymouscredentials",
+        "zkx509",
+        "zkvmx509identity",
+        "zkx509onchainidentity",
+        "zkx509onchainidentityv0",
+        "siswithhints",
+        "sishints",
+        "sishintsanoncredpqv0",
+        "latticeanonymouscredentials",
+    }
+)
 
 
 def _compact_privacy_backend_label(value: str) -> str:
@@ -82,41 +149,7 @@ def _compact_privacy_backend_label(value: str) -> str:
 
 def _is_pending_production_backend_label(value: str) -> bool:
     compact = _compact_privacy_backend_label(value)
-    return (
-        "pqmasp" in compact
-        or "postquantummasp" in compact
-        or "anonymouspgc" in compact
-        or "pgckoutofn" in compact
-        or "verange" in compact
-        or "zkat" in compact
-        or "policyprivateauthenticator" in compact
-        or "zkams" in compact
-        or "recursiveanonymousadmission" in compact
-        or "vega" in compact
-        or "existingcredentialzk" in compact
-        or "silentthreshold" in compact
-        or "thresholdanonymouscredential" in compact
-        or "zkx509" in compact
-        or "x509" in compact
-        or "zkvmx509" in compact
-        or "siswithhints" in compact
-        or "sishints" in compact
-        or "latticeanonymouscredentials" in compact
-        or "orchard" in compact
-        or "zcashorchard" in compact
-        or "penumbra" in compact
-        or "masp" in compact
-        or "bls12377" in compact
-        or "decaf377" in compact
-        or "fcmp" in compact
-        or "monero" in compact
-        or "curvetree" in compact
-        or "lattice" in compact
-        or "pcssis" in compact
-        or "jindo" in compact
-        or "miden" in compact
-        or "aztec" in compact
-    )
+    return compact in _PENDING_PRODUCTION_BACKEND_ALIASES
 
 
 def _is_trusted_setup_backend_label(value: str) -> bool:

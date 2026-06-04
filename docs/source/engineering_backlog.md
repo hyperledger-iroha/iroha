@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-02
+Last updated: 2026-06-03
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -16,8 +16,10 @@ track detailed unfinished engineering work.
   all byte values in the `F_257` RAM-LFE profile, and keeps evaluators
   secret-key free. Soracloud RotateLeft now requires public rotation-key
   refresh material for the outer ciphertext-slot envelope, and Bootstrap
-  applies a validated public encrypted-zero refresh key. Those refresh paths
-  are still not a complete BFV-RNS bootstrap or packed-polynomial
+  applies a validated public encrypted-zero refresh key. BFV evaluation-key
+  metadata now caps rotation-key bundles and requires canonical bounded
+  bootstrap key ids. Those refresh paths are still not a complete BFV-RNS
+  bootstrap or packed-polynomial
   Galois-switching circuit.
 - Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
   Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
@@ -50,7 +52,18 @@ track detailed unfinished engineering work.
   the full BFV-RNS modulus-chain, packed Galois-switching, and bootstrapping
   key bundle.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
-  checks into the next full workspace and SDK corridor. Focused adversarial
+  checks into the next full workspace and SDK corridor. The `iroha_cli
+  --all-targets` strict clippy gate now covers the governance-instruction, IVM
+  contract deploy, and Taikai helper targets after the previously failing
+  length/time arithmetic paths were made warning-clean. The `iroha_crypto
+  --all-targets` strict clippy gate is also green after the SoraNet
+  token/handshake and RAM-LFE test-target warning blockers were cleared. The
+  non-default GOST, SM, forced-NEON SM, SM OpenSSL provider, Rayon-backed
+  Merkle, secp256k1 MSM-batch, BLS multi-pairing, FFI export, and crypto
+  parity-test feature corridors now also pass strict `iroha_crypto
+  --all-targets` clippy and focused library tests, with SM acceleration and
+  OpenSSL preview tests serialized around their test-only runtime dispatch
+  overrides. Focused adversarial
   tests now cover malformed/truncated ciphertext envelopes, hidden-program
   shape/overflow rejection, replayed/tampered/future/expired/wrong-verifier
   openings, receipt-signing/backend mismatch refusal, adversarial BFV public
@@ -75,25 +88,300 @@ track detailed unfinished engineering work.
   chain id, receiver, amount, or policy hash across the Rust data-model, JS,
   Swift, Kotlin/JVM, Java Android, and Torii runtime fixture corridor, plus
   core ZK-ACE rotated/revoked identity state, unsupported action classes,
-  transaction digest/account substitution, mutated ZK-ACE/STARK public inputs,
-  and shared `OpenVerifyEnvelope` admission validation for unsupported backend
-  tags, blank circuit identifiers, zero verifier-key hashes, empty or oversized
-  public inputs, empty or oversized proof bytes, and forbidden auxiliary
-  metadata, with the core IVM-proved overlay path now using the same validator
-  plus node/verifier-record proof-byte bounds before replay and verifier
-  dispatch and IVM host registered-key verify syscalls using it before registry
-  binding, schema matching, and backend verifier dispatch, plus the generic
-  verifier guardrail wrapper using it for decoded Halo2/STARK envelopes before
-  verifier dispatch and the lightweight preverify/dedup cache using it before
-  inserting recognized envelope failures, with the common chain proof metadata
-  helper using it before voting/generic-proof/STARK shielded circuit, schema,
-  and commitment matching and the confidential-transfer-v2 metadata helper
-  using it before confidential schema/circuit interpretation, plus ZK-ACE
-  authorized-transfer admission using it before public-input decoding and STARK
-  wrapper checks, direct Halo2 IPA/STARK verifier dispatch using it before
-  verifier-key matching or backend proof verification, and confidential
-  unshield v2/v3 adversarial coverage matching the transfer-v2 envelope shape
-  cases;
+  transaction digest/account substitution, and mutated ZK-ACE/STARK public
+  inputs;
+  RAM-LFE proof-verifier metadata now rejects noncanonical backend/circuit
+  identifiers, zero schema hashes, empty/all-zero verifier keys, and oversized
+  verifier keys before proof-carrying programmed policies are admitted;
+  crypto identifier-envelope public-parameter validation now rejects
+  structurally valid but unregistered BFV profiles before identifier
+  encryption, decryption, or downstream Torii/core admission;
+  programmed RAM-LFE BFV bundle construction now exposes fallible constructors
+  that reject unregistered identifier profiles and invalid proof metadata before
+  public-parameter digests are emitted;
+  programmed BFV public-parameter admission now rejects zero hidden-program
+  digests and relinearization-only violations where unused rotation/bootstrap
+  refresh keys are smuggled into identifier-program metadata;
+  BFV evaluation-key metadata now rejects noncanonical bootstrap key ids and
+  oversized rotation-key bundles before key-bundle digests are admitted;
+  generic RAM-LFE and identifier receipt proof verifiers now have focused
+  pre-parse regressions for public-input schema drift and non-zero mismatched
+  verifier-key hashes;
+  secp256k1 recoverable prehash signing now normalizes low-S output and the
+  public-key recovery primitive rejects high-S malleable encodings before
+  deriving EVM addresses;
+  Ed25519 uncached batch verification now rejects noncanonical or small-order
+  signature `R` encodings before entering the dalek batch backend, and direct
+  byte-key/preparsed batch APIs now filter exact verify-cache hits before
+  signature parsing and backend setup; the thread-local exact verify-ok cache
+  now keeps two entries per exact slot to reduce collision churn for 32-byte
+  transaction-hash verification tuples without returning to a process-wide
+  cache;
+  SoraNet relay handshake frame length-prefix writes now use a checked helper
+  plus a compile-time `u16` maximum-frame assertion, so oversized relay hellos
+  fail as `FrameTooLarge` instead of relying on a narrowing assertion;
+  SoraNet constant-rate scheduler dequeue now handles unexpected empty queues
+  explicitly and falls through to the dummy-cell path instead of using
+  panic-only queue-pop assertions;
+  ML-DSA public-key reconstruction from private-key material now has a
+  fallible API, and `KeyPair::from_private_key` uses it so length-valid but
+  internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
+  ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
+  the existing `Result` path instead of relying on a panic-only assertion;
+  `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
+  public/private key formatting, `Signature::try_new` now routes SM2 through
+  checked private-key rebuild/signing helpers, and ML-DSA import plus
+  `Signature::try_new` reject secrets whose recomputed public material or
+  embedded `tr = H(pk)` public hash is inconsistent before signing;
+  SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
+  direct validation and direct/OS-backed signing, and expose fallible public-key
+  reconstruction from secret material;
+  BLS same-message aggregate and preaggregated verification now reject
+  duplicate public keys and public-key aggregates that cancel to the identity
+  before verification, and the public PoP-gated same-message wrappers reject
+  duplicate signer keys before PoP verification/cache work and no longer fall
+  back to per-signature verification after aggregate rejection; distinct-message
+  aggregate verification rejects duplicate messages and aggregate signatures
+  that cancel to the identity before batch verification, and the blstrs feature
+  backend compressed G1/G2 public-key decoders now use explicit `CtOption` to
+  `Option` handling instead of panic-only unwrap assumptions. The blstrs feature
+  backend also reuses the w3f signing/message semantics for normal, small,
+  same-message, preaggregated, and distinct-message aggregate verification so
+  backend choice does not change accepted signatures, and the feature-gated
+  `iroha_crypto --all-targets` strict clippy corridor now covers the blstrs BLS
+  test targets while the default w3f `bls` all-targets corridor is also green
+  after removing an unused panic-only secret-key wrapper. The default w3f BLS
+  backend now exposes fallible secret reload, signing, and public-key derivation
+  helpers, and top-level BLS signing, proof-of-possession proving, and
+  public-key derivation route through checked paths on `Result`-returning APIs;
+  BLS VRF proof construction now returns `Result`, rejects invalid stored
+  secret scalars before signing for both Normal and Small variants, and uses
+  checked compressed-proof decoding so malformed G1/G2 proof encodings fail
+  closed without `CtOption::unwrap`, with
+  governance VRF candidate generation handling those errors directly instead of
+  relying on `catch_unwind`; Merkle leaf iteration now stops cleanly on an
+  unexpected missing leaf slot instead of relying on panic-only internal layout
+  assertions, while decoded tree layout validation remains strict;
+  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
+  keys, and the standalone key-exchange surface now reject low-order encodings
+  before ECDH while retaining all-zero shared-secret fallback checks, and
+  X25519 session-key derivation now maps HKDF expansion failures through the
+  shared-secret `Result` path instead of using a panic-only assertion;
+  Kotlin/Java Connect X25519 direction-key derivation now maps provider
+  low-order agreement failures into `ConnectProtocolException`, while the
+  native Connect bridge FFI rejects the same low-order peer key without touching
+  output buffers;
+  Kotlin/Java Connect nonce, frame/envelope codec, and queue journal paths now
+  reject negative signed sequence values before nonce/AAD construction,
+  encoding, decode handoff, or journal persistence, high-bit `uint64` frame
+  and envelope sequences fail closed, and ciphertext-frame encoding requests the
+  canonical zero-flag Connect Norito field layout explicitly;
+  Kotlin Connect approval preimages now canonicalize `accountId` through the
+  shared I105 account-literal helper before binding it into wallet
+  authorization bytes, matching Java Android and rejecting domain-qualified
+  aliases;
+  Soracloud uploaded-model `X25519HkdfSha256` admission now requires exact
+  32-byte recipient and ephemeral public keys and routes both through the same
+  low-order decoder before bundle registration;
+  confidential key hierarchy derivation now reports HKDF expansion failures via
+  `Result`-returning helpers instead of panic-only assertions, and the CLI
+  `create-keys` path now propagates those failures through normal command
+  errors instead of a post-length-check `expect`;
+  confidential encrypted shield payloads now require supported versions,
+  non-empty ciphertext, and low-order-free X25519 ephemeral keys before
+  `Shield` execution burns public balance or records note commitments, and the
+  CLI plus Connect/Norito bridge shield payload builders now run that same
+  preflight before instruction construction, raw payload emission, or signing,
+  with Swift fallback serialization enforcing matching empty-ciphertext and
+  X25519 low-order admission;
+  standalone ML-KEM public-key validation, secret-key validation,
+  encapsulation, and decapsulation now reject noncanonical 12-bit public-key
+  coefficients plus noncanonical secret-key private coefficients, and
+  secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
+  public-key hashes before implicit rejection can derive divergent transport
+  keys;
+  changing the streaming ML-KEM profile on key material or live sessions now
+  clears configured Kyber public keys, fingerprints, and local decapsulation
+  secrets before any later HPKE use, and direct local ephemeral-payload
+  precomputation no longer commits Kyber transport keys, negotiated-suite, STS,
+  or snapshot state before a signed key update is built or accepted;
+  Norito streaming X25519 key updates now require prepared local ephemeral
+  material and reject low-order remote ephemeral public keys before
+  transport-key derivation or committing session state, signed
+  remote key updates verify signatures and stage key-counter, suite, and
+  ephemeral-shape admission on a local copy before X25519 shared-secret
+  derivation, ML-KEM decapsulation, transport-key derivation, resetting, or
+  committing session state, successful remote key updates now return the
+  inserted transport keys directly instead of relying on a panic-only option
+  readback, outbound key-update construction
+  stages ephemeral generation, transcript signing, and Kyber transport
+  derivation before committing session state and rejects zero or same-session
+  non-increasing counters before ephemeral generation, direct Norito
+  key-update state admission now rejects zero counters and suite/payload length
+  mismatches before accepting counters by requiring 32-byte X25519 public keys or
+  1088-byte Kyber768 ciphertexts, streaming snapshot restore also rejects zero
+  key counters before replacing live session state, direct Norito key-update
+  state restore/from-snapshot paths reject zero counters before replacing replay
+  state, KeyUpdate and capability
+  negotiation admission now rejects zero protocol versions before committing
+  suite, counter, transport-key, or ACK state, capability reports must carry the
+  viewer endpoint role before p2p or core ACK construction records negotiation
+  state, viewer-side capability ACKs must echo the report stream id, protocol
+  version, negotiated DATAGRAM size, and DPLPMTUD flag before transport state or
+  callbacks are updated, direct Norito STS derivation now rejects non-32-byte
+  handshake shared secrets before HKDF, and
+  Norito streaming content-key updates now authenticate and unwrap the GCK
+  before recording accepted rotation state so malformed wrapped keys cannot
+  poison replay windows, while outbound content-key construction rejects
+  regressed rotations before nonce generation or AEAD wrapping, inbound,
+  outbound, and restored snapshot GCKs must now be exactly 32 bytes, including
+  direct Norito GCK wrap/unwrap helpers, direct Norito content-key
+  state restore/from-snapshot paths reject partial id/valid-from metadata before
+  replacing replay state, and streaming snapshot restore stages
+  KEM-suite id validation, transport-key derivation, and Kyber
+  public-key/fingerprint validation before replacing live session state,
+  rejects partial content-key or Kyber metadata, and binds Kyber768 suites to
+  ML-KEM-768 snapshot metadata plus either the validated remote fingerprint for
+  inbound state or the validated local fingerprint for outbound state, with
+  local Kyber metadata requiring an installed decapsulation secret whose embedded
+  public key and `H(ek)` public-key hash match before restore can replace state;
+  transport
+  capability recording and snapshot restore now reject
+  DATAGRAM/fallback shape drift before updating live session state or
+  capability hashes; streaming
+  feedback admission now clamps inbound
+  `parity_chunks`, receiver `parity_applied`, and `fec_budget` to the 6-chunk
+  FEC ceiling, and caps inbound loss samples at Q16.16 100% before updating
+  snapshot or outbound hint state; the first accepted feedback hint or receiver
+  report now binds the feedback state to that stream id, and later feedback
+  frames with a different stream id are rejected before counters, EWMA loss,
+  parity, or snapshot-visible fields change;
+  SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
+  ephemeral public keys in decoded client and relay frames, reject malformed
+  Dilithium3/Ed25519 handshake signature field lengths, require 1024-byte
+  zero-padded frames, and reject selected KEM/signature ids that are absent
+  from either peer's advertised capability TLVs, including the relay capability
+  vector echoed in `RelayHello`; unsupported KEM ids fail at the KEM profile
+  gate before downgrade telemetry is built;
+  SoraNet signed-ticket signing now preflights ML-DSA-44 secret-key lengths,
+  and signed-ticket decode/direct verification now reject ML-DSA-44 verifier
+  public-key and signature vectors whose lengths disagree with the suite
+  metadata before signing payloads, accepting tokens, or entering backend
+  verification, while signed-ticket relay/transcript binding checks now run
+  before signature work in the full verifier, and signed-ticket policy metadata
+  now rejects unsupported versions, difficulty mismatches, expiry, and TTL
+  window failures before signature work; SoraNet PQ helpers now validate ML-KEM
+  encapsulation public-key lengths and ML-DSA signing context/secret-key
+  lengths before drawing direct or OS-backed randomness for malformed inputs;
+  SoraNet runtime client-hello processing now preflights NK2/NK3 client ML-KEM
+  public keys before capability telemetry, relay Noise key generation, OS-backed
+  ML-KEM key generation, or encapsulation; runtime handshake descriptor
+  commitments and resume hashes must now be 32-byte transcript-binding fields
+  before client RNG, relay RNG, transcript hashing, KEM key generation, or
+  encapsulation, client/relay capability vectors must now fit the
+  length-prefixed handshake field before client RNG or frame construction,
+  transcript hashing now rejects capability vectors that cannot fit its fixed
+  `u32` length field before hashing, len-prefixed handshake message parsing
+  now reads frame fields through checked cursor ranges, capability TLV parsing
+  now reads headers and value spans through checked cursor helpers, and
+  suite-list capability TLV re-encoding now rejects oversized values through
+  `update_suite_list` before encoded capabilities are emitted; deterministic
+  handshake fixture and telemetry signature rendering now uses checked base64
+  output lengths and fallible slice encoding before returning `prefix:base64`
+  witness strings; PoW
+  ticket parsing now reads fixed fields through checked cursor helpers, ticket verification,
+  signed-ticket verification, ticket
+  minting, and Argon2 puzzle verification/minting now reject malformed
+  descriptor, relay-id, or transcript binding field lengths before challenge
+  derivation, solution search, Argon2 work, or public-key validation;
+  PoW and Argon2 puzzle policy parameters now expose fallible constructors for
+  runtime config loaders so zero minimum TTLs and inverted future-skew bounds
+  fail closed without panicking, and their compatibility `new` constructors now
+  return fail-closed policies instead of unwinding on invalid timing bounds; PoW
+  ticket minting, Argon2 puzzle minting, and
+  revocation-store insertion now reject unrepresentable expiry timestamps
+  through checked `SystemTime` conversion, and p2p SoraNet runtime construction
+  now uses those fallible constructors for config-derived PoW/puzzle bounds;
+  relay capability advertisement and runtime GREASE append now check TLV payload
+  lengths before writing the two-byte length field, and relay config validation
+  rejects configured GREASE payloads that cannot fit that wire field;
+  relay
+  replay-filter bit counts are now bounded before power-of-two rounding, and
+  direct replay-filter construction plus `DoSControls::new` now propagate
+  oversized filter shapes as `ConfigError::ReplayFilter` instead of reaching
+  overflow-prone arithmetic; relay incentive uptime/scheduled-uptime and
+  verified-bandwidth epoch accumulators now saturate on overflow instead of
+  panicking on extreme telemetry or proof totals; relay adaptive PoW
+  success/failure window counters and difficulty-step arithmetic now saturate
+  before min/max clamping, avoiding panic-only overflow paths under extreme
+  counters or oversized adaptive-step config; P2P
+  QUIC/TCP happy-eyeballs dialing now records the first branch failure and
+  returns the second branch failure directly when both dials fail, avoiding
+  panic-only option readbacks in the fallback path; SoraNet CID
+  blinding key derivation now rejects
+  all-zero epoch salts or all-zero circuit secrets before HKDF; SoraNet
+  revocation-store reload now rejects duplicate persisted fingerprints, rejects
+  overflowing expiry timestamps, and bounds loaded active records to the
+  configured capacity;
+  SoraNet guard-directory snapshot decode now rejects duplicate or
+  key-mismatched issuer fingerprints and enforces ML-DSA-65 issuer public-key
+  length/phase requirements before snapshots are admitted, with issuer key
+  shape and the fingerprint `u32` key-length field now checked before
+  fingerprint derivation, and rejects empty issuer or relay sets before
+  trust-map construction or relay certificate verification;
+  SoraNet admission-token decode now reads fixed-width body fields and trailing
+  signature spans through checked cursor helpers so malformed token prefixes
+  return decode errors instead of relying on manual slice invariants; admission
+  tokens now expose `try_encode`, and the compatibility encoder fails closed to
+  a malformed frame when impossible direct token state cannot fit the v1
+  signature-length prefix;
+  SoraNet admission-token replay-store reload now rejects duplicate persisted
+  token IDs and overflowing expiry timestamps, and admission-token verification
+  rejects zero-length or inverted validity windows and preflights ML-DSA issuer
+  public-key and detached-signature lengths before backend verification or
+  replay-store mutation; admission-token verifier construction exposes a
+  fallible path that rejects malformed issuer public keys before fingerprint
+  derivation or runtime state admission, and the compatibility constructor now
+  keeps malformed issuer keys as fail-closed verifier state that is rejected
+  during ML-DSA preflight before backend signature work or replay-store mutation;
+  admission-token decode now rejects unrepresentable `issued_at`/`expires_at`
+  UNIX-second fields before downstream relay tools can attempt unchecked
+  `SystemTime` conversion;
+  admission-token minting now
+  preflights issuer ML-DSA secret-key length before nonce generation, body
+  construction, or backend signing; SoraNet SRCv2 bundle
+  verification re-runs canonical certificate-payload admission for in-memory
+  bundles, rejects weak Ed25519 verifier keys, and preflights ML-DSA-65
+  issuer public-key and detached-signature lengths before backend verification;
+  local SRCv2 issuance reuses certificate-payload admission and ML-DSA-65
+  issuer secret-key length preflight before signing bundles; Phase 2 SRCv2
+  rollout accepts Ed25519-only relay certificates while Phase 3 remains the
+  dual-signature gate;
+  SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
+  key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
+  relay public keys, rejects malformed/noncanonical/weak Ed25519 identity
+  public keys, rejects ML-DSA-65 detached signature length drift, and its
+  canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest
+  integer/length encodings and duplicate nested
+  bundle/signature/endpoint/KEM-policy fields, with byte/text/exact payload
+  reads routed through checked cursor helpers; SRCv2 validity-duration accessors
+  now use checked signed timestamp subtraction, expose a checked route for
+  callers, and fail closed to `Duration::ZERO` for directly constructed inverted
+  or unrepresentable windows; guard-directory relay entries
+  now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
+  snapshot directory hash, and a unique relay ID, with relay certificate
+  signatures verified against embedded issuer keys under the snapshot
+  validation phase; zero-length or inverted snapshot validity windows now fail
+  closed, and relay certificate validity must cover the full snapshot window
+  without being published after the snapshot; SRCv2 role/capability bitmask decode rejects unsupported
+  bits instead of masking them away and validity windows fail closed when they
+  are inverted or published after expiry; KEM rotation policies reject static
+  fallback/rotation/grace metadata, staged policies without fallbacks, rolling
+  policies without nonzero cadence, and preferred/fallback suite equality;
+  handshake-suite preference lists and endpoint URL lists must be non-empty and
+  duplicate-free, and endpoint URL strings reject empty,
+  whitespace-bearing, or control-character values; endpoint tags, when present,
+  reject empty, whitespace-bearing, control-character, or duplicate values;
   remaining breadth should emphasize full cross-SDK RNS vectors and broader
   release validation.
 
@@ -175,19 +463,32 @@ track detailed unfinished engineering work.
 
 - Rerun the full SoraFS data-model, core pin-registry, Torii storage-pin, and
   gateway policy suites under the next long validation budget. Focused coverage
-  is now green for the paid-pin adversarial cases; remaining breadth should
-  include historical fee receipt acceptance after governance pricing changes,
-  broader manifest-envelope lifecycle fixtures beyond the current
-  registry-metadata rotation and stale-envelope digest regression, streaming
-  CAR range coverage, and broader SDK validation beyond the current
-  JavaScript/Java/Kotlin/Python/C#/Swift pin-manifest guards for malformed
-  manifest digests, chunk digests, successor digests, alias proofs,
-  Java/Kotlin storage-class enum values, JavaScript/Python duplicate alias
-  spellings, numeric policy fields, and typed register-response normalization.
-  The Torii gateway adapter now fails closed for alias-proof or
-  malformed-envelope substitution when `require_manifest_envelope` is enabled
-  and rejects stale explicit envelopes after paid-pin registry metadata or
-  envelope-digest rotation.
+  is now green for the paid-pin adversarial cases, and SoraFS proof-token
+  decode now uses checked cursor reads for fixed-width moderation-token fields
+  with truncated-prefix regression coverage while rejecting unrepresentable
+  issued/expiry UNIX-second fields before `SystemTime` conversion; proof-token
+  body encoding now exposes `try_encode`, routes mint/signature/digest helpers
+  through checked entry-count and entry-length narrowing, and makes the
+  compatibility `encode` path fail closed to a malformed frame for impossible
+  direct token states; proof-token base64 header encoding/decoding now uses the
+  `base64` crate's checked no-alloc slice helpers instead of manual capacity
+  arithmetic and panic-only buffer assertions; remaining breadth should include
+  historical fee receipt acceptance after governance pricing changes, manifest
+  envelope validation, admission fail-closed, streaming CAR range coverage, and
+  SDK validation once Java is available.
+
+## Norito columnar and streaming validation follow-ups
+
+- Fold the focused NCB row-count prefix regression into the next full Norito and
+  workspace validation budget. Columnar `u64` combo views now read their `u32`
+  row-count prefix through a shared checked helper, so truncated prefixes return
+  `Error::LengthMismatch` on the normal decode path. Streaming baseline RLE
+  block decode now reads DC differences and AC records through checked helpers,
+  keeping truncated or overflowed cursor state on `CodecError::TruncatedBlock`
+  before offset advancement, and baseline frame/chroma metadata uses checked
+  fixed-width readers before chunk payload slicing. Bundled rANS SIMD stream
+  lane lengths also use a checked prefix reader before cursor advancement or
+  lane slicing.
 
 ## ZK audit validation follow-ups
 
@@ -199,11 +500,12 @@ track detailed unfinished engineering work.
 - Completed 2026-06-01: added inbound lifecycle endpoints for `pacs.002`,
   `pacs.004`, `camt.056`, `sese.023`, `sese.024`, and `sese.025`, with OpenAPI
   and MCP submission surfaces. The bridge records each lifecycle message in the
-  durable ISO record model, rejects duplicate payload/UETR replays, applies
-  `pacs.002`/`pacs.004`/`camt.056` and `sese.024`/`sese.025` updates only when
-  the referenced durable record is known, and keeps `sese.023` as a recorded
-  settlement instruction until all account, instrument, venue, CSD, and
-  cash-leg crosswalks are configured for ledger instruction mapping.
+  durable ISO record model, rejects duplicate payload, business-message-id, and
+  UETR replays, applies `pacs.002`/`pacs.004`/`camt.056` and
+  `sese.024`/`sese.025` updates only when the referenced durable record is
+  known, and records `sese.023` as a settlement instruction. The 2026-06-04
+  ledger-crosswalk gate below now requires account, instrument, venue, CSD, and
+  cash-leg mappings before live securities instructions are durably accepted.
 - Completed 2026-06-01: added durable-record outbox helpers for `pacs.004`,
   `camt.029`, `sese.024`, and `sese.025`. Payment returns require recorded
   settlement amount/currency from the original payment message; securities
@@ -215,6 +517,207 @@ track detailed unfinished engineering work.
   digest and signature verification, rejects tampered digests/signatures and
   unsupported algorithms, and keeps live `reject-unsupported` profiles rejecting
   embedded signature blocks.
+- Completed 2026-06-01: added profile-specific XMLDSig trust pins for
+  `require-verified` profiles. Torii now rejects otherwise valid signed
+  payloads unless the verified raw public key or DER certificate SHA-256 digest
+  matches the selected rail profile, rejects non-canonical/all-zero configured
+  pins at startup, and covers the supported C14N 1.0, C14N 1.1, and exclusive
+  C14N algorithm identifiers with deterministic fixtures.
+- Completed 2026-06-01: added XMLDSig/XAdES certificate-chain verification for
+  `KeyInfo/X509Data`. Torii now accepts at most eight unique DER certificates,
+  derives the signing key from the leaf
+  certificate, verifies each supplied leaf-to-issuer chain link by binding the
+  child issuer distinguished name to the parent subject distinguished name and
+  checking the child signature before exposing issuer/root DER SHA-256 digests
+  to the selected profile, requires leaf critical `keyUsage` carrying
+  `digitalSignature` while rejecting CA leaf certificates, requires issuer
+  critical CA `basicConstraints` plus critical `keyUsage` carrying
+  `keyCertSign`, requires every supplied certificate to use ECDSA-with-SHA256
+  over id-ecPublicKey secp256r1 with uncompressed P-256 SEC1 subject public-key
+  bytes, enforces issuer `pathLenConstraint` values for subordinate CA chains,
+  rejects unknown, malformed, or unsupported parsed critical X.509 extensions
+  on every supplied certificate, checks leaf and issuer certificate validity
+  against deterministic verified signed `SigningTime` or BAH `CreDt`, and
+  covers the pinned-issuer accept/reject corridor with generated P-256 fixtures.
+- Completed 2026-06-02: added a deterministic supported XML canonicalization
+  subset for XMLDSig verification. Torii now canonicalizes `SignedInfo` and the
+  referenced enveloped payload before hashing or signature verification. The
+  supported Reference URI scope is a single empty URI or a unique same-document
+  `#id` target using exact `Id`, `ID`, `id`, or `xml:id` attributes; remote,
+  empty-fragment, duplicate-ID, namespace-qualified non-`xml` ID attributes, and
+  same-document payload targets that do not strictly enclose the verified signature carrier
+  fail closed, while selected same-document targets carry ancestor namespace
+  declarations into root canonicalization. Each supported payload Reference must
+  declare an enveloped-signature transform first, may add at most one final
+  supported C14N transform that controls digest canonicalization, and must use a
+  SHA-256 digest method; missing, reordered, extra, or unsupported transforms
+  fail closed. The verifier also accepts one optional XAdES `SignedProperties`
+  Reference with the XAdES `SignedProperties` Type URI, a local `#id` target, one
+  supported C14N transform, and a SHA-256 digest; its enclosing
+  `QualifyingProperties` target must bind to the enclosing `Signature` `Id`, and
+  certificate-backed XAdES signatures must present a non-empty, duplicate-free
+  ordered prefix of the verified XMLDSig certificate-chain SHA-256 digests,
+  starting with the leaf certificate. The supported signed-property subset
+  requires direct
+  `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties`
+  structure; `QualifyingProperties` accepts only `Target`,
+  `SigningCertificateV2` accepts only attribute-free direct `Cert` children with
+  attribute-free direct `CertDigest` children, a `DigestMethod` carrying only
+  `Algorithm`, and text-only digest values. Signed `SigningTime` is a singleton
+  attribute-free text leaf. Any `SignedProperties` element under the signature
+  must be the verified referenced direct target; unreferenced, wrapped, or
+  duplicate `SignedProperties` elements and unrelated additional References fail
+  closed.
+  Supported XMLDSig method and transform elements are parameter-free: `CanonicalizationMethod`,
+  `SignatureMethod`, `DigestMethod`, payload Reference transforms, and
+  `SignedProperties` transforms reject non-whitespace child content such as
+  `InclusiveNamespaces`, XPath, HMAC, or digest parameters. Critical XMLDSig
+  method elements must appear exactly once, Reference transforms must be
+  enclosed in exactly one attribute-free `Transforms` wrapper, and only
+  implemented ordinary attributes are accepted (`Algorithm`, payload Reference
+  `URI`, and XAdES Reference `URI`/`Type`). Extra direct children under
+  `Reference` or `Transforms` fail closed, and supported References must keep
+  direct children ordered as `Transforms`, `DigestMethod`, then `DigestValue`.
+  Top-level `Signature` and
+  `SignedInfo` parsing now accepts only implemented direct children in supported
+  XMLDSig order, so reordered or wrapped `SignedInfo`/method nodes, unsupported
+  direct children, and duplicate singleton signature nodes fail closed. The
+  payload may contain exactly one supported signature carrier: either a bare
+  XMLDSig `Signature` or an ISO `Sgntr` wrapper with exactly one direct XMLDSig
+  `Signature` child. Any additional `Signature`/`Sgntr` element outside the
+  verified carrier fails closed. Required XMLDSig base64 fields
+  such as `SignatureValue`, per-Reference `DigestValue`, and XAdES
+  `CertDigest` values reject duplicates and must be attribute-free text leaves
+  without nested markup or comments; `PublicKey` must be singular, and
+  `PublicKey`/`X509Certificate` credential leaves follow the same no-markup
+  rule. Public-key material must not be mixed with `X509Certificate` material
+  in the same `KeyInfo`. Key material must be scoped to exactly one `KeyInfo`
+  using either `KeyValue/ECKeyValue` with the P-256 `NamedCurve` URI whose
+  `PublicKey` bytes parse as an uncompressed P-256 SEC1 point, or one bounded
+  duplicate-free `X509Data` certificate-chain wrapper; those wrappers accept
+  only implemented direct children, and unsupported children, unsupported
+  ordinary attributes, non-whitespace wrapper text, duplicates, or out-of-scope
+  `PublicKey`/`X509Certificate` elements fail closed. The canonical subset
+  covers empty-element expansion, attribute quote normalization, namespace
+  declarations, unprefixed attributes, declared prefixed attributes, and implicit
+  `xml:` attributes while accepting and omitting the fixed legal `xmlns:xml`
+  declaration. It
+  also decodes predefined and numeric XML character references before
+  re-emitting canonical text/attribute bytes. It applies root namespace
+  declarations inherited from an enclosing XMLDSig `Signature` element according
+  to the declared C14N mode: inclusive C14N carries all inherited root namespace
+  declarations, while exclusive C14N carries only visibly used inherited root
+  namespace declarations. No-comments C14N now omits
+  valid XML comments from `SignedInfo` and referenced payload bytes while
+  rejecting malformed comments. The verifier still rejects processing
+  instructions, CDATA/CDEnd tokens, uppercase `#X` numeric character
+  references, DTD/general/custom entity expansion, carriage returns, duplicate
+  attributes, unbound prefixed attributes, explicit reserved namespace
+  rebindings, malformed structural QNames such as double-colon local-name
+  matches, inherited namespace context beyond root declarations, raw attribute
+  whitespace rewrites, and malformed tag structure.
+- Completed 2026-06-02: broadened XMLDSig ECDSA `SignatureValue`
+  interoperability. Torii now accepts the fixed-width P-256 `r || s` signature
+  encoding used by XMLDSig profiles while retaining DER fixture compatibility,
+  requires canonical low-S for both encodings to remove ECDSA malleability, and
+  the require-verified suite covers accepted low-S plus rejected high-S
+  signatures.
+- Completed 2026-06-02: hardened XMLDSig namespace binding for the supported
+  signed ISO subset. Prefixed XMLDSig structural elements must now resolve to
+  the XMLDSig namespace in their inherited scope across `Signature`,
+  `SignedInfo`, `Reference`/`Transforms`/`Transform`/`DigestMethod`/
+  `DigestValue`, and public-key or X.509 `KeyInfo` material, with regressions
+  covering a correctly signed payload that binds `ds` to a non-XMLDSig URI.
+  Unprefixed XMLDSig structural elements remain accepted for legacy fixtures
+  only when they do not carry an explicit conflicting default namespace.
+- Completed 2026-06-02: tightened supported XML element span matching so a
+  selected opening tag must close with the exact same qualified name. This keeps
+  local-name discovery for prefixed XMLDSig fixtures while rejecting malformed
+  mismatched-prefix close tags before structure or cryptographic verification
+  continues.
+- Completed 2026-06-02: tightened XMLDSig attribute value extraction to exact
+  XML attribute names. Namespace-qualified spoof attributes such as
+  `ds:Algorithm` or `ds:URI` no longer have a local-name fallback in the
+  accessor and remain rejected before method, transform, digest, or Reference
+  policy is evaluated.
+- Completed 2026-06-02: hardened XAdES namespace binding for the supported
+  signed-property subset. Prefixed XAdES structural elements now must resolve to
+  the ETSI XAdES v1.3.2 namespace (`http://uri.etsi.org/01903/v1.3.2#`) across
+  `QualifyingProperties`, `SignedProperties`, `SignedSignatureProperties`,
+  `SigningTime`, `SigningCertificateV2`, `Cert`, and `CertDigest`; referenced
+  `SignedProperties` targets carry inherited namespace scope into verification,
+  and wrong-namespace XAdES payloads fail closed even when re-signed. Unprefixed
+  XAdES structural elements now also reject explicit conflicting default
+  namespaces.
+- Completed 2026-06-02: added profile-level XMLDSig certificate revocation
+  pins. Operators can configure `revoked_certificate_sha256` alongside the
+  trust pins; Torii validates the SHA-256 deny list at startup and rejects an
+  otherwise trusted XMLDSig chain when any verified leaf/issuer DER digest is
+  explicitly revoked.
+- Completed 2026-06-02: tightened ISO XMLDSig X.509 production admission so
+  Torii config and shared profile JSON SHA-256 trust/revocation pins must
+  already be canonical lowercase hex, `x509_trust_anchor_sha256_pins` and
+  legacy certificate pins require a linked issuer certificate beyond the leaf,
+  and CRL/OCSP freshness plus delegated OCSP responder certificate validity are
+  evaluated at verified XAdES `SigningTime` or BAH `CreDt` rather than local
+  wall clock.
+- Completed 2026-06-02: documented the XMLDSig trust-anchor rotation pattern
+  for operators: overlap current and next certificate pins during upstream
+  cutover, remove the retired pin after cutover, and use
+  `revoked_certificate_sha256` only for compromised leaf/anchor digests that
+  must override otherwise valid trust pins.
+- Completed 2026-06-02: tightened the ISO OCSP DER parser used by
+  `require-verified` XMLDSig/XAdES revocation checks. Torii now rejects
+  non-shortest long-form DER lengths and non-minimal positive integer encodings
+  before OCSP status, responder, or signature validation.
+- Completed 2026-06-02: tightened the supported ISO OCSP subset so
+  `ResponseData` and `SingleResponse` extensions fail closed instead of being
+  ignored by the local parser. Full OCSP extension-policy processing remains
+  outside the first-release subset.
+- Completed 2026-06-02: extended ISO bridge idempotency to business message
+  identifiers. Torii now indexes trimmed `BizMsgIdr`/BAH business-message IDs
+  alongside payload hashes and normalized UETRs, rejects replay by business
+  message id across distinct durable message records, and preserves the existing
+  conflict guard when a rejected message is retried with another record's
+  business message id.
+- Completed 2026-06-02: tightened reference snapshot checksum coverage for
+  profile validation. Torii now has focused coverage proving inbound admission
+  metadata records the exact `ReferenceDataSnapshots::snapshot_id()` checksum
+  after a BIC/LEI snapshot is loaded, and that the loaded-snapshot checksum
+  differs from the all-missing default snapshot.
+- Completed 2026-06-02: broadened Torii ISO profile/lifecycle transition
+  coverage. Profile admission now returns `UnknownMessageType` when the selected
+  rail profile has no inbound message profile for the submitted endpoint family,
+  rejects BAH `MsgDefIdr` values outside the selected profile's version set, and
+  covers known-original `pacs.004` return plus `camt.056` cancellation paths down
+  to durable original-message and lifecycle-message status fields.
+- Completed 2026-06-04: added a checked-in `sese.024` securities status-advice
+  XML fixture and pinned it at both the IVM parser layer and the Torii
+  lifecycle layer. The Torii regressions now cover known-original pending
+  updates, unknown-original recording without synthetic record creation,
+  wrong-family originals, and conflicting settlement references.
+- Completed 2026-06-04: added checked-in `pacs.004` payment-return and
+  `camt.056` cancellation-request XML fixtures. IVM parser tests pin the
+  canonical return/cancellation fields, and Torii tests prove those fixtures
+  drive known-original rejected/pending transitions without synthetic original
+  creation.
+- Completed 2026-06-04: added a checked-in `pacs.002` payment-status XML
+  fixture. IVM parser tests pin the canonical status/original/additional-info
+  fields, and Torii tests prove the fixture settles a known original payment.
+- Completed 2026-06-04: added adversarial `pacs.002` lifecycle coverage proving
+  `TxInfAndSts/StsId` cannot shadow `GrpHdr/MsgId` for durable lifecycle ids or
+  audit business-message ids.
+- Completed 2026-06-04: added Apache-2.0 mirrored Standards Editor XSD
+  fixtures for `pacs.002.001.10`, `pacs.004.001.10`, and `camt.056.001.08`.
+  The MDR/XSD live-profile matrix now validates BAH status, return, and
+  cancellation reports with rail-specific version and business-service controls
+  wherever the default profiles allow those exact versions.
+- Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
+  generated certificate-chain material, including complete canonical XML
+  coverage for broader signed ISO envelopes, official
+  rail/profile-specific trust-anchor packages, official CRL/OCSP or rail
+  revocation-feed fixtures.
+- Add official MDR/XSD fixture coverage per profile.
 - Completed 2026-06-01: tightened the deterministic XMLDSig/XAdES subset so
   `require-verified` profiles only accept the C14N 1.0 + single enveloped
   transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,
@@ -355,34 +858,18 @@ track detailed unfinished engineering work.
   identifiers must match before the trust-anchor path can authorize the leaf
   key; issuer-name/signature-valid chains with mismatched key identifiers fail
   closed.
-- Completed 2026-06-01: tightened X.509 Authority Key Identifier issuer/serial
-  binding for trust-anchor XMLDSig chains. When a subordinate certificate
-  presents AKI authorityCertIssuer/authorityCertSerialNumber metadata, the
-  issuer directory name and serial must match the actual issuer certificate
-  before the trust-anchor path can authorize the leaf key; same-subject,
-  same-key trust-anchor substitutions with a different CA serial now fail
-  closed.
-- Completed 2026-06-01: required CA certificates in X.509 XMLDSig
-  trust-anchor chains to mark BasicConstraints critical. Trust anchors and
-  intermediates whose BasicConstraints CA:true extension is non-critical no
-  longer satisfy CA admission, even when keyCertSign is present and signatures
-  otherwise verify.
-- Completed 2026-06-01: required CA certificates in X.509 XMLDSig
-  trust-anchor chains to mark KeyUsage critical. Trust anchors and
-  intermediates whose KeyUsage carries `keyCertSign` but is non-critical no
-  longer satisfy CA admission, so issuer certificates must present both
-  critical BasicConstraints CA:true and critical KeyUsage keyCertSign before
-  they can authorize signer leaves.
-- Completed 2026-06-01: required X.509 NameConstraints on XMLDSig
-  trust-anchor chains to be critical. Constrained issuer certificates now fail
-  closed when the NameConstraints extension is non-critical, even if the
-  permitted/excluded subtree values would otherwise authorize the signer leaf.
-- Remaining ISO signature work is path-policy processing beyond policy OID
-  presence/name constraints/path length/end-entity signer admission/
-  unknown-critical extension handling/signer validity enforcement/signer EKU
-  purpose binding/AKI-SKI issuer binding/AKI issuer-serial binding/CA
-  BasicConstraints criticality/CA KeyUsage criticality/NameConstraints
-  criticality/signer KeyUsage criticality/delegated OCSP KeyUsage criticality.
+- Completed 2026-06-02: added conservative required certificate-policy path
+  continuity for X.509 trust-anchor XMLDSig chains. When a profile requires
+  certificate policy OIDs, every intermediate CA below the pinned terminal
+  anchor must carry all required OIDs or `anyPolicy`; generated chain tests
+  cover matching, `anyPolicy`, missing, and unrelated intermediate policies.
+- Completed 2026-06-02: fail closed on policy mappings, policy constraints,
+  and inhibit-any-policy extensions in XMLDSig X.509 material until full RFC
+  5280 policy-tree processing is implemented.
+- Remaining ISO signature work is optional full RFC 5280 policy-tree processing
+  if production profiles need to accept policy mappings, policy constraints, or
+  inhibit-any-policy instead of rejecting those extensions in the supported
+  subset.
 - Completed 2026-06-01: tightened ISO idempotency so replayed Business
   Application Header `BizMsgIdr` values are rejected across different durable
   message identifiers, including after durable-store reload. Live-profile
@@ -409,6 +896,14 @@ track detailed unfinished engineering work.
   wrap the checked-in `sese.023`/`sese.025` XML fixtures in AppHdrs, validate
   them through a securities CSD live profile with required reference datasets,
   apply lifecycle state, and reject unsupported version and document-root drift.
+- Completed 2026-06-04: moved the default collateral substitution confirmation
+  surface to the ISO `colr.012` family. Torii now exposes
+  `/v1/iso20022/colr012`, the default generic and securities profiles advertise
+  `colr.012.001.05`, the checked-in `colr.012` fixture validates through the
+  generic profile and is durably keyed by `colr.012:<TxId>`, and the XSD
+  manifest tracks the remaining official `colr.012.001.05` schema gap. The
+  older `colr.007` parser/route remains as a legacy local compatibility path,
+  not the production default; operator evidence must not rely on it.
 - Completed 2026-06-01: broadened live-profile mismatch and lifecycle
   transition coverage. Swift CBPR+ validation now has negative tests for
   unsupported message-definition versions and business services, while
@@ -435,13 +930,163 @@ track detailed unfinished engineering work.
   and `trusted_certificate_sha256` profile aliases while normalizing them into
   the stricter `signature_public_key_sha256_pins` and
   `x509_trust_anchor_sha256_pins` verifier inputs.
+- Completed 2026-06-04: bound durable ISO message JSON records to a
+  deterministic `record_sha256` digest. Persisted records now carry a versioned
+  digest over the record body, and reload rejects missing, malformed, or
+  mismatched digests without rebuilding message status or replay indexes.
+- Completed 2026-06-04: added a deterministic durable ISO audit index at
+  `store_dir/audit/messages.index.json`. The index is sorted by message id,
+  carries `index_sha256`, links each entry to the corresponding message file and
+  `record_sha256`, and is regenerated from only valid records on reload so
+  forged persisted files are excluded from the audit manifest.
+- Completed 2026-06-04: exposed the durable ISO audit manifest through Torii at
+  `GET /v1/iso20022/audit/messages`, backed by the same deterministic index
+  builder used for `store_dir/audit/messages.index.json`, and added endpoint
+  coverage for successful export plus disabled-bridge rejection.
+- Completed 2026-06-04: added config-backed durable ISO store retention and
+  compaction. Operators can set `store_retention_secs` or `store_max_records`;
+  zero defaults retain all records. Compaction is independent from dedupe TTL,
+  removes expired or oldest overflow records from memory and disk, clears replay
+  indexes, and regenerates the audit manifest from survivors.
+- Completed 2026-06-04: added the config-backed ISO external audit export spool.
+  Operators can set `audit_export_dir`; each audit-index regeneration mirrors
+  `messages.index.json` into that external directory and writes digest-addressed
+  `.notary.json` preimages that bind `index_sha256`, source `store_dir`, record
+  count, the embedded manifest, and `anchor_sha256`.
+- Completed 2026-06-04: added `scripts/iso_audit_notary_adapter.py` for
+  operator-side archival/notary publication. The adapter consumes
+  `audit_export_dir`, verifies the anchor digest, embedded index digest,
+  top-level `index_sha256`, digest-addressed filename, local
+  `messages.index.json` equality, and record-count consistency before any
+  network delivery, rejects plaintext HTTP unless explicitly enabled for local
+  tests, rejects endpoint URLs with credentials, params, query strings,
+  fragments, or control characters, and writes bounded per-endpoint receipts.
+- Completed 2026-06-04: added `scripts/iso_rail_gateway_adapter.py` for
+  operator-side live rail file-drop ingress. Each XML payload requires a JSON
+  sidecar with `message_type`, explicit `profile` by default, and
+  `payload_sha256`; the adapter verifies the sidecar before posting to the
+  matching Torii ISO endpoint, rejects plaintext HTTP unless explicitly enabled
+  for local tests, rejects Torii base URLs with credentials, params, query
+  strings, fragments, or control characters, keeps explicit `--message` paths
+  inside the declared inbox, rejects legacy `colr.007` drops unless
+  `--allow-legacy-colr007` is set for local diagnostics, and writes bounded
+  submission receipts.
+- Completed 2026-06-04: added `scripts/iso_operator_receipt_verify.py` as a
+  read-only canary gate for rail/notary adapter receipts. It recomputes receipt
+  digests, requires successful 2xx receipts by default, rejects plaintext HTTP
+  evidence unless explicitly enabled for local tests, rejects leaked
+  authorization/token material and receipt endpoint URLs with credentials,
+  params, query strings, fragments, malformed hosts, or control characters, can
+  cross-check referenced XML or notary anchor source files, rejects legacy
+  `colr.007` rail source files unless `--allow-legacy-colr007` is set for local
+  diagnostics, and emits a digest-bound verifier summary with per-receipt file
+  paths, `receipt_sha256` values, and policy flags.
+- Completed 2026-06-04: added `scripts/iso_operator_canary.py` as the generic
+  provider canary runner. The runner consumes a strict JSON runbook with
+  explicit provider/environment labels, executes the rail file-drop adapter,
+  audit notary adapter, and receipt verifier as subprocesses, rejects unknown
+  runbook keys, rejects control characters in runbook strings, keeps relative
+  paths inside the runbook directory, rejects endpoint URLs with credentials,
+  params, query strings, or fragments, verifies generated receipts by default
+  with source-file cross-checks, redacts bearer-token file arguments in the
+  summary, and writes a single bounded JSON summary suitable for CI or operator
+  evidence archives.
+  `--plan-only` validates runbooks and prints redacted child commands without
+  contacting Torii or notary endpoints.
+- Completed 2026-06-04: added checked-in ISO operator canary runbook templates
+  under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
+  SEPA SCT Inst, and securities CSD profile families. The script tests validate
+  that each template plans successfully without network access.
+- Completed 2026-06-04: added `scripts/iso_trust_bundle_verify.py` as an
+  offline XMLDSig/XAdES trust-bundle preflight for operator rail PKI packages.
+  It verifies canonical lowercase nonzero SHA-256 pins, digest-bound base64 DER
+  envelopes with lightweight semantic shape checks for X.509 certificates,
+  X.509 CRLs, and OCSPResponse wrappers, duplicate material, contradictory
+  trust/revocation pins, required CRL/OCSP material, HTTPS provenance without
+  credentials, params, query strings, fragments, malformed bracket syntax,
+  control characters, localhost, or local/private IP literals, timezone-aware
+  non-future retrieval timestamps, unique DER labels per material class, and
+  secret-looking fields before emitting Torii profile trust override JSON.
+- Completed 2026-06-04: added checked-in trust-bundle templates under
+  `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
+  Inst, and securities CSD profile families. The templates use synthetic DER
+  envelopes for CI/schema validation only, require `--allow-synthetic-der`,
+  cannot emit profile override JSON, and must be replaced with current rail PKI
+  material before production.
+- Completed 2026-06-04: added `scripts/iso_operator_evidence_verify.py` as an
+  offline production evidence gate for ISO operator archives. The verifier
+  recomputes canary and trust summary digests, requires successful
+  rail/notary/verify canary stages plus digest-bound receipt-verifier JSON with
+  positive rail/notary receipt evidence and per-receipt digests by default,
+  rejects plan-only or dry-run canaries, insecure HTTP evidence,
+  default-profile fallbacks, legacy `colr.007` local overrides, unredacted
+  bearer-token paths, secret-looking child output, smuggled trust-source URLs,
+  missing/malformed/future trust-source retrieval timestamps, smuggled child
+  command endpoint URLs, local-only child command flags in either `--flag` or
+  `--flag=value` form, unsupported child command flags outside the expected
+  rail/notary/receipt-verifier CLI surfaces, synthetic trust DER, and
+  record-only trust policy before an archive is accepted as production
+  evidence. Canary command redaction also handles
+  `--bearer-token-file=<path>` in addition to the separated argument form.
+- Completed 2026-06-04: added `fixtures/iso20022/xsd/fixture_manifest.json`
+  and `scripts/iso_xsd_fixture_verify.py` as an offline structural preflight for
+  checked-in ISO XSD/XML fixtures. The verifier checks schema target
+  namespaces, `Document` payload roots, XML fixture namespaces and payload
+  roots, canonical lowercase ISO message definition ids, schema path
+  containment under the manifest tree, fixture path containment under the ISO
+  fixture tree, manifest duplicates/path escapes, and digest-bound summaries
+  while making reviewed missing-schema fixture exceptions explicit. All
+  checked-in payment XSDs now have standalone XML fixtures, so the
+  `--require-fixture-for-schema` strict flag passes; the schema-backed strict
+  flag still rejects the current official-package gaps until the remaining
+  securities/collateral/legacy-return XSDs are checked in.
+- Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
+  aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
+  operator evidence summaries, requires strict schema-backed/fixture-backed XSD
+  proof by default, rejects non-production evidence policies, provider or
+  environment drift, missing rail/notary/verify canary stages, missing
+  rail/notary receipt kinds, missing or weak direct receipt-archive
+  verification, legacy `colr.007` local overrides, omitted evidence policy
+  flags, nested receipt-summary tampering, weak trust profiles, and record-only
+  trust policy, and emits a digest-bound blocker report for valid but
+  not-yet-production summaries.
+- Completed 2026-06-04: hardened live securities lifecycle profile admission
+  against local reference snapshots. `sese.023`/`sese.025` profile validation now
+  rejects syntactically valid but unmapped settlement instrument ISIN/CUSIP
+  values, inactive or unknown place-of-settlement MICs, and unmapped delivering
+  or receiving party BICs before a durable settlement lifecycle record can be
+  accepted.
+- Completed 2026-06-04: gated live `securities-csd` `sese.023` ledger
+  instruction admission on configured CSD venue, securities settlement-account,
+  and cash-leg crosswalk snapshots. The gate now rejects missing snapshots,
+  incomplete rows, party/account mismatches, and unknown cash-leg currencies
+  before durable lifecycle recording, with checked-in sample snapshot schemas
+  under `fixtures/iso_bridge/`.
 - Broaden XMLDSig/XAdES fixture coverage beyond the current local fixture set,
   including full certificate-chain fixtures and official rail/profile-specific
-  trust-anchor packages.
+  trust-anchor packages that replace the synthetic trust-bundle templates.
+- Run provider-specific production canaries for the selected archival/notary
+  vendors using `scripts/iso_operator_canary.py`, pass the archived summaries
+  and receipt files through `scripts/iso_operator_evidence_verify.py`, retain
+  the accepted evidence summary and receipts, include the accepted evidence in
+  `scripts/iso_production_readiness.py`, and document any vendor-specific
+  authentication, SLA, or response evidence required by the production runbook.
+- Run provider-specific live gateway canaries for selected
+  SWIFT/Fedwire/SEPA/CSD operator integrations using
+  `scripts/iso_operator_canary.py`, pass the archived summaries and receipt
+  files through `scripts/iso_operator_evidence_verify.py`, retain the accepted
+  evidence summary and receipts, include the accepted evidence in
+  `scripts/iso_production_readiness.py`, and document rail-specific file-drop,
+  retry, and acknowledgement handling.
 - Add official MDR/XSD fixture coverage beyond the current live-profile
-  `pacs.008`/`pacs.009` corridor and keep broadening Torii tests for additional
-  lifecycle transition edge cases beyond the current family-mismatch and
-  conflicting-reference/BAH securities-linking guards.
+  `pacs.008`/`pacs.009` and checked-in lifecycle fixture corridors, make
+  the strict `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
+  (`--require-schema-backed-fixtures`) pass,
+  make the aggregate `scripts/iso_production_readiness.py` gate pass without
+  diagnostic overrides, and keep broadening Torii tests for
+  additional live-rail profile edge cases beyond the current family-mismatch,
+  conflicting-reference, BAH securities-linking, and collateral-substitution
+  guards.
 
 ## Soracles follow-ups
 
@@ -1459,7 +2104,16 @@ track detailed unfinished engineering work.
     deterministic batch corridor for the Torii/direct-ingress single-key
     Ed25519 authority path as the next crypto follow-up after the
     Poseidon/source-attribution and Norito allocation work. Gossip-side
-    deterministic Ed25519 batch precheck is already implemented.
+    deterministic Ed25519 batch precheck is already implemented, and the
+    crypto-layer direct/preparsed Ed25519 batch APIs now filter exact
+    verify-cache hits before signature parsing; the thread-local exact
+    verify-ok cache also keeps two colliding entries per slot. The ML-DSA key
+    path now rejects inconsistent imported secrets and exposes
+    `KeyPair::try_from_seed`, `KeyPair::try_random`,
+    `KeyPair::try_random_with_algorithm`, `PublicKey::try_to_*`,
+    `ExposedPrivateKey::try_to_*`, `Signature::try_new`, plus typed
+    `SignatureOf::try_*` constructors, so remaining crypto follow-ups should
+    focus on hot verification boundaries rather than ML-DSA panic replacement.
   - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
     the new knee after the conservative cache pass.
   - The targeted built-in overlay path now avoids the full `InstructionBox`

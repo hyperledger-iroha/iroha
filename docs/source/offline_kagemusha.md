@@ -937,13 +937,16 @@ fixed-proof semantic append transition profile is 2,094 bytes.
 The benchmark also emits
 `kagemusha_recursive_spend_reserved_lineage_payload_bytes` and
 `kagemusha_reserved_lineage_transition_profile_bytes`. Those
-fixtures use Reserved-lineage proof ids, metadata-bound previous recursive proof
-opening archives, full append opening-preflight contracts, derived compact
-append boundaries, and accumulator-carried `append_boundary_digest` values. The
-CI reducer writes `reserved_lineage_payload_bytes.tsv` and
+fixtures use the actual split Reserved-lineage proof ids
+(`kagemusha-recursive-spend-lineage-onehop-v1` at hop 1 and
+`kagemusha-recursive-spend-lineage-append-v1` afterward), metadata-bound
+previous recursive proof opening archives, full append opening-preflight
+contracts, derived compact append boundaries, and accumulator-carried
+`append_boundary_digest` values. The CI reducer writes
+`reserved_lineage_payload_bytes.tsv` and
 `reserved_lineage_transition_profile_bytes.tsv` and checks those series for the
 same hop-count independence. The current fixed-proof Reserved-lineage D2D bundle
-is 3,833 bytes, and the append Reserved-lineage transition profile is 2,817
+is 3,847 bytes, and the append Reserved-lineage transition profile is 2,817
 bytes, with separate size ceilings because the Reserved-lineage fixtures carry
 proof-opening metadata that the compatibility semantic payload does not.
 The dedicated `Kagemusha Payload Benchmark` workflow runs

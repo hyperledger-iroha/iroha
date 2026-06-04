@@ -817,6 +817,11 @@ pub mod isi {
         envelope
             .validate_for_admission()
             .map_err(|err| open_verify_envelope_validation_error(label, err))?;
+        if !open_verify_backend_tag_matches(backend, vk_record.backend) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} verifying key backend mismatch").into(),
+            ));
+        }
         if !circuit_id_matches(backend, &vk_record.circuit_id, &envelope.circuit_id) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
@@ -8288,14 +8293,17 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let source_domain = iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload);
-        let configured_source_material = if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
-            None
-        } else {
-            configured_sccp_source_verifier_material_for_domain(
-                &state_transaction.zk,
-                source_domain,
-            )?
-        };
+        let diagnostic_taira_tron_xor = state_transaction.zk.sccp_allow_unready_transparent_proofs
+            && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact);
+        let configured_source_material =
+            if source_domain == iroha_sccp::SCCP_DOMAIN_SORA || diagnostic_taira_tron_xor {
+                None
+            } else {
+                configured_sccp_source_verifier_material_for_domain(
+                    &state_transaction.zk,
+                    source_domain,
+                )?
+            };
         let configured_source_deployment =
             if let Some(material) = configured_source_material.as_ref() {
                 let deployment = configured_sccp_source_adapter_engine_deployment_for_domain(
@@ -8349,7 +8357,9 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
-        let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
+        let artifact_structure_is_valid = if diagnostic_taira_tron_xor {
+            true
+        } else if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
@@ -8380,6 +8390,9 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
+            if diagnostic_taira_tron_xor {
+                return Ok(());
+            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),
@@ -11183,14 +11196,11 @@ pub mod isi {
                 ConfidentialPolicyMode::ShieldedOnly => {}
             }
             let asset_id = shield_public_asset_id(state_transaction, &def_id, self.from())?;
-            if !self.enc_payload().is_supported() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unsupported confidential payload version: {}",
-                        self.enc_payload().version()
-                    )),
-                ));
-            }
+            self.enc_payload().validate().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string(),
+                ))
+            })?;
             let burn = Burn::asset_numeric(
                 iroha_primitives::numeric::Numeric::new(*self.amount(), 0),
                 asset_id,
@@ -15472,6 +15482,24 @@ pub mod isi {
             format!("0x{}", digit.to_string().repeat(40))
         }
 
+        fn test_sccp_evm_mainnet_network_id(domain: u32) -> String {
+            match domain {
+                iroha_sccp::SCCP_DOMAIN_ETH => {
+                    format!(
+                        "0x{}",
+                        hex::encode(iroha_sccp::sccp_eth_mainnet_network_id_word_v1())
+                    )
+                }
+                iroha_sccp::SCCP_DOMAIN_BSC => {
+                    format!(
+                        "0x{}",
+                        hex::encode(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1())
+                    )
+                }
+                _ => unreachable!("test helper only supports EVM mainnet domains"),
+            }
+        }
+
         fn test_sccp_h256_is_nonzero(hash: &[u8; 32]) -> bool {
             hash.iter().any(|byte| *byte != 0)
         }
@@ -15614,7 +15642,7 @@ pub mod isi {
                         test_sccp_evm_address(seed + 10),
                         test_sccp_hex32(seed + 11),
                         test_sccp_hex32(seed + 12),
-                        test_sccp_hex32(seed + 13),
+                        test_sccp_evm_mainnet_network_id(domain),
                         test_sccp_evm_address(seed + 14),
                     )
                     .expect("EVM-family SCCP destination rollout")
@@ -16158,14 +16186,14 @@ pub mod isi {
         }
 
         #[test]
-        fn configured_sccp_bsc_mainnet_lane_launch_accepts_bsc_without_other_lanes() {
+        fn configured_sccp_ethereum_mainnet_lane_launch_accepts_eth_without_other_lanes() {
             let mut zk = crate::state::default_zk_config();
             zk.sccp_source_verifier_materials.clear();
             zk.sccp_source_adapter_engine_deployments.clear();
             zk.sccp_destination_rollouts.clear();
             zk.sccp_route_allowlists.clear();
 
-            let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            let domain = iroha_sccp::SCCP_DOMAIN_ETH;
             let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
             let deployment =
                 test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
@@ -16188,16 +16216,16 @@ pub mod isi {
                     .expect("BSC source material");
             let configured_deployment =
                 super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
-                    .expect("configured BSC source deployment")
-                    .expect("BSC source deployment");
+                    .expect("configured Ethereum source deployment")
+                    .expect("Ethereum source deployment");
             let configured_rollout =
                 super::configured_sccp_destination_rollout_for_domain(&zk, domain)
-                    .expect("configured BSC destination rollout")
-                    .expect("BSC destination rollout");
+                    .expect("configured Ethereum destination rollout")
+                    .expect("Ethereum destination rollout");
             let configured_allowlist =
                 super::configured_sccp_route_allowlist_for_domain(&zk, domain)
-                    .expect("configured BSC route allowlist")
-                    .expect("BSC route allowlist");
+                    .expect("configured Ethereum route allowlist")
+                    .expect("Ethereum route allowlist");
 
             super::validate_configured_sccp_lane_launch_ready(
                 &zk,
@@ -16207,10 +16235,12 @@ pub mod isi {
                 &configured_rollout,
                 &configured_allowlist,
             )
-            .expect("BSC lane should launch with complete BSC material only");
+            .expect("Ethereum lane should launch with complete ETH material only");
 
             let all_lanes_err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
-                .expect_err("single BSC lane must not satisfy the all-lanes diagnostic helper");
+                .expect_err(
+                    "single Ethereum lane must not satisfy the all-lanes diagnostic helper",
+                );
             assert!(
                 format!("{all_lanes_err:?}").contains("all-lanes launch policy"),
                 "unexpected all-lanes diagnostic error: {all_lanes_err:?}",
@@ -16218,22 +16248,22 @@ pub mod isi {
         }
 
         #[test]
-        fn configured_sccp_bsc_mainnet_lane_launch_rejects_other_domains() {
+        fn configured_sccp_ethereum_mainnet_lane_launch_rejects_other_domains() {
             let zk = test_configured_sccp_all_lanes_zk_config();
-            let domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            let domain = iroha_sccp::SCCP_DOMAIN_BSC;
             let material = super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
-                .expect("configured ETH source material")
-                .expect("ETH source material");
+                .expect("configured BSC source material")
+                .expect("BSC source material");
             let deployment =
                 super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
-                    .expect("configured ETH source deployment")
-                    .expect("ETH source deployment");
+                    .expect("configured BSC source deployment")
+                    .expect("BSC source deployment");
             let rollout = super::configured_sccp_destination_rollout_for_domain(&zk, domain)
-                .expect("configured ETH destination rollout")
-                .expect("ETH destination rollout");
+                .expect("configured BSC destination rollout")
+                .expect("BSC destination rollout");
             let allowlist = super::configured_sccp_route_allowlist_for_domain(&zk, domain)
-                .expect("configured ETH route allowlist")
-                .expect("ETH route allowlist");
+                .expect("configured BSC route allowlist")
+                .expect("BSC route allowlist");
 
             let err = super::validate_configured_sccp_lane_launch_ready(
                 &zk,
@@ -16243,10 +16273,10 @@ pub mod isi {
                 &rollout,
                 &allowlist,
             )
-            .expect_err("ETH should remain outside the BSC-mainnet launch policy");
+            .expect_err("BSC should remain outside the Ethereum-mainnet launch policy");
             let err = format!("{err:?}");
             assert!(
-                err.contains("BSC mainnet lane launch policy") && err.contains("domain 1"),
+                err.contains("Ethereum mainnet lane launch policy") && err.contains("domain 2"),
                 "unexpected error: {err}",
             );
         }
@@ -16530,8 +16560,8 @@ pub mod isi {
                         &zk,
                         iroha_sccp::SCCP_DOMAIN_BSC,
                     )
-                    .expect("configured BSC source material")
-                    .expect("BSC source material");
+                    .expect("configured Ethereum source material")
+                    .expect("Ethereum source material");
                     (
                         iroha_sccp::sccp_source_verifier_material_hash(&material),
                         "source verifier material",
@@ -17364,6 +17394,28 @@ pub mod isi {
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
             );
 
+            for backend_tag in [
+                BackendTag::Unsupported,
+                BackendTag::Halo2Bn254,
+                BackendTag::Groth16,
+                BackendTag::Stark,
+            ] {
+                let mut bad_backend_rec = vk_rec.clone();
+                bad_backend_rec.backend = backend_tag;
+                let err = validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &ok,
+                    &bad_backend_rec,
+                )
+                .expect_err("registered backend tag must match the admitted proof backend");
+                assert!(
+                    err.to_string().contains("verifying key backend mismatch"),
+                    "unexpected backend-tag rejection for {}: {err}",
+                    backend_tag.canonical_label()
+                );
+            }
+
             for (label, envelope, expected) in [
                 (
                     "empty_circuit",
@@ -18167,14 +18219,37 @@ pub mod isi {
             asset_def_id: &AssetDefinitionId,
             amount: u128,
         ) -> Result<(), InstructionExecutionError> {
+            shield_amount_with_payload(
+                stx,
+                asset_def_id,
+                amount,
+                valid_confidential_encrypted_payload_for_tests(),
+            )
+        }
+
+        fn shield_amount_with_payload(
+            stx: &mut StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+            amount: u128,
+            enc_payload: iroha_data_model::confidential::ConfidentialEncryptedPayload,
+        ) -> Result<(), InstructionExecutionError> {
             iroha_data_model::isi::zk::Shield::new(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 amount,
                 [3; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                enc_payload,
             )
             .execute(&ALICE_ID, stx)
+        }
+
+        fn valid_confidential_encrypted_payload_for_tests()
+        -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                [0x07; 32],
+                [0x08; 24],
+                vec![0x09, 0x0A],
+            )
         }
 
         fn numeric_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
@@ -19723,6 +19798,47 @@ pub mod isi {
                 msg.contains("max_proof_bytes"),
                 "unexpected oversized proof error: {msg}"
             );
+        }
+
+        #[test]
+        fn shield_rejects_invalid_confidential_payload_before_state_change() {
+            let dataspace = DataSpaceId::new(7);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(dataspace);
+            stx.world.current_dataspace_id = Some(dataspace);
+
+            for (payload, expected) in [
+                (
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                        [0u8; 32],
+                        [0x08; 24],
+                        vec![0x09],
+                    ),
+                    "low-order",
+                ),
+                (
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                        [0x07; 32],
+                        [0x08; 24],
+                        Vec::new(),
+                    ),
+                    "ciphertext must not be empty",
+                ),
+            ] {
+                let err = shield_amount_with_payload(&mut stx, &asset_def_id, 3, payload)
+                    .expect_err("invalid confidential payload must fail closed");
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(msg.contains(expected), "expected `{expected}` in `{msg}`");
+                assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+                assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+            }
         }
 
         #[test]
@@ -26857,6 +26973,108 @@ pub mod isi {
                 let msg = smart_contract_error_message(err);
                 assert!(
                     msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_non_admitted_record_tags() {
+            for (idx, backend_tag) in [
+                BackendTag::Unsupported,
+                BackendTag::Halo2Bn254,
+                BackendTag::Groth16,
+                BackendTag::Stark,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
+                let vk_commitment = hash_vk(&vk_box);
+                let public_inputs = vec![1, 2, 3, idx as u8];
+                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+                let circuit_id = format!("circuit_bad_record_tag_{idx}");
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    backend_tag,
+                    if backend_tag == BackendTag::Stark {
+                        "goldilocks"
+                    } else {
+                        "pallas"
+                    },
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs,
+                    proof_bytes: vec![4, 5, 6, idx as u8],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+                stx.world
+                    .verifying_keys_by_circuit
+                    .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+                stx.apply();
+
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "non-admitted verifier record tag must reject before preverify lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("verifying key backend mismatch"),
                     "unexpected msg for {}: {msg}",
                     backend_tag.canonical_label()
                 );

@@ -40,6 +40,9 @@ public final class ConnectJournalRecord {
     this.sequence = sequence;
     this.payloadHash = normalizeHash(payloadHash);
     this.ciphertext = Objects.requireNonNull(ciphertext, "ciphertext").clone();
+    if (sequence < 0L) {
+      throw new ConnectJournalException("sequence must be non-negative");
+    }
     if (this.ciphertext.length > 0xFFFF_FFFFL) {
       throw new ConnectJournalException("ciphertext too large for journal entry");
     }

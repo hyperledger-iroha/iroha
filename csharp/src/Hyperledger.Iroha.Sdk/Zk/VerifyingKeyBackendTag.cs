@@ -90,113 +90,9 @@ public static class VerifyingKeyBackendTags
         }
 
         var compact = CompactAscii(label);
-        if (label == "unsupported" || compact == "unsupported")
-        {
-            return VerifyingKeyBackendTag.Unsupported;
-        }
-
-        if (compact.Contains("pqmasp", StringComparison.Ordinal)
-            || compact.Contains("postquantummasp", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.PqMaspStarkFri;
-        }
-        if (compact.Contains("anonymouspgc", StringComparison.Ordinal)
-            || compact.Contains("pgckoutofn", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.AnonymousPgc;
-        }
-        if (compact.Contains("verange", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.VeRange;
-        }
-        if (compact.Contains("zkat", StringComparison.Ordinal)
-            || compact.Contains("policyprivateauthenticator", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.ZkAt;
-        }
-        if (compact.Contains("zkams", StringComparison.Ordinal)
-            || compact.Contains("recursiveanonymousadmission", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.RecursiveAnonymousAdmission;
-        }
-        if (compact.Contains("vega", StringComparison.Ordinal)
-            || compact.Contains("existingcredentialzk", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.VegaExistingCredentialZk;
-        }
-        if (compact.Contains("silentthreshold", StringComparison.Ordinal)
-            || compact.Contains("thresholdanonymouscredential", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.SilentThresholdAnoncred;
-        }
-        if (compact.Contains("zkx509", StringComparison.Ordinal)
-            || compact.Contains("x509", StringComparison.Ordinal)
-            || compact.Contains("zkvmx509", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.ZkX509;
-        }
-        if (compact.Contains("siswithhints", StringComparison.Ordinal)
-            || compact.Contains("sishints", StringComparison.Ordinal)
-            || compact.Contains("latticeanonymouscredentials", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.SisWithHints;
-        }
-        if (compact.Contains("orchard", StringComparison.Ordinal)
-            || compact.Contains("zcashorchard", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.Halo2IpaOrchard;
-        }
-        if (compact.Contains("penumbra", StringComparison.Ordinal)
-            || compact.Contains("masp", StringComparison.Ordinal)
-            || compact.Contains("bls12377", StringComparison.Ordinal)
-            || compact.Contains("decaf377", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.Groth16Bls12377;
-        }
-        if (compact.Contains("fcmp", StringComparison.Ordinal)
-            || compact.Contains("monero", StringComparison.Ordinal)
-            || compact.Contains("curvetree", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.FcmpPlusPlusCurveTree;
-        }
-        if (compact.Contains("lattice", StringComparison.Ordinal)
-            || compact.Contains("pcssis", StringComparison.Ordinal)
-            || compact.Contains("jindo", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.LatticePcsSis;
-        }
-        if (compact.Contains("miden", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.MidenStark;
-        }
-        if (compact.Contains("aztec", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.AztecPlonkishPrivateKernel;
-        }
-        if (compact.Contains("halo2", StringComparison.Ordinal)
-            && compact.Contains("bn254", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.Halo2Bn254;
-        }
-        if (compact.Contains("groth16", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.Groth16;
-        }
-        if (compact.Contains("stark", StringComparison.Ordinal))
-        {
-            return VerifyingKeyBackendTag.Stark;
-        }
-        if (compact == "halo2ipa"
-            || compact == "halo2ipapasta"
-            || compact == "halo2pasta"
-            || (compact.Contains("halo2", StringComparison.Ordinal)
-                && (compact.Contains("ipa", StringComparison.Ordinal)
-                    || compact.Contains("pasta", StringComparison.Ordinal))))
-        {
-            return VerifyingKeyBackendTag.Halo2IpaPasta;
-        }
-
-        return VerifyingKeyBackendTag.Unsupported;
+        return CatalogBackendAliases.TryGetValue(compact, out var tag)
+            ? tag
+            : VerifyingKeyBackendTag.Unsupported;
     }
 
     public static bool IsPendingProductionBackendLabel(string? raw) =>
@@ -255,9 +151,88 @@ public static class VerifyingKeyBackendTags
             "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kagemusha-recursive-aggregation-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+            "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+            "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
             "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+        };
+
+    private static readonly Dictionary<string, VerifyingKeyBackendTag> CatalogBackendAliases =
+        new(StringComparer.Ordinal)
+        {
+            ["unsupported"] = VerifyingKeyBackendTag.Unsupported,
+            ["halo2ipa"] = VerifyingKeyBackendTag.Halo2IpaPasta,
+            ["halo2ipapasta"] = VerifyingKeyBackendTag.Halo2IpaPasta,
+            ["halo2pasta"] = VerifyingKeyBackendTag.Halo2IpaPasta,
+            ["halo2pastaipavotebool"] = VerifyingKeyBackendTag.Halo2IpaPasta,
+            ["halo2bn254"] = VerifyingKeyBackendTag.Halo2Bn254,
+            ["groth16"] = VerifyingKeyBackendTag.Groth16,
+            ["groth16bn254"] = VerifyingKeyBackendTag.Groth16,
+            ["stark"] = VerifyingKeyBackendTag.Stark,
+            ["starkfri"] = VerifyingKeyBackendTag.Stark,
+            ["starkfrisha256goldilocks"] = VerifyingKeyBackendTag.Stark,
+            ["halo2ipaorchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
+            ["orchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
+            ["zcashorchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
+            ["groth16bls12377"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["groth16bls12377decaf377"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["bls12377"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["decaf377"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["masp"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["penumbra"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["penumbramasp"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["halo2ipapenumbra"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["halo2ipamasp"] = VerifyingKeyBackendTag.Groth16Bls12377,
+            ["fcmppluspluscurvetree"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["fcmp"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["monero"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["monerofcmp"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["monerofcmpplusplus"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["curvetree"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["halo2ipamonero"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["halo2ipacurvetree"] = VerifyingKeyBackendTag.FcmpPlusPlusCurveTree,
+            ["latticepcssis"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["latticepcszk"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["jindo"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["jindolatticepcszk"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["jindolatticepcszkv0"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["jindolatticepcssis"] = VerifyingKeyBackendTag.LatticePcsSis,
+            ["starkfrimiden"] = VerifyingKeyBackendTag.MidenStark,
+            ["midenstark"] = VerifyingKeyBackendTag.MidenStark,
+            ["aztecplonkishprivatekernel"] = VerifyingKeyBackendTag.AztecPlonkishPrivateKernel,
+            ["aztecprivatekernel"] = VerifyingKeyBackendTag.AztecPlonkishPrivateKernel,
+            ["pqmaspstarkfri"] = VerifyingKeyBackendTag.PqMaspStarkFri,
+            ["pqmaspstark"] = VerifyingKeyBackendTag.PqMaspStarkFri,
+            ["starkfripqmaspstarkfri"] = VerifyingKeyBackendTag.PqMaspStarkFri,
+            ["postquantummasp"] = VerifyingKeyBackendTag.PqMaspStarkFri,
+            ["anonymouspgc"] = VerifyingKeyBackendTag.AnonymousPgc,
+            ["anonymouspgckoutofn"] = VerifyingKeyBackendTag.AnonymousPgc,
+            ["anonymouspgckoutofnv1"] = VerifyingKeyBackendTag.AnonymousPgc,
+            ["verange"] = VerifyingKeyBackendTag.VeRange,
+            ["verangetransparentrange"] = VerifyingKeyBackendTag.VeRange,
+            ["verangetransparentrangev1"] = VerifyingKeyBackendTag.VeRange,
+            ["zkat"] = VerifyingKeyBackendTag.ZkAt,
+            ["zkatpolicyprivateauthenticator"] = VerifyingKeyBackendTag.ZkAt,
+            ["zkatpolicyprivateauthv1"] = VerifyingKeyBackendTag.ZkAt,
+            ["recursiveanonymousadmission"] = VerifyingKeyBackendTag.RecursiveAnonymousAdmission,
+            ["recursiveanonymousadmissionv0"] = VerifyingKeyBackendTag.RecursiveAnonymousAdmission,
+            ["zkamsrecursiveadmission"] = VerifyingKeyBackendTag.RecursiveAnonymousAdmission,
+            ["zkamsrecursiveadmissionv0"] = VerifyingKeyBackendTag.RecursiveAnonymousAdmission,
+            ["vegaexistingcredentialzk"] = VerifyingKeyBackendTag.VegaExistingCredentialZk,
+            ["vegaexistingcredentialzkv0"] = VerifyingKeyBackendTag.VegaExistingCredentialZk,
+            ["silentthresholdanoncred"] = VerifyingKeyBackendTag.SilentThresholdAnoncred,
+            ["silentthresholdanoncredv0"] = VerifyingKeyBackendTag.SilentThresholdAnoncred,
+            ["silentthresholdanonymouscredential"] = VerifyingKeyBackendTag.SilentThresholdAnoncred,
+            ["thresholdanonymouscredentials"] = VerifyingKeyBackendTag.SilentThresholdAnoncred,
+            ["zkx509"] = VerifyingKeyBackendTag.ZkX509,
+            ["zkvmx509identity"] = VerifyingKeyBackendTag.ZkX509,
+            ["zkx509onchainidentity"] = VerifyingKeyBackendTag.ZkX509,
+            ["zkx509onchainidentityv0"] = VerifyingKeyBackendTag.ZkX509,
+            ["siswithhints"] = VerifyingKeyBackendTag.SisWithHints,
+            ["sishints"] = VerifyingKeyBackendTag.SisWithHints,
+            ["sishintsanoncredpqv0"] = VerifyingKeyBackendTag.SisWithHints,
+            ["latticeanonymouscredentials"] = VerifyingKeyBackendTag.SisWithHints,
         };
 
     private static readonly HashSet<string> StarkFriProductionBackends =

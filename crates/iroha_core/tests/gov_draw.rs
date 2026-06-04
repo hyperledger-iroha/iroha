@@ -25,7 +25,8 @@ fn make_candidate(
     match variant {
         CandidateVariant::Normal => {
             let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
-            let (vrf_output, proof) = prove_normal_with_chain(&sk, chain_bytes, &input);
+            let (vrf_output, proof) =
+                prove_normal_with_chain(&sk, chain_bytes, &input).expect("normal VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
             let (algo, pk_payload) = public_key.to_bytes();
@@ -38,7 +39,8 @@ fn make_candidate(
         }
         CandidateVariant::Small => {
             let (pk_raw, sk) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
-            let (vrf_output, proof) = prove_small_with_chain(&sk, chain_bytes, &input);
+            let (vrf_output, proof) =
+                prove_small_with_chain(&sk, chain_bytes, &input).expect("small VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
             let (algo, pk_payload) = public_key.to_bytes();

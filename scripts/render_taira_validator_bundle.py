@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ class ValidatorEntry:
     """Validator-specific material for a rendered Taira config."""
 
     slug: str
+    account_id: str
     public_key: str
     private_key: str
     pop_hex: str
@@ -217,6 +219,36 @@ def _render_trusted_peers_pop(validators: list[ValidatorEntry]) -> list[str]:
     return lines
 
 
+def _render_governance_manifest(validators: list[ValidatorEntry]) -> str:
+    """Render the Parliament lane manifest used for authoritative routing."""
+
+    payload = {
+        "lane": "governance",
+        "governance": "parliament",
+        "version": 1,
+        "validators": [
+            {
+                "validator": validator.account_id,
+                "peer_id": validator.public_key,
+            }
+            for validator in validators
+        ],
+        "quorum": max(1, (len(validators) * 2 // 3) + 1),
+        "protected_namespaces": [
+            "apps",
+            "governance",
+        ],
+        "hooks": {
+            "runtime_upgrade": {
+                "allow": True,
+                "require_metadata": True,
+                "metadata_key": "gov_upgrade_id",
+            },
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
 def load_roster(
     path: Path,
     secrets_path: Path | None = None,
@@ -237,6 +269,7 @@ def load_roster(
 
     validators: list[ValidatorEntry] = []
     seen_slugs: set[str] = set()
+    seen_account_ids: set[str] = set()
     seen_public_keys: set[str] = set()
     seen_public_addresses: set[str] = set()
     seen_torii_public_addresses: set[str] = set()
@@ -269,6 +302,9 @@ def load_roster(
             )
         if slug in seen_slugs:
             raise ValueError(f"validator slug `{slug}` is duplicated")
+        account_id = _require_string(raw, "account_id", f"validator `{slug}`")
+        if account_id in seen_account_ids:
+            raise ValueError(f"validator account_id `{account_id}` is duplicated")
         if public_key in seen_public_keys:
             raise ValueError(f"validator public_key `{public_key}` is duplicated")
         if public_address in seen_public_addresses:
@@ -279,12 +315,14 @@ def load_roster(
                 "each public validator must expose its own direct Torii hostname"
             )
         seen_slugs.add(slug)
+        seen_account_ids.add(account_id)
         seen_public_keys.add(public_key)
         seen_public_addresses.add(public_address)
         seen_torii_public_addresses.add(torii_public_address.strip())
         validators.append(
             ValidatorEntry(
                 slug=slug,
+                account_id=account_id,
                 public_key=public_key,
                 private_key=private_key,
                 pop_hex=pop_hex,
@@ -414,6 +452,16 @@ def render_validator_config(
                 f'identity_private_key = {_quote_toml(shared.streaming_identity_private_key)}'
             )
             continue
+        if current_section == "[nexus.registry]" and stripped.startswith(
+            "manifest_directory = "
+        ):
+            rendered.append('manifest_directory = "manifests"')
+            continue
+        if current_section == "[nexus.registry]" and stripped.startswith(
+            "cache_directory = "
+        ):
+            rendered.append('cache_directory = "manifests"')
+            continue
 
         rendered.append(raw_line)
 
@@ -451,6 +499,8 @@ def render_bundle(
             continue
         target_dir = output_dir / validator.slug
         target_dir.mkdir(parents=True, exist_ok=True)
+        manifest_dir = target_dir / "manifests"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / "config.toml"
         target_path.write_text(
             render_validator_config(
@@ -459,6 +509,10 @@ def render_bundle(
                 validators,
                 shared_secrets=secret_material.shared if secret_material else None,
             ),
+            encoding="utf-8",
+        )
+        (manifest_dir / "governance.manifest.json").write_text(
+            _render_governance_manifest(validators),
             encoding="utf-8",
         )
         written.append(target_path)

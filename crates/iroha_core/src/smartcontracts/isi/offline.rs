@@ -270,6 +270,13 @@ pub mod isi {
             )
             .into());
         }
+        if crate::zk::is_production_claim_backend_label(backend) {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "offline transparent proofs may not use production-claim proof backends",
+            )
+            .into());
+        }
         if backend_tag.is_pending_production_backend() {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -284,11 +291,12 @@ pub mod isi {
             )
             .into());
         }
-        let expected_tag = if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
-            BackendTag::Halo2IpaPasta
-        } else {
-            BackendTag::Stark
-        };
+        let expected_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "offline recursive proof backend is not admitted by the production verifier registry",
+            )
+        })?;
         if backend_tag != expected_tag {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -1015,6 +1023,13 @@ pub mod isi {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
                 "offline recursive proofs may not use pending-production proof backends",
+            )
+            .into());
+        }
+        if crate::zk::is_production_claim_backend_label(backend) {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "offline recursive proofs may not use production-claim proof backends",
             )
             .into());
         }
@@ -2473,6 +2488,7 @@ pub mod isi {
             .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
             state_transaction
                 .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
+
             if let Some(lineage_witness) = &self.lineage_witness {
                 ensure_kagemusha_recursive_lineage_verifier_records_registered(
                     lineage_witness,
@@ -3345,6 +3361,148 @@ pub mod isi {
         }
 
         #[cfg(feature = "zk-halo2-ipa")]
+        fn recursive_redeem_real_pallas_open_envelope(
+            label: &str,
+            metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+        ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+            let n = 4usize;
+            let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+            let coeffs = (0..n)
+                .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+                .collect::<Vec<_>>();
+            let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(coeffs);
+            let commitment = poly.commit(&params).expect("Pallas commitment");
+            let z = iroha_zkp_halo2::pallas::Scalar::from(5u64);
+            let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+            let (proof, t) = poly
+                .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+                .expect("Pallas opening proof");
+            iroha_zkp_halo2::OpenVerifyEnvelope {
+                params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+                public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+                    iroha_zkp_halo2::pallas::PallasBackend,
+                >(params.n(), z, t, commitment),
+                proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+                transcript_label: label.to_owned(),
+                vk_commitment: metadata.vk_commitment,
+                public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+                domain_tag: metadata.domain_tag,
+            }
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn recursive_redeem_real_lineage_pallas_open_envelopes_archive(
+            chain_id: &iroha_data_model::ChainId,
+            asset: &AssetDefinitionId,
+            steps: &[KagemushaVerifiedFoldStep],
+        ) -> Vec<u8> {
+            let envelopes = steps
+                .iter()
+                .enumerate()
+                .map(|(stored_hop_index, step)| {
+                    let metadata =
+                        crate::zk::kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+                            chain_id, asset, 0, step,
+                        )
+                        .expect("record-backed one-hop Pallas metadata");
+                    recursive_redeem_real_pallas_open_envelope(
+                        &format!("recursive-redeem-real-lineage-open-envelope-{stored_hop_index}"),
+                        metadata,
+                    )
+                })
+                .collect::<Vec<_>>();
+            norito::to_bytes(&envelopes)
+                .expect("encode real recursive Kagemusha lineage Pallas envelopes")
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[allow(clippy::too_many_arguments)]
+        fn recursive_redeem_real_lineage_transfer_step(
+            chain_id: &iroha_data_model::ChainId,
+            asset: &AssetDefinitionId,
+            vk_record: &VerifyingKeyRecord,
+            vk_box: &VerifyingKeyBox,
+            vk_id: &VerifyingKeyId,
+            tree_commitments: &[[u8; 32]],
+            spend_key: [u8; 32],
+            amount: u128,
+            input_rho: [u8; 32],
+            input_diversifier: [u8; 32],
+            leaf_index: usize,
+            output_spend_key: [u8; 32],
+            output_rho: [u8; 32],
+            output_diversifier: [u8; 32],
+        ) -> (
+            KagemushaVerifiedFoldStep,
+            iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+        ) {
+            let root_before =
+                crate::zk::confidential_v2::compute_confidential_root_v2(tree_commitments)
+                    .expect("real lineage root before");
+            let output_owner_tag =
+                crate::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &output_spend_key,
+                    output_diversifier,
+                )
+                .expect("real lineage output owner tag");
+            let proof = crate::zk::confidential_v2::build_confidential_transfer_proof_v2(
+                chain_id,
+                &asset.to_string(),
+                &spend_key,
+                tree_commitments,
+                &[crate::zk::confidential_v2::ConfidentialTransferInputV2 {
+                    amount,
+                    rho: input_rho,
+                    diversifier: input_diversifier,
+                    leaf_index,
+                }],
+                &[crate::zk::confidential_v2::ConfidentialTransferOutputV2 {
+                    amount,
+                    rho: output_rho,
+                    owner_tag: output_owner_tag,
+                }],
+                root_before,
+                &vk_record.circuit_id,
+                vk_box,
+            )
+            .expect("real lineage confidential transfer v2 proof");
+            let mut next_tree = tree_commitments.to_vec();
+            next_tree.extend(proof.output_commitments.iter().copied());
+            let root_after = crate::zk::confidential_v2::compute_confidential_root_v2(&next_tree)
+                .expect("real lineage root after");
+            let vk_commitment = crate::zk::hash_vk(vk_box);
+            let mut attachment = ProofAttachment::new_ref(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                proof.proof,
+                vk_id.clone(),
+            );
+            attachment.vk_commitment = Some(vk_commitment);
+            attachment.envelope_hash = Some(Hash::new(&attachment.proof.bytes).into());
+            let spend_nullifier = crate::zk::confidential_v2::derive_confidential_nullifier_v2(
+                chain_id.as_str(),
+                &asset.to_string(),
+                &output_spend_key,
+                output_rho,
+            );
+            let current_note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: proof.output_commitments[0],
+                spend_nullifier,
+                amount: Numeric::new(amount, 0),
+            };
+            (
+                KagemushaVerifiedFoldStep {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    verifier_key: vk_box.clone(),
+                },
+                current_note,
+            )
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
         fn recursive_spend_bundle_fixture_for_note(
             chain_id: &iroha_data_model::ChainId,
             asset: &AssetDefinitionId,
@@ -3539,6 +3697,327 @@ pub mod isi {
             };
             RecursiveKagemushaRedeemBundleFixture {
                 bundle,
+                lineage_witness,
+                lineage_record_id,
+                lineage_record,
+            }
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn real_recursive_kagemusha_redeem_record_backed_multi_hop_fixture()
+        -> RecursiveKagemushaRedeemTestFixture {
+            let authority = sample_account(0x66);
+            let recipient = sample_account(0x67);
+            let chain_id: iroha_data_model::ChainId = "kagemusha-recursive-redeem-real-lineage"
+                .parse()
+                .expect("chain id");
+            let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "kgmrl".parse().expect("asset definition name"),
+            );
+            let recipient_asset_id = AssetId::new(definition_id.clone(), recipient.clone());
+            let domain = Domain::new(domain_id).build(&authority);
+            let authority_account = Account::new(authority.clone()).build(&authority);
+            let recipient_account = Account::new(recipient.clone()).build(&authority);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .with_name("kgmrl".to_owned())
+                    .confidential_policy(AssetConfidentialPolicy::convertible())
+                    .build(&authority);
+            let recipient_asset = Asset::new(recipient_asset_id, Numeric::zero());
+
+            let mut lineage_record =
+                crate::zk::confidential_v2::confidential_transfer_v2_vk_record(
+                    crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    3,
+                )
+                .expect("real lineage transfer verifier record");
+            lineage_record.status = ConfidentialStatus::Active;
+            let lineage_record_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "recursive-kagemusha-real-lineage-transfer-v2",
+            );
+            let lineage_vk_box = lineage_record
+                .key
+                .clone()
+                .expect("real lineage inline transfer verifier key");
+
+            let amount = 42;
+            let initial_spend_key = [0x10_u8; 32];
+            let initial_rho = [0x20_u8; 32];
+            let initial_diversifier =
+                crate::zk::confidential_v2::derive_confidential_diversifier_v2(
+                    b"recursive-real-lineage-hop-0-input",
+                );
+            let initial_owner_tag =
+                crate::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &initial_spend_key,
+                    initial_diversifier,
+                )
+                .expect("real lineage initial owner tag");
+            let initial_commitment = crate::zk::confidential_v2::derive_confidential_note_v2(
+                &definition_id.to_string(),
+                amount,
+                initial_rho,
+                initial_owner_tag,
+            )
+            .expect("real lineage initial commitment");
+            let mut tree_commitments = vec![initial_commitment];
+            let initial_root =
+                crate::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                    .expect("real lineage initial root");
+
+            let hop1_spend_key = [0x30_u8; 32];
+            let hop1_rho = [0x31_u8; 32];
+            let hop1_diversifier = crate::zk::confidential_v2::derive_confidential_diversifier_v2(
+                b"recursive-real-lineage-hop-0-output",
+            );
+            let (hop0, note0) = recursive_redeem_real_lineage_transfer_step(
+                &chain_id,
+                &definition_id,
+                &lineage_record,
+                &lineage_vk_box,
+                &lineage_record_id,
+                &tree_commitments,
+                initial_spend_key,
+                amount,
+                initial_rho,
+                initial_diversifier,
+                0,
+                hop1_spend_key,
+                hop1_rho,
+                hop1_diversifier,
+            );
+            tree_commitments.extend(hop0.output_commitments.iter().copied());
+
+            let final_spend_key = [0x50_u8; 32];
+            let final_rho = [0x51_u8; 32];
+            let final_diversifier = crate::zk::confidential_v2::derive_confidential_diversifier_v2(
+                b"recursive-real-lineage-hop-1-output",
+            );
+            let (hop1, final_note) = recursive_redeem_real_lineage_transfer_step(
+                &chain_id,
+                &definition_id,
+                &lineage_record,
+                &lineage_vk_box,
+                &lineage_record_id,
+                &tree_commitments,
+                hop1_spend_key,
+                amount,
+                hop1_rho,
+                hop1_diversifier,
+                1,
+                final_spend_key,
+                final_rho,
+                final_diversifier,
+            );
+            tree_commitments.extend(hop1.output_commitments.iter().copied());
+            let final_leaf_index = tree_commitments
+                .len()
+                .checked_sub(1)
+                .expect("real lineage final note exists");
+            let final_root =
+                crate::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                    .expect("real lineage final root");
+            assert_eq!(hop1.root_after, final_root);
+
+            let lineage_steps = vec![hop0, hop1];
+            let current_notes = vec![note0, final_note.clone()];
+            let pallas_open_envelopes_archive =
+                recursive_redeem_real_lineage_pallas_open_envelopes_archive(
+                    &chain_id,
+                    &definition_id,
+                    &lineage_steps,
+                );
+            let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                norito::decode_from_bytes(&pallas_open_envelopes_archive)
+                    .expect("decode real lineage Pallas opening archive");
+            let recursive_vk_box = crate::zk::kagemusha_recursive_aggregation_proof_vk_box()
+                .expect("recursive aggregation vk");
+            let mut previous_bundle = None::<KagemushaRecursiveSpendBundleV1>;
+            let mut previous_recursive_proofs = Vec::new();
+            for (hop_index, ((step, current_note), envelope)) in lineage_steps
+                .iter()
+                .zip(current_notes.iter())
+                .zip(pallas_open_envelopes.iter())
+                .enumerate()
+            {
+                let one_hop_record_bundle = KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id: chain_id.clone(),
+                        asset: definition_id.clone(),
+                        steps: vec![step.clone()],
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                        id: lineage_record_id.clone(),
+                        record: lineage_record.clone(),
+                    }],
+                };
+                let evidence =
+                    crate::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+                        &one_hop_record_bundle,
+                        std::slice::from_ref(envelope),
+                    )
+                    .expect("real lineage recursive aggregation evidence");
+                let accumulator = if let Some(previous_bundle) = previous_bundle.as_ref() {
+                    iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
+                        &previous_bundle.accumulator,
+                        &previous_bundle.recursive_proof,
+                        &evidence,
+                        current_note,
+                    )
+                    .expect("real lineage append accumulator")
+                } else {
+                    iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                        &evidence,
+                        current_note,
+                    )
+                    .expect("real lineage initial accumulator")
+                };
+                let bundle = crate::zk::prove_kagemusha_recursive_spend_accumulator(
+                    crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                    &recursive_vk_box,
+                    accumulator,
+                    None,
+                )
+                .expect("real lineage recursive spend proof");
+                if hop_index + 1 < lineage_steps.len() {
+                    previous_recursive_proofs.push(bundle.recursive_proof.clone());
+                }
+                previous_bundle = Some(bundle);
+            }
+            let bundle = previous_bundle.expect("real lineage final recursive spend bundle");
+            assert_eq!(bundle.accumulator.initial_root, initial_root);
+            assert_eq!(bundle.accumulator.final_root, final_root);
+            assert_eq!(bundle.accumulator.current_note, final_note);
+
+            let lineage_witness = KagemushaRecursiveSpendLineageWitnessV1 {
+                record_bundle: KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id: chain_id.clone(),
+                        asset: definition_id.clone(),
+                        steps: lineage_steps,
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                        id: lineage_record_id.clone(),
+                        record: lineage_record.clone(),
+                    }],
+                },
+                pallas_open_envelopes_archive,
+                current_notes,
+                previous_recursive_proofs,
+            };
+            crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(
+                &bundle,
+                &lineage_witness,
+                |_| None,
+            )
+            .expect("real record-backed lineage witness replays");
+
+            let recursive_vk_record = crate::zk::kagemusha_recursive_aggregation_proof_vk_record(
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                1,
+            )
+            .expect("recursive spend verifier record");
+            let recursive_vk_id = bundle.recursive_proof.verifier_key_id.clone();
+            let mut unshield_record =
+                crate::zk::confidential_v2::confidential_unshield_v2_vk_record(
+                    crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    1,
+                )
+                .expect("confidential unshield v2 verifier record");
+            let unshield_vk_box = unshield_record.key.clone().expect("unshield verifier key");
+            let unshield_vk_commitment = unshield_record.commitment;
+            let unshield_vk_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "recursive-kagemusha-real-lineage-unshield-v2",
+            );
+            unshield_record.status = ConfidentialStatus::Active;
+            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v2(
+                &chain_id,
+                &definition_id.to_string(),
+                &final_spend_key,
+                &tree_commitments,
+                &[crate::zk::confidential_v2::ConfidentialUnshieldInputV2 {
+                    amount,
+                    rho: final_rho,
+                    diversifier: final_diversifier,
+                    leaf_index: final_leaf_index,
+                }],
+                amount,
+                final_root,
+                &unshield_record.circuit_id,
+                &unshield_vk_box,
+            )
+            .expect("real lineage final unshield proof");
+            assert_eq!(unshield_proof.nullifiers, vec![final_note.spend_nullifier]);
+            let mut redeem_attachment = ProofAttachment::new_ref(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                unshield_proof.proof,
+                unshield_vk_id.clone(),
+            );
+            redeem_attachment.vk_commitment = Some(unshield_vk_commitment);
+            redeem_attachment.envelope_hash =
+                Some(Hash::new(&redeem_attachment.proof.bytes).into());
+            let instruction = RedeemKagemushaRecursive::new_with_lineage_witness(
+                bundle,
+                recipient.clone(),
+                amount,
+                redeem_attachment,
+                Some(lineage_witness.clone()),
+            );
+
+            let mut world = World::with_assets(
+                [domain],
+                [authority_account, recipient_account],
+                [asset_definition],
+                [recipient_asset],
+                [],
+            );
+            world
+                .verifying_keys
+                .insert(recursive_vk_id, recursive_vk_record);
+            world
+                .verifying_keys
+                .insert(unshield_vk_id.clone(), unshield_record);
+            world
+                .verifying_keys
+                .insert(lineage_record_id.clone(), lineage_record.clone());
+            world.verifying_keys_by_circuit.insert(
+                (
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID.to_owned(),
+                    1,
+                ),
+                unshield_vk_id.clone(),
+            );
+            world.zk_assets.insert(definition_id.clone(), {
+                let mut zk_state = ZkAssetState::default();
+                zk_state.allow_unshield = true;
+                zk_state.commitments = tree_commitments;
+                zk_state.root_history = vec![initial_root];
+                zk_state.vk_unshield = Some(ZkAssetVerifierBinding {
+                    id: unshield_vk_id,
+                    commitment: unshield_vk_commitment,
+                });
+                zk_state
+            });
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id);
+            let mut zk = state.zk.clone();
+            zk.halo2.enabled = true;
+            zk.halo2.max_envelope_bytes = usize::MAX;
+            zk.halo2.max_proof_bytes = usize::MAX;
+            state.set_zk(zk);
+
+            RecursiveKagemushaRedeemTestFixture {
+                state,
+                authority,
+                recipient,
+                definition_id,
+                instruction,
                 lineage_witness,
                 lineage_record_id,
                 lineage_record,
@@ -5109,6 +5588,34 @@ pub mod isi {
         }
 
         #[test]
+        fn offline_note_rejects_production_claim_backend_labels_before_registry_lookup() {
+            for backend in [
+                "halo2/ipa:production-ready",
+                "halo2/ipa:mainnet-ready",
+                "stark/fri/audit-signoff",
+                "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+                "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            ] {
+                let (state, mut proof, _public_inputs_hash) =
+                    offline_note_verifier_test_state(ConfidentialStatus::Active);
+                proof.verifier_key_id =
+                    VerifyingKeyId::new(backend, crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
+                proof.proof.backend = backend.to_owned();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let transaction = block.transaction();
+
+                let err = offline_note_resolve_verifier(&proof, &transaction)
+                    .expect_err("offline proofs must not accept production-claim backends");
+                assert_offline_rejection(
+                    err,
+                    "verifier_key_invalid",
+                    "production-claim proof backends",
+                );
+            }
+        }
+
+        #[test]
         fn offline_note_rejects_transparent_backend_tag_mismatch() {
             let (mut state, proof, _public_inputs_hash) =
                 offline_note_verifier_test_state(ConfidentialStatus::Active);
@@ -5612,6 +6119,77 @@ pub mod isi {
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(balance, Numeric::zero());
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay() {
+            run_recursive_kagemusha_redeem_large_stack(|| {
+                let fixture = real_recursive_kagemusha_redeem_record_backed_multi_hop_fixture();
+                let spend_nullifier = fixture
+                    .instruction
+                    .bundle
+                    .accumulator
+                    .current_note
+                    .spend_nullifier;
+                let topup_anchor_nullifiers = fixture
+                    .instruction
+                    .bundle
+                    .accumulator
+                    .topup_anchor_nullifiers
+                    .clone();
+                let replay_instruction = fixture.instruction.clone();
+                let recipient_asset_id =
+                    AssetId::new(fixture.definition_id.clone(), fixture.recipient.clone());
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = fixture.state.block(header);
+                {
+                    let mut transaction = block.transaction();
+                    fixture
+                        .instruction
+                        .execute(&fixture.authority, &mut transaction)
+                        .expect("record-backed multi-hop recursive Kagemusha redeem should mint");
+
+                    let shielded_state = transaction
+                        .world
+                        .zk_assets
+                        .get(&fixture.definition_id)
+                        .expect("recursive redeem keeps shielded asset state");
+                    assert!(
+                        shielded_state.nullifiers.contains(&spend_nullifier),
+                        "redeem must consume the final spendable note nullifier"
+                    );
+                    for nullifier in &topup_anchor_nullifiers {
+                        assert!(
+                            shielded_state.nullifiers.contains(nullifier),
+                            "redeem must consume every top-up anchor nullifier"
+                        );
+                    }
+                    let balance = transaction
+                        .world
+                        .assets
+                        .get(&recipient_asset_id)
+                        .map(|asset| asset.as_ref().clone())
+                        .unwrap_or_else(Numeric::zero);
+                    assert_eq!(balance, Numeric::new(42, 0));
+                    transaction.apply();
+                }
+
+                let mut replay_transaction = block.transaction();
+                let err = replay_instruction
+                    .execute(&fixture.authority, &mut replay_transaction)
+                    .expect_err(
+                        "record-backed multi-hop recursive Kagemusha redeem must not replay",
+                    );
+                assert_offline_rejection(err, "duplicate_nullifier", "already spent");
+                let balance = replay_transaction
+                    .world
+                    .assets
+                    .get(&recipient_asset_id)
+                    .map(|asset| asset.as_ref().clone())
+                    .unwrap_or_else(Numeric::zero);
+                assert_eq!(balance, Numeric::new(42, 0));
+            });
         }
 
         #[cfg(feature = "zk-halo2-ipa")]

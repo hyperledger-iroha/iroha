@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -21,6 +22,10 @@ public final class OfflineNoteV2Test {
     offlineNoteV2ModelsMatchRustNoritoVectors();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
+    proofVerifierAndHashValidationRejectsMalformedValues();
+    certificateValidationRejectsMalformedValues();
+    auditBundleRejectsInvalidShapesAndUncommittedOutputs();
+    issueRedeemPublicInputsAndInstancesRejectMalformedValues();
     instanceValuesMatchRustVectors();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
@@ -102,6 +107,312 @@ public final class OfflineNoteV2Test {
             badProof);
 
     assertThrows(forged::validateProofBinding, "proof binding mismatch should throw");
+  }
+
+  private static void proofVerifierAndHashValidationRejectsMalformedValues() throws Exception {
+    final byte[] publicInputsHash = audit(loadFixture()).publicInputsHash();
+    final OfflineNoteV2.ProofBox trimmedProof =
+        new OfflineNoteV2.ProofBox(
+            "  " + OfflineNoteV2.RECURSIVE_BACKEND + "  ", new byte[] {1});
+    assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, trimmedProof.backend(), "trimmed proof backend");
+
+    assertThrows(
+        () -> new OfflineNoteV2.ProofBox(" \n ", new byte[] {1}),
+        "blank proof backend should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[0]),
+        "empty proof bytes should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RecursiveProofV2(
+                new byte[31],
+                new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1})),
+        "short public input hash should throw");
+    final byte[] nonCanonicalHash = Arrays.copyOf(publicInputsHash, publicInputsHash.length);
+    nonCanonicalHash[31] = (byte) (nonCanonicalHash[31] & 0xFE);
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RecursiveProofV2(
+                nonCanonicalHash,
+                new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1})),
+        "noncanonical public input hash should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.VerifyingKeyIdReference("", "vk"),
+        "blank verifier backend should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2:ipa", "vk"),
+        "colon verifier backend should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", "bad:vk"),
+        "colon verifier name should throw");
+  }
+
+  private static void certificateValidationRejectsMalformedValues() throws Exception {
+    final Map<String, Object> cert = obj(obj(loadFixture(), "payment_token"), "sender_key_certificate");
+    final byte[] publicKey = base64Bytes(string(cert, "public_key"));
+    final byte[] assertionPublicKey = base64Bytes(string(cert, "assertion_public_key"));
+    final byte[] issuerSignature = base64Bytes(string(cert, "issuer_signature_base64"));
+
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                1,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                issuerSignature),
+        "bad certificate version should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                2,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                false,
+                issuerSignature),
+        "non-one-use certificate should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                2,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                Arrays.copyOf(publicKey, 31),
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                issuerSignature),
+        "short note public key should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                2,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                -1,
+                true,
+                issuerSignature),
+        "negative assertion usage limit should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                2,
+                string(cert, "platform"),
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                string(cert, "assertion_scheme"),
+                string(cert, "assertion_key_algorithm"),
+                assertionPublicKey,
+                nullableInt(cert, "assertion_usage_count_limit"),
+                true,
+                Arrays.copyOf(issuerSignature, 63)),
+        "short issuer signature should throw");
+  }
+
+  private static void auditBundleRejectsInvalidShapesAndUncommittedOutputs() throws Exception {
+    final OfflineNoteV2.AuditBundleV2 audit = audit(loadFixture());
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                Collections.emptyList(),
+                audit.inputClaims(),
+                audit.outputCommitments(),
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "empty audit input nullifiers should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                Collections.emptyList(),
+                audit.outputCommitments(),
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "empty audit input claims should throw");
+    final List<byte[]> tooManyNullifiers = new ArrayList<>(audit.inputNullifiers());
+    tooManyNullifiers.add(audit.inputNullifiers().get(0));
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                tooManyNullifiers,
+                audit.inputClaims(),
+                audit.outputCommitments(),
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "audit input count mismatch should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                audit.inputClaims(),
+                Collections.emptyList(),
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "empty audit output commitments should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                audit.inputClaims(),
+                audit.outputCommitments(),
+                Collections.emptyList(),
+                audit.recursiveProof()),
+        "empty audit output claims should throw");
+    final OfflineNoteV2.AuditOutputClaimV2 uncommittedOutput =
+        new OfflineNoteV2.AuditOutputClaimV2(
+            OfflineNoteV2.hash("uncommitted-output".getBytes(StandardCharsets.UTF_8)),
+            audit.outputClaims().get(0).keyCertificate(),
+            audit.outputClaims().get(0).assetId(),
+            audit.outputClaims().get(0).amount());
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditBundleV2(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                audit.inputClaims(),
+                audit.outputCommitments(),
+                Arrays.asList(uncommittedOutput),
+                audit.recursiveProof()),
+        "uncommitted audit output claim should throw");
+  }
+
+  private static void issueRedeemPublicInputsAndInstancesRejectMalformedValues() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.KeyCertificateV2 cert =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+
+    assertThrows(
+        () -> new OfflineNoteV2.IssueV2(new byte[31], cert, redeem.assetId(), "5"),
+        "short issue commitment should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.IssueV2(redeem.sourceNoteCommitment(), cert, "cash#branch.sbp", "5"),
+        "bad issue asset id should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.IssueV2(redeem.sourceNoteCommitment(), cert, redeem.assetId(), "not-a-number"),
+        "bad issue amount should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RedeemV2(
+                redeem.sourceNoteCommitment(),
+                Collections.emptyList(),
+                redeem.senderKeyCertificate(),
+                redeem.recipient(),
+                redeem.assetId(),
+                redeem.amount(),
+                redeem.recursiveProof()),
+        "empty redeem nullifiers should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RedeemPublicInputsV2(
+                new byte[31],
+                redeem.inputNullifiers(),
+                redeem.senderKeyCertificate().payloadHash(),
+                redeem.recipient(),
+                redeem.assetId(),
+                redeem.amount()),
+        "short redeem source commitment should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RedeemPublicInputsV2(
+                redeem.sourceNoteCommitment(),
+                redeem.inputNullifiers(),
+                new byte[31],
+                redeem.recipient(),
+                redeem.assetId(),
+                redeem.amount()),
+        "short redeem key-certificate hash should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RedeemPublicInputsV2(
+                redeem.sourceNoteCommitment(),
+                redeem.inputNullifiers(),
+                redeem.senderKeyCertificate().payloadHash(),
+                redeem.recipient() + "@bad",
+                redeem.assetId(),
+                redeem.amount()),
+        "bad redeem recipient should throw");
+
+    final OfflineNoteV2.AuditOutputClaimV2 overLimitOutput =
+        new OfflineNoteV2.AuditOutputClaimV2(
+            OfflineNoteV2.hash("third-output".getBytes(StandardCharsets.UTF_8)),
+            audit.outputClaims().get(0).keyCertificate(),
+            audit.outputClaims().get(0).assetId(),
+            "0");
+    final List<byte[]> tooManyCommitments = new ArrayList<>(audit.outputCommitments());
+    tooManyCommitments.add(overLimitOutput.noteCommitment());
+    final List<OfflineNoteV2.AuditOutputClaimV2> tooManyClaims =
+        new ArrayList<>(audit.outputClaims());
+    tooManyClaims.add(overLimitOutput);
+    final OfflineNoteV2.AuditBundleV2 tooManyOutputs =
+        new OfflineNoteV2.AuditBundleV2(
+            audit.tokenId(),
+            audit.senderKeyCertificate(),
+            audit.inputNullifiers(),
+            audit.inputClaims(),
+            tooManyCommitments,
+            tooManyClaims,
+            audit.recursiveProof());
+    assertThrows(
+        () -> OfflineNoteV2.InstanceBuilder.auditInstanceValues(tooManyOutputs),
+        "too many audit outputs should throw");
+
+    final OfflineNoteV2.AuditOutputClaimV2 unconservedOutput =
+        new OfflineNoteV2.AuditOutputClaimV2(
+            audit.outputClaims().get(0).noteCommitment(),
+            audit.outputClaims().get(0).keyCertificate(),
+            audit.outputClaims().get(0).assetId(),
+            "6");
+    final OfflineNoteV2.AuditBundleV2 unconservedAudit =
+        new OfflineNoteV2.AuditBundleV2(
+            audit.tokenId(),
+            audit.senderKeyCertificate(),
+            audit.inputNullifiers(),
+            audit.inputClaims(),
+            audit.outputCommitments(),
+            Arrays.asList(unconservedOutput, audit.outputClaims().get(1)),
+            audit.recursiveProof());
+    assertThrows(
+        () -> OfflineNoteV2.InstanceBuilder.auditInstanceValues(unconservedAudit),
+        "unconserved audit amounts should throw");
   }
 
   private static void instanceValuesMatchRustVectors() throws Exception {

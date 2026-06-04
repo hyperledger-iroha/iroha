@@ -8,10 +8,10 @@ ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR = (
     "2140903293411cad0f0eb217d8beb18d3a188edf7bba455098589a2409445e46"
 )
 ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
-    "035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd"
+    "4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"
 )
 ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
-    "d08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d"
+    "feb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4"
 )
 
 
@@ -43,6 +43,9 @@ def eth_args(module):
         ),
         deployment_receipt_hash=bytes.fromhex("aa" * 32),
         deployment_transaction_hash=bytes.fromhex("de" * 32),
+        deployment_transaction_block_hash=bytes.fromhex("bb" * 32),
+        deployment_transaction_block_number=4660,
+        deployment_transaction_input_sha256=bytes.fromhex("cd" * 32),
         deployment_receipt_contract_address=bytes.fromhex("11" * 20),
         deployment_receipt_block_hash=bytes.fromhex("bb" * 32),
         deployment_receipt_block_number=4660,
@@ -325,6 +328,7 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     rendered = module.render_toml(args)
 
     assert '# sccp_evm_source_rpc_chain_id = "1"' in rendered
+    assert '# sccp_evm_source_block_tag = "finalized"' in rendered
     assert '# sccp_evm_source_bridge_address = "0x' + "11" * 20 + '"' in rendered
     assert (
         '# sccp_evm_source_bridge_runtime_code_hash = "0x'
@@ -341,6 +345,22 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     assert (
         '# sccp_evm_source_deployment_transaction_hash = "0x'
         + "de" * 32
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_hash = "0x'
+        + "bb" * 32
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_number = "4660"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        + "cd" * 32
         + '"'
         in rendered
     )
@@ -407,9 +427,41 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
-    assert "source_bridge_network_id" not in rendered
+    assert (
+        'source_bridge_network_id = "0x'
+        + module.eth_source_bridge_network_id().hex()
+        + '"'
+        in rendered
+    )
     assert "source_bridge_owner_address" not in rendered
-    assert "source_bridge_config_hash" not in rendered
+    assert 'source_bridge_config_hash = "0x' in rendered
+    assert "# sccp_eth_source_bridge_config_hash" in rendered
+
+
+def test_eth_source_toml_rejects_nonfinalized_block_tag():
+    module = load_evidence_module()
+    args = eth_args(module)
+    runtime_bytecode = bytes.fromhex("6080604052")
+    args.source_bridge_emitter_code_hash = module.runtime_bytecode_hash(runtime_bytecode)
+    args.source_bridge_runtime_bytecode_hex = runtime_bytecode
+    args.source_bridge_runtime_bytecode_file = None
+    args.expected_source_verifier_material_hash = (
+        module.eth_source_verifier_material_record_hash(args)
+    )
+    args.expected_source_adapter_engine_deployment_hash = (
+        module.eth_source_adapter_engine_deployment_record_hash(args)
+    )
+    args.block_tag = "latest"
+
+    try:
+        module.render_toml(args)
+    except ValueError as exc:
+        assert "Ethereum source TOML requires --block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("non-finalized ETH source TOML was accepted")
+
+    summary = module._json_summary(args)
+    assert summary["block_tag"] == "latest"
 
 
 def test_eth_source_evidence_rejects_boolean_receipt_block_number():
@@ -425,6 +477,39 @@ def test_eth_source_evidence_rejects_boolean_receipt_block_number():
         raise AssertionError("boolean ETH source deployment block number was accepted")
 
     assert module._toml_receipt_metadata_ready(args) is False
+
+
+def test_eth_source_evidence_rejects_deployment_transaction_readback_drift():
+    module = load_evidence_module()
+    cases = [
+        (
+            "deployment_transaction_block_hash",
+            bytes.fromhex("ab" * 32),
+            "--deployment-transaction-block-hash must match",
+        ),
+        (
+            "deployment_transaction_block_number",
+            4661,
+            "--deployment-transaction-block-number must match",
+        ),
+        (
+            "deployment_transaction_input_sha256",
+            None,
+            "--deployment-transaction-input-sha256",
+        ),
+    ]
+    for field, value, expected in cases:
+        args = eth_args(module)
+        setattr(args, field, value)
+
+        try:
+            module.render_toml(args)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"ETH source TOML accepted drifted {field}")
+
+        assert module._toml_receipt_metadata_ready(args) is False
 
 
 def test_eth_source_evidence_requires_receipt_block_receipts_root_for_toml():
@@ -513,6 +598,46 @@ def test_eth_source_record_hashes_match_rust_vectors():
         module.eth_source_adapter_engine_deployment_record_hash(args).hex()
         == ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
     )
+
+
+def test_eth_source_bridge_config_hash_binds_mainnet_lane_and_code_hash():
+    module = load_evidence_module()
+    args = eth_args(module)
+    config_hash = module.eth_source_bridge_config_hash(
+        bridge_address=args.bridge_address,
+        source_bridge_code_hash=args.source_bridge_emitter_code_hash,
+        network_id=module.eth_source_bridge_network_id(),
+        source_domain=1,
+        target_domain=0,
+    )
+
+    assert any(config_hash)
+    assert config_hash != module.eth_source_bridge_config_hash(
+        bridge_address=args.bridge_address,
+        source_bridge_code_hash=bytes.fromhex("78" * 32),
+        network_id=module.eth_source_bridge_network_id(),
+        source_domain=1,
+        target_domain=0,
+    )
+    for kwargs, expected in (
+        ({"network_id": (56).to_bytes(32, "big")}, "source_bridge_network_id"),
+        ({"source_domain": 2}, "source_domain must be ETH"),
+        ({"target_domain": 1}, "target_domain must be SORA"),
+    ):
+        params = {
+            "bridge_address": args.bridge_address,
+            "source_bridge_code_hash": args.source_bridge_emitter_code_hash,
+            "network_id": module.eth_source_bridge_network_id(),
+            "source_domain": 1,
+            "target_domain": 0,
+        }
+        params.update(kwargs)
+        try:
+            module.eth_source_bridge_config_hash(**params)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid ETH source bridge config hash input was accepted")
 
 
 def test_eth_direct_record_hashes_reject_zero_production_inputs():
@@ -640,6 +765,12 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         "0x" + "aa" * 32,
         "--deployment-transaction-hash",
         "0x" + "de" * 32,
+        "--deployment-transaction-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-transaction-block-number",
+        "4660",
+        "--deployment-transaction-input-sha256",
+        "0x" + "cd" * 32,
         "--deployment-receipt-contract-address",
         "0x" + "11" * 20,
         "--deployment-receipt-block-hash",
@@ -709,6 +840,12 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         "0x" + "aa" * 32,
         "--deployment-transaction-hash",
         "0x" + "de" * 32,
+        "--deployment-transaction-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-transaction-block-number",
+        "4660",
+        "--deployment-transaction-input-sha256",
+        "0x" + "cd" * 32,
         "--deployment-receipt-contract-address",
         "0x" + "11" * 20,
         "--deployment-receipt-block-hash",
@@ -734,6 +871,9 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
     assert output["source_bridge_runtime_bytecode_hex"] == (
         "0x" + runtime_bytecode.hex()
     )
+    assert output["deployment_transaction_block_hash"] == "0x" + "bb" * 32
+    assert output["deployment_transaction_block_number"] == 4660
+    assert output["deployment_transaction_input_sha256"] == "cd" * 32
     assert (
         output["adapter_verifier_vk_hash"]
         == "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
@@ -760,6 +900,8 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         in rendered
     )
     assert '# sccp_evm_source_deployment_transaction_hash = "0x' + "de" * 32 in rendered
+    assert "# sccp_evm_source_deployment_transaction_block_hash" in rendered
+    assert "# sccp_evm_source_deployment_transaction_input_sha256" in rendered
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
     assert "[[zk.sccp_source_adapter_engine_deployments]]" in rendered

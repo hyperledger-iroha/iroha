@@ -124,6 +124,7 @@ import {
   noritoDecodeInstruction,
   noritoDecodePrivacyProofEnvelope,
   noritoEncodeInstruction,
+  noritoEncodePrivacyProofEnvelope,
 } from "../src/norito.js";
 import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
@@ -3342,12 +3343,13 @@ descriptorTest("Jindo lattice local verifier rejects tampered dev fixtures", () 
     publicInputsBytes = decoded.public_inputs,
     proofBytes = decoded.proof_bytes,
   } = {}) =>
-    buildPrivacyProofEnvelope({
-      backend,
-      circuitId,
-      vkHash: Buffer.alloc(32, 0xaa),
-      publicInputs: publicInputsBytes,
-      proofBytes,
+    noritoEncodePrivacyProofEnvelope({
+      backend: backend === "unsupported" ? "Unsupported" : backend,
+      circuit_id: circuitId,
+      vk_hash: Buffer.alloc(32, 0xaa),
+      public_inputs: publicInputsBytes,
+      proof_bytes: proofBytes,
+      aux: Buffer.alloc(0),
     });
   const tamperedProof = [...decoded.proof_bytes];
   tamperedProof[tamperedProof.length - 1] ^= 0xff;
@@ -3532,12 +3534,13 @@ descriptorTest("SIS-with-hints local verifier rejects tampered dev fixtures", ()
     publicInputsBytes = decoded.public_inputs,
     proofBytes = decoded.proof_bytes,
   } = {}) =>
-    buildPrivacyProofEnvelope({
-      backend,
-      circuitId,
-      vkHash: Buffer.alloc(32, 0xbb),
-      publicInputs: publicInputsBytes,
-      proofBytes,
+    noritoEncodePrivacyProofEnvelope({
+      backend: backend === "unsupported" ? "Unsupported" : backend,
+      circuit_id: circuitId,
+      vk_hash: Buffer.alloc(32, 0xbb),
+      public_inputs: publicInputsBytes,
+      proof_bytes: proofBytes,
+      aux: Buffer.alloc(0),
     });
   const tamperedProof = [...decoded.proof_bytes];
   tamperedProof[tamperedProof.length - 1] ^= 0xff;
@@ -4200,6 +4203,7 @@ descriptorTest("privacy proof envelope builder rejects malformed and oversized i
     classInstance,
     accessorProofBytes,
     { ...base, backend: null },
+    { ...base, backend: "unsupported" },
     { ...base, backend: "mock/dev" },
     { ...base, backend: " unsupported" },
     { ...base, backend: "unsupported " },
@@ -4207,6 +4211,9 @@ descriptorTest("privacy proof envelope builder rejects malformed and oversized i
     { ...base, backend: "miden-stark " },
     { ...base, backend: " stark/fri/sha256-goldilocks" },
     { ...base, backend: "stark/fri/sha256-goldilocks " },
+    { ...base, backend: "stark/fri/sha256 goldilocks" },
+    { ...base, backend: "stark/fri/sha256+goldilocks" },
+    { ...base, backend: "halo2/ipa+mock" },
     { ...base, backend: "stark/fri/dev-fixture" },
     { ...base, backend: "stark/fri/d-e-v-f-i-x-t-u-r-e" },
     { ...base, backend: "stark/fri/dev" },
@@ -5233,6 +5240,20 @@ function privacyNoritoFrameWithSchemaOverride(schemaByte, offset, value) {
   return frame;
 }
 
+function int8PrivacyFrame(schemaByte) {
+  const frame = privacyNoritoFrameWithPayload(schemaByte);
+  const backing = new ArrayBuffer(frame.length);
+  new Uint8Array(backing).set(frame);
+  return new Int8Array(backing);
+}
+
+function sharedPrivacyFrame(schemaByte) {
+  const frame = privacyNoritoFrameWithPayload(schemaByte);
+  const backing = new SharedArrayBuffer(frame.length);
+  new Uint8Array(backing).set(frame);
+  return new Uint8Array(backing);
+}
+
 function completePrivacyNativeBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
@@ -5871,6 +5892,80 @@ descriptorTest("privacy native wrappers reject empty request and result payloads
       assert.throws(
         () => privacyVerifyProofV1(privacyNoritoFrame(0x52)),
         /requestArchive must contain a non-empty privacy request payload/,
+      );
+    },
+  );
+});
+
+descriptorTest("privacy native wrappers reject ambiguous byte views", () => {
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyCapabilitiesV1() {
+        return int8PrivacyFrame(0x50);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        return new Uint16Array(24);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyBuildProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyBuildProofV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        assert.fail("signed typed-array build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        assert.fail("wide typed-array verify request must not reach native dispatch");
+      },
+    }),
+    () => {
+      assert.throws(
+        () => privacyBuildProofV1(int8PrivacyFrame(0x52)),
+        /requestArchive must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(new Uint16Array(24)),
+        /requestArchive must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        assert.fail("shared-memory build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        return sharedPrivacyFrame(0x56);
+      },
+    }),
+    () => {
+      assert.throws(
+        () => privacyBuildProofV1(sharedPrivacyFrame(0x52)),
+        /requestArchive must not use shared memory/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyVerifyProofV1 output must not use shared memory/,
       );
     },
   );

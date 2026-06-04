@@ -8766,15 +8766,17 @@ pub mod message {
         fn filter_blocks_rotates_topology_for_npos_view() {
             let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_a.public_key().clone()),
                 PeerId::new(kp_b.public_key().clone()),
+                PeerId::new(kp_c.public_key().clone()),
             ]);
             let height = 2_u64;
 
             let mut chosen = None;
             for seed in [[0x5A; 32], [0xA5; 32], [0x3C; 32]] {
-                for view in 0_u64..=2 {
+                for view in 0_u64..=4 {
                     let mut permissioned = topology.clone();
                     permissioned.canonicalize_order();
                     permissioned.shuffle_prf(seed, height);
@@ -8812,7 +8814,7 @@ pub mod message {
                 header.set_view_change_index(view);
             })
             .into();
-            block = sign_block_for_topology(block, &rotated, &[&kp_a, &kp_b]);
+            block = sign_block_for_topology(block, &rotated, &[&kp_a, &kp_b, &kp_c]);
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],

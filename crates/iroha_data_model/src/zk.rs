@@ -23,13 +23,13 @@ pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
 pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
 
-/// Default maximum proof payload size accepted by generic OpenVerify admission.
+/// Default maximum proof payload size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
 
-/// Default maximum public-input metadata size accepted by generic OpenVerify admission.
+/// Default maximum public-input metadata size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES: usize = 1024 * 1024;
 
-/// Default maximum auxiliary metadata size for non-admission OpenVerify callers.
+/// Default maximum auxiliary metadata size for non-admission `OpenVerify` callers.
 pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 
 /// Backend tag for zero-knowledge verifiers.
@@ -61,7 +61,7 @@ pub enum BackendTag {
     PqMaspStarkFri,
     /// Anonymous PGC k-out-of-n backend.
     AnonymousPgc,
-    /// VeRange transparent range-proof backend.
+    /// `VeRange` transparent range-proof backend.
     VeRange,
     /// zkAt policy-private authenticator backend.
     ZkAt,
@@ -144,7 +144,7 @@ impl BackendTag {
         }
         let compact = label
             .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .collect::<String>();
 
         if label == "unsupported" || compact == "unsupported" {
@@ -422,11 +422,21 @@ impl OpenVerifyEnvelope {
     /// public-input interpretation, verifier-key registry matching, and proof
     /// verification. This method only enforces the shared fail-closed envelope
     /// invariants that all admitted proof paths rely on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenVerifyEnvelopeValidationError`] when the envelope is not
+    /// acceptable for registered proof admission.
     pub fn validate_for_admission(&self) -> Result<(), OpenVerifyEnvelopeValidationError> {
         self.validate_with_bounds(OpenVerifyEnvelopeBounds::default())
     }
 
     /// Validate generic shape and size invariants with caller-provided bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenVerifyEnvelopeValidationError`] when the envelope violates
+    /// the supplied backend, size, or non-empty field bounds.
     pub fn validate_with_bounds(
         &self,
         bounds: OpenVerifyEnvelopeBounds,
@@ -662,6 +672,10 @@ fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// Derive a private prover-side AIR statement digest from public inputs and witness.
+///
+/// # Errors
+///
+/// Returns a Norito error when the public inputs cannot be canonically encoded.
 pub fn derive_zk_ace_air_statement_digest(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -679,6 +693,10 @@ pub fn derive_zk_ace_air_statement_digest(
 }
 
 /// Derive the verifier-side public AIR word for a ZK-ACE proof.
+///
+/// # Errors
+///
+/// Returns a Norito error when the public inputs cannot be canonically encoded.
 pub fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {
@@ -748,6 +766,10 @@ pub fn derive_zk_ace_transfer_digest(
 }
 
 /// Hash canonical public inputs into a STARK public-input word.
+///
+/// # Errors
+///
+/// Returns a Norito error when the public inputs cannot be canonically encoded.
 pub fn derive_zk_ace_public_inputs_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {
@@ -786,6 +808,8 @@ pub fn zk_ace_public_inputs_schema_hash_v1() -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};

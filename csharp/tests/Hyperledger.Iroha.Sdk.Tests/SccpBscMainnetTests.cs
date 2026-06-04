@@ -395,6 +395,62 @@ public sealed class SccpBscMainnetTests
     }
 
     [Fact]
+    public void LocalAdmissionSubmissionWrapsNativeBscOutput()
+    {
+        var input = new BscMainnetLocalAdmissionSubmissionInput(
+            ProofBytes: [1, 2, 3],
+            PublicInputsBytes: [4, 5, 6],
+            BundleBytes: [7, 8, 9],
+            EnvelopeBytes: [10, 11, 12],
+            StatementHash: "0x" + new string('6', 64),
+            SourceVerifierMaterialHash: "0x" + new string('7', 64),
+            SourceAdapterEngineDeploymentHash: "0x" + new string('8', 64));
+        var submission = BscMainnetSccp.BuildLocalAdmissionSubmission(input);
+
+        Assert.Equal(BscMainnetSccp.LocalAdmissionSubmissionKind, submission.PlatformPayload);
+        Assert.Equal(BscMainnetSccp.LocalAdmissionEnvelopeEncoding, submission.EnvelopeEncoding);
+        Assert.Equal(BscMainnetSccp.LocalAdmissionEntrypoint, submission.VerifierEntrypoint);
+        Assert.Equal(BscMainnetSccp.DomainBsc, submission.SourceDomain);
+        Assert.Equal(BscMainnetSccp.DomainSora, submission.TargetDomain);
+        Assert.Empty(submission.Arguments);
+        Assert.Equal([1, 2, 3], submission.ProofBytes);
+        Assert.Equal([4, 5, 6], submission.PublicInputsBytes);
+        Assert.Equal([7, 8, 9], submission.BundleBytes);
+        Assert.Equal([10, 11, 12], submission.EnvelopeBytes);
+        Assert.Equal([1, 2, 3], submission.LocalAdmission.ProofBytes);
+        Assert.Equal("0x0a0b0c", submission.EnvelopeHex);
+
+        input.ProofBytes[0] = 99;
+        Assert.Equal([1, 2, 3], submission.ProofBytes);
+
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                SourceDomain = EthereumMainnetSccp.DomainEthereum,
+            }));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                ProofBytes = [0, 0],
+            }));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                EnvelopeBytes = [],
+            }));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                EnvelopeEncoding = "abi_tuple_v1",
+            }));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildLocalAdmissionSubmission(input with
+            {
+                ProofFamily = "debug-proof-family",
+            }));
+    }
+
+    [Fact]
     public async Task InboundEvidenceUsesMainnetRpcAndRejectsDrift()
     {
         var txHash = "0x" + new string('a', 64);
@@ -486,6 +542,12 @@ public sealed class SccpBscMainnetTests
         await Assert.ThrowsAsync<ArgumentException>(
             () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
                 new ExecutionProviderStub("0x038", receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub("56", receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub(56, receipt, block)).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(
             () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
                 new BscMainnetInboundEvidence

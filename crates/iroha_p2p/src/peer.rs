@@ -1938,7 +1938,14 @@ mod run {
                 .cryptographer
                 .decrypt_into(datagram.as_ref(), &mut self.decrypted)?;
             let frame_len =
-                framed_message_len::<T>(plaintext, self.framed_schema, self.framed_padding)?;
+                framed_message_len::<T>(plaintext, self.framed_schema, self.framed_padding)
+                    .map_err(|reason| {
+                        iroha_logger::warn!(
+                            reason = reason.as_str(),
+                            "Failed to decode QUIC datagram payload frame"
+                        );
+                        Error::Format
+                    })?;
             if frame_len != plaintext.len() {
                 return Err(Error::Format);
             }
@@ -6282,6 +6289,19 @@ mod state {
     }
 
     impl Connecting {
+        #[cfg(any(feature = "quic", test))]
+        fn record_raced_dial_error(
+            current_error: &mut Option<crate::Error>,
+            other_dial_failed: bool,
+            error: crate::Error,
+        ) -> Result<(), crate::Error> {
+            if other_dial_failed {
+                return Err(error);
+            }
+            *current_error = Some(error);
+            Ok(())
+        }
+
         #[allow(unused_variables, clippy::too_many_lines, clippy::single_match_else)]
         pub(super) async fn connect_to(
             Self {
@@ -6709,9 +6729,12 @@ mod state {
                                                 Ok(conn) => break Ok(conn),
                                                 Err(e) => {
                                                     iroha_logger::debug!(%e, addr=%peer_addr, "QUIC dial failed while racing TCP-like");
-                                                    quic_err = Some(e);
-                                                    if tcp_err.is_some() {
-                                                        break Err(quic_err.take().unwrap());
+                                                    if let Err(err) = Self::record_raced_dial_error(
+                                                        &mut quic_err,
+                                                        tcp_err.is_some(),
+                                                        e,
+                                                    ) {
+                                                        break Err(err);
                                                     }
                                                 }
                                             },
@@ -6719,9 +6742,12 @@ mod state {
                                                 Ok(conn) => break Ok(conn),
                                                 Err(e) => {
                                                     iroha_logger::debug!(%e, addr=%peer_addr, "TCP-like dial failed while racing QUIC");
-                                                    tcp_err = Some(e);
-                                                    if quic_err.is_some() {
-                                                        break Err(tcp_err.take().unwrap());
+                                                    if let Err(err) = Self::record_raced_dial_error(
+                                                        &mut tcp_err,
+                                                        quic_err.is_some(),
+                                                        e,
+                                                    ) {
+                                                        break Err(err);
                                                     }
                                                 }
                                             },
@@ -6848,6 +6874,38 @@ mod state {
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
                 quic_dialer: None,
             }
+        }
+
+        fn io_error(kind: std::io::ErrorKind, label: &'static str) -> crate::Error {
+            std::io::Error::new(kind, label).into()
+        }
+
+        #[test]
+        fn raced_dial_error_state_returns_second_failure() {
+            let mut first_error = None;
+            Connecting::record_raced_dial_error(
+                &mut first_error,
+                false,
+                io_error(std::io::ErrorKind::TimedOut, "quic timeout"),
+            )
+            .expect("first failure should be recorded");
+            assert!(matches!(
+                first_error,
+                Some(crate::Error::Io(err)) if err.kind() == std::io::ErrorKind::TimedOut
+            ));
+
+            let mut second_slot = None;
+            let err = Connecting::record_raced_dial_error(
+                &mut second_slot,
+                true,
+                io_error(std::io::ErrorKind::ConnectionRefused, "tcp refused"),
+            )
+            .expect_err("second failure should be returned");
+            assert!(second_slot.is_none());
+            assert!(matches!(
+                err,
+                crate::Error::Io(err) if err.kind() == std::io::ErrorKind::ConnectionRefused
+            ));
         }
 
         #[tokio::test(flavor = "current_thread")]

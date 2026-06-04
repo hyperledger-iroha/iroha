@@ -63,6 +63,7 @@ object SccpSourceProofs {
     private const val SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1: Long = 0x6026_3388_DBBF_9B2AL
     private const val SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1: Long = 0x6AF3_25E8_25AD_5C18L
     private const val EVM_MAX_RECEIPT_VALUE_BYTES: Int = 16 * 1024
+    private const val EVM_MAX_BLOCK_RECEIPTS: Int = 4096
     private const val ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX: Int = 9
     private const val ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH: Int = 4
     private const val ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: Int = 512
@@ -221,6 +222,8 @@ object SccpSourceProofs {
         "submitSccpSourceEvent(uint32,uint32,bytes32)".toByteArray(StandardCharsets.UTF_8)
     private val TRON_TRIGGER_SMART_CONTRACT_TYPE_URL: ByteArray =
         "type.googleapis.com/protocol.TriggerSmartContract".toByteArray(StandardCharsets.UTF_8)
+    private val ETH_SOURCE_BRIDGE_CONFIG_LABEL: ByteArray =
+        "iroha:sccp:eth-source-bridge-config:v1".toByteArray(StandardCharsets.UTF_8)
     private val TRON_SOURCE_BRIDGE_CONFIG_LABEL: ByteArray =
         "iroha:sccp:tron-source-bridge-config:v1".toByteArray(StandardCharsets.UTF_8)
     private const val TON_MASTERCHAIN_WORKCHAIN_ID: Int = -1
@@ -384,6 +387,17 @@ object SccpSourceProofs {
         val storageValueHash: String,
         val storageProofNodes: List<ByteArray>,
     )
+
+    /** Ethereum receipt-trie proof material derived from an execution block's full receipt list. */
+    data class EvmReceiptTrieProof(
+        val receiptsRoot: String,
+        val receiptRlp: String,
+        val receiptTrieKey: String,
+        val receiptTrieProofNodes: List<ByteArray>,
+    ) {
+        fun snapshot(): EvmReceiptTrieProof =
+            copy(receiptTrieProofNodes = receiptTrieProofNodes.map { it.copyOf() })
+    }
 
     /** BSC ValidatorSet account/storage proof transcript material. */
     data class BscValidatorSetMetadataProof(
@@ -2246,7 +2260,7 @@ object SccpSourceProofs {
             rlpList(
                 listOf(
                     rlpBytes(EVM_RECEIPT_ROOT_VALUE_MARKER),
-                    rlpBytes(hex32Bytes(receiptRoot, "receiptRoot")),
+                    rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")),
                 ),
             )
         require(value.isNotEmpty() && value.size <= EVM_MAX_RECEIPT_VALUE_BYTES) {
@@ -4137,6 +4151,7 @@ object SccpSourceProofs {
                 "sccp:eth:finality-policy:beacon-finalized-checkpoint-mainnet:v1",
                 sourceBridgeEmitterId = "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
                 requiresSourceBridge = true,
+                requiresSourceBridgeConfig = true,
             )
             DOMAIN_BSC -> SourceRecordProfile(
                 chain,
@@ -4353,6 +4368,22 @@ object SccpSourceProofs {
         return keccak256(out.toByteArray())
     }
 
+    private fun ethSourceBridgeConfigHash(
+        sourceDomain: Int,
+        bridgeAddress: ByteArray,
+        networkId: ByteArray,
+        codeHash: ByteArray,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(keccak256(ETH_SOURCE_BRIDGE_CONFIG_LABEL))
+        out.write(abiWordAddress20(bridgeAddress, "sourceBridgeEmitterAddress"))
+        out.write(networkId)
+        out.write(abiWordU32(sourceDomain, "sourceDomain"))
+        out.write(abiWordU32(DOMAIN_SORA, "targetDomain"))
+        out.write(codeHash)
+        return keccak256(out.toByteArray())
+    }
+
     private fun normalizeSourceMaterial(
         sourceDomain: Int,
         sourceTrustAnchorHash: String,
@@ -4473,7 +4504,13 @@ object SccpSourceProofs {
             }
             ByteArray(32)
         }
-        val normalizedSourceBridgeNetworkId = if (profile.requiresSourceBridgeConfig) {
+        val normalizedSourceBridgeNetworkId = if (normalizedSourceDomain == DOMAIN_ETH) {
+            nonZeroHex32Bytes(requireNotNull(networkId) { "networkId is required" }, "networkId").also {
+                require(it.contentEquals(hexBytes(ETH_MAINNET_NETWORK_ID, "sourceBridgeNetworkId", 32))) {
+                    "sourceBridgeNetworkId must be Ethereum mainnet chain id"
+                }
+            }
+        } else if (profile.requiresSourceBridgeConfig) {
             nonZeroHex32Bytes(requireNotNull(networkId) { "networkId is required" }, "networkId")
         } else {
             require(networkId == null) {
@@ -4481,7 +4518,12 @@ object SccpSourceProofs {
             }
             ByteArray(32)
         }
-        val normalizedSourceBridgeOwnerAddress = if (profile.requiresSourceBridgeConfig) {
+        val normalizedSourceBridgeOwnerAddress = if (normalizedSourceDomain == DOMAIN_ETH) {
+            require(ownerAddress == null) {
+                "sourceBridgeOwnerAddress is not used for sourceDomain"
+            }
+            ByteArray(0)
+        } else if (profile.requiresSourceBridgeConfig) {
             nonZeroHexBytes(requireNotNull(ownerAddress) { "ownerAddress is required" }, "ownerAddress", 20)
         } else {
             require(ownerAddress == null) {
@@ -4489,13 +4531,30 @@ object SccpSourceProofs {
             }
             ByteArray(0)
         }
-        val normalizedSourceBridgeConfigHash = if (profile.requiresSourceBridgeConfig) {
+        val normalizedSourceBridgeConfigHash = if (normalizedSourceDomain == DOMAIN_ETH) {
+            nonZeroHex32Bytes(requireNotNull(configHash) { "configHash is required" }, "configHash")
+        } else if (profile.requiresSourceBridgeConfig) {
             nonZeroHex32Bytes(requireNotNull(configHash) { "configHash is required" }, "configHash")
         } else {
             require(configHash == null) {
                 "sourceBridgeConfigHash is not used for sourceDomain"
             }
             ByteArray(32)
+        }
+        if (
+            normalizedSourceDomain == DOMAIN_ETH &&
+            !normalizedSourceBridgeConfigHash.contentEquals(
+                ethSourceBridgeConfigHash(
+                    normalizedSourceDomain,
+                    normalizedSourceBridgeEmitterAddress,
+                    normalizedSourceBridgeNetworkId,
+                    normalizedSourceBridgeEmitterCodeHash,
+                )
+            )
+        ) {
+            throw IllegalArgumentException(
+                "sourceBridgeConfigHash must match ETH source bridge config fields",
+            )
         }
         if (
             normalizedSourceDomain == DOMAIN_TRON &&
@@ -4840,6 +4899,394 @@ object SccpSourceProofs {
             writeVector(out, signature)
         }
         return out.toByteArray()
+    }
+
+    /** Canonical legacy or EIP-2718 typed Ethereum receipt RLP bytes. */
+    @JvmStatic
+    fun canonicalEvmReceiptRlp(receipt: Map<String, Any?>): ByteArray {
+        val status = requireEthereumRpcQuantity(receipt["status"], "receipt.status")
+        require(status == BigInteger.ZERO || status == BigInteger.ONE) {
+            "receipt.status must be 0x0 or 0x1"
+        }
+        val payload = rlpList(
+            listOf(
+                rlpBytes(minimalBigEndianBytes(status, "receipt.status")),
+                rlpBytes(
+                    minimalBigEndianBytes(
+                        requireEthereumRpcQuantity(
+                            receipt["cumulativeGasUsed"] ?: receipt["cumulative_gas_used"],
+                            "receipt.cumulativeGasUsed",
+                        ),
+                        "receipt.cumulativeGasUsed",
+                    ),
+                ),
+                rlpBytes(
+                    ethereumRpcHexBytes(
+                        receipt["logsBloom"] ?: receipt["logs_bloom"],
+                        "receipt.logsBloom",
+                        byteLength = 256,
+                        nonzero = false,
+                    ),
+                ),
+                rlpList(evmReceiptLogsForRlp(receipt)),
+            ),
+        )
+        val receiptType = evmReceiptType(receipt)
+        return if (receiptType == null) {
+            payload
+        } else {
+            byteArrayOf(receiptType.toByte()) + payload
+        }
+    }
+
+    /** Raw Ethereum receipt-trie key: RLP(transactionIndex), not a hashed secure-trie key. */
+    @JvmStatic
+    fun evmReceiptTrieKey(transactionIndex: Any?): String {
+        val index = normalizeUnsignedBigIntegerMax(transactionIndex, "transactionIndex", MAX_U64, "u64")
+        return "0x" + hexLower(rlpBytes(minimalBigEndianBytes(index, "transactionIndex")))
+    }
+
+    /** Build a receipt-trie proof from an ordered `eth_getBlockReceipts` response. */
+    @JvmStatic
+    fun buildEvmReceiptTrieProofFromReceipts(
+        receipts: List<Map<String, Any?>>,
+        transactionIndex: Any?,
+    ): EvmReceiptTrieProof {
+        require(receipts.isNotEmpty()) { "blockReceipts must be a non-empty array" }
+        require(receipts.size <= EVM_MAX_BLOCK_RECEIPTS) {
+            "blockReceipts must contain at most $EVM_MAX_BLOCK_RECEIPTS entries"
+        }
+        val targetIndex = normalizeUnsignedBigIntegerMax(
+            transactionIndex,
+            "transactionIndex",
+            BigInteger.valueOf((receipts.size - 1).toLong()),
+            "block receipt index",
+        )
+        val items = ArrayList<EvmTrieItem>(receipts.size)
+        var targetReceiptRlp: ByteArray? = null
+        receipts.forEachIndexed { index, receipt ->
+            val receiptIndex = requireEthereumRpcQuantity(
+                receipt["transactionIndex"] ?: receipt["transaction_index"],
+                "blockReceipts[$index].transactionIndex",
+            )
+            require(receiptIndex == BigInteger.valueOf(index.toLong())) {
+                "block receipt transactionIndex must match receipt order"
+            }
+            val encodedReceipt = canonicalEvmReceiptRlp(receipt)
+            if (receiptIndex == targetIndex) {
+                targetReceiptRlp = encodedReceipt
+            }
+            val key = rlpBytes(minimalBigEndianBytes(BigInteger.valueOf(index.toLong()), "transactionIndex"))
+            items.add(EvmTrieItem(bytesToNibbles(key), encodedReceipt))
+        }
+
+        val root = buildEvmTrieNode(items)
+        val receiptsRoot = "0x" + hexLower(keccak256(encodeEvmTrieNode(root)))
+        val receiptTrieKey = rlpBytes(minimalBigEndianBytes(targetIndex, "transactionIndex"))
+        val proofNodes = collectEvmTrieProofNodes(root, bytesToNibbles(receiptTrieKey))
+        validateMptProofNodes(proofNodes, "receiptTrieProofNodes")
+        return EvmReceiptTrieProof(
+            receiptsRoot = receiptsRoot,
+            receiptRlp = "0x" + hexLower(
+                targetReceiptRlp
+                    ?: throw IllegalArgumentException("transactionIndex must select a block receipt"),
+            ),
+            receiptTrieKey = "0x" + hexLower(receiptTrieKey),
+            receiptTrieProofNodes = proofNodes.map { it.copyOf() },
+        )
+    }
+
+    private fun evmReceiptType(receipt: Map<String, Any?>): Int? {
+        val typeInput = receipt["type"] ?: return null
+        val receiptType = requireEthereumRpcQuantity(typeInput, "receipt.type")
+        if (receiptType == BigInteger.ZERO) {
+            return null
+        }
+        require(receiptType <= BigInteger.valueOf(0x7fL)) {
+            "typed receipt type must fit one byte below 0x80"
+        }
+        val admittedType = receiptType.toInt()
+        require(admittedType in 1..4) {
+            "typed receipt type is not supported for Ethereum mainnet receipt proofs"
+        }
+        return admittedType
+    }
+
+    private fun evmReceiptLogsForRlp(receipt: Map<String, Any?>): List<ByteArray> {
+        val logs = receipt["logs"] as? List<*>
+            ?: throw IllegalArgumentException("receipt.logs must be an array")
+        return logs.mapIndexed { index, logInput ->
+            val log = logInput as? Map<*, *>
+                ?: throw IllegalArgumentException("receipt.logs[$index] must be an object")
+            require(log["removed"] != true) { "receipt.logs[$index] must not be removed" }
+            val topics = log["topics"] as? List<*>
+                ?: throw IllegalArgumentException("receipt.logs[$index].topics must be an array")
+            require(topics.size <= 4) {
+                "receipt.logs[$index].topics must contain at most 4 entries"
+            }
+            rlpList(
+                listOf(
+                    rlpBytes(
+                        ethereumRpcHexBytes(
+                            log["address"],
+                            "receipt.logs[$index].address",
+                            byteLength = 20,
+                            nonzero = false,
+                        ),
+                    ),
+                    rlpList(
+                        topics.mapIndexed { topicIndex, topic ->
+                            rlpBytes(
+                                ethereumRpcHexBytes(
+                                    topic,
+                                    "receipt.logs[$index].topics[$topicIndex]",
+                                    byteLength = 32,
+                                    nonzero = false,
+                                ),
+                            )
+                        },
+                    ),
+                    rlpBytes(
+                        ethereumRpcHexBytes(
+                            log["data"],
+                            "receipt.logs[$index].data",
+                            nonzero = false,
+                            allowEmpty = true,
+                        ),
+                    ),
+                ),
+            )
+        }
+    }
+
+    private data class EvmTrieItem(val path: List<Int>, val value: ByteArray)
+
+    private sealed class EvmTrieNode {
+        var rlp: ByteArray? = null
+    }
+
+    private class EvmTrieLeaf(val path: List<Int>, val value: ByteArray) : EvmTrieNode()
+
+    private class EvmTrieExtension(val path: List<Int>, val child: EvmTrieNode) : EvmTrieNode()
+
+    private class EvmTrieBranch(val children: List<EvmTrieNode?>, val value: ByteArray) : EvmTrieNode()
+
+    private fun buildEvmTrieNode(items: List<EvmTrieItem>): EvmTrieNode {
+        require(items.isNotEmpty()) { "cannot build an empty trie node" }
+        if (items.size == 1) {
+            return EvmTrieLeaf(items[0].path, items[0].value)
+        }
+        val prefix = longestCommonNibblePrefix(items.map { it.path })
+        if (prefix.isNotEmpty()) {
+            return EvmTrieExtension(
+                prefix,
+                buildEvmTrieNode(items.map { EvmTrieItem(it.path.drop(prefix.size), it.value) }),
+            )
+        }
+        val grouped = Array(16) { ArrayList<EvmTrieItem>() }
+        var branchValue = ByteArray(0)
+        items.forEach { item ->
+            if (item.path.isEmpty()) {
+                branchValue = item.value
+            } else {
+                grouped[item.path[0]].add(EvmTrieItem(item.path.drop(1), item.value))
+            }
+        }
+        return EvmTrieBranch(
+            grouped.map { group -> if (group.isEmpty()) null else buildEvmTrieNode(group) },
+            branchValue,
+        )
+    }
+
+    private fun encodeEvmTrieNode(node: EvmTrieNode): ByteArray {
+        node.rlp?.let { return it }
+        val encoded = when (node) {
+            is EvmTrieLeaf -> rlpList(
+                listOf(
+                    rlpBytes(encodeEvmTrieCompactPath(node.path, leaf = true)),
+                    rlpBytes(node.value),
+                ),
+            )
+            is EvmTrieExtension -> rlpList(
+                listOf(
+                    rlpBytes(encodeEvmTrieCompactPath(node.path, leaf = false)),
+                    rlpBytes(evmTrieNodeReference(node.child)),
+                ),
+            )
+            is EvmTrieBranch -> rlpList(
+                node.children.map { child ->
+                    rlpBytes(if (child == null) ByteArray(0) else evmTrieNodeReference(child))
+                } + rlpBytes(node.value),
+            )
+        }
+        node.rlp = encoded
+        return encoded
+    }
+
+    private fun evmTrieNodeReference(node: EvmTrieNode): ByteArray {
+        val rlp = encodeEvmTrieNode(node)
+        return if (rlp.size < 32) rlp else keccak256(rlp)
+    }
+
+    private fun collectEvmTrieProofNodes(node: EvmTrieNode, path: List<Int>): List<ByteArray> {
+        val proof = ArrayList<ByteArray>()
+        proof.add(encodeEvmTrieNode(node))
+        when (node) {
+            is EvmTrieLeaf -> {
+                require(node.path == path) {
+                    "receipt trie proof path does not end at requested receipt"
+                }
+            }
+            is EvmTrieExtension -> {
+                require(path.size >= node.path.size && path.take(node.path.size) == node.path) {
+                    "receipt trie proof path does not match extension"
+                }
+                proof.addAll(collectEvmTrieProofNodes(node.child, path.drop(node.path.size)))
+            }
+            is EvmTrieBranch -> {
+                if (path.isEmpty()) {
+                    require(node.value.isNotEmpty()) {
+                        "receipt trie branch has no value for requested receipt"
+                    }
+                } else {
+                    val child = node.children[path[0]]
+                        ?: throw IllegalArgumentException("receipt trie proof path is missing child")
+                    proof.addAll(collectEvmTrieProofNodes(child, path.drop(1)))
+                }
+            }
+        }
+        return proof
+    }
+
+    private fun encodeEvmTrieCompactPath(nibbles: List<Int>, leaf: Boolean): ByteArray {
+        nibbles.forEach { nibble ->
+            require(nibble in 0..15) { "trie path nibble out of range" }
+        }
+        val flags = if (leaf) 2 else 0
+        val out = ArrayList<Byte>()
+        var start = 0
+        if (nibbles.size % 2 == 1) {
+            out.add((((flags + 1) shl 4) or nibbles[0]).toByte())
+            start = 1
+        } else {
+            out.add((flags shl 4).toByte())
+        }
+        var index = start
+        while (index < nibbles.size) {
+            out.add(((nibbles[index] shl 4) or nibbles[index + 1]).toByte())
+            index += 2
+        }
+        return out.toByteArray()
+    }
+
+    private fun bytesToNibbles(bytes: ByteArray): List<Int> {
+        val nibbles = ArrayList<Int>(bytes.size * 2)
+        bytes.forEach { byte ->
+            val value = byte.toInt() and 0xff
+            nibbles.add(value ushr 4)
+            nibbles.add(value and 0x0f)
+        }
+        return nibbles
+    }
+
+    private fun longestCommonNibblePrefix(paths: List<List<Int>>): List<Int> {
+        if (paths.isEmpty()) {
+            return emptyList()
+        }
+        val prefix = ArrayList(paths[0])
+        for (path in paths.drop(1)) {
+            var index = 0
+            val limit = Math.min(prefix.size, path.size)
+            while (index < limit && prefix[index] == path[index]) {
+                index += 1
+            }
+            while (prefix.size > index) {
+                prefix.removeAt(prefix.size - 1)
+            }
+            if (prefix.isEmpty()) {
+                break
+            }
+        }
+        return prefix
+    }
+
+    private fun requireEthereumRpcQuantity(value: Any?, label: String): BigInteger {
+        require(value is String && value.trim() == value && value.startsWith("0x")) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        val text = value.substring(2)
+        require(text.isNotEmpty() && text.matches(Regex("[0-9a-f]+")) && !(text.length > 1 && text[0] == '0')) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        return BigInteger(text, 16)
+    }
+
+    private fun normalizeUnsignedBigIntegerMax(
+        value: Any?,
+        label: String,
+        max: BigInteger,
+        maxLabel: String,
+    ): BigInteger {
+        val numeric = when (value) {
+            is BigInteger -> value
+            is Long -> BigInteger.valueOf(value)
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is String -> {
+                require(value.trim() == value) { "$label must be canonical" }
+                if (value.startsWith("0x")) {
+                    require(value.length > 2 && value.substring(2).matches(Regex("[0-9a-f]+"))) {
+                        "$label must be a canonical JSON-RPC quantity"
+                    }
+                    require(value.length == 3 || value[2] != '0') {
+                        "$label must be a canonical JSON-RPC quantity"
+                    }
+                    BigInteger(value.substring(2), 16)
+                } else {
+                    require(isCanonicalDecimalText(value)) { "$label must be an unsigned integer" }
+                    BigInteger(value)
+                }
+            }
+            else -> throw IllegalArgumentException("$label must be an unsigned integer")
+        }
+        require(numeric >= BigInteger.ZERO) { "$label must be non-negative" }
+        require(numeric <= max) { "$label must fit $maxLabel" }
+        return numeric
+    }
+
+    private fun ethereumRpcHexBytes(
+        value: Any?,
+        label: String,
+        byteLength: Int? = null,
+        nonzero: Boolean = true,
+        allowEmpty: Boolean = false,
+    ): ByteArray {
+        require(value is String && value.trim() == value && value.startsWith("0x")) {
+            "$label must be canonical lowercase 0x hex"
+        }
+        val text = value.substring(2)
+        require((allowEmpty || text.isNotEmpty()) && text.length % 2 == 0 && text.matches(Regex("[0-9a-f]*"))) {
+            "$label must be canonical lowercase 0x hex"
+        }
+        if (byteLength != null) {
+            require(text.length == byteLength * 2) { "$label must be $byteLength bytes" }
+        }
+        val out = ByteArray(text.length / 2)
+        for (index in out.indices) {
+            out[index] = text.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+        require(!nonzero || !isZero(out)) { "$label must not be zero" }
+        return out
+    }
+
+    private fun minimalBigEndianBytes(value: BigInteger, field: String): ByteArray {
+        require(value >= BigInteger.ZERO) { "$field must be non-negative" }
+        if (value == BigInteger.ZERO) {
+            return ByteArray(0)
+        }
+        val raw = value.toByteArray()
+        return if (raw[0] == 0.toByte()) raw.copyOfRange(1, raw.size) else raw
     }
 
     private fun rlpLengthPrefix(length: Int, shortOffset: Int, longOffset: Int): ByteArray {

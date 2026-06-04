@@ -52,19 +52,37 @@ For future math upgrades (non-normative), see `docs/source/norito_streaming_math
 the suite-specific ephemeral payload, while `process_remote_key_update`
 validates signatures, enforces monotonic counters, and establishes session
 transport keys. Kyber-based HPKE handshakes are supported via
-`set_kyber_remote_public`/`set_kyber_local_secret`, which configure the static
-key material required to encapsulate to viewers and decapsulate incoming
+`set_kyber_remote_public`, `set_kyber_local_secret`, and
+`set_kyber_local_key_pair`, which configure the static key material required to
+encapsulate to viewers and decapsulate incoming
 `KeyUpdate` payloads. Fingerprints use the `nsc_kyber_pk` domain with
 `Sha3-256` until the workspace migrates the streaming hash functions to BLAKE3.
+The lower-level `local_ephemeral_public` helper only returns the outbound
+X25519 public key or Kyber ciphertext; it never commits negotiated suite, STS,
+transport-key, or snapshot state on its own.
+Inbound X25519 key updates require the receiver to have prepared local ephemeral
+material first, mirroring the Kyber requirement for a configured local
+decapsulation secret.
 
 `streaming::StreamingKeyMaterial` wraps the node-owned Ed25519 identity key
 pair alongside optional Kyber key material. `set_kyber_keys` validates the
-provided byte slices, caches the `Kyber768` fingerprint, and zeroizes the secret
-key when dropped. Call `install_into_session` on new `StreamingSession`
-instances to pre-load the Kyber secret for HPKE decapsulation, and use
-`build_key_update` to sign outbound frames without re-threading the identity
-key. When operators need to pre-compute suite fingerprints for configuration,
+provided byte slices, rejects noncanonical ML-KEM public-key coefficients and
+secret-key private coefficients, verifies that the secret key embeds the same
+canonical public key and matching `H(ek)` public-key hash, caches the
+`Kyber768` fingerprint, and zeroizes the secret key when dropped. Standalone
+local-secret admission and ML-KEM decapsulation run the same private-component,
+embedded-public-key, and `H(ek)` consistency checks, so secret-only installs
+cannot carry a corrupted decapsulation key.
+Call `install_into_session` on new `StreamingSession`
+instances to pre-load the Kyber secret for HPKE decapsulation and the local
+public-key fingerprint used by outbound suite binding, and use `build_key_update`
+to sign outbound frames without re-threading the identity key. When operators
+need to pre-compute suite fingerprints for configuration,
 `kyber_public_fingerprint` exposes the canonical helper used by the runtime.
+Changing the ML-KEM suite on either `StreamingKeyMaterial` or
+`StreamingSession` clears configured Kyber public keys, fingerprints, and local
+decapsulation secrets so stale suite-specific material cannot survive a profile
+switch.
 Configuration files surface these knobs under the `streaming` namespace:
 `streaming.kyber_public_key` and `streaming.kyber_secret_key` accept hex-encoded
 Kyber key material and feed the `StreamingKeyMaterial` passed to
@@ -91,7 +109,17 @@ Norito-encoded blob containing the negotiated session ID, key counter, STS root,
 cadence state, Kyber fingerprints, and latest GCK metadata so hosts can persist
 the handshake and resume viewers after restarts without replaying the control
 stream; transport keys are re-derived deterministically from the stored STS
-root when the snapshot is restored. Snapshots are written to
+root when the snapshot is restored. Kyber restores require the persisted suite
+to bind to ML-KEM-768 metadata and to a validated Kyber fingerprint: inbound
+snapshots bind to the remote public key, while outbound snapshots may bind to the
+installed local public key. Persisted local Kyber metadata is accepted only when
+the restoring session already has a local decapsulation secret whose embedded
+private component and public key are canonical and whose embedded `H(ek)`
+public-key hash matches that metadata. This validation runs before any live
+session state is replaced. Transport capability
+resolutions must also preserve the normal negotiation shape before they are
+recorded or restored: DATAGRAM-enabled state requires a nonzero DATAGRAM size,
+while stream fallback state must carry zero DATAGRAM size. Snapshots are written to
 `kura/store_dir/streaming_sessions/sessions.norito` and are encrypted with
 ChaCha20-Poly1305 using a key derived from the node's Ed25519 identity.
 - Deterministic session lifecycle — `StreamingSession::snapshot_state` persists `{session_id,
@@ -121,14 +149,32 @@ captures the key points so implementers can line them up with the codec spec.
 ### Rekey cadence and persistence
 
 - Publishers emit a new `KeyUpdate` every 64 MiB of encrypted payload or 5
-  minutes. `StreamingSession::key_counter` increments per update and must never
-  regress.
+  minutes. `StreamingSession::key_counter` is one-based, increments per update,
+  and must never regress; zero counters are rejected before outbound, inbound, or
+  restored state can be committed. `KeyUpdate.protocol_version` must also be
+  nonzero before the suite, counter, or transport-key state is recorded.
 - Each rekey produces a fresh deterministic Kyber encapsulation (coins derived
   from session ID and counter) and rotates the Session Transport Secret (STS).
+  STS derivation accepts only 32-byte handshake shared secrets, matching
+  X25519 and ML-KEM outputs, before HKDF expands the transport root.
   `{session_id, key_counter, suite_id, sts_root}` are persisted via
   `StreamingSession::snapshot_state` so restarts resume without replay.
+  Direct `KeyUpdateState` admission also checks the suite-specific ephemeral
+  payload length (32-byte X25519 public key or 1088-byte Kyber768 ciphertext)
+  before accepting a key counter, so malformed control frames cannot poison
+  replay state. Remote key-update processing verifies the signature, runs this
+  staged counter/suite/shape admission on a local copy, and only then performs
+  X25519 shared-secret derivation or ML-KEM decapsulation, so authenticated
+  replays and suite drift fail before expensive key-agreement work or live state
+  replacement. Direct `KeyUpdateState::restore`/`from_snapshot` rehydration is
+  fallible and rejects zero counters before replacing existing state.
 - Group content keys rotate every third HPKE update; viewers retain only the
-  newest value to bound memory and gossip exposure.
+  newest value to bound memory and gossip exposure. GCKs are fixed 32-byte
+  inputs to CEK derivation, so `wrap_gck`, `unwrap_gck`, content-key admission,
+  and snapshot restore reject any shorter or longer value before updating
+  rotation state. Direct `ContentKeyState::restore`/`from_snapshot`
+  rehydration is fallible and rejects partial `{content_key_id,
+  valid_from_segment}` metadata before replacing replay state.
 
 ### QUIC profile and capability negotiation
 
@@ -139,12 +185,19 @@ captures the key points so implementers can line them up with the codec spec.
 - Capability resolution picks the intersection of suite bitmasks, the logical
   AND of DATAGRAM support, the minimum DATAGRAM size, and the maximum feedback
   interval. The resolved tuple feeds the manifest’s
-  `transport_capabilities_hash` so operators can audit deployments.
+  `transport_capabilities_hash` so operators can audit deployments. Session
+  admission rejects contradictory resolved tuples before recording the
+  capability hash, so DATAGRAM-enabled state must carry a nonzero DATAGRAM size
+  and fallback stream state must carry zero DATAGRAM size.
 - Feature negotiation intersects the viewer’s `feature_bits` with the
   publisher’s advertised capability mask. Viewers may set bit 10 to REQUIRE a
   privacy overlay; publishers lacking bit 11 **MUST** reject the handshake with
-  a protocol violation. Unknown feature bits are rejected to keep the codec surface
-  deterministic.
+  a protocol violation. Zero `CapabilityReport.protocol_version` values and
+  non-viewer `CapabilityReport.endpoint_role` values are rejected before
+  transport state is recorded, and unknown feature bits are rejected to keep the
+  codec surface deterministic. Viewer-side `CapabilityAck` admission must echo
+  the viewer `stream_id`, accepted protocol version, and negotiated DATAGRAM
+  size plus DPLPMTUD flag before transport state is applied.
 - Node configuration: `streaming.feature_bits` in the node config controls the
   publisher’s advertised mask. The default template enables both feedback hints
   and the privacy-overlay provider bits (`0b11`), matching the required baseline (bit 0 = feedback hints, bit 1 = privacy provider). Networks that admit SM2/SM3/SM4
@@ -162,9 +215,9 @@ captures the key points so implementers can line them up with the codec spec.
   clamp DATAGRAM payloads to the negotiated minimum and expose a runtime guard so
   hosts can pivot to the fallback path when peers disable DATAGRAM delivery.【F:crates/iroha_p2p/src/streaming/quic.rs:375】
 - The capability handshake now enforces consistent `CapabilityReport`/`CapabilityAck`
-  MTU values and rejects zero-length DATAGRAM requests when the transport stays in
-  DATAGRAM mode; integration tests cover the negotiated limit as well as the
-  DATAGRAM-off path.【F:crates/iroha_p2p/src/streaming/quic.rs:982】
+  stream/version/MTU/DPLPMTUD values and rejects zero-length DATAGRAM requests
+  when the transport stays in DATAGRAM mode; integration tests cover the
+  negotiated limit as well as the DATAGRAM-off path.【F:crates/iroha_p2p/src/streaming/quic.rs:982】
 - Restricted environments (enterprise firewalls, TURN relays) should enable the
   deterministic fallback by muxing chunk payloads over per-segment unidirectional
   streams or tunnelling the QUIC control plane through the existing `/p2p` TCP
@@ -183,6 +236,14 @@ captures the key points so implementers can line them up with the codec spec.
 - Publishers compute parity with
   `parity_chunks = clamp(ceil((loss_ewma * 1.25 + 0.005) * 12), 0, 6)` in
   fixed-point arithmetic. Redundancy may only increase within a session window.
+  Inbound feedback hints are clamped to the same 6-chunk ceiling before they
+  update snapshot or outbound hint state, and inbound loss samples are capped
+  at Q16.16 `1.0` (100% loss). Receiver-report `parity_applied` and
+  `fec_budget` fields are clamped to the same 6-chunk ceiling before they enter
+  feedback snapshots. The first accepted `FeedbackHint` or `ReceiverReport`
+  binds the feedback state to that `stream_id`; later feedback frames carrying a
+  different stream id are rejected before counters, EWMA loss, parity, or
+  snapshot-visible fields are updated.
 - The runtime records this parity inside `StreamingSession` snapshots so the
   `ManifestPublisher` (`iroha_core::streaming::ManifestPublisher`) can call
   `StreamingHandle::populate_manifest(peer_id, manifest, feedback_hint_frame)`
@@ -406,7 +467,10 @@ the decoded output against the hashes in the conformance bundle. CI jobs can inv
 
 - The baseline encoder continues to compress luma-only frames, but RD bundles now stash deterministic 4:2:0 chroma sidecars (no neutral fills) so decoded Y4M outputs and PSNR-YUV calculations match the source. Full chroma compression/HDR variants and SIMD acceleration are planned for Milestone D8; keep production traffic on the baseline profile until those land.
 - A perceptual RDO schedule is available (`RdoMode::Perceptual`) for bundled entropy; it softens lambda at mid/high Q to bias toward SSIM-like structure preservation. The RD harness can drive the bundled encoder with explicit quantizers via `--quantizer` (repeatable for sweeps) or request a bitrate ladder with `--target-bitrate-mbps` plus the tiny-clip preset (`--tiny-clip-preset`) to keep 16–32 px fixtures from paying oversized headers. JSON outputs now enumerate every quantizer run and record bundled metrics alongside baseline values when `ENABLE_RANS_BUNDLES=1` is set.
-- Congestion-control feedback (`FeedbackHint`/`ReceiverReport`) is scheduled to be retrofitted during Milestone D3. Until then, telemetry counters track the placeholder behaviour described above.
+- Congestion-control feedback (`FeedbackHint`/`ReceiverReport`) is active in the
+  session state machine; publishers clamp loss/parity fields, bind feedback to
+  the first accepted stream id, and expose the bounded parity budget through
+  manifest population and telemetry snapshots.
 - The Norito audio helper now defaults to the native low-delay codec (block-adaptive delta quantisation) and keeps libopus as an explicit fallback. Deployments that force libopus retain the 64 kbps mono / 96 kbps stereo presets, while ambisonics continues to leverage the deterministic codec until multistream support lands.
 - Segment headers and manifests include an `audio_summary` (sample rate, frame samples, cadence, FEC level, layout). Validators enforce ±10 ms A/V sync using this summary when checking timestamps in the pipeline.
 - Decoder/RD harness: `cargo xtask streaming-entropy-bench` now emits decoded Y4M clips, PSNR, and Norito `SegmentBundle` artefacts (with optional chroma sidecars) when `--y4m-in/--y4m-out/--chunk-out` are supplied, and `cargo xtask streaming-decode --bundle <path> --y4m-out <path> [--psnr-ref <y4m>] [--psnr-mode y|yuv]` rehydrates bundles for RD tooling. The rANS comparison harness (`benchmarks/nsc/rans_compare.py`) records PSNR, SSIM, optional VMAF, bundled chunk sizes, bitrate ladder selections, and the `SVT_MIN_DIMENSION` guard in `report.json`, and now publishes `norito_summary`/`norito_per_clip_summary` blocks so dashboards can read per-clip baseline vs bundled metrics (with skip flags) without scraping runner logs.【xtask/src/streaming_bench.rs:1】【benchmarks/nsc/rans_compare.py:1】

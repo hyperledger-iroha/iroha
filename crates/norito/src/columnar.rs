@@ -58,6 +58,14 @@ fn take_bytes<'a>(bytes: &'a [u8], off: &mut usize, len: usize) -> Result<&'a [u
 }
 
 #[inline]
+fn read_row_count_prefix(bytes: &[u8]) -> Result<usize, Error> {
+    let raw = bytes.get(..4).ok_or(Error::LengthMismatch)?;
+    let mut prefix = [0u8; 4];
+    prefix.copy_from_slice(raw);
+    Ok(u32::from_le_bytes(prefix) as usize)
+}
+
+#[inline]
 fn read_aos_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = bytes.get(*off..).ok_or(Error::LengthMismatch)?;
     let (len, used) = crate::core::read_len_from_slice(tail)?;
@@ -449,7 +457,7 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     // Column 1: ids (aligned to 8) or delta-coded
     let mut off = 5usize;
@@ -1029,7 +1037,7 @@ pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     if desc != DESC_U64_OPTSTR_BOOL && desc != DESC_U64_DELTA_OPTSTR_BOOL {
         return Err(Error::Message("invalid NCB optstr descriptor".into()));
@@ -1187,7 +1195,7 @@ pub fn view_ncb_u64_optu32_bool(bytes: &[u8]) -> Result<NcbU64OptU32BoolView<'_>
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     if desc != DESC_U64_OPTU32_BOOL && desc != DESC_U64_DELTA_OPTU32_BOOL {
         return Err(Error::Message("invalid NCB optu32 descriptor".into()));
@@ -1529,7 +1537,7 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     if desc != DESC_U64_BYTES_BOOL && desc != DESC_U64_DELTA_BYTES_BOOL {
         return Err(Error::Message("invalid NCB bytes descriptor".into()));
@@ -1980,7 +1988,7 @@ pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Erro
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     if !matches!(
         desc,
@@ -2628,7 +2636,7 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     let is_dict = matches!(
         desc,
@@ -3045,7 +3053,7 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     let id_delta = matches!(
         desc,
@@ -3987,6 +3995,57 @@ pub fn decode_rows_u64_enum_bool_adaptive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ncb_row_count_prefix_rejects_truncated_inputs() {
+        let prefix = [0x2a, 0, 0, 0];
+        for len in 0..4 {
+            let err = read_row_count_prefix(&prefix[..len]).unwrap_err();
+            assert!(matches!(err, Error::LengthMismatch));
+        }
+
+        assert_eq!(read_row_count_prefix(&prefix).unwrap(), 42);
+    }
+
+    #[test]
+    fn ncb_row_count_views_reject_truncated_headers() {
+        let prefix = [0, 0, 0, 0];
+        for len in 0..4 {
+            let input = &prefix[..len];
+            assert!(matches!(
+                view_ncb_u64_str_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_optstr_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_optu32_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_bytes_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_u32_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_str_u32_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_bytes_u32_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+            assert!(matches!(
+                view_ncb_u64_enum_bool(input),
+                Err(Error::LengthMismatch)
+            ));
+        }
+    }
 
     #[test]
     fn should_use_columnar_respects_heuristics_threshold() {
@@ -6427,7 +6486,7 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
     }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    let n = read_row_count_prefix(bytes)?;
     let desc = bytes[4];
     let (is_delta, use_dict, code_delta) = match desc {
         DESC_U64_ENUM_BOOL => (false, false, false),

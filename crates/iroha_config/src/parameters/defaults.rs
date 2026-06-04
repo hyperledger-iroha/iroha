@@ -2053,6 +2053,10 @@ pub mod torii {
     pub const ISO_BRIDGE_STRUCTURED_ADDRESS_MODE: &str = "permissive";
     /// ISO 20022 reference data refresh cadence (seconds).
     pub const ISO_BRIDGE_REFERENCE_REFRESH_SECS: u64 = 24 * 60 * 60; // 24 hours
+    /// ISO 20022 durable store age retention (seconds); zero keeps records by age.
+    pub const ISO_BRIDGE_STORE_RETENTION_SECS: u64 = 0;
+    /// ISO 20022 durable store maximum record count; zero keeps all records by count.
+    pub const ISO_BRIDGE_STORE_MAX_RECORDS: u64 = 0;
     /// Return the default ISO 20022 bridge rail profile identifier.
     #[must_use]
     pub fn iso_bridge_default_profile() -> String {

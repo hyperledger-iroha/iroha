@@ -63,7 +63,8 @@ impl CreateKeysArgs {
 impl Run for CreateKeysArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (mut spend_key, random_generated) = self.parse_seed()?;
-        let keyset = derive_keyset_from_slice(&spend_key).expect("validated length");
+        let keyset = derive_keyset_from_slice(&spend_key)
+            .wrap_err("failed to derive confidential key hierarchy")?;
 
         let json = render_keyset_json(&keyset, random_generated);
         let json_string =
@@ -341,5 +342,21 @@ mod tests {
                 .unwrap(),
             hex::decode(seed_hex).unwrap()
         );
+    }
+
+    #[test]
+    fn create_keys_with_invalid_seed_returns_error_without_output() {
+        let args = CreateKeysArgs {
+            seed_hex: Some("deadbeef".to_string()),
+            output: None,
+            quiet: false,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args.run(&mut ctx).expect_err("invalid seed should fail");
+
+        assert!(format!("{err}").contains("expected 32 bytes"));
+        assert!(ctx.printed.is_empty());
+        assert!(ctx.lines.is_empty());
     }
 }

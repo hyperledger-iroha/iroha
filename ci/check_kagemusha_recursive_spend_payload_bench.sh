@@ -32,7 +32,7 @@ mode = sys.argv[3]
 
 payload_baseline = 1751
 transition_profile_baseline = 2094
-reserved_lineage_payload_baseline = 3833
+reserved_lineage_payload_baseline = 3847
 reserved_lineage_transition_profile_baseline = 2817
 
 def write_benchmark(group, hop, size):
@@ -198,6 +198,8 @@ for needle in \
   "kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract" \
   "kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract" \
   "kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile" \
+  "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1" \
+  "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1" \
   "append_boundary_digest" \
   "previous_recursive_proof_open_envelopes_archive_digest" \
   "append_opening_preflight_digest" \
@@ -210,16 +212,6 @@ done
 
 mkdir -p "${ARTIFACTS_DIR}"
 
-if [[ "${SKIP_BENCH}" == "1" ]]; then
-  echo "[kagemusha-payload-bench] skipping benchmark run; reducing existing Criterion output in ${CRITERION_OUT}" >&2
-else
-  echo "[kagemusha-payload-bench] running recursive spend payload benchmark…" >&2
-  cargo bench -p iroha_data_model --bench kagemusha_recursive_spend_payload -- \
-    --sample-size "${SAMPLE_SIZE}" \
-    --warm-up-time "${WARM_UP_TIME}" \
-    --measurement-time "${MEASUREMENT_TIME}"
-fi
-
 SUMMARY_FILE="${ARTIFACTS_DIR}/summary.txt"
 PAYLOAD_BYTES_FILE="${ARTIFACTS_DIR}/payload_bytes.tsv"
 TRANSITION_PROFILE_BYTES_FILE="${ARTIFACTS_DIR}/transition_profile_bytes.tsv"
@@ -229,6 +221,21 @@ BENCH_DIR="${CRITERION_OUT}/kagemusha_recursive_spend_payload_bytes"
 TRANSITION_PROFILE_BENCH_DIR="${CRITERION_OUT}/kagemusha_recursive_spend_transition_profile_bytes"
 RESERVED_LINEAGE_BENCH_DIR="${CRITERION_OUT}/kagemusha_recursive_spend_reserved_lineage_payload_bytes"
 RESERVED_LINEAGE_TRANSITION_PROFILE_BENCH_DIR="${CRITERION_OUT}/kagemusha_reserved_lineage_transition_profile_bytes"
+
+if [[ "${SKIP_BENCH}" == "1" ]]; then
+  echo "[kagemusha-payload-bench] skipping benchmark run; reducing existing Criterion output in ${CRITERION_OUT}" >&2
+else
+  echo "[kagemusha-payload-bench] running recursive spend payload benchmark…" >&2
+  rm -rf \
+    "${BENCH_DIR}" \
+    "${TRANSITION_PROFILE_BENCH_DIR}" \
+    "${RESERVED_LINEAGE_BENCH_DIR}" \
+    "${RESERVED_LINEAGE_TRANSITION_PROFILE_BENCH_DIR}"
+  cargo bench -p iroha_data_model --bench kagemusha_recursive_spend_payload -- \
+    --sample-size "${SAMPLE_SIZE}" \
+    --warm-up-time "${WARM_UP_TIME}" \
+    --measurement-time "${MEASUREMENT_TIME}"
+fi
 
 python3 - "$BENCH_DIR" "$TRANSITION_PROFILE_BENCH_DIR" "$RESERVED_LINEAGE_BENCH_DIR" "$RESERVED_LINEAGE_TRANSITION_PROFILE_BENCH_DIR" "$PAYLOAD_BYTES_FILE" "$TRANSITION_PROFILE_BYTES_FILE" "$RESERVED_LINEAGE_PAYLOAD_BYTES_FILE" "$RESERVED_LINEAGE_TRANSITION_PROFILE_BYTES_FILE" "$EXPECTED_HOPS" "$MAX_BYTES" "$MAX_TRANSITION_PROFILE_BYTES" "$MAX_RESERVED_LINEAGE_BYTES" "$MAX_RESERVED_LINEAGE_TRANSITION_PROFILE_BYTES" <<'PY'
 import re

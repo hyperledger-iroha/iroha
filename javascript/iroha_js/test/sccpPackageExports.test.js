@@ -83,6 +83,38 @@ test("published TypeScript declarations cover every SCCP runtime export", () => 
   assert.deepEqual(missing, []);
 });
 
+test("published TypeScript declarations constrain TAIRA XOR TRON settlement defaults", () => {
+  const declarations = fs.readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const settlementFragment = declarationInterface(
+    declarations,
+    "TairaXorTronToTairaSettlementFragment",
+  );
+  assert.match(settlementFragment, /entrypoint\?: "finalize_inbound";/u);
+  assert.match(settlementFragment, /route\?: "taira_tron_xor";/u);
+  assert.match(settlementFragment, /route_id\?: "taira_tron_xor";/u);
+  assert.match(settlementFragment, /payload\?: never;/u);
+  assert.match(settlementFragment, /payload_json\?: never;/u);
+  assert.match(settlementFragment, /payloadJson\?: never;/u);
+  assert.match(settlementFragment, /payload_bytes\?: never;/u);
+  assert.match(settlementFragment, /payloadBytes\?: never;/u);
+
+  const sourcePackageInput = declarationInterface(
+    declarations,
+    "TairaXorTronToTairaSourceProofPackageInput",
+  );
+  assert.match(
+    sourcePackageInput,
+    /settlementDefaults\?: TairaXorTronToTairaSettlementFragment;/u,
+  );
+  assert.match(
+    sourcePackageInput,
+    /settlement_defaults\?: TairaXorTronToTairaSettlementFragment;/u,
+  );
+});
+
 test("published TypeScript declarations expose SCCP domain id inputs", () => {
   const declarations = fs.readFileSync(
     new URL("../index.d.ts", import.meta.url),

@@ -7,6 +7,7 @@ This directory contains bounded formal models for Sumeragi safety and liveness.
 `Sumeragi.tla` captures the commit path:
 - phase progression (`Propose`, `Prepare`, `CommitVote`, `NewView`, `Committed`),
 - vote and quorum thresholds (`CommitQuorum`, `ViewQuorum`),
+- latched view-change quorum evidence for nonzero active views,
 - weighted stake quorum (`StakeQuorum`) for NPoS-style commit guards,
 - RBC causality (`Init -> Chunk -> Ready -> Deliver`) with header/digest evidence,
 - GST and weak fairness assumptions over honest progress actions.
@@ -5528,7 +5529,11 @@ routing-plan, NPoS VRF epoch seal, post-commit cleanup, and restart replay
 independently exhaust the same 36, 13, 14, 31, 30, 26, 25, 28, 30, 17, 31,
 26, 30, 31, and 28 expected-failure configs as Apalache.
 Static CFG `CONSTRAINT` directives and TLC runner `tlc_constraint` injections
-must resolve to operators defined by the selected `.tla` module.
+must resolve to zero-arity operators defined by the selected `.tla` module.
+Static CFG and TLC runner constraints must not be literal `TRUE`/`FALSE`
+predicates or simple aliases resolving to `TRUE`/`FALSE`/`TypeInvariant`, so a
+state-space bound cannot accidentally disable the model or prune every
+behavior.
 
 `SumeragiValidatorSetTransition.tla` captures the validator-set activation
 gate for one scheduled reconfiguration:
@@ -5882,9 +5887,12 @@ verification, and full networking details.
 
 ## Files
 
-- `Sumeragi.tla`: protocol model and properties.
+- `Sumeragi.tla`: protocol model and properties, including latched
+  commit-certificate and commit-view evidence across view-counter resets.
 - `Sumeragi_fast.cfg`: smaller CI-friendly parameter set.
 - `Sumeragi_deep.cfg`: larger stress parameter set.
+- `Sumeragi_tlc_fast.cfg`: TLC check of the same commit-path parameters with
+  the fairness-backed `Spec` temporal behavior.
 - `SumeragiForkSafety.tla`: same-height conflicting-branch commit-certificate safety model.
 - `SumeragiForkSafety_fast.cfg`: permissioned count-quorum fork-safety check.
 - `SumeragiForkSafety_npos.cfg`: NPoS-style stake-quorum fork-safety check.
@@ -7733,8 +7741,38 @@ Invariants:
 - `TypeInvariant`
 - `CommitImpliesQuorum`
 - `CommitImpliesStakeQuorum`
+- `CommitCertificateMatchesFinality`
+- `LiveCommitGateMatchesFinality`
+- `LiveCommitGateRbcEvidenceMatches`
+- `CommitImpliesLiveVoteQuorum`
+- `CommitImpliesLiveStakeQuorum`
+- `CommitImpliesHonestSupport`
 - `CommitImpliesDelivered`
+- `CommitImpliesRbcEvidence`
+- `FinalityCertificateStackComplete`
+- `FinalityCertificateStackMatchesFinality`
+- `CommitDisablesProgressActions`
+- `CommittedPhaseMatchesFinality`
+- `CommitViewMatchesFinality`
+- `CommitViewDoesNotLeadCurrentView`
+- `ViewEvidenceMatchesActiveView`
+- `NewViewPhaseBelowQuorum`
+- `LiveNewViewVotesStayInHandoff`
+- `ViewEvidenceIsCompleteOrEmpty`
+- `PreCommitPhasesHaveNoCommitVotes`
+- `PrePreparePhasesHaveNoPrepareVotes`
+- `CommitImpliesViewQuorumEvidence`
+- `CommitVotePhaseRequiresPrepareQuorum`
+- `LiveCommitVotesRequirePrepareQuorum`
+- `CommitImpliesPrepareQuorum`
+- `CommitEvidenceMatchesVoteCounters`
+- `CommitEvidenceIsBounded`
+- `VoteCountersRespectRosterBudgets`
+- `StakeSignedMatchesVoteCounters`
+- `NoCommitEvidenceBeforeCommit`
+- `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
+- `RbcProgressEvidenceMatchesState`
 
 Fork-safety invariants:
 - `TypeInvariant`
@@ -8611,11 +8649,96 @@ Highest-QC optional selection invariants:
 - `MaxCandidateSelected`
 - `IgnoredEvidenceCannotClearSelection`
 
-Temporal property:
+Temporal properties:
 - `EventuallyCommit` (`[] (gst => <> committed)`), with post-GST fairness encoded
   operationally in `Next` (timeout/fault preemption guards on enabled
   progress actions). This keeps the model checkable with Apalache 0.52.x, which
   does not support `WF_` fairness operators inside checked temporal properties.
+- `CommitNeverRevoked` (`[] (committed => [] committed)`) proves the abstract
+  finality latch cannot be cleared by later view-change or RBC steps.
+- `CommittedPhaseAlwaysMatchesFinality` proves that the terminal `Committed`
+  phase and the abstract finality latch are equivalent in every reachable state.
+- `CommitCertificateAlwaysMatchesFinality` proves that quorum-weighted commit
+  certificate evidence exists exactly when the abstract finality latch is set.
+- `LiveCommitGateAlwaysMatchesFinality` proves that the abstract finality latch
+  is equivalent to the live commit gate: commit votes, signed stake, and RBC
+  delivery evidence all satisfy `CanCommit(...)`.
+- `LiveCommitGateRbcEvidenceAlwaysMatches` proves that the live commit gate is
+  equivalent to vote quorum, stake quorum, delivered RBC state, READY quorum,
+  chunk coverage, header evidence, and digest evidence.
+- `CommittedPhaseNeverLeaves` proves the single-height abstraction cannot leave
+  the terminal committed phase after finality.
+- `CommitViewNeverChanges` proves that the latched commit-view witness remains
+  the active view after finality.
+- `CommitViewNeverLeadsCurrentView` proves that the latched commit-view witness
+  never points to a future view.
+- `ViewQuorumEvidenceNeverDiverges` proves that proposals, vote phases, and
+  finality in nonzero views remain backed by a latched view-change quorum
+  witness.
+- `NewViewQuorumHandoffNeverStalls` proves that a quorum-satisfied `NewView`
+  phase immediately hands off to proposal-ready state instead of remaining in a
+  view-change phase with enough votes already collected.
+- `LiveNewViewVotesNeverLeakPastHandoff` proves that live NewView vote counters
+  remain confined to the NewView collection phase or the immediate proposal
+  handoff with quorum evidence, and never leak into prepare, commit-vote, or
+  committed execution.
+- `ViewEvidenceNeverPartial` proves that the latched view-change witness is
+  either absent or quorum-complete, never a partial vote count.
+- `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
+  prepare phases cannot carry stale live commit-vote counters or signed stake
+  from an earlier view into the next pre-commit path.
+- `PrePrepareVotesNeverCarryAcrossViews` proves that `NewView` and proposal
+  phases cannot carry stale prepare-vote counters from an earlier view into the
+  next prepare or commit path.
+- `CommitPhasesNeverBypassPrepareQuorum` proves that execution never reaches
+  commit-vote or committed phases without prepare-quorum evidence.
+- `LiveCommitVotesNeverBypassPrepareQuorum` proves that any live commit-vote
+  counter or signed-stake evidence can only appear in commit-vote or committed
+  phases after prepare quorum, ruling out stale live commit votes leaking across
+  view changes or earlier phases.
+- `PreFinalityCommitArtifactsNeverAppear` proves that commit-certificate
+  votes/stake and the commit-view witness stay absent until finality is reached.
+- `FinalityCertificateStackNeverIncomplete` proves that every finalized state
+  carries the complete certificate stack: terminal phase, prepare quorum, live
+  and latched commit vote/stake evidence, honest support, RBC delivery evidence,
+  and the required view-change witness for nonzero commit views.
+- `FinalityCertificateStackAlwaysMatchesFinality` proves that the complete
+  finality certificate stack is exact: it appears if and only if the abstract
+  finality latch is set, so a latent full certificate stack cannot exist before
+  finality.
+- `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
+  their view-change quorum witness after commit.
+- `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required
+  before entering commit vote remains present after finality.
+- `LiveCommitQuorumNeverLost` proves that the live vote counters and signed
+  stake stay above finality quorum thresholds after finality.
+- `CommitHonestSupportNeverLost` proves that finalized states keep enough
+  honest commit-vote support after discounting the Byzantine vote budget.
+- `CommitRbcEvidenceNeverLost` proves that finalized states keep the RBC
+  delivered state, ready quorum, full chunk coverage, and validated header/digest
+  evidence after finality.
+- `CommitProgressActionsNeverReenabled` proves that finalized states cannot
+  re-enable proposal, vote, view-change timeout, RBC, or Byzantine-fault
+  progress actions.
+- `CommitEvidenceNeverDivergesFromVoteCounters` proves that the latched commit
+  certificate evidence remains traceable to the live vote counters and signed
+  stake after finality.
+- `StakeAccountingNeverDiverges` proves that the live signed-stake accumulator
+  always equals the weighted honest and Byzantine commit-vote counters.
+- `CommitEvidenceNeverExceedsRosterBudget` proves that latched commit
+  certificate vote/stake evidence stays within the configured validator and
+  weighted-stake budgets in every reachable state.
+- `VoteCountersNeverExceedRosterBudgets` proves that prepare, honest commit,
+  Byzantine commit, NewView, and view-evidence counters stay within their
+  honest/fault roster budgets in every reachable state.
+- `CommitEvidenceNeverLost` proves a committed execution keeps quorum and stake
+  certificate evidence above threshold for all later states.
+- `RbcDeliveryNeverLost` proves that once RBC reaches the delivered state, later
+  view-change, vote, or fault steps cannot roll it back.
+- `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
+  state keeps the evidence expected for that state: initialized states keep
+  validated header/digest evidence, chunk-covered states keep full chunk
+  coverage, and ready/delivered states keep ready quorum.
 
 Frontier recovery invariants:
 - `TypeInvariant`
@@ -10496,6 +10619,7 @@ From repository root:
 ```bash
 bash scripts/formal/sumeragi_apalache.sh fast
 bash scripts/formal/sumeragi_apalache.sh deep
+bash scripts/formal/sumeragi_tlc.sh fast
 bash scripts/formal/sumeragi_apalache.sh fork-fast
 bash scripts/formal/sumeragi_apalache.sh fork-npos
 bash scripts/formal/sumeragi_apalache.sh quorum-fast
@@ -23528,43 +23652,69 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   selected `spec_file`, `cfg_file`, and TLC `module` proof inputs exactly once
   before those inputs are resolved, and selected `spec_file`/`cfg_file` paths
   must stay flat direct children of this formal directory with the expected
-  `.tla`/`.cfg` suffix. Malformed `spec_file`/`cfg_file` assignment lines are
-  rejected even when a branch also contains one parseable assignment. Malformed
-  `module`, `tlc_constraint`, and `apalache_length` assignment lines are
-  rejected the same way before model checking.
+  `.tla`/`.cfg` suffix. Malformed, append-style, declaration-prefixed, or
+  array-indexed `spec_file`/`cfg_file` assignment lines, plus shell-builtin
+  mutation lines for those variables, are rejected even when the branch also
+  contains one parseable assignment. Malformed, append-style,
+  declaration-prefixed, or array-indexed `module`, `tlc_constraint`, and
+  `apalache_length` assignment lines, plus shell-builtin mutation lines for
+  those variables, are rejected the same way before model checking.
   Referenced configs must be
   non-empty, define either top-level `SPECIFICATION` or top-level `INIT` plus
   top-level `NEXT`, and include at least one top-level invariant/property
   directive. Top-level CFG directives
   must be from the supported TLA+/TLC set; malformed or duplicated
-  `CHECK_DEADLOCK` values and unknown directive spellings are rejected before
-  model checking. Every CFG
+  `CHECK_DEADLOCK` values, unknown directive spellings, and indented
+  directive-like continuation lines are rejected before model checking. Every
+  CFG
   `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
-  `PROPERTY/PROPERTIES` operator reference must use static TLA operator-name
-  syntax and be defined by the selected `.tla` module. Top-level TLA operator
-  definitions are distinguished from scoped `LET` helpers, and duplicate
-  top-level operator definitions or `RECURSIVE` declarations are rejected before
-  model checking. Multi-line
+  `PROPERTY/PROPERTIES` operator reference must use non-reserved static TLA
+  operator-name syntax, must not target the module's `vars` state tuple, be
+  defined by the selected `.tla` module, and resolve to a zero-arity operator.
+  Top-level TLA operator
+  definitions are distinguished from scoped `LET` helpers. Top-level operator
+  definitions must use non-reserved static signatures, and malformed, reserved,
+  or duplicate top-level operator definitions and `RECURSIVE` declarations are
+  rejected before model checking. Each `RECURSIVE` declaration must also have a
+  matching top-level definition with the same arity, so declarations alone
+  cannot satisfy CFG proof-target reachability. TLA dependency declarations must
+  use non-reserved static module identifiers (`EXTENDS` lists and `INSTANCE`
+  statements) and non-reserved static named-instance aliases, so dependency
+  resolution cannot silently accept malformed import text. Named `INSTANCE`
+  declarations are tracked as dependencies only and cannot satisfy CFG/TLC
+  proof-target references. Top-level `ASSUME`,
+  `ASSUMPTION`, and `AXIOM`
+  directives, plus theorem/proof directives such as `THEOREM`, `PROOF`, and
+  `QED`, are rejected because assumptions or proof text can make model
+  checking vacuous or uncheckable before any invariant or property is
+  meaningful. Multi-line
   `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
-  continuation line. Behavior directives and invariant/property check entries
-  must not be duplicated. CFG
+  continuation line and cannot be empty. Behavior directives, static
+  `CONSTRAINT` directives, and invariant/property check entries must not be
+  duplicated. CFG
   constant bindings must also match constants declared by the selected `.tla`
-  module, every declared TLA constant must be bound by the CFG, malformed
-  `CONSTANTS` block lines must fail before model checking, duplicate TLA
-  constant declarations are rejected, and bindings must not be duplicated.
-  TLA variable declarations must also be duplicate-free and match exactly one
-  static top-level `vars` tuple, so temporal specifications cannot omit state
+  module, every declared TLA constant must be bound by the CFG, each CFG
+  constant-binding line must bind exactly one non-reserved static constant name,
+  malformed `CONSTANTS` block lines and empty `CONSTANT(S)` blocks must fail
+  before model checking, TLA `CONSTANT(S)` declaration lines must be
+  non-reserved static identifier lists, empty TLA declaration blocks and
+  dangling declaration commas are rejected, duplicate TLA constant declarations
+  are rejected, and bindings must not be duplicated. TLA variable declarations
+  must also be non-reserved, static, non-empty, duplicate-free, and match
+  exactly one top-level `vars` definition whose full body is one non-reserved
+  static tuple, so temporal specifications cannot omit state
   variables or include undeclared ones.
   CFG filenames must belong to their selected TLA module by using the module
   stem or a module-stem prefix, preventing runner edits from reusing a
   cross-module config by accident.
-  Every `.tla` and `.cfg` file in this directory must be reached by at least
-  one checked or documented formal mode, so orphan proof artifacts cannot drift
-  outside the guard.
-  Referenced `.tla` files must declare exactly one top-of-file module name
-  matching their filename and exactly one terminating `====` with no trailing
-  content, and every `EXTENDS` or `INSTANCE` dependency must name either a known
-  TLA standard module or an existing local `.tla` file.
+  Every `.tla` and `.cfg` file under this directory must be reached by at least
+  one checked or documented formal mode, so orphan or nested proof artifacts
+  cannot drift outside the guard.
+  Referenced `.tla` files must declare exactly one top-of-file non-reserved
+  static TLA module identifier matching their filename and exactly one
+  terminating `====` with no trailing content, and every `EXTENDS` or
+  `INSTANCE` dependency must name either a known TLA standard module or an
+  existing local `.tla` file.
   Every Apalache branch must
   set a non-negative integer `apalache_length`, and
   the documented length table must match the runner's effective
@@ -23579,6 +23729,14 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   runner `module="..."` assignments
   must be TLA identifiers and resolve to existing `.tla` files with matching
   module declarations, so an existing CFG cannot mask a stale TLC module target.
+  TLC runner `tlc_constraint` injections must resolve to zero-arity
+  selected-module operators that are not literal `TRUE`/`FALSE` predicates,
+  single-line or multi-line boolean-only `TRUE`/`FALSE` wrappers, or simple
+  alias chains resolving to `TRUE`/`FALSE`/`TypeInvariant`, so TLC-only bounds
+  cannot silently erase the checked state space.
+  Static CFG `CONSTRAINT` operator references are checked against the same
+  trivial-chain rule, so checked configs cannot erase behavior with a vacuous
+  local bound.
   CI/README Apalache and TLC command lines must also provide exactly one static
   mode token after the runner path.
   Duplicate fast-mode rows or duplicated TLC commands are rejected so one
@@ -23598,10 +23756,17 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `ci/check_sumeragi_formal_expected_failures.sh`, and mutation modes are kept
   out of the PR baseline script. Every referenced CFG must include at least one
   non-`TypeInvariant` invariant/property check so baseline, scheduled, and
-  expected-failure coverage cannot degrade into type-only checks. The guard also
+  expected-failure coverage cannot degrade into type-only checks. Those
+  non-`TypeInvariant` checks must not be top-level TLA definitions with direct
+  literal `TRUE` or `FALSE` bodies, single-line or multi-line boolean-only
+  `TRUE`/`FALSE` wrappers, or alias chains resolving to
+  `TRUE`/`FALSE`/`TypeInvariant`, so semantic coverage cannot be satisfied by a
+  vacuous predicate. The guard also
   resolves every documented mutation mode through
   `scripts/formal/sumeragi_tlc.sh`, including wildcard mappings and exact naming
-  overrides, and requires the matching TLC branch to set `expect_failure=1`.
+  overrides, requires the selected Apalache/TLC CFG stems to contain the
+  normalized mutation-mode suffix, and requires the matching TLC branch to set
+  `expect_failure=1`.
   The Apalache and TLC mutation modes must resolve to the same CFG file, except
   for the explicitly allowed commit-root TLC-specific `_tlc_bug_` configs, so
   the TLC expected-failure corridor stays routable and fail-closed without

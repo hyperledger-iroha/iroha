@@ -10,6 +10,7 @@ use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_se
 
 const HKDF_SALT: &[u8] = b"iroha:x25519:hkdf:v1";
 const HKDF_INFO: &[u8] = b"iroha:x25519:session-key";
+const LOW_ORDER_CHECK_PRIVATE_KEY: [u8; 32] = [1_u8; 32];
 
 /// Implements the [`KeyExchangeScheme`] using X25519 key exchange and HKDF-SHA256 with
 /// domain separation to derive the session key.
@@ -69,7 +70,7 @@ impl KeyExchangeScheme for X25519Sha256 {
         let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret.as_bytes());
         let mut okm = [0u8; 32];
         hkdf.expand(HKDF_INFO, &mut okm)
-            .expect("hkdf expansion to 32 bytes must succeed");
+            .map_err(|_| Error::Other("x25519 hkdf expansion failed".into()))?;
         Ok(SessionKey::new(okm.to_vec()))
     }
 
@@ -87,12 +88,25 @@ impl KeyExchangeScheme for X25519Sha256 {
         }
         let mut array = [0u8; Self::PUBLIC_KEY_SIZE];
         array.copy_from_slice(bytes);
-        Ok(PublicKey::from(array))
+        let public_key = PublicKey::from(array);
+        if is_low_order_public_key(&public_key) {
+            return Err(ParseError("x25519 public key is low-order".into()));
+        }
+        Ok(public_key)
     }
 
     const SHARED_SECRET_SIZE: usize = 32;
     const PUBLIC_KEY_SIZE: usize = 32;
     const PRIVATE_KEY_SIZE: usize = 32;
+}
+
+fn is_low_order_public_key(public_key: &PublicKey) -> bool {
+    let probe_secret = StaticSecret::from(LOW_ORDER_CHECK_PRIVATE_KEY);
+    probe_secret
+        .diffie_hellman(public_key)
+        .as_bytes()
+        .iter()
+        .all(|&byte| byte == 0)
 }
 
 #[cfg(test)]
@@ -145,5 +159,12 @@ mod tests {
         let low_order = PublicKey::from([0u8; 32]);
         let err = scheme.compute_shared_secret(&sk, &low_order);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn decode_public_key_rejects_low_order_public_key() {
+        let err = X25519Sha256::decode_public_key(&[0u8; 32])
+            .expect_err("low-order public key must be rejected while decoding");
+        assert!(err.to_string().contains("low-order"));
     }
 }

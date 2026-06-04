@@ -73,7 +73,9 @@ CASE_LABEL_LINE_RE = re.compile(
 ASSIGN_RE = re.compile(
     r'^\s*(spec_file|cfg_file)="\$spec_dir/([^"]+)"\s*$', re.MULTILINE
 )
-PROOF_INPUT_ASSIGNMENT_RE = re.compile(r"^\s*(spec_file|cfg_file)\s*=")
+SHELL_ASSIGNMENT_DECLARATION_PREFIX = (
+    r"(?:(?:declare|local|typeset|readonly|export)(?:\s+-[A-Za-z]+)*\s+)?"
+)
 MODULE_ASSIGN_RE = re.compile(r'^\s*module="([^"]+)"\s*$', re.MULTILINE)
 TLC_CONSTRAINT_ASSIGN_RE = re.compile(
     r'^\s*tlc_constraint="([^"]*)"\s*$', re.MULTILINE
@@ -98,20 +100,107 @@ APALACHE_TOOLCHAIN_PATH_VERSION_RE = re.compile(
 APALACHE_DOCKER_IMAGE_VERSION_RE = re.compile(
     r"\bghcr\.io/apalache-mc/apalache:([0-9]+\.[0-9]+\.[0-9]+)\b"
 )
-TLA_MODULE_RE = re.compile(r"^-{4}\s+MODULE\s+([A-Za-z0-9_]+)\s+-{4}\s*$")
+
+
+def shell_mutation_candidate_re(*variables: str) -> re.Pattern[str]:
+    """Return a regex for shell lines that can mutate the given variables."""
+    names = "|".join(re.escape(variable) for variable in variables)
+    return re.compile(
+        rf"^\s*(?:"
+        rf"{SHELL_ASSIGNMENT_DECLARATION_PREFIX}"
+        rf"(?:{names})(?:\[[^]]+\])?\s*\+?\s*="
+        rf"|printf\b(?=[^#\n]*\s-v\s+(?:{names})\b)"
+        rf"|read\b(?=[^#\n]*\b(?:{names})\b)"
+        rf"|unset\b(?=[^#\n]*\b(?:{names})\b)"
+        rf"|eval\b(?=[^#\n]*\b(?:{names})(?:\[[^]]+\])?\s*\+?\s*=)"
+        rf")"
+    )
+
+
+PROOF_INPUT_MUTATION_RE = shell_mutation_candidate_re("spec_file", "cfg_file")
+TLA_MODULE_RE = re.compile(
+    r"^-{4}\s+MODULE\s+([A-Za-z_][A-Za-z0-9_]*)\s+-{4}\s*$"
+)
 TLA_TERMINATOR_RE = re.compile(r"^={4}\s*$")
 TLA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-TLA_OPERATOR_DEFINITION_RE = re.compile(
+TLA_RESERVED_WORDS = {
+    "ASSUME",
+    "ASSUMPTION",
+    "AXIOM",
+    "CASE",
+    "CHOOSE",
+    "CONSTANT",
+    "CONSTANTS",
+    "DOMAIN",
+    "ELSE",
+    "ENABLED",
+    "EXCEPT",
+    "EXTENDS",
+    "FALSE",
+    "IF",
+    "IN",
+    "INSTANCE",
+    "LET",
+    "LOCAL",
+    "MODULE",
+    "OTHER",
+    "SF_",
+    "SUBSET",
+    "THEN",
+    "THEOREM",
+    "TRUE",
+    "UNCHANGED",
+    "UNION",
+    "VARIABLE",
+    "VARIABLES",
+    "WF_",
+    "WITH",
+}
+TLA_BOOLEAN_LITERAL_TOKEN_RE = re.compile(r"TRUE|FALSE|/\\|\\/|~|\(|\)")
+TLA_DECLARATION_LIST_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*,?\s*$"
+)
+TLA_OPERATOR_DEFINITION_BODY_RE = re.compile(
     r"^\s*(?:LOCAL\s+)?([A-Za-z_][A-Za-z0-9_]*)"
-    r"\s*(?:\([^)]*\))?\s*=="
+    r"(?:\s*\(([^()]*)\))?\s*==\s*(.*)$"
+)
+TLA_OPERATOR_DEFINITION_START_RE = re.compile(
+    r"^\s*(?:LOCAL\s+)?[A-Za-z_][A-Za-z0-9_]*"
 )
 TLA_RECURSIVE_RE = re.compile(r"^\s*RECURSIVE\s+(.+)$")
+TLA_RECURSIVE_ENTRY_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)(?:\((.*)\))?$"
+)
 TLA_EXTENDS_RE = re.compile(r"^\s*EXTENDS\s+(.+)$")
 TLA_INSTANCE_RE = re.compile(
     r"^\s*(?:LOCAL\s+)?"
-    r"(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*==\s*)?"
-    r"INSTANCE\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+    r"(?:(?P<alias>[A-Za-z_][A-Za-z0-9_]*)\s*==\s*)?"
+    r"INSTANCE\s+(?P<module>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s+WITH\s+.+)?\s*$"
 )
+TLA_INSTANCE_START_RE = re.compile(
+    r"^\s*(?:LOCAL\s+)?"
+    r"(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*==\s*)?"
+    r"INSTANCE\b"
+)
+TLA_INSTANCE_BODY_RE = re.compile(r"^INSTANCE\b")
+TLA_FORBIDDEN_DIRECTIVE_RE = re.compile(
+    r"^(ASSUME|ASSUMPTION|AXIOM|THEOREM|PROOF|QED|SUFFICES|HAVE|TAKE|PICK|"
+    r"WITNESS|OBVIOUS|OMITTED)\b"
+)
+TLA_PROOF_DIRECTIVE_WORDS = {
+    "HAVE",
+    "OBVIOUS",
+    "OMITTED",
+    "PICK",
+    "PROOF",
+    "QED",
+    "SUFFICES",
+    "TAKE",
+    "THEOREM",
+    "WITNESS",
+}
 TLA_VARS_DEFINITION_RE = re.compile(r"^\s*vars\s*==\s*(.*)$")
 TLA_IDENTIFIER_SCAN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 TLA_STANDARD_MODULES = {
@@ -130,23 +219,46 @@ TLA_CONSTANT_COLLECTION_STOP_DIRECTIVES = {
     "VARIABLE",
     "VARIABLES",
     "ASSUME",
-    "THEOREM",
+    "ASSUMPTION",
+    "AXIOM",
     "EXTENDS",
     "INSTANCE",
     "LOCAL",
     "RECURSIVE",
-}
+} | TLA_PROOF_DIRECTIVE_WORDS
 TLA_VARIABLE_DECLARATION_DIRECTIVES = {"VARIABLE", "VARIABLES"}
 TLA_VARIABLE_COLLECTION_STOP_DIRECTIVES = {
     "CONSTANT",
     "CONSTANTS",
     "ASSUME",
-    "THEOREM",
+    "ASSUMPTION",
+    "AXIOM",
     "EXTENDS",
     "INSTANCE",
     "LOCAL",
     "RECURSIVE",
-}
+} | TLA_PROOF_DIRECTIVE_WORDS
+
+
+def is_tla_user_identifier(value: str) -> bool:
+    """Return whether value can name a user-defined TLA symbol."""
+    return (
+        bool(TLA_IDENTIFIER_RE.match(value))
+        and value not in TLA_RESERVED_WORDS
+        and not value.startswith(("SF_", "WF_"))
+    )
+
+
+def is_tla_operator_name(value: str) -> bool:
+    """Return whether value can name a Sumeragi TLA proof target."""
+    return is_tla_user_identifier(value)
+
+
+def is_tla_module_name(value: str) -> bool:
+    """Return whether value can name a TLA module dependency."""
+    return is_tla_user_identifier(value)
+
+
 README_APALACHE_LENGTH_TABLE_HEADER = "| Mode | Length | Intended use |"
 README_TABLE_SEPARATOR_RE = re.compile(
     r"^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|\s*$"
@@ -154,7 +266,10 @@ README_TABLE_SEPARATOR_RE = re.compile(
 README_APALACHE_LENGTH_TABLE_ROW_RE = re.compile(
     r"^\|\s*`([A-Za-z0-9_-]+)`\s*\|\s*([^|]*?)\s*\|\s*([^|]+?)\s*\|\s*$"
 )
-CFG_CONSTANT_BINDING_RE = re.compile(
+CFG_CONSTANT_BINDING_LINE_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)\s*(.+)$"
+)
+CFG_NESTED_CONSTANT_BINDING_RE = re.compile(
     r"(^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)"
 )
 CFG_CONSTANT_DIRECTIVES = {"CONSTANT", "CONSTANTS"}
@@ -176,6 +291,7 @@ CFG_ALLOWED_DIRECTIVES = (
     | CFG_SINGLE_OPERATOR_DIRECTIVES
     | CFG_MULTI_OPERATOR_DIRECTIVES
 )
+CFG_NON_PROOF_OPERATOR_REFERENCES = {"vars"}
 TLC_SPECIFIC_MUTATION_CFG_PREFIXES = ("commit-roots-bug-",)
 FORMAL_FILE_SUFFIXES = {".cfg", ".tla"}
 
@@ -207,6 +323,18 @@ def display_path(path: Path) -> Path:
         return path.relative_to(ROOT_DIR)
     except ValueError:
         return path
+
+
+def indented_cfg_directive(line: str, directive: str) -> bool:
+    return line[:1].isspace() and directive in CFG_ALLOWED_DIRECTIVES
+
+
+def is_cfg_operator_reference_name(value: str) -> bool:
+    """Return whether value can be used as a CFG proof/behavior operator."""
+    return (
+        is_tla_operator_name(value)
+        and value not in CFG_NON_PROOF_OPERATOR_REFERENCES
+    )
 
 
 def command_modes(
@@ -270,7 +398,7 @@ def formal_artifact_paths(spec_dir: Path | None = None) -> tuple[Path, ...]:
         sorted(
             path
             for suffix in FORMAL_FILE_SUFFIXES
-            for path in spec_dir.glob(f"*{suffix}")
+            for path in spec_dir.rglob(f"*{suffix}")
         )
     )
 
@@ -561,7 +689,7 @@ def referenced_files(
     assignments: dict[str, list[str]] = {}
     errors: list[str] = []
     for offset, line in enumerate(case.body.splitlines(), 1):
-        if PROOF_INPUT_ASSIGNMENT_RE.match(line) and ASSIGN_RE.match(line) is None:
+        if PROOF_INPUT_MUTATION_RE.match(line) and ASSIGN_RE.match(line) is None:
             line_number = case.line + offset - 1
             errors.append(
                 f"{mode}: runner case {case.label!r} line {line_number} "
@@ -603,7 +731,7 @@ def malformed_scalar_assignment_errors(
     owner: str,
 ) -> list[str]:
     errors: list[str] = []
-    candidate_re = re.compile(rf"^\s*{re.escape(variable)}\s*=")
+    candidate_re = shell_mutation_candidate_re(variable)
     for offset, line in enumerate(case.body.splitlines(), 1):
         if candidate_re.match(line) and assignment_re.match(line) is None:
             line_number = case.line + offset - 1
@@ -681,7 +809,53 @@ def tlc_runner_constraint_errors(
         return errors
     definitions = tla_operator_definitions(module_path)
     if constraint in definitions:
+        signature = tla_operator_signatures(module_path).get(constraint)
+        if signature is not None and signature[1] != 0:
+            definition_line, arity = signature
+            errors.append(
+                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
+                f"{constraint}, but {display_path(module_path)}:{definition_line} "
+                f"defines it with arity {arity}; TLC runner constraints must "
+                "target zero-arity operators"
+            )
+            return errors
+
+        trivial_chains = tla_trivial_operator_chains(module_path)
+        chain = trivial_chains.get(constraint)
+        if chain is None:
+            return errors
+
+        definition_line = chain[0][1]
+        value = chain[-1][2]
+        if len(chain) == 1 and value in {"TRUE", "FALSE"}:
+            errors.append(
+                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
+                f"{constraint}, but {display_path(module_path)}:{definition_line} "
+                f"defines it as literal {value}"
+            )
+            return errors
+        if len(chain) == 1 and value == "TypeInvariant":
+            errors.append(
+                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
+                f"{constraint}, but {display_path(module_path)}:{definition_line} "
+                "aliases TypeInvariant directly"
+            )
+            return errors
+
+        chain_text = " -> ".join(
+            f"{name}@{display_path(module_path)}:{chain_line}"
+            for name, chain_line, _ in chain
+        )
+        if value in {"TRUE", "FALSE"}:
+            terminal = f"literal {value}"
+        else:
+            terminal = value
+        errors.append(
+            f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
+            f"{constraint}, but {chain_text} resolves to {terminal}"
+        )
         return errors
+
     errors.append(
         f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
         f"{constraint}, but {display_path(module_path)} does not define it"
@@ -770,6 +944,11 @@ def tla_module_header_errors(mode: str, paths: list[Path]) -> list[str]:
                 f"{mode}: {relative}:{line_number} declares MODULE after "
                 f"content at line {first_nonempty_line}"
             )
+        if not is_tla_module_name(declared):
+            errors.append(
+                f"{mode}: {relative}:{line_number} declares reserved TLA "
+                f"MODULE name {declared}"
+            )
         if declared != path.stem:
             errors.append(
                 f"{mode}: {relative} declares MODULE {declared}, "
@@ -841,6 +1020,14 @@ def cfg_directive_errors(path: Path) -> list[str]:
 
         parts = stripped.split()
         directive = parts[0]
+        if indented_cfg_directive(line, directive):
+            errors.append(
+                f"{display_path(path)}:{line_number} indented CFG directive "
+                f"{directive} must be top-level"
+            )
+            collecting = None
+            continue
+
         if collecting is not None and line[:1].isspace():
             continue
 
@@ -885,23 +1072,59 @@ def cfg_operator_references(path: Path) -> tuple[list[tuple[int, str, str]], lis
     references: list[tuple[int, str, str]] = []
     errors: list[str] = []
     collecting: str | None = None
+    collecting_line: int | None = None
+    collecting_entries = 0
+    collecting_invalid = False
+
+    def close_collecting() -> None:
+        nonlocal collecting, collecting_line, collecting_entries, collecting_invalid
+        if (
+            collecting is not None
+            and collecting_line is not None
+            and collecting_entries == 0
+            and not collecting_invalid
+        ):
+            errors.append(
+                f"{display_path(path)}:{collecting_line} {collecting} block "
+                "must reference at least one static TLA operator"
+            )
+        collecting = None
+        collecting_line = None
+        collecting_entries = 0
+        collecting_invalid = False
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
         stripped = line.split("\\*", 1)[0].strip()
         if not stripped:
-            collecting = None
+            close_collecting()
             continue
 
         parts = stripped.split()
         directive = parts[0]
+        if indented_cfg_directive(line, directive):
+            if collecting is not None:
+                collecting_invalid = True
+            errors.append(
+                f"{display_path(path)}:{line_number} indented CFG directive "
+                f"{directive} must be top-level"
+            )
+            close_collecting()
+            continue
+
         if directive in CFG_SINGLE_OPERATOR_DIRECTIVES:
-            collecting = None
+            close_collecting()
             if len(parts) != 2:
                 errors.append(
                     f"{display_path(path)}:{line_number} directive {directive} "
                     f"must reference exactly one operator"
                 )
-            elif not TLA_IDENTIFIER_RE.match(parts[1]):
+            elif parts[1] in CFG_NON_PROOF_OPERATOR_REFERENCES:
+                errors.append(
+                    f"{display_path(path)}:{line_number} directive {directive} "
+                    "must reference a TLA operator other than "
+                    f"{parts[1]} tuple"
+                )
+            elif not is_cfg_operator_reference_name(parts[1]):
                 errors.append(
                     f"{display_path(path)}:{line_number} directive {directive} "
                     f"must reference a static TLA operator: {parts[1]}"
@@ -912,8 +1135,15 @@ def cfg_operator_references(path: Path) -> tuple[list[tuple[int, str, str]], lis
 
         if directive in CFG_MULTI_OPERATOR_DIRECTIVES:
             if len(parts) > 1:
+                close_collecting()
                 for operator in parts[1:]:
-                    if not TLA_IDENTIFIER_RE.match(operator):
+                    if operator in CFG_NON_PROOF_OPERATOR_REFERENCES:
+                        errors.append(
+                            f"{display_path(path)}:{line_number} directive "
+                            f"{directive} must reference TLA operators other "
+                            f"than {operator} tuple"
+                        )
+                    elif not is_cfg_operator_reference_name(operator):
                         errors.append(
                             f"{display_path(path)}:{line_number} directive "
                             f"{directive} must reference static TLA operators: "
@@ -921,42 +1151,160 @@ def cfg_operator_references(path: Path) -> tuple[list[tuple[int, str, str]], lis
                         )
                     else:
                         references.append((line_number, directive, operator))
-                collecting = None
             else:
+                close_collecting()
                 collecting = directive
+                collecting_line = line_number
+                collecting_entries = 0
+                collecting_invalid = False
             continue
 
         if collecting is not None and line[:1].isspace():
-            if len(parts) != 1 or not TLA_IDENTIFIER_RE.match(parts[0]):
+            if len(parts) != 1:
+                collecting_invalid = True
+                errors.append(
+                    f"{display_path(path)}:{line_number} {collecting} "
+                    "block line must reference exactly one static TLA operator"
+                )
+            elif parts[0] in CFG_NON_PROOF_OPERATOR_REFERENCES:
+                collecting_invalid = True
+                errors.append(
+                    f"{display_path(path)}:{line_number} {collecting} "
+                    "block line must reference a TLA operator other than "
+                    f"{parts[0]} tuple"
+                )
+            elif not is_cfg_operator_reference_name(parts[0]):
+                collecting_invalid = True
                 errors.append(
                     f"{display_path(path)}:{line_number} {collecting} "
                     "block line must reference exactly one static TLA operator"
                 )
             else:
                 references.append((line_number, collecting, parts[0]))
+                collecting_entries += 1
             continue
 
-        collecting = None
+        close_collecting()
 
+    close_collecting()
     return references, errors
 
 
 @cache
 def tla_operator_definition_entries(path: Path) -> list[tuple[int, str]]:
-    entries: list[tuple[int, str]] = []
-    for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0]
-        if stripped.startswith((" ", "\t")):
-            continue
-        match = TLA_OPERATOR_DEFINITION_RE.match(stripped)
-        if match is not None:
-            entries.append((line_number, match.group(1)))
+    entries, _ = tla_operator_definition_entries_and_errors(path)
     return entries
 
 
 @cache
+def tla_operator_definition_entries_and_errors(
+    path: Path,
+) -> tuple[list[tuple[int, str]], list[str]]:
+    signature_entries, errors = tla_operator_definition_signature_entries_and_errors(
+        path
+    )
+    return [(line_number, name) for line_number, name, _ in signature_entries], errors
+
+
+@cache
+def tla_operator_definition_signature_entries_and_errors(
+    path: Path,
+) -> tuple[list[tuple[int, str, int]], list[str]]:
+    entries: list[tuple[int, str, int]] = []
+    errors: list[str] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = line.split("\\*", 1)[0]
+        if stripped.startswith((" ", "\t")):
+            continue
+        if TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip()):
+            continue
+
+        match = TLA_OPERATOR_DEFINITION_BODY_RE.match(stripped)
+        if match is None:
+            if "==" in stripped and TLA_OPERATOR_DEFINITION_START_RE.match(stripped):
+                errors.append(
+                    f"{display_path(path)}:{line_number} TLA operator "
+                    f"definition must use a static signature: {stripped.strip()}"
+                )
+            continue
+
+        body = match.group(3).strip()
+        if TLA_INSTANCE_BODY_RE.match(body):
+            continue
+        if not is_tla_operator_name(match.group(1)):
+            errors.append(
+                f"{display_path(path)}:{line_number} TLA operator "
+                "definition must use a non-reserved static name: "
+                f"{stripped.strip()}"
+            )
+            continue
+        params = match.group(2)
+        arity = 0
+        if params is not None:
+            param_names = [param.strip() for param in params.split(",")]
+            if not param_names or any(
+                not is_tla_operator_name(param) for param in param_names
+            ):
+                errors.append(
+                    f"{display_path(path)}:{line_number} TLA operator "
+                    "definition must use static parameters: "
+                    f"{stripped.strip()}"
+                )
+                continue
+            arity = len(param_names)
+        entries.append((line_number, match.group(1), arity))
+    return entries, errors
+
+
+def tla_operator_definition_parse_errors(path: Path) -> list[str]:
+    _, errors = tla_operator_definition_entries_and_errors(path)
+    return errors
+
+
+@cache
 def tla_recursive_declaration_entries(path: Path) -> list[tuple[int, str]]:
-    entries: list[tuple[int, str]] = []
+    entries, _ = tla_recursive_declaration_entries_and_errors(path)
+    return entries
+
+
+def split_top_level_commas(text: str) -> tuple[list[str], str | None]:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return [], "unbalanced parentheses"
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    if depth != 0:
+        return [], "unbalanced parentheses"
+    parts.append(text[start:].strip())
+    if any(not part for part in parts):
+        return [], "empty recursive declaration entry"
+    return parts, None
+
+
+@cache
+def tla_recursive_declaration_entries_and_errors(
+    path: Path,
+) -> tuple[list[tuple[int, str]], list[str]]:
+    signature_entries, errors = tla_recursive_declaration_signature_entries_and_errors(
+        path
+    )
+    return [(line_number, name) for line_number, name, _ in signature_entries], errors
+
+
+@cache
+def tla_recursive_declaration_signature_entries_and_errors(
+    path: Path,
+) -> tuple[list[tuple[int, str, int]], list[str]]:
+    entries: list[tuple[int, str, int]] = []
+    errors: list[str] = []
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
         stripped = line.split("\\*", 1)[0]
         if stripped.startswith((" ", "\t")):
@@ -965,26 +1313,294 @@ def tla_recursive_declaration_entries(path: Path) -> list[tuple[int, str]]:
         match = TLA_RECURSIVE_RE.match(stripped)
         if match is None:
             continue
-        for part in match.group(1).split(","):
-            name = part.strip().split("(", 1)[0].strip()
-            if TLA_IDENTIFIER_RE.match(name):
-                entries.append((line_number, name))
-    return entries
+
+        parts, split_error = split_top_level_commas(match.group(1).strip())
+        if split_error is not None:
+            errors.append(
+                f"{display_path(path)}:{line_number} RECURSIVE declaration "
+                f"must list static operator declarations: {split_error}"
+            )
+            continue
+
+        line_entries: list[tuple[int, str, int]] = []
+        line_errors: list[str] = []
+        for part in parts:
+            entry_match = TLA_RECURSIVE_ENTRY_RE.match(part)
+            if entry_match is None:
+                line_errors.append(part)
+                continue
+            if not is_tla_operator_name(entry_match.group(1)):
+                line_errors.append(part)
+                continue
+            params = entry_match.group(2)
+            arity = 0
+            if params is not None:
+                param_names = [param.strip() for param in params.split(",")]
+                if not param_names or any(
+                    param != "_" and not is_tla_operator_name(param)
+                    for param in param_names
+                ):
+                    line_errors.append(part)
+                    continue
+                arity = len(param_names)
+            line_entries.append((line_number, entry_match.group(1), arity))
+
+        if line_errors:
+            errors.append(
+                f"{display_path(path)}:{line_number} RECURSIVE declaration "
+                "must list static operator declarations: "
+                + ", ".join(line_errors)
+            )
+            continue
+        entries.extend(line_entries)
+    return entries, errors
+
+
+def tla_recursive_declaration_parse_errors(path: Path) -> list[str]:
+    _, errors = tla_recursive_declaration_entries_and_errors(path)
+    return errors
 
 
 @cache
 def tla_operator_definitions(path: Path) -> set[str]:
     definitions = {name for _, name in tla_operator_definition_entries(path)}
-    for _, name in tla_recursive_declaration_entries(path):
-        definitions.add(name)
     return definitions
+
+
+@cache
+def tla_operator_signatures(path: Path) -> dict[str, tuple[int, int]]:
+    signatures: dict[str, tuple[int, int]] = {}
+    for line_number, name, arity in tla_operator_definition_signature_entries_and_errors(
+        path
+    )[0]:
+        signatures[name] = (line_number, arity)
+    return signatures
+
+
+@cache
+def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[int, str]]:
+    entries: dict[str, tuple[int, str]] = {}
+    lines = read_text(path).splitlines()
+    for index, line in enumerate(lines):
+        line_number = index + 1
+        stripped = line.split("\\*", 1)[0]
+        if stripped.startswith((" ", "\t")):
+            continue
+        if TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip()):
+            continue
+        match = TLA_OPERATOR_DEFINITION_BODY_RE.match(stripped)
+        if match is None:
+            continue
+        body = match.group(3).strip()
+        if TLA_INSTANCE_BODY_RE.match(body):
+            continue
+        if not is_tla_operator_name(match.group(1)):
+            continue
+        params = match.group(2)
+        if params is not None:
+            param_names = [param.strip() for param in params.split(",")]
+            if not param_names or any(
+                not is_tla_operator_name(param) for param in param_names
+            ):
+                continue
+        if body:
+            entries[match.group(1)] = (line_number, body)
+            continue
+
+        body_lines: list[tuple[int, str]] = []
+        for body_index, body_line in enumerate(lines[index + 1 :], line_number + 1):
+            body_stripped = body_line.split("\\*", 1)[0]
+            if not body_stripped.strip():
+                continue
+            if not body_stripped.startswith((" ", "\t")):
+                break
+            body_lines.append((body_index, body_stripped.strip()))
+
+        if body_lines:
+            entries[match.group(1)] = (
+                body_lines[0][0],
+                " ".join(body for _, body in body_lines),
+            )
+    return entries
+
+
+@cache
+def tla_literal_operator_definitions(path: Path) -> dict[str, tuple[int, str]]:
+    return {
+        name: entry
+        for name, entry in tla_single_expression_operator_definitions(path).items()
+        if entry[1] in {"TRUE", "FALSE"}
+    }
+
+
+@cache
+def tla_type_invariant_alias_definitions(path: Path) -> dict[str, tuple[int, str]]:
+    return {
+        name: entry
+        for name, entry in tla_single_expression_operator_definitions(path).items()
+        if entry[1] == "TypeInvariant"
+    }
+
+
+def strip_static_outer_parentheses(expression: str) -> str:
+    stripped = expression.strip()
+    while stripped.startswith("(") and stripped.endswith(")"):
+        depth = 0
+        encloses_full_expression = True
+        for index, char in enumerate(stripped):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    return stripped
+                if depth == 0 and index != len(stripped) - 1:
+                    encloses_full_expression = False
+                    break
+        if depth != 0 or not encloses_full_expression:
+            return stripped
+        stripped = stripped[1:-1].strip()
+    return stripped
+
+
+def tla_static_identifier_alias(expression: str) -> str | None:
+    stripped = strip_static_outer_parentheses(expression)
+    if TLA_IDENTIFIER_RE.match(stripped):
+        return stripped
+    return None
+
+
+def tla_static_boolean_literal(expression: str) -> str | None:
+    tokens: list[str] = []
+    index = 0
+    while index < len(expression):
+        if expression[index].isspace():
+            index += 1
+            continue
+        match = TLA_BOOLEAN_LITERAL_TOKEN_RE.match(expression, index)
+        if match is None:
+            return None
+        tokens.append(match.group(0))
+        index = match.end()
+    if not tokens:
+        return None
+
+    position = 0
+
+    def peek() -> str | None:
+        if position >= len(tokens):
+            return None
+        return tokens[position]
+
+    def parse_atom() -> bool | None:
+        nonlocal position
+        token = peek()
+        if token is None:
+            return None
+        if token == "~":
+            position += 1
+            value = parse_atom()
+            if value is None:
+                return None
+            return not value
+        if token in {"/\\", "\\/"}:
+            position += 1
+            return parse_atom()
+        if token == "(":
+            position += 1
+            value = parse_or()
+            if value is None or peek() != ")":
+                return None
+            position += 1
+            return value
+        if token == "TRUE":
+            position += 1
+            return True
+        if token == "FALSE":
+            position += 1
+            return False
+        return None
+
+    def parse_and() -> bool | None:
+        nonlocal position
+        value = parse_atom()
+        if value is None:
+            return None
+        while peek() == "/\\":
+            position += 1
+            rhs = parse_atom()
+            if rhs is None:
+                return None
+            value = value and rhs
+        return value
+
+    def parse_or() -> bool | None:
+        nonlocal position
+        value = parse_and()
+        if value is None:
+            return None
+        while peek() == "\\/":
+            position += 1
+            rhs = parse_and()
+            if rhs is None:
+                return None
+            value = value or rhs
+        return value
+
+    value = parse_or()
+    if value is None or position != len(tokens):
+        return None
+    return "TRUE" if value else "FALSE"
+
+
+def tla_trivial_terminal_expression(expression: str) -> str | None:
+    literal = tla_static_boolean_literal(expression)
+    if literal is not None:
+        return literal
+    alias = tla_static_identifier_alias(expression)
+    if alias == "TypeInvariant":
+        return alias
+    return None
+
+
+@cache
+def tla_trivial_operator_chains(
+    path: Path,
+) -> dict[str, list[tuple[str, int, str]]]:
+    single_expressions = tla_single_expression_operator_definitions(path)
+    chains: dict[str, list[tuple[str, int, str]]] = {}
+
+    for operator in single_expressions:
+        current = operator
+        seen: set[str] = set()
+        chain: list[tuple[str, int, str]] = []
+        while current in single_expressions and current not in seen:
+            seen.add(current)
+            line_number, body = single_expressions[current]
+            terminal = tla_trivial_terminal_expression(body)
+            if terminal is not None:
+                chain.append((current, line_number, terminal))
+                chains[operator] = chain
+                break
+            target = tla_static_identifier_alias(body)
+            if target is None:
+                break
+            chain.append((current, line_number, target))
+            current = target
+
+    return chains
 
 
 def tla_duplicate_operator_definition_errors(mode: str, path: Path) -> list[str]:
     if not path.exists():
         return []
 
-    errors: list[str] = []
+    errors = [
+        f"{mode}: {error}" for error in tla_recursive_declaration_parse_errors(path)
+    ]
+    errors.extend(
+        f"{mode}: {error}" for error in tla_operator_definition_parse_errors(path)
+    )
     seen_definitions: dict[str, int] = {}
     for line_number, operator in tla_operator_definition_entries(path):
         previous_line = seen_definitions.get(operator)
@@ -1008,6 +1624,32 @@ def tla_duplicate_operator_definition_errors(mode: str, path: Path) -> list[str]
             )
         else:
             seen_recursive[operator] = line_number
+
+    definition_signatures = {
+        name: (line_number, arity)
+        for line_number, name, arity in tla_operator_definition_signature_entries_and_errors(
+            path
+        )[0]
+    }
+    for line_number, operator, arity in tla_recursive_declaration_signature_entries_and_errors(
+        path
+    )[0]:
+        definition = definition_signatures.get(operator)
+        if definition is None:
+            errors.append(
+                f"{mode}: {display_path(path)}:{line_number} declares "
+                f"TLA RECURSIVE operator {operator}, but no top-level "
+                "definition exists"
+            )
+            continue
+        definition_line, definition_arity = definition
+        if definition_arity != arity:
+            errors.append(
+                f"{mode}: {display_path(path)}:{line_number} declares "
+                f"TLA RECURSIVE operator {operator} with arity {arity}, but "
+                f"definition at line {definition_line} has arity "
+                f"{definition_arity}"
+            )
     return errors
 
 
@@ -1025,12 +1667,23 @@ def tla_module_dependency_references(
 
         match = TLA_EXTENDS_RE.match(stripped)
         if match is not None:
-            modules = TLA_IDENTIFIER_SCAN_RE.findall(match.group(1))
-            if not modules:
+            modules = [module.strip() for module in match.group(1).split(",")]
+            if not modules or any(
+                not TLA_IDENTIFIER_RE.match(module) for module in modules
+            ):
                 errors.append(
                     f"{display_path(path)}:{line_number} EXTENDS "
-                    "must name at least one module"
+                    "must list static module identifiers: "
+                    f"{match.group(1).strip()}"
                 )
+                continue
+            if any(not is_tla_module_name(module) for module in modules):
+                errors.append(
+                    f"{display_path(path)}:{line_number} EXTENDS "
+                    "must list non-reserved static module identifiers: "
+                    f"{match.group(1).strip()}"
+                )
+                continue
             references.extend(
                 (line_number, "EXTENDS", module) for module in modules
             )
@@ -1038,7 +1691,30 @@ def tla_module_dependency_references(
 
         match = TLA_INSTANCE_RE.match(stripped)
         if match is not None:
-            references.append((line_number, "INSTANCE", match.group(1)))
+            alias = match.group("alias")
+            if alias is not None and not is_tla_user_identifier(alias):
+                errors.append(
+                    f"{display_path(path)}:{line_number} INSTANCE alias "
+                    "must be a non-reserved static identifier: "
+                    f"{stripped}"
+                )
+                continue
+            module = match.group("module")
+            if not is_tla_module_name(module):
+                errors.append(
+                    f"{display_path(path)}:{line_number} INSTANCE "
+                    "must reference a non-reserved static module identifier: "
+                    f"{stripped}"
+                )
+                continue
+            references.append((line_number, "INSTANCE", module))
+            continue
+
+        if TLA_INSTANCE_START_RE.match(stripped):
+            errors.append(
+                f"{display_path(path)}:{line_number} INSTANCE "
+                f"must reference a static module identifier: {stripped}"
+            )
 
     return references, errors
 
@@ -1063,10 +1739,90 @@ def tla_module_dependency_errors(mode: str, path: Path) -> list[str]:
     return errors
 
 
+def tla_forbidden_directive_errors(mode: str, path: Path) -> list[str]:
+    if not path.exists():
+        return []
+
+    errors: list[str] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = line.split("\\*", 1)[0]
+        if not stripped.strip() or stripped.startswith((" ", "\t")):
+            continue
+        match = TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip())
+        if match is None:
+            continue
+        if match.group(1) in TLA_PROOF_DIRECTIVE_WORDS:
+            reason = "proof-free"
+        else:
+            reason = "assumption-free"
+        errors.append(
+            f"{mode}: {display_path(path)}:{line_number} uses top-level "
+            f"{match.group(1)} directive; Sumeragi formal modules must be "
+            f"{reason}"
+        )
+    return errors
+
+
 @cache
-def tla_constant_declaration_entries(path: Path) -> list[tuple[int, str]]:
+def tla_declaration_block_entries(
+    path: Path,
+    declaration_directives: frozenset[str],
+    stop_directives: frozenset[str],
+    label: str,
+) -> tuple[list[tuple[int, str]], list[str]]:
     entries: list[tuple[int, str]] = []
-    collecting = False
+    errors: list[str] = []
+    collecting_label: str | None = None
+    collecting_line: int | None = None
+    collecting_entries = 0
+    collecting_invalid = False
+    collecting_pending_comma_line: int | None = None
+
+    def close_collecting() -> None:
+        nonlocal collecting_label, collecting_line, collecting_entries
+        nonlocal collecting_invalid, collecting_pending_comma_line
+        if (
+            collecting_label is not None
+            and collecting_line is not None
+            and collecting_entries == 0
+            and not collecting_invalid
+        ):
+            errors.append(
+                f"{display_path(path)}:{collecting_line} {label} block "
+                "must declare at least one identifier"
+            )
+        elif (
+            collecting_label is not None
+            and collecting_pending_comma_line is not None
+            and not collecting_invalid
+        ):
+            errors.append(
+                f"{display_path(path)}:{collecting_pending_comma_line} "
+                f"{label} declaration block ends with trailing comma"
+            )
+        collecting_label = None
+        collecting_line = None
+        collecting_entries = 0
+        collecting_invalid = False
+        collecting_pending_comma_line = None
+
+    def parse_declaration_line(
+        line_number: int, declaration: str
+    ) -> tuple[list[str], bool]:
+        if not TLA_DECLARATION_LIST_RE.match(declaration):
+            errors.append(
+                f"{display_path(path)}:{line_number} {label} declaration "
+                f"line must list static identifiers: {declaration}"
+            )
+            return [], False
+        names = TLA_IDENTIFIER_SCAN_RE.findall(declaration)
+        if any(not is_tla_user_identifier(name) for name in names):
+            errors.append(
+                f"{display_path(path)}:{line_number} {label} declaration "
+                f"line must list non-reserved static identifiers: {declaration}"
+            )
+            return [], False
+        return names, declaration.endswith(",")
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
         stripped = line.split("\\*", 1)[0].strip()
@@ -1075,26 +1831,66 @@ def tla_constant_declaration_entries(path: Path) -> list[tuple[int, str]]:
 
         parts = stripped.split()
         directive = parts[0]
-        if directive in TLA_CONSTANT_DECLARATION_DIRECTIVES:
-            collecting = True
+        if directive in declaration_directives:
+            close_collecting()
             rest = stripped[len(directive) :].strip()
-            entries.extend(
-                (line_number, name)
-                for name in TLA_IDENTIFIER_SCAN_RE.findall(rest)
-            )
+            if not rest:
+                collecting_label = label
+                collecting_line = line_number
+                collecting_entries = 0
+                collecting_invalid = False
+                collecting_pending_comma_line = None
+                continue
+
+            names, pending_comma = parse_declaration_line(line_number, rest)
+            entries.extend((line_number, name) for name in names)
+            if pending_comma:
+                collecting_label = label
+                collecting_line = line_number
+                collecting_entries = len(names)
+                collecting_invalid = not names
+                collecting_pending_comma_line = line_number
             continue
 
-        if not collecting:
+        if collecting_label is None:
             continue
-        if directive in TLA_CONSTANT_COLLECTION_STOP_DIRECTIVES or "==" in stripped:
-            collecting = False
+        if directive in stop_directives or "==" in stripped:
+            close_collecting()
             continue
-        entries.extend(
-            (line_number, name)
-            for name in TLA_IDENTIFIER_SCAN_RE.findall(stripped)
-        )
+        names, pending_comma = parse_declaration_line(line_number, stripped)
+        entries.extend((line_number, name) for name in names)
+        if not names:
+            collecting_invalid = True
+            collecting_pending_comma_line = None
+            continue
+        collecting_pending_comma_line = None
+        collecting_entries += len(names)
+        if pending_comma:
+            collecting_pending_comma_line = line_number
 
+    close_collecting()
+    return entries, errors
+
+
+@cache
+def tla_constant_declaration_entries(path: Path) -> list[tuple[int, str]]:
+    entries, _ = tla_declaration_block_entries(
+        path,
+        frozenset(TLA_CONSTANT_DECLARATION_DIRECTIVES),
+        frozenset(TLA_CONSTANT_COLLECTION_STOP_DIRECTIVES),
+        "CONSTANTS",
+    )
     return entries
+
+
+def tla_constant_declaration_parse_errors(path: Path) -> list[str]:
+    _, errors = tla_declaration_block_entries(
+        path,
+        frozenset(TLA_CONSTANT_DECLARATION_DIRECTIVES),
+        frozenset(TLA_CONSTANT_COLLECTION_STOP_DIRECTIVES),
+        "CONSTANTS",
+    )
+    return errors
 
 
 @cache
@@ -1107,7 +1903,9 @@ def tla_duplicate_constant_declaration_errors(mode: str, path: Path) -> list[str
     if not path.exists():
         return []
 
-    errors: list[str] = []
+    errors = [
+        f"{mode}: {error}" for error in tla_constant_declaration_parse_errors(path)
+    ]
     seen: dict[str, int] = {}
     for line_number, constant in tla_constant_declaration_entries(path):
         previous_line = seen.get(constant)
@@ -1124,36 +1922,23 @@ def tla_duplicate_constant_declaration_errors(mode: str, path: Path) -> list[str
 
 @cache
 def tla_variable_declaration_entries(path: Path) -> list[tuple[int, str]]:
-    entries: list[tuple[int, str]] = []
-    collecting = False
-
-    for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0].strip()
-        if not stripped:
-            continue
-
-        parts = stripped.split()
-        directive = parts[0]
-        if directive in TLA_VARIABLE_DECLARATION_DIRECTIVES:
-            collecting = True
-            rest = stripped[len(directive) :].strip()
-            entries.extend(
-                (line_number, name)
-                for name in TLA_IDENTIFIER_SCAN_RE.findall(rest)
-            )
-            continue
-
-        if not collecting:
-            continue
-        if directive in TLA_VARIABLE_COLLECTION_STOP_DIRECTIVES or "==" in stripped:
-            collecting = False
-            continue
-        entries.extend(
-            (line_number, name)
-            for name in TLA_IDENTIFIER_SCAN_RE.findall(stripped)
-        )
-
+    entries, _ = tla_declaration_block_entries(
+        path,
+        frozenset(TLA_VARIABLE_DECLARATION_DIRECTIVES),
+        frozenset(TLA_VARIABLE_COLLECTION_STOP_DIRECTIVES),
+        "VARIABLES",
+    )
     return entries
+
+
+def tla_variable_declaration_parse_errors(path: Path) -> list[str]:
+    _, errors = tla_declaration_block_entries(
+        path,
+        frozenset(TLA_VARIABLE_DECLARATION_DIRECTIVES),
+        frozenset(TLA_VARIABLE_COLLECTION_STOP_DIRECTIVES),
+        "VARIABLES",
+    )
+    return errors
 
 
 @cache
@@ -1193,7 +1978,13 @@ def tla_vars_tuple_entries(
     line_number, body = definitions[0]
     start = body.find("<<")
     end = body.rfind(">>")
-    if start == -1 or end == -1 or end <= start:
+    if (
+        start == -1
+        or end == -1
+        or end <= start
+        or body[:start].strip()
+        or body[end + 2 :].strip()
+    ):
         errors.append(
             f"{display_path(path)}:{line_number} vars must be a static tuple"
         )
@@ -1213,6 +2004,11 @@ def tla_vars_tuple_entries(
                 f"{display_path(path)}:{line_number} vars must list "
                 f"static variables: {name}"
             )
+        elif not is_tla_user_identifier(name):
+            errors.append(
+                f"{display_path(path)}:{line_number} vars must list "
+                f"non-reserved static variables: {name}"
+            )
         else:
             entries.append((line_number, name))
     return entries, errors
@@ -1225,6 +2021,10 @@ def tla_variable_surface_errors(mode: str, path: Path) -> list[str]:
     errors: list[str] = []
     declarations = tla_variable_declaration_entries(path)
     vars_entries, parse_errors = tla_vars_tuple_entries(path)
+    errors.extend(
+        f"{mode}: {error}"
+        for error in tla_variable_declaration_parse_errors(path)
+    )
     errors.extend(f"{mode}: {error}" for error in parse_errors)
 
     seen_declarations: dict[str, int] = {}
@@ -1271,44 +2071,98 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
     bindings: list[tuple[int, str]] = []
     errors: list[str] = []
     collecting = False
+    collecting_line: int | None = None
+    collecting_entries = 0
+    collecting_invalid = False
+
+    def close_collecting() -> None:
+        nonlocal collecting, collecting_line, collecting_entries, collecting_invalid
+        if (
+            collecting
+            and collecting_line is not None
+            and collecting_entries == 0
+            and not collecting_invalid
+        ):
+            errors.append(
+                f"{display_path(path)}:{collecting_line} CONSTANTS block "
+                "must bind at least one constant"
+            )
+        collecting = False
+        collecting_line = None
+        collecting_entries = 0
+        collecting_invalid = False
+
+    def parse_binding(line_number: int, text: str, context: str) -> str | None:
+        match = CFG_CONSTANT_BINDING_LINE_RE.match(text)
+        if match is None:
+            errors.append(
+                f"{display_path(path)}:{line_number} {context} "
+                "must bind exactly one constant"
+            )
+            return None
+        constant = match.group(1)
+        if not is_tla_user_identifier(constant):
+            errors.append(
+                f"{display_path(path)}:{line_number} {context} "
+                f"must bind a non-reserved static constant: {constant}"
+            )
+            return None
+        rhs = match.group(2).strip()
+        nested_match = CFG_NESTED_CONSTANT_BINDING_RE.search(rhs)
+        if nested_match is not None:
+            errors.append(
+                f"{display_path(path)}:{line_number} {context} contains "
+                f"nested binding-looking token {nested_match.group(2)}"
+            )
+            return None
+        return constant
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
         stripped = line.split("\\*", 1)[0].strip()
         if not stripped:
-            collecting = False
+            close_collecting()
             continue
 
         parts = stripped.split()
         directive = parts[0]
+        if indented_cfg_directive(line, directive):
+            errors.append(
+                f"{display_path(path)}:{line_number} indented CFG directive "
+                f"{directive} must be top-level"
+            )
+            collecting_invalid = True
+            close_collecting()
+            continue
+
         if directive in CFG_CONSTANT_DIRECTIVES:
+            close_collecting()
             rest = stripped[len(directive) :].strip()
             if not rest:
                 collecting = True
+                collecting_line = line_number
+                collecting_entries = 0
+                collecting_invalid = False
                 continue
-            matches = list(CFG_CONSTANT_BINDING_RE.finditer(rest))
-            if not matches:
-                errors.append(
-                    f"{display_path(path)}:{line_number} directive {directive} "
-                    "must bind at least one constant"
-                )
-            bindings.extend((line_number, match.group(2)) for match in matches)
-            collecting = False
+            binding = parse_binding(
+                line_number, rest, f"directive {directive}"
+            )
+            if binding is not None:
+                bindings.append((line_number, binding))
             continue
 
         if not collecting:
             continue
         if not line[:1].isspace():
-            collecting = False
+            close_collecting()
             continue
-        match = CFG_CONSTANT_BINDING_RE.search(stripped)
-        if match is None:
-            errors.append(
-                f"{display_path(path)}:{line_number} CONSTANTS block line "
-                "must bind a constant"
-            )
+        binding = parse_binding(line_number, stripped, "CONSTANTS block line")
+        if binding is None:
+            collecting_invalid = True
             continue
-        bindings.append((line_number, match.group(2)))
+        bindings.append((line_number, binding))
+        collecting_entries += 1
 
+    close_collecting()
     return bindings, errors
 
 
@@ -1381,6 +2235,7 @@ def cfg_operator_reference_errors(mode: str, module_path: Path, cfg_path: Path) 
 
     references, parse_errors = cfg_operator_references(cfg_path)
     definitions = tla_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
     errors = [f"{mode}: {error}" for error in parse_errors]
     for line_number, directive, operator in references:
         if operator not in definitions:
@@ -1388,6 +2243,17 @@ def cfg_operator_reference_errors(mode: str, module_path: Path, cfg_path: Path) 
                 f"{mode}: {display_path(cfg_path)}:{line_number} references "
                 f"{directive} operator {operator}, but {display_path(module_path)} "
                 f"does not define it"
+            )
+            continue
+        signature = signatures.get(operator)
+        if signature is not None and signature[1] != 0:
+            definition_line, arity = signature
+            errors.append(
+                f"{mode}: {display_path(cfg_path)}:{line_number} references "
+                f"{directive} operator {operator}, but "
+                f"{display_path(module_path)}:{definition_line} defines it "
+                f"with arity {arity}; CFG references must target zero-arity "
+                "operators"
             )
     return errors
 
@@ -1409,19 +2275,23 @@ def cfg_duplicate_operator_reference_errors(mode: str, cfg_path: Path) -> list[s
         return []
 
     errors: list[str] = []
-    seen_behavior: dict[str, int] = {}
+    seen_singleton: dict[str, int] = {}
     seen_checks: dict[tuple[str, str], int] = {}
     for line_number, directive, operator in references:
-        if directive in {"SPECIFICATION", "INIT", "NEXT"}:
-            previous_line = seen_behavior.get(directive)
+        if directive in {"SPECIFICATION", "INIT", "NEXT", "CONSTRAINT"}:
+            previous_line = seen_singleton.get(directive)
             if previous_line is not None:
+                label = (
+                    f"{directive} behavior directive"
+                    if directive in {"SPECIFICATION", "INIT", "NEXT"}
+                    else f"{directive} directive"
+                )
                 errors.append(
                     f"{mode}: {display_path(cfg_path)}:{line_number} repeats "
-                    f"{directive} behavior directive first declared at line "
-                    f"{previous_line}"
+                    f"{label} first declared at line {previous_line}"
                 )
             else:
-                seen_behavior[directive] = line_number
+                seen_singleton[directive] = line_number
             continue
 
         if directive not in CFG_CHECK_DIRECTIVES:
@@ -1463,6 +2333,69 @@ def cfg_semantic_check_errors(
         f"{mode}: {runner_name} cfg {display_path(cfg_file)} "
         "has no non-TypeInvariant invariant/property check"
     ]
+
+
+def cfg_trivial_check_operator_errors(
+    mode: str,
+    module_path: Path,
+    cfg_path: Path,
+    runner_name: str,
+) -> list[str]:
+    if not module_path.exists() or not cfg_path.exists():
+        return []
+
+    references, parse_errors = cfg_operator_references(cfg_path)
+    if parse_errors:
+        return []
+
+    trivial_chains = tla_trivial_operator_chains(module_path)
+    errors: list[str] = []
+    for line_number, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES and directive != "CONSTRAINT":
+            continue
+        if directive in CFG_CHECK_DIRECTIVES and operator == "TypeInvariant":
+            continue
+        chain = trivial_chains.get(operator)
+        if chain is None:
+            continue
+
+        definition_line = chain[0][1]
+        value = chain[-1][2]
+        if directive == "CONSTRAINT":
+            reference_kind = f"{directive} operator {operator}"
+        else:
+            reference_kind = f"{directive} check {operator}"
+        if len(chain) == 1 and value in {"TRUE", "FALSE"}:
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_path)}:{line_number} "
+                f"references {reference_kind}, but "
+                f"{display_path(module_path)}:{definition_line} defines it as "
+                f"literal {value}"
+            )
+            continue
+        if len(chain) == 1 and value == "TypeInvariant":
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_path)}:{line_number} "
+                f"references {reference_kind}, but "
+                f"{display_path(module_path)}:{definition_line} aliases "
+                "TypeInvariant directly"
+            )
+            continue
+
+        chain_text = " -> ".join(
+            f"{name}@{display_path(module_path)}:{chain_line}"
+            for name, chain_line, _ in chain
+        )
+        if value in {"TRUE", "FALSE"}:
+            terminal = f"literal {value}"
+        else:
+            terminal = value
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_path)}:{line_number} "
+            f"references {reference_kind}, but {chain_text} "
+            f"resolves to {terminal}"
+        )
+    return errors
 
 
 def unreferenced_formal_file_errors(referenced_paths: set[Path]) -> list[str]:
@@ -1832,6 +2765,43 @@ def allowed_mutation_cfg_pair(mode: str, apalache_cfg: Path, tlc_cfg: Path) -> b
     return tlc_cfg == apalache_cfg.with_name(expected_tlc_name)
 
 
+def mutation_mode_slug(mode: str) -> str:
+    return mode.split("-bug-", 1)[1].replace("-", "_")
+
+
+def mutation_cfg_name_errors(
+    modes: list[str] | set[str],
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    errors: list[str] = []
+    for mode in sorted_unique(modes):
+        if "-bug-" not in mode:
+            continue
+        case = matching_case(mode, cases)
+        if case is None:
+            continue
+
+        cfg_file, cfg_errors = cfg_file_for_mode(mode, case)
+        if cfg_errors or cfg_file is None:
+            continue
+
+        slug = mutation_mode_slug(mode)
+        expected_fragments = [f"_bug_{slug}"]
+        if runner_name == "TLC" and any(
+            mode.startswith(prefix) for prefix in TLC_SPECIFIC_MUTATION_CFG_PREFIXES
+        ):
+            expected_fragments.append(f"_tlc_bug_{slug}")
+        if any(fragment in cfg_file.stem for fragment in expected_fragments):
+            continue
+        expected = " or ".join(expected_fragments)
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)} does not "
+            f"contain expected mutation fragment {expected}"
+        )
+    return errors
+
+
 def mutation_cfg_equivalence_errors(
     modes: list[str] | set[str],
     apalache_cases: dict[str, RunnerCase],
@@ -1994,6 +2964,7 @@ def main() -> int:
         reference_errors.extend(tla_module_header_errors(mode, files))
         for spec_file in [path for path in files if path.suffix == ".tla"]:
             reference_errors.extend(tla_module_dependency_errors(mode, spec_file))
+            reference_errors.extend(tla_forbidden_directive_errors(mode, spec_file))
             reference_errors.extend(
                 tla_duplicate_constant_declaration_errors(mode, spec_file)
             )
@@ -2021,6 +2992,11 @@ def main() -> int:
                 )
                 reference_errors.extend(
                     cfg_operator_reference_errors(mode, spec_files[0], cfg_file)
+                )
+                reference_errors.extend(
+                    cfg_trivial_check_operator_errors(
+                        mode, spec_files[0], cfg_file, "Apalache"
+                    )
                 )
                 reference_errors.extend(
                     cfg_constant_binding_errors(mode, spec_files[0], cfg_file)
@@ -2091,6 +3067,9 @@ def main() -> int:
     mutation_cfg_mismatches = mutation_cfg_equivalence_errors(
         readme_bug_modes, apalache_cases, tlc_cases
     )
+    mutation_cfg_name_mismatches = mutation_cfg_name_errors(
+        readme_bug_modes, apalache_cases, "Apalache"
+    ) + mutation_cfg_name_errors(readme_bug_modes, tlc_cases, "TLC")
     module_identity_mismatches = module_identity_errors(
         tlc_modes_to_resolve, apalache_cases, tlc_cases
     )
@@ -2120,6 +3099,7 @@ def main() -> int:
         tlc_reference_errors.extend(tla_module_header_errors(mode, module_files))
         for module_file in module_files:
             tlc_reference_errors.extend(tla_module_dependency_errors(mode, module_file))
+            tlc_reference_errors.extend(tla_forbidden_directive_errors(mode, module_file))
             tlc_reference_errors.extend(
                 tla_duplicate_constant_declaration_errors(mode, module_file)
             )
@@ -2152,6 +3132,11 @@ def main() -> int:
                     )
                     tlc_reference_errors.extend(
                         cfg_operator_reference_errors(mode, module_files[0], cfg_file)
+                    )
+                    tlc_reference_errors.extend(
+                        cfg_trivial_check_operator_errors(
+                            mode, module_files[0], cfg_file, "TLC"
+                        )
                     )
                     tlc_reference_errors.extend(
                         cfg_constant_binding_errors(mode, module_files[0], cfg_file)
@@ -2355,6 +3340,12 @@ def main() -> int:
         errors.append(
             "README mutation modes resolve to different Apalache/TLC cfg files:\n"
             + format_items(mutation_cfg_mismatches)
+        )
+    if mutation_cfg_name_mismatches:
+        errors.append(
+            "README mutation modes resolve to cfg files without matching "
+            "mutation-name fragments:\n"
+            + format_items(mutation_cfg_name_mismatches)
         )
     if module_identity_mismatches:
         errors.append(

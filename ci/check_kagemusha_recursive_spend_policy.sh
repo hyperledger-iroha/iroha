@@ -218,6 +218,14 @@ ADVERSARIAL_COVERAGE = {
         'assert_offline_rejection(err, "invalid_recursive_bundle", "private-hop lineage")',
         "rejected recursive redeem must not consume the final spendable note nullifier",
         "assert_eq!(balance, Numeric::zero())",
+        "fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay",
+        "real_recursive_kagemusha_redeem_record_backed_multi_hop_fixture",
+        "recursive_redeem_real_lineage_transfer_step",
+        "record-backed multi-hop recursive Kagemusha redeem should mint",
+        "redeem must consume every top-up anchor nullifier",
+        "record-backed multi-hop recursive Kagemusha redeem must not replay",
+        'assert_offline_rejection(err, "duplicate_nullifier", "already spent")',
+        "assert_eq!(balance, Numeric::new(42, 0))",
         "fn kagemusha_recursive_redeem_reserved_lineage_profile_verifies_backend_before_mint",
         "one-hop verifier-slice",
         "fn kagemusha_recursive_redeem_rejects_adversarial_lineage_verifier_records_before_mint",
@@ -419,6 +427,8 @@ ADVERSARIAL_COVERAGE = {
         "kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract",
         "kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract",
         "kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
         "previous_recursive_proof_open_envelopes_archive_digest",
         "append_opening_preflight_digest",
         "append transition profile benchmark must bind previous proof openings",
@@ -572,6 +582,70 @@ SDK_APPEND_CAP_BINDING_COVERAGE = {
     ),
 }
 
+RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
+    "crates/iroha_data_model/src/offline/mod.rs": (
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
+        "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
+        "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+    ),
+    "crates/iroha_core/src/zk.rs": (
+        "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID",
+        "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
+        "kagemusha_recursive_spend_lineage_append_vk_record",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
+        "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids",
+        '"halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1"',
+        '"halo2/pasta/kagemusha-recursive-spend-lineage-append-v1"',
+    ),
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
+        "recursiveSpendLineageOneHopProofCircuitIdV1",
+        "recursiveSpendLineageAppendProofCircuitIdV1",
+        "isLineageProofCircuitId",
+        "isLineageAppendOutputCircuitId",
+    ),
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
+        "RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "isLineageProofCircuitId",
+        "isLineageAppendOutputCircuitId",
+    ),
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
+        "RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "isLineageProofCircuitId",
+        "isLineageAppendOutputCircuitId",
+    ),
+    "javascript/iroha_js/src/crypto.js": (
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "isKagemushaRecursiveSpendLineageProofCircuitId",
+        "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
+    ),
+    "javascript/iroha_js/dist/crypto.js": (
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "isKagemushaRecursiveSpendLineageProofCircuitId",
+        "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
+    ),
+    "python/iroha_python/src/iroha_python/kagemusha.py": (
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
+        "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
+    ),
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
+        "RecursiveSpendLineageOneHopProofCircuitIdV1",
+        "RecursiveSpendLineageAppendProofCircuitIdV1",
+        "IsLineageProofCircuitId",
+        "IsLineageAppendOutputCircuitId",
+    ),
+}
+
 VERIFY_RESULT_FAIL_CLOSED_COVERAGE = {
     "crates/iroha_core/src/zk.rs": (
         "let witnessless_redeem_supported =",
@@ -636,6 +710,8 @@ PAYLOAD_BENCH_SOURCE_COVERAGE = {
         "kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract",
         "kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract",
         "kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
         "previous_recursive_proof_open_envelopes_archive_digest",
         "append_opening_preflight_digest",
         "previous_proof_open_envelope_archive",
@@ -657,6 +733,7 @@ WORKFLOW_REQUIRED_PATHS = (
     *ADVERSARIAL_COVERAGE.keys(),
     *SDK_HELPER_EDGE_COVERAGE.keys(),
     *SDK_APPEND_CAP_BINDING_COVERAGE.keys(),
+    *RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE.keys(),
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
 )
 WORKFLOW_MAIN_GUARD_COMMANDS = (
@@ -733,6 +810,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "core append cap direct-prover negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary",
+    ),
+    (
+        "Reserved-lineage profile split negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split",
     ),
     (
         "workflow path negative control",
@@ -817,6 +898,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "core ISI coverage negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-isi",
+    ),
+    (
+        "core multi-hop redeem success negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-multi-hop-redeem-success",
     ),
     (
         "core malformed lineage hop proof negative control",
@@ -1193,7 +1278,7 @@ def check_rust_reserved_lineage_policy():
             "can_redeem_kagemusha_recursive_spend_witnessless",
             (
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
-                "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+                "is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)",
                 "hop_count >= 1",
                 "hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             ),
@@ -1235,7 +1320,8 @@ def check_rust_reserved_lineage_policy():
     for needle in (
         "fn validate_kagemusha_recursive_spend_append_output_selection",
         "is_supported_kagemusha_recursive_spend_append_proof_transition",
-        "!= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+        "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
+        "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
         "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
         "reserved previous builder accepts structurally valid reserved output",
     ):
@@ -1339,7 +1425,7 @@ def check_docs_reserved_lineage_policy():
         "fixed-proof recursive spend bundle at 1,751 bytes",
         "2,048-byte material-growth ceiling",
         "semantic append transition profile is 2,094 bytes",
-        "Reserved-lineage D2D bundle is 3,833 bytes",
+        "Reserved-lineage D2D bundle is 3,847 bytes",
         "append Reserved-lineage transition profile is 2,817 bytes",
         "`kagemusha_reserved_lineage_transition_profile_bytes`",
     ):
@@ -1397,6 +1483,13 @@ def check_sdk_append_cap_binding_coverage():
     )
 
 
+def check_reserved_lineage_profile_split_coverage():
+    require_needles(
+        RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE,
+        "is missing Reserved-lineage one-hop/append profile split coverage",
+    )
+
+
 def check_verify_result_fail_closed_coverage():
     require_needles(
         VERIFY_RESULT_FAIL_CLOSED_COVERAGE,
@@ -1425,6 +1518,7 @@ def run_checks():
     check_adversarial_coverage()
     check_sdk_helper_edge_coverage()
     check_sdk_append_cap_binding_coverage()
+    check_reserved_lineage_profile_split_coverage()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
 
@@ -1608,6 +1702,25 @@ if mode == "--negative-control-core-append-cap-boundary":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core append cap boundary drift was not detected")
+
+if mode == "--negative-control-core-lineage-profile-split":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids",
+        "Reserved-lineage verifier records must coexist",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate Reserved-lineage profile split coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected Reserved-lineage profile split drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Reserved-lineage profile split drift was not detected")
 
 if mode == "--negative-control-workflow":
     target = WORKFLOW_PATH
@@ -2104,6 +2217,25 @@ if mode == "--negative-control-core-isi":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core ISI coverage drift was not detected")
+
+if mode == "--negative-control-core-multi-hop-redeem-success":
+    target = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+    source = read(target)
+    mutated = source.replace(
+        "fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay",
+        "fn kagemusha_recursive_redeem_missing_multi_hop_success_coverage",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate multi-hop redeem success coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected multi-hop redeem success coverage drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: multi-hop redeem success coverage drift was not detected")
 
 if mode == "--negative-control-core-lineage-hop-proof":
     target = "crates/iroha_core/src/smartcontracts/isi/offline.rs"

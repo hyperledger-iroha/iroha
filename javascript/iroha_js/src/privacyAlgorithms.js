@@ -449,6 +449,7 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
   Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
   Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
     "research-target-as-of-2026-05",
@@ -538,7 +539,7 @@ function isLowercaseHyphenatedIdentifier(value) {
 }
 
 function isSdkEntrypointName(value) {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(value);
+  return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value);
 }
 
 function isPublicInputSchemaToken(value) {
@@ -553,6 +554,10 @@ function publicInputSchemaTokenHasPayloadMetadata(value) {
 
 function isProofFamilyName(value) {
   return /^[a-z0-9]+(?:[-/][a-z0-9]+)*$/.test(value);
+}
+
+function isBackendFamilyName(value) {
+  return /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/.test(value);
 }
 
 function isVerifierKeyId(value) {
@@ -975,7 +980,14 @@ function entrypointIsExplicitDevFixture(entrypoint) {
 function entrypointIsLocalVerifier(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  return name.startsWith("verify") && name.endsWith("Locally");
+  const lower = name.toLowerCase();
+  return (
+    lower.startsWith("verify") &&
+    (lower.endsWith("locally") ||
+      lower.endsWith("local") ||
+      lower.includes("localverifier") ||
+      lower.includes("localonly"))
+  );
 }
 
 function entrypointIsInstructionBuilder(entrypoint) {
@@ -994,6 +1006,18 @@ function entrypointIsPlannedLedgerMutation(entrypoint) {
   );
 }
 
+function entrypointIsProofHelper(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return (
+    name.includes("ProofEnvelope") ||
+    name.includes("ProofWitness") ||
+    name.includes("ProofPublicInputs") ||
+    name.includes("ProofRequest") ||
+    name.includes("ProofCommitment")
+  );
+}
+
 function entrypointIsProductionProofBuilder(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
@@ -1001,6 +1025,8 @@ function entrypointIsProductionProofBuilder(entrypoint) {
     name.startsWith("build") &&
     name.includes("Proof") &&
     !entrypointIsInstructionBuilder(entrypoint) &&
+    !entrypointIsPlannedLedgerMutation(entrypoint) &&
+    !entrypointIsProofHelper(entrypoint) &&
     !entrypointIsDevFixture(entrypoint)
   );
 }
@@ -1067,6 +1093,11 @@ function backendFamilyForDescriptor(descriptor) {
       `privacy algorithm descriptor ${descriptor.id} is missing backend family metadata`,
     );
   }
+  if (!isBackendFamilyName(backendFamily)) {
+    throw new Error(
+      `privacy algorithm descriptor ${descriptor.id} backendFamily metadata must be non-empty and use request-portable verifier-key backend characters`,
+    );
+  }
   if (catalogLabelClaimsProductionReadiness(backendFamily)) {
     throw new Error(
       `privacy algorithm descriptor ${descriptor.id} backendFamily metadata must not claim production/mainnet/audit readiness before production gates pass`,
@@ -1096,25 +1127,27 @@ function validateRequiredPrivacyPlanRows(descriptors) {
         `privacy algorithm catalog required production privacy plan row ${algorithmId} must keep backend family ${backendFamily} until the production inventory is deliberately updated`,
       );
     }
+    if (
+      !(descriptor.plannedSdkEntrypoints ?? []).some(
+        entrypointIsProductionProofBuilder,
+      )
+    ) {
+      throw new Error(
+        `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain a planned production proof builder until production gates pass`,
+      );
+    }
   }
 }
 
 function validateResearchTargetSdkEntrypoints(descriptors) {
-  const nonResearchExecutableEntrypoints = new Set(
-    descriptors
-      .filter((descriptor) => descriptor.implementationStage !== RESEARCH_STAGE_MAY_2026)
-      .flatMap((descriptor) => descriptor.sdkEntrypoints ?? []),
-  );
   for (const descriptor of descriptors) {
     if (descriptor.implementationStage !== RESEARCH_STAGE_MAY_2026) {
       continue;
     }
-    for (const entrypoint of descriptor.sdkEntrypoints ?? []) {
-      if (!nonResearchExecutableEntrypoints.has(entrypoint)) {
-        throw new Error(
-          `privacy algorithm catalog research target ${descriptor.id} cannot advertise new executable SDK entrypoint ${entrypoint}; keep it in plannedSdkEntrypoints until the production stage advances`,
-        );
-      }
+    if ((descriptor.sdkEntrypoints ?? []).length > 0) {
+      throw new Error(
+        `privacy algorithm catalog research target ${descriptor.id} cannot advertise executable SDK entrypoints; keep them in plannedSdkEntrypoints until the production stage advances`,
+      );
     }
   }
 }
@@ -1412,6 +1445,14 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
   ) {
     throw new Error(
       `privacy algorithm descriptor ${index} research targets cannot advertise local-only verifier SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === RESEARCH_STAGE_MAY_2026 &&
+    sdkEntrypoints.length > 0
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} research targets cannot advertise executable SDK entrypoints; keep them in plannedSdkEntrypoints until the production stage advances`,
     );
   }
   if (
@@ -2096,9 +2137,9 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "buildRotateZkAceIdentityCommitmentInstruction",
       "buildRevokeZkAceIdentityCommitmentInstruction",
       "buildZkAceAuthorizedTransferInstruction",
-      "buildZkAceAuthorizationProofV1",
     ]),
     plannedSdkEntrypoints: Object.freeze([
+      "buildZkAceAuthorizationProofV1",
       "buildShieldedZkAceAuthorizedTransferInstruction",
     ]),
     chainRequirements: Object.freeze([
@@ -3273,12 +3314,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.",
       "Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.",
     ]),
-    sdkEntrypoints: Object.freeze([
-      "buildRegisterAssetHiddenZkPoolInstruction",
-      "buildAssetHiddenZkTransferInstruction",
-    ]),
+    sdkEntrypoints: Object.freeze([]),
     plannedSdkEntrypoints: Object.freeze([
       "buildPqMaspStarkTransferProofV0",
+      "buildPqMaspStarkRegisterPoolInstruction",
+      "buildPqMaspStarkTransferInstruction",
       "generateMlDsaKeyPair",
       "encapsulateMlKem",
     ]),

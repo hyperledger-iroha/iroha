@@ -96,6 +96,8 @@ crate::ffi::ffi_item! {
         /// SM2 signature scheme (GM/T 0003-2012)
         Sm2 = 10,
     }
+
+    ffi_type(opaque)
 }
 
 impl Algorithm {

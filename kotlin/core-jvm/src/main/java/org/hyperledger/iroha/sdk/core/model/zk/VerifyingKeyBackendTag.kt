@@ -75,53 +75,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
                 return UNSUPPORTED
             }
             val compact = compactAscii(label)
-
-            return when {
-                label == "unsupported" || compact == "unsupported" -> UNSUPPORTED
-                compact.contains("pqmasp") || compact.contains("postquantummasp") ->
-                    PQ_MASP_STARK_FRI
-                compact.contains("anonymouspgc") || compact.contains("pgckoutofn") ->
-                    ANONYMOUS_PGC
-                compact.contains("verange") -> VERANGE
-                compact.contains("zkat") || compact.contains("policyprivateauthenticator") ->
-                    ZKAT
-                compact.contains("zkams") || compact.contains("recursiveanonymousadmission") ->
-                    RECURSIVE_ANONYMOUS_ADMISSION
-                compact.contains("vega") || compact.contains("existingcredentialzk") ->
-                    VEGA_EXISTING_CREDENTIAL_ZK
-                compact.contains("silentthreshold") ||
-                    compact.contains("thresholdanonymouscredential") ->
-                    SILENT_THRESHOLD_ANONCRED
-                compact.contains("zkx509") || compact.contains("x509") ||
-                    compact.contains("zkvmx509") ->
-                    ZK_X509
-                compact.contains("siswithhints") || compact.contains("sishints") ||
-                    compact.contains("latticeanonymouscredentials") ->
-                    SIS_WITH_HINTS
-                compact.contains("orchard") || compact.contains("zcashorchard") ->
-                    HALO2_IPA_ORCHARD
-                compact.contains("penumbra") || compact.contains("masp") ||
-                    compact.contains("bls12377") || compact.contains("decaf377") ->
-                    GROTH16_BLS12_377
-                compact.contains("fcmp") || compact.contains("monero") ||
-                    compact.contains("curvetree") ->
-                    FCMP_PLUS_PLUS_CURVE_TREE
-                compact.contains("lattice") || compact.contains("pcssis") ||
-                    compact.contains("jindo") ->
-                    LATTICE_PCS_SIS
-                compact.contains("miden") -> MIDEN_STARK
-                compact.contains("aztec") -> AZTEC_PLONKISH_PRIVATE_KERNEL
-                compact.contains("halo2") && compact.contains("bn254") -> HALO2_BN254
-                compact.contains("groth16") -> GROTH16
-                compact.contains("stark") -> STARK
-                compact == "halo2ipa" ||
-                    compact == "halo2ipapasta" ||
-                    compact == "halo2pasta" ||
-                    (compact.contains("halo2") &&
-                        (compact.contains("ipa") || compact.contains("pasta"))) ->
-                    HALO2_IPA_PASTA
-                else -> UNSUPPORTED
-            }
+            return catalogBackendAliases[compact] ?: UNSUPPORTED
         }
 
         @JvmStatic
@@ -165,9 +119,86 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kagemusha-recursive-aggregation-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+            "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+            "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
             "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+        )
+
+        private val catalogBackendAliases = mapOf(
+            "unsupported" to UNSUPPORTED,
+            "halo2ipa" to HALO2_IPA_PASTA,
+            "halo2ipapasta" to HALO2_IPA_PASTA,
+            "halo2pasta" to HALO2_IPA_PASTA,
+            "halo2pastaipavotebool" to HALO2_IPA_PASTA,
+            "halo2bn254" to HALO2_BN254,
+            "groth16" to GROTH16,
+            "groth16bn254" to GROTH16,
+            "stark" to STARK,
+            "starkfri" to STARK,
+            "starkfrisha256goldilocks" to STARK,
+            "halo2ipaorchard" to HALO2_IPA_ORCHARD,
+            "orchard" to HALO2_IPA_ORCHARD,
+            "zcashorchard" to HALO2_IPA_ORCHARD,
+            "groth16bls12377" to GROTH16_BLS12_377,
+            "groth16bls12377decaf377" to GROTH16_BLS12_377,
+            "bls12377" to GROTH16_BLS12_377,
+            "decaf377" to GROTH16_BLS12_377,
+            "masp" to GROTH16_BLS12_377,
+            "penumbra" to GROTH16_BLS12_377,
+            "penumbramasp" to GROTH16_BLS12_377,
+            "halo2ipapenumbra" to GROTH16_BLS12_377,
+            "halo2ipamasp" to GROTH16_BLS12_377,
+            "fcmppluspluscurvetree" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "fcmp" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "monero" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "monerofcmp" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "monerofcmpplusplus" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "curvetree" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "halo2ipamonero" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "halo2ipacurvetree" to FCMP_PLUS_PLUS_CURVE_TREE,
+            "latticepcssis" to LATTICE_PCS_SIS,
+            "latticepcszk" to LATTICE_PCS_SIS,
+            "jindo" to LATTICE_PCS_SIS,
+            "jindolatticepcszk" to LATTICE_PCS_SIS,
+            "jindolatticepcszkv0" to LATTICE_PCS_SIS,
+            "jindolatticepcssis" to LATTICE_PCS_SIS,
+            "starkfrimiden" to MIDEN_STARK,
+            "midenstark" to MIDEN_STARK,
+            "aztecplonkishprivatekernel" to AZTEC_PLONKISH_PRIVATE_KERNEL,
+            "aztecprivatekernel" to AZTEC_PLONKISH_PRIVATE_KERNEL,
+            "pqmaspstarkfri" to PQ_MASP_STARK_FRI,
+            "pqmaspstark" to PQ_MASP_STARK_FRI,
+            "starkfripqmaspstarkfri" to PQ_MASP_STARK_FRI,
+            "postquantummasp" to PQ_MASP_STARK_FRI,
+            "anonymouspgc" to ANONYMOUS_PGC,
+            "anonymouspgckoutofn" to ANONYMOUS_PGC,
+            "anonymouspgckoutofnv1" to ANONYMOUS_PGC,
+            "verange" to VERANGE,
+            "verangetransparentrange" to VERANGE,
+            "verangetransparentrangev1" to VERANGE,
+            "zkat" to ZKAT,
+            "zkatpolicyprivateauthenticator" to ZKAT,
+            "zkatpolicyprivateauthv1" to ZKAT,
+            "recursiveanonymousadmission" to RECURSIVE_ANONYMOUS_ADMISSION,
+            "recursiveanonymousadmissionv0" to RECURSIVE_ANONYMOUS_ADMISSION,
+            "zkamsrecursiveadmission" to RECURSIVE_ANONYMOUS_ADMISSION,
+            "zkamsrecursiveadmissionv0" to RECURSIVE_ANONYMOUS_ADMISSION,
+            "vegaexistingcredentialzk" to VEGA_EXISTING_CREDENTIAL_ZK,
+            "vegaexistingcredentialzkv0" to VEGA_EXISTING_CREDENTIAL_ZK,
+            "silentthresholdanoncred" to SILENT_THRESHOLD_ANONCRED,
+            "silentthresholdanoncredv0" to SILENT_THRESHOLD_ANONCRED,
+            "silentthresholdanonymouscredential" to SILENT_THRESHOLD_ANONCRED,
+            "thresholdanonymouscredentials" to SILENT_THRESHOLD_ANONCRED,
+            "zkx509" to ZK_X509,
+            "zkvmx509identity" to ZK_X509,
+            "zkx509onchainidentity" to ZK_X509,
+            "zkx509onchainidentityv0" to ZK_X509,
+            "siswithhints" to SIS_WITH_HINTS,
+            "sishints" to SIS_WITH_HINTS,
+            "sishintsanoncredpqv0" to SIS_WITH_HINTS,
+            "latticeanonymouscredentials" to SIS_WITH_HINTS,
         )
 
         private val trustedSetupBackendSegments = setOf(

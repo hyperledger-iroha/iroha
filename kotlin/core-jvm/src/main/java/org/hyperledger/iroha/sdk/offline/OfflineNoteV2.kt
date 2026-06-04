@@ -107,20 +107,23 @@ object OfflineNoteV2 {
         NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN)
 
     class VerifyingKeyIdReference @JvmOverloads constructor(
-        val backend: String = RECURSIVE_BACKEND,
-        val name: String = RECURSIVE_VERIFIER_NAME,
+        backend: String = RECURSIVE_BACKEND,
+        name: String = RECURSIVE_VERIFIER_NAME,
     ) {
+        val backend: String = requireNonBlank(backend, "verifying key backend")
+        val name: String = requireNonBlank(name, "verifying key name")
+
         init {
-            require(backend.trim().isNotEmpty()) { "verifying key backend must not be empty" }
-            require(name.trim().isNotEmpty()) { "verifying key name must not be empty" }
+            require(this.backend.indexOf(':') < 0) { "verifying key backend must not contain ':'" }
+            require(this.name.indexOf(':') < 0) { "verifying key name must not contain ':'" }
         }
     }
 
-    class ProofBox(val backend: String, bytes: ByteArray) {
+    class ProofBox(backend: String, bytes: ByteArray) {
+        val backend: String = requireNonBlank(backend, "proof backend")
         private val _bytes = bytes.copyOf()
 
         init {
-            require(backend.trim().isNotEmpty()) { "proof backend must not be empty" }
             require(_bytes.isNotEmpty()) { "proof bytes must not be empty" }
         }
 
@@ -431,6 +434,12 @@ object OfflineNoteV2 {
             }
             requireHashes(_outputCommitments, "output_commitments")
             require(outputClaims.isNotEmpty()) { "output claims must not be empty" }
+            val committed = _outputCommitments.map { hexLower(it) }.toSet()
+            for (claim in outputClaims) {
+                require(hexLower(claim.noteCommitment()) in committed) {
+                    "audit output claim is not listed in output commitments"
+                }
+            }
         }
 
         fun tokenId(): ByteArray = _tokenId.copyOf()
@@ -798,7 +807,7 @@ object OfflineNoteV2 {
         if (single != null) {
             val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
             encoder.writeUInt(0, 32)
-            writeField(encoder) { writeConstVec(it, compactPublicKeyPayload(single.curveId, single.publicKey)) }
+            writeField(encoder) { writePublicKey(it, single.curveId, single.publicKey) }
             return encoder.toByteArray()
         }
         val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
@@ -828,12 +837,14 @@ object OfflineNoteV2 {
         encoder.writeUInt(sorted.size.toLong(), 64)
         for (member in sorted) {
             writeField(encoder) { memberEncoder ->
-                writeField(memberEncoder) {
-                    writeConstVec(it, compactPublicKeyPayload(member.curveId, member.publicKey))
-                }
+                writeField(memberEncoder) { writePublicKey(it, member.curveId, member.publicKey) }
                 writeField(memberEncoder) { it.writeUInt(member.weight.toLong(), 16) }
             }
         }
+    }
+
+    private fun writePublicKey(encoder: NoritoEncoder, curveId: Int, publicKey: ByteArray) {
+        writeConstVec(encoder, compactPublicKeyPayload(curveId, publicKey))
     }
 
     private fun writeAssetId(encoder: NoritoEncoder, assetId: String) {
@@ -1057,6 +1068,12 @@ object OfflineNoteV2 {
         for (i in values.indices) {
             requireHash(values[i], "$field[$i]")
         }
+    }
+
+    private fun requireNonBlank(value: String, field: String): String {
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty()) { "$field must not be empty" }
+        return trimmed
     }
 
     private fun canonicalSortKey(member: MultisigMemberPayload): ByteArray {

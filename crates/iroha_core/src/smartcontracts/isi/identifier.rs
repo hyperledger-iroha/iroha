@@ -731,7 +731,26 @@ pub mod isi {
                 .into(),
             ));
         }
-        if envelope.backend != BackendTag::Halo2IpaPasta {
+        let expected_backend_tag =
+            crate::zk::production_verify_backend_tag(&verifier.proof_backend).ok_or_else(|| {
+                Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE proof verifier backend {} is not admitted by the production verifier registry",
+                        verifier.proof_backend
+                    )
+                    .into(),
+                )
+            })?;
+        if expected_backend_tag != BackendTag::Halo2IpaPasta {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "RAM-LFE proof verifier backend {} must use Halo2 IPA Pasta envelopes",
+                    verifier.proof_backend
+                )
+                .into(),
+            ));
+        }
+        if envelope.backend != expected_backend_tag {
             return Err(Error::InvariantViolation(
                 "RAM-LFE proof envelope backend tag must be Halo2 IPA Pasta"
                     .to_owned()
@@ -903,6 +922,24 @@ pub mod isi {
                 "unexpected error: {message}"
             );
 
+            for (backend, expected_message) in [
+                ("halo2/ipa:production-ready", "production verifier registry"),
+                ("stark/fri/sha256-goldilocks", "must use Halo2 IPA Pasta"),
+            ] {
+                let mut backend_verifier = verifier.clone();
+                backend_verifier.proof_backend = backend.to_owned();
+                let backend_proof = sample_proof_box(&backend_verifier, |_| {});
+                let err = verify_execution_proof(&backend_proof, &execution, &backend_verifier)
+                    .expect_err(
+                        "unexpected RAM-LFE verifier backend must reject before proof parsing",
+                    );
+                let message = err.to_string();
+                assert!(
+                    message.contains(expected_message),
+                    "backend {backend}: expected {expected_message:?}, got {message:?}"
+                );
+            }
+
             let aux = sample_proof_box(&verifier, |envelope| {
                 envelope.aux = b"unbound-identifier-proof-metadata".to_vec();
             });
@@ -921,6 +958,28 @@ pub mod isi {
                 .expect_err("zero verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(message.contains("non-zero"), "unexpected error: {message}");
+
+            let schema_drift = sample_proof_box(&verifier, |envelope| {
+                envelope.public_inputs.extend_from_slice(b":schema-drift");
+            });
+            let err = verify_execution_proof(&schema_drift, &execution, &verifier)
+                .expect_err("public-input schema drift must reject before proof parsing");
+            let message = err.to_string();
+            assert!(
+                message.contains("public-input schema hash"),
+                "unexpected error: {message}"
+            );
+
+            let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
+                envelope.vk_hash = [0xA5; Hash::LENGTH];
+            });
+            let err = verify_execution_proof(&wrong_vk_hash, &execution, &verifier)
+                .expect_err("wrong verifier-key hash must reject before proof parsing");
+            let message = err.to_string();
+            assert!(
+                message.contains("mismatched verifying key"),
+                "unexpected error: {message}"
+            );
         }
     }
 }

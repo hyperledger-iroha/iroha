@@ -4358,6 +4358,123 @@ impl SccpRouteAllowlist {
     }
 }
 
+/// User-level SCCP route manifest material advertised to wallet clients.
+#[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
+pub struct SccpRouteManifest {
+    /// Material format version.
+    #[config(default = "1")]
+    pub version: u8,
+    /// Stable route identifier.
+    pub route_id: String,
+    /// Stable asset key within the route.
+    pub asset_key: String,
+    /// TRON network key, for example `mainnet` or `nile`.
+    pub tron_network: String,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// CAIP-compatible TRON chain id hex.
+    pub chain_id_hex: String,
+    /// SCCP counterparty domain identifier.
+    pub counterparty_domain: u32,
+    /// Destination verifier target name.
+    pub verifier_target: String,
+    /// Whether this route is production-ready.
+    #[config(default = "false")]
+    pub production_ready: bool,
+    /// Disabled reason surfaced when the route is not production-ready.
+    pub disabled_reason: Option<String>,
+    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    pub network_id_hex: String,
+    /// TRON TairaXOR token contract address.
+    pub taira_xor_token_address: String,
+    /// TRON TairaXOR bridge contract address.
+    pub taira_xor_bridge_address: String,
+    /// TRON SCCP source bridge contract address.
+    pub sccp_tron_source_bridge_address: String,
+    /// TRON destination verifier contract address.
+    pub tron_verifier_address: String,
+    /// Hex-encoded verifier code digest.
+    pub verifier_code_hash: String,
+    /// Hex-encoded verifier key digest.
+    pub verifier_key_hash: String,
+    /// Canonical destination binding key.
+    pub destination_binding_key: String,
+    /// Hex-encoded canonical destination binding hash.
+    pub destination_binding_hash: String,
+    /// Canonical TAIRA settlement asset definition id.
+    pub taira_burn_record_settlement_asset_definition_id: String,
+    /// Base64-encoded TAIRA burn-record contract artifact.
+    pub taira_burn_record_contract_artifact_b64: String,
+    /// Hex-encoded SHA-256 digest of the TAIRA burn-record artifact.
+    pub taira_burn_record_artifact_sha256: String,
+    /// Hex-encoded TAIRA burn-record contract code hash.
+    pub taira_burn_record_code_hash: String,
+    /// TAIRA burn-record verifier backend.
+    pub taira_burn_record_vk_backend: String,
+    /// TAIRA burn-record verifier key name.
+    pub taira_burn_record_vk_name: String,
+    /// TAIRA burn-record settlement gas limit.
+    pub taira_burn_record_gas_limit: u64,
+    /// Optional settlement contract address.
+    pub settlement_contract_address: Option<String>,
+    /// Optional settlement contract alias.
+    pub settlement_contract_alias: Option<String>,
+    /// Whether post-deploy route evidence is complete.
+    pub post_deploy_full_toml_ready: Option<bool>,
+    /// Hex-encoded source bridge config hash.
+    pub post_deploy_source_bridge_config_hash: Option<String>,
+    /// Hex-encoded source event transaction id.
+    pub post_deploy_source_event_transaction_id: Option<String>,
+    /// Hex-encoded route canary evidence hash.
+    pub post_deploy_route_canary_evidence_hash: Option<String>,
+    /// Hex-encoded route canary transaction id.
+    pub post_deploy_route_canary_transaction_id: Option<String>,
+    /// Hex-encoded offline full TOML SHA-256 digest.
+    pub post_deploy_offline_full_toml_sha256: Option<String>,
+}
+
+impl SccpRouteManifest {
+    fn parse(self) -> actual::SccpRouteManifest {
+        actual::SccpRouteManifest {
+            version: self.version,
+            route_id: self.route_id,
+            asset_key: self.asset_key,
+            tron_network: self.tron_network,
+            chain: self.chain,
+            chain_id_hex: self.chain_id_hex,
+            counterparty_domain: self.counterparty_domain,
+            verifier_target: self.verifier_target,
+            production_ready: self.production_ready,
+            disabled_reason: self.disabled_reason,
+            network_id_hex: self.network_id_hex,
+            taira_xor_token_address: self.taira_xor_token_address,
+            taira_xor_bridge_address: self.taira_xor_bridge_address,
+            sccp_tron_source_bridge_address: self.sccp_tron_source_bridge_address,
+            tron_verifier_address: self.tron_verifier_address,
+            verifier_code_hash: self.verifier_code_hash,
+            verifier_key_hash: self.verifier_key_hash,
+            destination_binding_key: self.destination_binding_key,
+            destination_binding_hash: self.destination_binding_hash,
+            taira_burn_record_settlement_asset_definition_id: self
+                .taira_burn_record_settlement_asset_definition_id,
+            taira_burn_record_contract_artifact_b64: self.taira_burn_record_contract_artifact_b64,
+            taira_burn_record_artifact_sha256: self.taira_burn_record_artifact_sha256,
+            taira_burn_record_code_hash: self.taira_burn_record_code_hash,
+            taira_burn_record_vk_backend: self.taira_burn_record_vk_backend,
+            taira_burn_record_vk_name: self.taira_burn_record_vk_name,
+            taira_burn_record_gas_limit: self.taira_burn_record_gas_limit,
+            settlement_contract_address: self.settlement_contract_address,
+            settlement_contract_alias: self.settlement_contract_alias,
+            post_deploy_full_toml_ready: self.post_deploy_full_toml_ready,
+            post_deploy_source_bridge_config_hash: self.post_deploy_source_bridge_config_hash,
+            post_deploy_source_event_transaction_id: self.post_deploy_source_event_transaction_id,
+            post_deploy_route_canary_evidence_hash: self.post_deploy_route_canary_evidence_hash,
+            post_deploy_route_canary_transaction_id: self.post_deploy_route_canary_transaction_id,
+            post_deploy_offline_full_toml_sha256: self.post_deploy_offline_full_toml_sha256,
+        }
+    }
+}
+
 /// Zero-knowledge configuration section.
 /// User-level configuration container for `Zk`.
 #[derive(Debug, ReadConfig, Clone)]
@@ -4458,6 +4575,9 @@ pub struct Zk {
     /// SCCP governed route allowlist material that can enable SCCP lanes.
     #[config(default = "Vec::new()")]
     pub sccp_route_allowlists: Vec<SccpRouteAllowlist>,
+    /// Concrete SCCP route manifests advertised to wallet clients.
+    #[config(default = "Vec::new()")]
+    pub sccp_route_manifests: Vec<SccpRouteManifest>,
     /// Poseidon parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_POSEIDON_PARAMS_ID")]
     pub poseidon_params_id: Option<u32>,
@@ -4510,6 +4630,11 @@ impl Zk {
                 .sccp_route_allowlists
                 .into_iter()
                 .map(SccpRouteAllowlist::parse)
+                .collect(),
+            sccp_route_manifests: self
+                .sccp_route_manifests
+                .into_iter()
+                .map(SccpRouteManifest::parse)
                 .collect(),
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
@@ -18666,6 +18791,17 @@ pub struct IsoBridge {
     pub profiles: Vec<IsoBridgeProfile>,
     /// Directory where ISO bridge message state is persisted.
     pub store_dir: Option<PathBuf>,
+    #[config(default = "defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS")]
+    #[norito(default)]
+    /// Age retention window for durable ISO records (seconds); zero disables age pruning.
+    pub store_retention_secs: u64,
+    #[config(default = "defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS")]
+    #[norito(default)]
+    /// Maximum durable ISO records to retain; zero disables count pruning.
+    pub store_max_records: u64,
+    #[norito(default)]
+    /// Optional external audit export directory for manifest/notary preimages.
+    pub audit_export_dir: Option<PathBuf>,
     /// Optional global embedded XML signature policy override.
     pub embedded_signature_policy: Option<String>,
     /// Signing credentials used for bridge operations.
@@ -18726,6 +18862,9 @@ pub struct IsoBridgeProfile {
     #[norito(default)]
     /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
     pub trusted_certificate_sha256: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
+    pub revoked_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
@@ -20433,6 +20572,9 @@ impl IsoBridge {
                 .map(IsoBridgeProfile::parse)
                 .collect(),
             store_dir: self.store_dir,
+            store_retention_secs: self.store_retention_secs,
+            store_max_records: self.store_max_records,
+            audit_export_dir: self.audit_export_dir,
             embedded_signature_policy: self.embedded_signature_policy,
             signer: self.signer.map(IsoBridgeSigner::parse),
             account_aliases: self
@@ -20465,6 +20607,7 @@ impl IsoBridgeProfile {
             x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
             trusted_public_key_sha256: self.trusted_public_key_sha256,
             trusted_certificate_sha256: self.trusted_certificate_sha256,
+            revoked_certificate_sha256: self.revoked_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
                 .message_profiles
@@ -20520,6 +20663,15 @@ pub struct IsoReferenceData {
     pub bic_lei_path: Option<PathBuf>,
     /// Optional path to a MIC directory snapshot.
     pub mic_directory_path: Option<PathBuf>,
+    /// Optional path to a CSD venue to ledger-domain crosswalk snapshot.
+    #[norito(default)]
+    pub csd_venue_path: Option<PathBuf>,
+    /// Optional path to a securities settlement-account crosswalk snapshot.
+    #[norito(default)]
+    pub securities_account_path: Option<PathBuf>,
+    /// Optional path to a securities cash-leg crosswalk snapshot.
+    #[norito(default)]
+    pub cash_leg_path: Option<PathBuf>,
     #[config(env = "ISO_BRIDGE_REFERENCE_CACHE_DIR")]
     /// Directory where cached snapshots and provenance metadata are stored.
     pub cache_dir: Option<PathBuf>,
@@ -20532,6 +20684,9 @@ impl Default for IsoReferenceData {
             isin_crosswalk_path: None,
             bic_lei_path: None,
             mic_directory_path: None,
+            csd_venue_path: None,
+            securities_account_path: None,
+            cash_leg_path: None,
             cache_dir: None,
         }
     }
@@ -20544,6 +20699,9 @@ impl IsoReferenceData {
             isin_crosswalk_path: self.isin_crosswalk_path,
             bic_lei_path: self.bic_lei_path,
             mic_directory_path: self.mic_directory_path,
+            csd_venue_path: self.csd_venue_path,
+            securities_account_path: self.securities_account_path,
+            cash_leg_path: self.cash_leg_path,
             cache_dir: self.cache_dir,
         }
     }
@@ -20848,6 +21006,9 @@ mod offline_cfg_tests {
                     "trusted_certificate_sha256": [
                         "2222222222222222222222222222222222222222222222222222222222222222"
                     ],
+                    "revoked_certificate_sha256": [
+                        "3333333333333333333333333333333333333333333333333333333333333333"
+                    ],
                     "required_reference_datasets": ["bic-lei"],
                     "message_profiles": [
                         {
@@ -20868,6 +21029,9 @@ mod offline_cfg_tests {
                 }
             ],
             "store_dir": null,
+            "store_retention_secs": 86400,
+            "store_max_records": 1000,
+            "audit_export_dir": null,
             "embedded_signature_policy": null,
             "signer": {
                 "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
@@ -20883,7 +21047,10 @@ mod offline_cfg_tests {
                 "refresh_interval_secs": 3600,
                 "isin_crosswalk_path": null,
                 "bic_lei_path": null,
-                "mic_directory_path": null
+                "mic_directory_path": null,
+                "csd_venue_path": null,
+                "securities_account_path": null,
+                "cash_leg_path": null
             }
         }"#
         .replace("__ASSET_DEFINITION__", &asset_definition);
@@ -20893,7 +21060,14 @@ mod offline_cfg_tests {
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         assert_eq!(parsed.default_profile, "swift-cbpr-plus");
+        assert_eq!(parsed.store_retention_secs, 86_400);
+        assert_eq!(parsed.store_max_records, 1_000);
+        assert!(parsed.audit_export_dir.is_none());
         assert_eq!(parsed.profiles[0].id, "swift-cbpr-plus");
+        assert_eq!(
+            parsed.profiles[0].revoked_certificate_sha256,
+            vec!["3333333333333333333333333333333333333333333333333333333333333333"]
+        );
         assert_eq!(
             parsed.profiles[0].message_profiles[0].amount_minor_units[0].currency,
             "USD"
@@ -20908,6 +21082,9 @@ mod offline_cfg_tests {
         assert_eq!(parsed.currency_assets[0].asset_definition, asset_definition);
         assert_eq!(parsed.reference_data.refresh_interval_secs, 3600);
         assert!(parsed.reference_data.isin_crosswalk_path.is_none());
+        assert!(parsed.reference_data.csd_venue_path.is_none());
+        assert!(parsed.reference_data.securities_account_path.is_none());
+        assert!(parsed.reference_data.cash_leg_path.is_none());
     }
 
     #[test]
@@ -20918,6 +21095,9 @@ mod offline_cfg_tests {
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
             store_dir: None,
+            store_retention_secs: defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+            store_max_records: defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+            audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
             account_aliases: Vec::new(),
@@ -20940,6 +21120,9 @@ mod offline_cfg_tests {
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
             store_dir: None,
+            store_retention_secs: defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+            store_max_records: defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+            audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
             account_aliases: Vec::new(),

@@ -40,7 +40,7 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
     absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
 - **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` (collateral management)
 
 - Follow the same instrument rules as `sese.*` (ISIN preferred).
 - Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
@@ -112,15 +112,104 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
   blocks remain skipped during IVM field materialisation. Torii profile validation verifies the
   supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles only
-  when the verified public key or DER certificate SHA-256 digest matches that rail profile's
-  configured `trusted_public_key_sha256` or `trusted_certificate_sha256` pins, and continues to
-  reject embedded signatures for live `reject-unsupported` profiles. Regression tests
+  when the verified public key or cryptographically linked terminal CA trust-anchor DER digest
+  matches that rail profile's configured `signature_public_key_sha256_pins`,
+  legacy `trusted_public_key_sha256`, or `x509_trust_anchor_sha256_pins`
+  pins; legacy `trusted_certificate_sha256` is normalized into the same
+  terminal trust-anchor policy. Raw `KeyValue/ECKeyValue` public-key
+  material must decode as an uncompressed P-256 SEC1 point. Leaf certificates
+  must carry critical `keyUsage` with `digitalSignature` and must not be CA
+  certificates. Each chain link must bind the child issuer
+  distinguished name to the parent subject distinguished name and verify the child certificate
+  signature. Chain issuers must carry critical CA `basicConstraints` plus critical `keyUsage`
+  with `keyCertSign`, `X509Data` chains are capped at eight unique DER
+  certificates, all supplied certificates must use ECDSA-with-SHA256 over
+  id-ecPublicKey secp256r1 with uncompressed P-256 SEC1 subject public-key
+  bytes, issuer `pathLenConstraint` values must allow the supplied subordinate
+  CA chain, configured `x509_required_certificate_policy_oids` must remain
+  continuous through every intermediate CA below the terminal anchor unless
+  that intermediate carries `anyPolicy`, policy mappings, policy constraints,
+  and inhibit-any-policy extensions fail closed in the supported subset, and
+  unknown, malformed, or unsupported parsed critical X.509 extensions on
+  supplied certificates are rejected, certificate validity is checked against deterministic verified signed XAdES
+  `SigningTime` or BAH `CreDt`, CRL/OCSP freshness and delegated OCSP
+  responder validity use that same evaluation time, embedded CRL/OCSP values
+  are accepted only from signed `KeyInfo/X509Data`, configured and embedded OCSP
+  DER must use shortest-form lengths and minimal positive integer encodings,
+  OCSP `ResponseData` and `SingleResponse` extensions are unsupported and fail closed, and
+  ECDSA `SignatureValue` accepts both fixed-width P-256 `r || s` and DER encodings only when
+  `s` is canonical low-S.
+  Unsigned signature-local `SigningTime` values are not trusted for X.509 validity.
+  Reference URIs are limited to one empty URI or one
+  unique same-document `#id` target using exact `Id`, `ID`, `id`, or `xml:id` attributes; selected
+  same-document payload targets must strictly enclose the verified signature carrier, with ancestor
+  namespace declarations carried into referenced-root canonicalization. Signed XML
+  payload References must declare an enveloped-signature transform first, may add at most one
+  final supported C14N transform that controls digest canonicalization, and must use a SHA-256
+  digest method. One optional XAdES `SignedProperties` Reference may target a local `#id` with
+  the XAdES `SignedProperties` Type URI, exactly one supported C14N transform, and a SHA-256 digest;
+  its enclosing `QualifyingProperties` target must bind to the enclosing `Signature` `Id`, and
+  certificate-backed XAdES signatures must present a non-empty, duplicate-free ordered prefix of
+  the verified XMLDSig certificate-chain SHA-256 digests, starting with the leaf certificate. The
+  supported signed-property subset requires direct
+  `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties` structure;
+  `QualifyingProperties` accepts only `Target`, `SigningCertificateV2` accepts only direct
+  attribute-free `Cert` children with direct attribute-free `CertDigest` children, a
+  `DigestMethod` carrying only `Algorithm`, and text-only digest values; signed `SigningTime` is a
+  singleton attribute-free text leaf. Prefixed XAdES structural elements must resolve to the ETSI
+  XAdES v1.3.2 namespace, and unprefixed XMLDSig/XAdES structural elements reject explicit
+  conflicting default namespaces. Any `SignedProperties` element under the
+  signature must be the verified referenced direct target; unreferenced,
+  wrapped, or duplicate `SignedProperties` elements and unrelated or duplicate
+  References fail closed.
+  Supported XMLDSig method and transform elements are parameter-free:
+  `CanonicalizationMethod`, `SignatureMethod`, `DigestMethod`, payload Reference transforms, and
+  `SignedProperties` transforms reject non-whitespace child content such as `InclusiveNamespaces`,
+  XPath, HMAC, or digest parameters. Method, transform, digest, and Reference policy attributes
+  are read by exact XML attribute name only, so namespace-qualified spoof attributes fail closed.
+  Critical method elements must appear exactly once, and
+  Reference transforms must be enclosed in exactly one attribute-free `Transforms` wrapper;
+  only implemented ordinary attributes are accepted (`Algorithm`, payload Reference `URI`,
+  and XAdES Reference `URI`/`Type`). Extra direct children under `Reference` or `Transforms`
+  fail closed, and supported References must keep direct children ordered as `Transforms`,
+  `DigestMethod`, then `DigestValue`. Top-level
+  `Signature` and `SignedInfo` parsing accepts only implemented direct children in supported
+  XMLDSig order, so reordered or wrapped `SignedInfo` or method nodes, unsupported direct
+  children, and duplicate singleton signature nodes fail closed. The payload may contain exactly
+  one supported signature carrier: either a bare XMLDSig `Signature` or an ISO `Sgntr` wrapper
+  with exactly one direct XMLDSig `Signature` child. Any additional `Signature`/`Sgntr`
+  element outside the verified carrier fails closed. Prefixed XMLDSig
+  structural elements must resolve to the XMLDSig namespace in their inherited
+  scope across `Signature`, `SignedInfo`, Reference transforms/digests, and
+  public-key or X.509 `KeyInfo` material. Supported XML element spans require
+  exact qualified-name matches between opening and closing tags. Required XMLDSig
+  base64 fields such as `SignatureValue`, per-Reference `DigestValue`, and XAdES `CertDigest`
+  values reject duplicates and must be attribute-free text leaves without nested markup or comments;
+  `PublicKey` must be singular, and `PublicKey`/`X509Certificate` credential leaves follow the same
+  no-markup rule. Public-key material cannot be mixed with `X509Certificate` material in the same
+  `KeyInfo`. Key material must be scoped to exactly one
+  `KeyInfo` using either `KeyValue/ECKeyValue` with the P-256 `NamedCurve` URI or one `X509Data`
+  certificate-chain wrapper; unsupported direct child elements, unsupported ordinary attributes,
+  non-whitespace wrapper text, duplicate `KeyInfo` blocks, or out-of-scope
+  `PublicKey`/`X509Certificate` elements fail closed.
+  Signed XML must fit Torii's supported canonical XML subset so only implemented C14N rewrites are
+  trusted: empty elements are expanded, attribute quotes are normalized, namespace declarations plus
+  unprefixed, prefixed, and implicit `xml:` namespace attributes are sorted, legal `xmlns:xml`
+  declarations are omitted, and predefined/numeric XML character references are decoded then
+  re-emitted canonically. Valid XML comments are omitted
+  for the supported no-comments C14N algorithms. Root namespace declarations inherited from the
+  enclosing XMLDSig `Signature` element are applied according to the declared C14N mode: inclusive
+  C14N carries all inherited root declarations, while exclusive C14N carries only visibly used
+  inherited root declarations for signed fragments such as prefixed `SignedInfo`.
+  Any verified leaf or issuer digest listed in the profile's `revoked_certificate_sha256` deny list
+  overrides matching trust pins. The bridge continues to reject embedded signatures for live
+  `reject-unsupported` profiles. Regression tests
   consume the samples and the new header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
 - Torii accepts lifecycle submissions at `/v1/iso20022/pacs002`, `pacs004`, `camt056`,
   `sese023`, `sese024`, and `sese025`. These endpoints validate the selected rail profile,
   store the lifecycle message in the durable ISO bridge record model, reject replayed
-  payload/UETR evidence, and update referenced durable records only when the original message is
-  already known.
+  payload, business-message-id, or UETR evidence, and update referenced durable records only when
+  the original message is already known.
 
 #### Regulatory and market-structure considerations
 
@@ -233,7 +322,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo Collateral Substitution → `colr.007`
+### Repo Collateral Substitution → `colr.012`
 
 | Repo field / context                            | ISO 20022 path                     | Notes |
 |-------------------------------------------------|-----------------------------------|-------|
@@ -315,65 +404,65 @@ iroha app settlement dvp \
 
 ### Scenario A — Collateral Substitution (Repo / Pledge)
 
-**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S  
+**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S
 **Timing:** per market cut-offs and T2S day/night cycles; orchestrate the two legs so they complete within the same settlement window.
 
 #### Message choreography
-1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.  
-2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).  
-3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.  
-4. `sese.023` instructions (two legs):  
-   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
-   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
-   Link the pair (see below).  
-5. `sese.024` status advices (accepted, matched, pending, failing, rejected).  
-6. `sese.025` confirmations once booked.  
+1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.
+2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).
+3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.
+4. `sese.023` instructions (two legs):
+   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).
+   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).
+   Link the pair (see below).
+5. `sese.024` status advices (accepted, matched, pending, failing, rejected).
+6. `sese.025` confirmations once booked.
 7. Optional cash delta (fees/haircut) → `pacs.009` FI-to-FI Credit Transfer with `CtgyPurp/Cd = SECU`; status via `pacs.002`, returns via `pacs.004`.
 
 #### Required acknowledgements / statuses
-- Transport level: gateways may emit `admi.007` or rejects before business processing.  
-- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).  
+- Transport level: gateways may emit `admi.007` or rejects before business processing.
+- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).
 - Cash side: `pacs.002` (`PDNG`, `ACSC`, `RJCT` etc.), `pacs.004` for returns.
 
 #### Conditionality / unwind fields
-- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.  
-- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).  
-- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).  
-- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).  
+- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.
+- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).
+- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).
+- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).
 - Optional T2S Conditional Securities Delivery (CoSD) rules when supported.
 
 #### References
-- SWIFT collateral management MDR (`colr.010/011/012`).  
-- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.  
+- SWIFT collateral management MDR (`colr.010/011/012`).
+- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.
 - SMPG settlement practice, Clearstream DCP manuals, ASX ISO workshops.
 
 ### Scenario B — FX Window Breach (PvP Funding Failure)
 
-**Participants:** counterparties and cash agents, securities custodian, CSD/T2S  
+**Participants:** counterparties and cash agents, securities custodian, CSD/T2S
 **Timing:** FX PvP windows (CLS/bilateral) and CSD cut-offs; keep securities legs on hold pending cash confirmation.
 
 #### Message choreography
-1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.  
-2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.  
-3. Lifecycle `sese.024` notices (accepted/matched/pending).  
-4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).  
+1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.
+2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.
+3. Lifecycle `sese.024` notices (accepted/matched/pending).
+4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).
 5. If the FX window is breached → cancel/recall cash (`camt.056/029` or `pacs.004`) and cancel securities (`sese.020` + `sese.027`, or `sese.026` reversal if already confirmed per market rule).
 
 #### Required acknowledgements / statuses
-- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.  
-- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.  
+- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.
+- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.
 - Transport: `admi.007` / gateway rejects before business processing.
 
 #### Conditionality / unwind fields
-- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.  
-- `Lnkgs` to tie securities instructions to the cash leg.  
-- T2S CoSD rule if using conditional delivery.  
-- `PrtlSttlmInd` to prevent unintended partials.  
+- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.
+- `Lnkgs` to tie securities instructions to the cash leg.
+- T2S CoSD rule if using conditional delivery.
+- `PrtlSttlmInd` to prevent unintended partials.
 - On `pacs.009`, `CtgyPurp/Cd = SECU` flags securities-related funding.
 
 #### References
-- PMPG / CBPR+ guidance for payments in securities processes.  
-- SMPG settlement practices, T2S insights on linking/holds.  
+- PMPG / CBPR+ guidance for payments in securities processes.
+- SMPG settlement practices, T2S insights on linking/holds.
 - Clearstream DCP manuals, ECMS documentation for maintenance messages.
 
 ### pacs.004 return mapping notes
@@ -385,13 +474,79 @@ iroha app settlement dvp \
   preserve only the ignored-signature marker, and `require-verified` profiles
   accept only the supported P-256/SHA-256 enveloped XMLDSig/XAdES subset after
   digest, signature, canonicalization-method, and profile trust-pin
-  verification.
+  verification, including verified certificate-chain issuer/root pins,
+  child issuer distinguished-name binding to parent subject distinguished names,
+  issuer path-length constraint enforcement, rejection for unknown, malformed,
+  or unsupported parsed critical X.509 extensions, certificate-extension and validity-at-signing checks, and the supported
+  low-S fixed-width P-256 `r || s` or low-S DER ECDSA `SignatureValue` encodings. The
+  verifier also accepts only one empty Reference URI or one unique same-document
+  `#id` target that strictly encloses the verified signature carrier, with an
+  enveloped-signature transform first, at most one final
+  supported C14N transform that controls digest canonicalization, and SHA-256
+  digest method. It may also verify one XAdES `SignedProperties` Reference with
+  a local `#id` target, the XAdES `SignedProperties` Type URI, exactly one
+  supported C14N transform, a SHA-256 digest, and a `QualifyingProperties`
+  target bound to the enclosing `Signature` `Id`. Certificate-backed XAdES
+  signatures must present a non-empty, duplicate-free ordered prefix of the
+  verified XMLDSig certificate-chain SHA-256 digests, starting with the leaf
+  certificate; the supported signed-property shape requires direct
+  `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties` structure,
+  `QualifyingProperties` accepts only `Target`, `SigningCertificateV2` accepts only attribute-free
+  direct `Cert` and `CertDigest` children, a `DigestMethod` carrying only `Algorithm`, and
+  text-only digest values, and signed `SigningTime` is a singleton attribute-free text leaf.
+  Unreferenced, wrapped, or duplicate `SignedProperties` elements fail closed. Same-document targets carry ancestor namespace declarations into the
+  referenced root before the verifier applies the supported canonical XML subset for empty-element
+  expansion, attribute quote normalization, namespace declarations plus
+  unprefixed, declared prefixed, and implicit `xml:` attribute sorting, legal
+  `xmlns:xml` declaration omission, and
+  predefined/numeric XML character-reference decoding. Valid XML comments are
+  omitted for the supported no-comments C14N algorithms. Root namespace
+  declarations inherited from the enclosing XMLDSig `Signature` are applied by
+  C14N mode: all inherited root declarations for inclusive C14N and only visibly
+  used inherited root declarations for exclusive C14N.
+  Supported XMLDSig method and transform elements reject non-whitespace child
+  content, including `InclusiveNamespaces`, XPath, HMAC, and digest parameters. Method,
+  transform, digest, and Reference policy attributes are read by exact XML attribute name only, so
+  namespace-qualified spoof attributes fail closed. Critical method elements must appear exactly
+  once, Reference transforms must be enclosed in exactly one attribute-free `Transforms` wrapper,
+  and only implemented ordinary attributes are accepted.
+  Supported Reference children must remain ordered as `Transforms`, `DigestMethod`, then
+  `DigestValue`. Top-level `Signature` and `SignedInfo` parsing accepts only implemented
+  direct children in supported XMLDSig order, so reordered or wrapped `SignedInfo` or method
+  nodes, unsupported direct children, and duplicate singleton signature nodes fail closed.
+  The payload may contain exactly one supported signature carrier: either a bare XMLDSig
+  `Signature` or an ISO `Sgntr` wrapper with exactly one direct XMLDSig `Signature` child. Any
+  additional `Signature`/`Sgntr` element outside the verified carrier fails closed.
+  Prefixed XMLDSig structural elements must resolve to the XMLDSig namespace in their inherited
+  scope across `Signature`, `SignedInfo`, Reference transforms/digests, and `KeyInfo` material.
+  Supported XML element spans require exact qualified-name matches between opening and closing tags.
+  Structural element QNames must also pass the supported XML name policy, so malformed local-name
+  matches such as double-colon XMLDSig tags fail closed before namespace or digest handling.
+  Prefixed XAdES structural elements must resolve to the ETSI XAdES v1.3.2 namespace.
+  Required XMLDSig base64 fields reject duplicates and must be attribute-free
+  text leaves without nested markup or comments; `PublicKey`/`X509Certificate` credential leaves
+  follow the same no-markup rule. Public-key material cannot be mixed with certificate material in
+  one `KeyInfo`; key material must appear inside
+  exactly one structured `KeyInfo` using either `KeyValue/ECKeyValue` with P-256 `NamedCurve` or
+  one `X509Data` wrapper, with unsupported direct child elements, unsupported ordinary attributes,
+  and non-whitespace wrapper text rejected.
+  Profile `revoked_certificate_sha256` pins deny otherwise trusted chains.
+  Unsupported XML or cryptographic inputs, such as DTD/general/custom entity
+  expansion, malformed comments, CDATA, processing instructions, remote
+  Reference URIs, duplicate reference IDs, unrelated or duplicate References,
+  missing or unsupported Reference transforms, unbound prefixed attributes,
+  explicit reserved namespace rebindings, malformed structural QNames,
+  duplicate attributes, inherited
+  namespace context beyond root declarations, raw attribute whitespace rewrites,
+  malformed tag structure, noncanonical OCSP DER length/integer encodings, or
+  OCSP response/single-response extensions,
+  fail closed until complete canonical XML or OCSP policy coverage is available.
 
 ### Operational checklist for the bridge
-- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
-- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.  
-- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.  
-- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.  
+- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).
+- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.
+- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.
+- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.
 - Parameterise hold/unwind timing by market calendar/cut-offs; issue `sese.030`/`camt.056` before cancellation deadlines, fallback to returns when necessary.
 
 ### Sample ISO 20022 Payloads (Annotated)

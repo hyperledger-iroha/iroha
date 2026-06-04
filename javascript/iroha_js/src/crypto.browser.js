@@ -319,6 +319,10 @@ export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
@@ -340,17 +344,36 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 
-export function preferredKagemushaOfflineSpendMode() {
-  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+export function preferredKagemushaOfflineSpendMode(
+  recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
+) {
+  return recursiveSpendAvailable
+    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
   return (
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
-    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) &&
     Number.isInteger(hopCount) &&
     hopCount >= 1 &&
     hopCount <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
+  return (
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
+  return (
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
 }
 
@@ -374,6 +397,9 @@ export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outpu
   if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
     return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
   }
+  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  }
   return outputProofCircuitId;
 }
 
@@ -381,13 +407,13 @@ export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(out
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
 }
 
 export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(previousHopCount) {
   return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount)
-    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     : KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
 }
 
@@ -402,7 +428,7 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
   if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
     return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
   }
-  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
     return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount);
   }
   return false;
@@ -411,14 +437,14 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
 export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId) {
   return (
     previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-    previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId)
   );
 }
 
 export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
   previousProofCircuitId,
 ) {
-  return previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1;
+  return isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId);
 }
 
 export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -430,9 +456,9 @@ export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
   return (
     (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
       normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
-    (previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
       (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1))
+        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
   );
 }
 
@@ -458,8 +484,9 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
   previousHopCount,
 ) {
   return (
-    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) ===
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
+    ) &&
     Number.isInteger(previousHopCount) &&
     previousHopCount >= 1
   );

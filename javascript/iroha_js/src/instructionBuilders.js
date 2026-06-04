@@ -1587,6 +1587,8 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/kagemusha-folded-v1",
   "halo2/pasta/kagemusha-recursive-aggregation-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
   "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -1650,42 +1652,72 @@ function compactPrivacyBackendLabel(value) {
 
 function isPendingProductionVerifierBackendLabel(value) {
   const compact = compactPrivacyBackendLabel(value);
-  return (
-    compact.includes("pqmasp") ||
-    compact.includes("postquantummasp") ||
-    compact.includes("anonymouspgc") ||
-    compact.includes("pgckoutofn") ||
-    compact.includes("verange") ||
-    compact.includes("zkat") ||
-    compact.includes("policyprivateauthenticator") ||
-    compact.includes("zkams") ||
-    compact.includes("recursiveanonymousadmission") ||
-    compact.includes("vega") ||
-    compact.includes("existingcredentialzk") ||
-    compact.includes("silentthreshold") ||
-    compact.includes("thresholdanonymouscredential") ||
-    compact.includes("zkx509") ||
-    compact.includes("x509") ||
-    compact.includes("zkvmx509") ||
-    compact.includes("siswithhints") ||
-    compact.includes("sishints") ||
-    compact.includes("latticeanonymouscredentials") ||
-    compact.includes("orchard") ||
-    compact.includes("zcashorchard") ||
-    compact.includes("penumbra") ||
-    compact.includes("masp") ||
-    compact.includes("bls12377") ||
-    compact.includes("decaf377") ||
-    compact.includes("fcmp") ||
-    compact.includes("monero") ||
-    compact.includes("curvetree") ||
-    compact.includes("lattice") ||
-    compact.includes("pcssis") ||
-    compact.includes("jindo") ||
-    compact.includes("miden") ||
-    compact.includes("aztec")
-  );
+  return PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES.has(compact);
 }
+
+const PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES = new Set([
+  "halo2ipaorchard",
+  "orchard",
+  "zcashorchard",
+  "groth16bls12377",
+  "groth16bls12377decaf377",
+  "bls12377",
+  "decaf377",
+  "masp",
+  "penumbra",
+  "penumbramasp",
+  "halo2ipapenumbra",
+  "halo2ipamasp",
+  "fcmppluspluscurvetree",
+  "fcmp",
+  "monero",
+  "monerofcmp",
+  "monerofcmpplusplus",
+  "curvetree",
+  "halo2ipamonero",
+  "halo2ipacurvetree",
+  "latticepcssis",
+  "latticepcszk",
+  "jindo",
+  "jindolatticepcszk",
+  "jindolatticepcszkv0",
+  "jindolatticepcssis",
+  "starkfrimiden",
+  "midenstark",
+  "aztecplonkishprivatekernel",
+  "aztecprivatekernel",
+  "pqmaspstarkfri",
+  "pqmaspstark",
+  "starkfripqmaspstarkfri",
+  "postquantummasp",
+  "anonymouspgc",
+  "anonymouspgckoutofn",
+  "anonymouspgckoutofnv1",
+  "verange",
+  "verangetransparentrange",
+  "verangetransparentrangev1",
+  "zkat",
+  "zkatpolicyprivateauthenticator",
+  "zkatpolicyprivateauthv1",
+  "recursiveanonymousadmission",
+  "recursiveanonymousadmissionv0",
+  "zkamsrecursiveadmission",
+  "zkamsrecursiveadmissionv0",
+  "vegaexistingcredentialzk",
+  "vegaexistingcredentialzkv0",
+  "silentthresholdanoncred",
+  "silentthresholdanoncredv0",
+  "silentthresholdanonymouscredential",
+  "thresholdanonymouscredentials",
+  "zkx509",
+  "zkvmx509identity",
+  "zkx509onchainidentity",
+  "zkx509onchainidentityv0",
+  "siswithhints",
+  "sishints",
+  "sishintsanoncredpqv0",
+  "latticeanonymouscredentials",
+]);
 
 function hasTrustedSetupBackendSegment(value) {
   return String(value)
@@ -1763,7 +1795,7 @@ function isStarkFriProductionBackendLabel(backend) {
 }
 
 function isPortableVerifierBackendLabel(backend) {
-  return /^[A-Za-z0-9/_.:+ \-]+$/u.test(backend);
+  return /^[A-Za-z0-9/_.:-]+$/u.test(backend);
 }
 
 function normalizeNativeHalo2PastaBackendLabel(value) {
@@ -14474,6 +14506,13 @@ export function verifyVeRangeProofLocally(options) {
  * @returns {Buffer}
  */
 export function buildPrivacyProofEnvelope(options) {
+  return buildPrivacyProofEnvelopeInternal(options);
+}
+
+function buildPrivacyProofEnvelopeInternal(
+  options,
+  { allowUnsupportedBackend = false } = {},
+) {
   const source = assertPlainObject(options, "privacyProofEnvelope");
   assertAllowedFields(
     source,
@@ -14572,11 +14611,19 @@ export function buildPrivacyProofEnvelope(options) {
       "privacyProofEnvelope.circuitId",
     );
   }
-  const envelope = {
-    backend: normalizePrivacyBackendTag(
-      backendAlias.value,
+  const backend = normalizePrivacyBackendTag(
+    backendAlias.value,
+    "privacyProofEnvelope.backendTag",
+  );
+  if (backend === "Unsupported" && !allowUnsupportedBackend) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "privacyProofEnvelope.backendTag uses unsupported privacy verifier backend unsupported",
       "privacyProofEnvelope.backendTag",
-    ),
+    );
+  }
+  const envelope = {
+    backend,
     circuit_id: circuitId,
     vk_hash: normalizeOpenVerifyFixedBytes(
       vkHashAlias.value,
@@ -14610,7 +14657,11 @@ function buildPrivacyProofEnvelopeWithOptionalLimits(options) {
   if (envelopeOptions.maxPublicInputBytes === undefined) {
     delete envelopeOptions.maxPublicInputBytes;
   }
-  return buildPrivacyProofEnvelope(envelopeOptions);
+  return buildPrivacyProofEnvelopeInternal(envelopeOptions, {
+    allowUnsupportedBackend:
+      envelopeOptions.backend === JINDO_BACKEND ||
+      envelopeOptions.backend === SIS_HINTS_BACKEND,
+  });
 }
 
 /**
@@ -14926,7 +14977,7 @@ export function buildRevokeZkAceIdentityCommitmentInstruction(options) {
  * @param {object} options
  * @returns {{public_inputs: object, proof: object}}
  */
-export function buildZkAceAuthorizationProofV1(options) {
+function buildZkAceAuthorizationProofV1(options) {
   const source = assertPlainObject(options, "zkAceAuthorizationProof");
   const publicInputs = normalizeZkAcePublicInputs(
     source.publicInputs ?? source.public_inputs,

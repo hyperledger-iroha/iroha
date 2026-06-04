@@ -84,8 +84,12 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("groth16-bls12-377", VerifyingKeyBackendTag.Groth16Bls12377)]
     [InlineData("groth16/bls12-377", VerifyingKeyBackendTag.Groth16Bls12377)]
     [InlineData("penumbra-masp", VerifyingKeyBackendTag.Groth16Bls12377)]
+    [InlineData("halo2/ipa/penumbra", VerifyingKeyBackendTag.Groth16Bls12377)]
+    [InlineData("halo2/ipa/masp", VerifyingKeyBackendTag.Groth16Bls12377)]
     [InlineData("monero-fcmp++", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
     [InlineData("fcmp-plus-plus-curve-tree", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
+    [InlineData("halo2/ipa/monero", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
+    [InlineData("halo2/ipa/curve-tree", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
     [InlineData("lattice-pcs-sis", VerifyingKeyBackendTag.LatticePcsSis)]
     [InlineData("jindo-lattice-pcs-zk", VerifyingKeyBackendTag.LatticePcsSis)]
     [InlineData("miden-stark", VerifyingKeyBackendTag.MidenStark)]
@@ -136,25 +140,19 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Theory]
-    [InlineData("halo2/ipa/orchard/dev-fixture", VerifyingKeyBackendTag.Halo2IpaOrchard)]
-    [InlineData("stark/fri/miden/claimed-production", VerifyingKeyBackendTag.MidenStark)]
-    [InlineData("anonymous-pgc-k-out-of-n-v1-production", VerifyingKeyBackendTag.AnonymousPgc)]
-    [InlineData("sis-hints-anoncred-pq-v0-devfixture", VerifyingKeyBackendTag.SisWithHints)]
-    [InlineData("groth16/bls12-377/../../prod", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("post-quantum-masp/audit-claimed", VerifyingKeyBackendTag.PqMaspStarkFri)]
-    [InlineData("halo2/ipa/penumbra", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("halo2/ipa/masp", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("halo2/ipa/monero", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("halo2/ipa/curve-tree", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    public void AdversarialPendingAliasSplicesRemainFailClosed(
-        string label,
-        VerifyingKeyBackendTag expected)
+    [InlineData("halo2/ipa/orchard/dev-fixture")]
+    [InlineData("stark/fri/miden/claimed-production")]
+    [InlineData("anonymous-pgc-k-out-of-n-v1-production")]
+    [InlineData("sis-hints-anoncred-pq-v0-devfixture")]
+    [InlineData("groth16/bls12-377/../../prod")]
+    [InlineData("post-quantum-masp/audit-claimed")]
+    public void AdversarialPendingAliasSplicesStayUnsupported(string label)
     {
         var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
 
-        Assert.Equal(expected, parsed);
-        Assert.True(parsed.IsPendingProductionBackend());
-        Assert.True(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+        Assert.Equal(VerifyingKeyBackendTag.Unsupported, parsed);
+        Assert.False(parsed.IsPendingProductionBackend());
+        Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
     }
 
     [Theory]
@@ -214,6 +212,9 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("stark/fri/random-profile")]
     [InlineData("stark/fri/sha512-goldilocks")]
     [InlineData("stark/fri/audit-proof-v1")]
+    [InlineData("stark/fri/sha256 goldilocks")]
+    [InlineData("stark/fri/sha256+goldilocks")]
+    [InlineData("halo2/ipa+mock")]
     [InlineData("halo2/ipa:production-ready")]
     [InlineData("halo2/ipa:claimed-production")]
     [InlineData("halo2/ipa:mainnet-ready")]

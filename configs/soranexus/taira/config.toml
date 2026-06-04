@@ -41,6 +41,7 @@ enabled = true
 allowed_origins = [
   "http://127.0.0.1:3000",
   "http://localhost:3000",
+  "https://test.soraswap.org",
   "https://dweb.link",
   "https://ipfs.io",
   "https://cloudflare-ipfs.com",
@@ -213,6 +214,14 @@ allowed_curve_ids = [1, 3, 4]
 enabled = true
 lane_count = 4
 
+[nexus.registry]
+# Public Taira governance lanes require a manifest with explicit validator
+# account-to-peer bindings. Rendered validator bundles rewrite this to the
+# co-located `manifests` directory.
+manifest_directory = "configs/soranexus/taira/manifests"
+cache_directory = "configs/soranexus/taira/manifests"
+poll_interval_ms = 10000
+
 [nexus.autoscale]
 enabled = true
 min_lanes = 4
@@ -369,7 +378,7 @@ viral_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋj
 parliament_committee_size = 21
 parliament_term_blocks = 43200
 parliament_min_stake = 1
-parliament_eligibility_asset_id = "6Pxgx8TdkMxb1zPDUWKPnf34viNw"
+parliament_eligibility_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 parliament_alternate_size = 21
 parliament_quorum_bps = 6667
 rules_committee_size = 7

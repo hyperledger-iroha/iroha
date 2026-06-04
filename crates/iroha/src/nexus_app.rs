@@ -246,6 +246,9 @@ pub struct NexusTransferReceipt {
 /// Connect transport required by the facade.
 pub trait NexusConnectTransport {
     /// Register a Connect session and return launch metadata.
+    ///
+    /// # Errors
+    /// Returns an error if the transport cannot create or register the session.
     fn start_connect(
         &self,
         config: &NexusAppConfig,
@@ -253,12 +256,18 @@ pub trait NexusConnectTransport {
     ) -> Result<NexusConnectSession, NexusAppError>;
 
     /// Wait for wallet approval and return the approved account.
+    ///
+    /// # Errors
+    /// Returns an error if approval fails, times out, or yields invalid account data.
     fn await_approval(
         &self,
         session: &mut NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError>;
 
     /// Request a wallet signature for the canonical payload bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the wallet rejects the request or returns an invalid response.
     fn request_signature(
         &self,
         session: &NexusConnectSession,
@@ -269,6 +278,9 @@ pub trait NexusConnectTransport {
 /// Torii submission dependency used by the facade.
 pub trait NexusToriiSubmitter {
     /// Submit the signed transaction and optionally wait for final status.
+    ///
+    /// # Errors
+    /// Returns an error if submission fails or finalization does not complete successfully.
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -369,6 +381,9 @@ where
     }
 
     /// Register an app-role Connect session and return wallet launch metadata.
+    ///
+    /// # Errors
+    /// Returns an error if the configured Connect transport cannot start a session.
     pub fn start_connect(
         &self,
         options: NexusConnectOptions,
@@ -377,6 +392,9 @@ where
     }
 
     /// Wait for wallet approval and cache the resolved account on the session.
+    ///
+    /// # Errors
+    /// Returns an error if wallet approval fails or the approved account cannot be validated.
     pub fn await_approval(
         &self,
         session: &mut NexusConnectSession,
@@ -395,15 +413,21 @@ where
     }
 
     /// Build a canonical signable numeric asset transfer.
+    ///
+    /// # Errors
+    /// Returns an error if required authority, signer, or transfer fields are missing or invalid.
     pub fn build_transfer_draft(
         &self,
         input: NexusTransferInput,
     ) -> Result<NexusTransferDraft, NexusAppError> {
-        let signable = self.build_signable_transfer(input.clone(), None)?;
+        let signable = self.build_signable_transfer(&input, None)?;
         Ok(NexusTransferDraft { input, signable })
     }
 
     /// Send a wallet `SIGN_REQUEST_TX` for the canonical transaction payload.
+    ///
+    /// # Errors
+    /// Returns an error if the Connect transport cannot obtain a wallet signature.
     pub fn request_signature(
         &self,
         session: &NexusConnectSession,
@@ -414,21 +438,29 @@ where
 
     /// Build a signed transaction from a wallet signature, submit it to Torii,
     /// and optionally wait for a terminal pipeline status.
+    ///
+    /// # Errors
+    /// Returns an error if the signature is invalid, the transaction fails verification,
+    /// submission fails, or the submitted transaction hash does not match the local hash.
     pub fn finalize_and_submit(
         &self,
         signable: NexusSignableTransaction,
         signature: NexusWalletSignature,
         options: NexusFinalizeOptions,
     ) -> Result<NexusTransferReceipt, NexusAppError> {
-        if signature.algorithm != NexusSignatureAlgorithm::Ed25519 {
+        let NexusWalletSignature {
+            algorithm,
+            signature,
+        } = signature;
+        if algorithm != NexusSignatureAlgorithm::Ed25519 {
             return Err(NexusAppError::UnsupportedSignatureAlgorithm {
-                algorithm: format!("{:?}", signature.algorithm),
+                algorithm: format!("{algorithm:?}"),
             });
         }
-        if signature.signature.len() != 64 {
+        if signature.len() != 64 {
             return Err(NexusAppError::InvalidSignature(format!(
                 "Ed25519 signature must be 64 bytes, got {}",
-                signature.signature.len()
+                signature.len()
             )));
         }
 
@@ -443,7 +475,7 @@ where
 
         let signed = signable
             .builder
-            .build_with_signature(Signature::from_bytes(&signature.signature));
+            .build_with_signature(Signature::from_bytes(&signature));
         signed
             .verify_signature()
             .map_err(|err| NexusAppError::SignatureVerification(err.to_string()))?;
@@ -460,6 +492,10 @@ where
     }
 
     /// Convenience wrapper over draft, wallet signature, finalize, submit, and wait.
+    ///
+    /// # Errors
+    /// Returns an error if account resolution, signing, transaction construction, submission,
+    /// or finalization fails.
     pub fn transfer_with_wallet(
         &self,
         session: &NexusConnectSession,
@@ -489,14 +525,14 @@ where
         )?;
         let mut resolved_input = input;
         resolved_input.authority = Some(authority);
-        let signable = self.build_signable_transfer(resolved_input, Some(signing_public_key))?;
+        let signable = self.build_signable_transfer(&resolved_input, Some(signing_public_key))?;
         let signature = self.request_signature(session, &signable)?;
         self.finalize_and_submit(signable, signature, options)
     }
 
     fn build_signable_transfer(
         &self,
-        input: NexusTransferInput,
+        input: &NexusTransferInput,
         signing_public_key: Option<PublicKey>,
     ) -> Result<NexusSignableTransaction, NexusAppError> {
         let authority = input
@@ -723,7 +759,7 @@ mod tests {
 
     fn fixture_account(key: &str) -> AccountId {
         AccountId::parse_encoded(&fixture_string(key))
-            .map(|parsed| parsed.into_account_id())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("fixture account")
     }
 
@@ -749,7 +785,10 @@ mod tests {
             metadata,
             creation_time_ms: Some(fixture_u64("creation_time_ms")),
             ttl: Some(Duration::from_millis(fixture_u64("ttl_ms"))),
-            nonce: Some(NonZeroU32::new(fixture_u64("nonce") as u32).expect("nonce")),
+            nonce: Some(
+                NonZeroU32::new(u32::try_from(fixture_u64("nonce")).expect("nonce fits u32"))
+                    .expect("nonce"),
+            ),
         }
     }
 

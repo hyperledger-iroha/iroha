@@ -6,7 +6,9 @@ import json
 from array import array
 
 import pytest
+from norito.crc64 import crc64
 
+import iroha_python.verange as verange_module
 from iroha_python import (
     buildRangeCommitment,
     buildVeRangeDevProofFixture,
@@ -18,6 +20,10 @@ from iroha_python import (
     verify_verange_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
+
+_OPEN_VERIFY_SCHEMA_HASH = hashlib.sha256(
+    b"norito:v1:type-name\0iroha_data_model::zk::OpenVerifyEnvelope"
+).digest()[:16]
 
 
 def _payload() -> bytes:
@@ -35,6 +41,47 @@ def _base_envelope() -> dict[str, object]:
         "vkHash": bytes([0x55]) * 32,
         "proofBytes": b"prepared-verange-proof",
     }
+
+
+def _field(payload: bytes) -> bytes:
+    return len(payload).to_bytes(8, "little") + payload
+
+
+def _open_verify_frame(
+    *,
+    backend_tag: int = 3,
+    circuit_id: bytes = b"stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    circuit_field: bytes | None = None,
+    vk_hash: bytes = bytes([0x55]) * 32,
+    public_inputs: bytes = b"\x01",
+    public_inputs_field: bytes | None = None,
+    proof_bytes: bytes = b"\x02",
+    proof_field: bytes | None = None,
+    aux: bytes = b"",
+    aux_field: bytes | None = None,
+) -> bytes:
+    payload = b"".join(
+        [
+            _field(backend_tag.to_bytes(4, "little")),
+            _field(_field(circuit_id) if circuit_field is None else circuit_field),
+            _field(vk_hash),
+            _field(_field(public_inputs) if public_inputs_field is None else public_inputs_field),
+            _field(_field(proof_bytes) if proof_field is None else proof_field),
+            _field(_field(aux) if aux_field is None else aux_field),
+        ]
+    )
+    return b"".join(
+        [
+            b"NRT0",
+            b"\x00\x00",
+            _OPEN_VERIFY_SCHEMA_HASH,
+            b"\x00",
+            len(payload).to_bytes(8, "little"),
+            crc64(payload).to_bytes(8, "little"),
+            b"\x00",
+            payload,
+        ]
+    )
 
 
 def test_verange_builders_normalize_commitments_and_dev_fixture() -> None:
@@ -216,6 +263,7 @@ def test_privacy_proof_envelope_rejects_adversarial_backend_alias_splices() -> N
     }
     for backend in [
         "mock/dev",
+        "unsupported",
         " unsupported",
         "unsupported ",
         " miden-stark",
@@ -349,6 +397,112 @@ def test_privacy_proof_envelope_accepts_unsigned_byte_memoryviews() -> None:
     assert decoded["aux"] == b"{}"
 
 
+@pytest.mark.parametrize(
+    ("archive", "expected"),
+    [
+        ([True], r"privacyProofEnvelope\[0\]"),
+        (memoryview(array("H", [0x4E52])), "privacyProofEnvelope"),
+    ],
+)
+def test_decode_privacy_proof_envelope_rejects_ambiguous_archive_bytes(
+    archive: object,
+    expected: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=expected):
+        decode_privacy_proof_envelope(archive)
+
+
+@pytest.mark.parametrize(
+    ("archive", "expected"),
+    [
+        (
+            _open_verify_frame(backend_tag=4),
+            "privacyProofEnvelope.backend uses unsupported tag",
+        ),
+        (
+            _open_verify_frame(circuit_id=b""),
+            "privacyProofEnvelope.circuit_id must be non-empty",
+        ),
+        (
+            _open_verify_frame(circuit_id=b" shape"),
+            "privacyProofEnvelope.circuit_id must be clean and non-empty",
+        ),
+        (
+            _open_verify_frame(circuit_id=b"shape "),
+            "privacyProofEnvelope.circuit_id must be clean and non-empty",
+        ),
+        (
+            _open_verify_frame(circuit_id=b"\xff"),
+            "privacyProofEnvelope.circuit_id must contain valid UTF-8",
+        ),
+        (
+            _open_verify_frame(circuit_field=_field(b"shape") + b"\x00"),
+            "privacyProofEnvelope.circuit_id has trailing bytes",
+        ),
+        (
+            _open_verify_frame(vk_hash=bytes(32)),
+            "privacyProofEnvelope.vk_hash must be nonzero",
+        ),
+        (
+            _open_verify_frame(public_inputs=b""),
+            "privacyProofEnvelope.public_inputs must be non-empty",
+        ),
+        (
+            _open_verify_frame(public_inputs_field=_field(b"\x01") + b"\x00"),
+            "privacyProofEnvelope.public_inputs has trailing bytes",
+        ),
+        (
+            _open_verify_frame(proof_bytes=b""),
+            "privacyProofEnvelope.proof_bytes must be non-empty",
+        ),
+        (
+            _open_verify_frame(proof_field=_field(b"\x02") + b"\x00"),
+            "privacyProofEnvelope.proof_bytes has trailing bytes",
+        ),
+        (
+            _open_verify_frame(aux_field=_field(b"{}") + b"\x00"),
+            "privacyProofEnvelope.aux has trailing bytes",
+        ),
+    ],
+)
+def test_decode_privacy_proof_envelope_rejects_adversarial_nested_fields(
+    archive: bytes,
+    expected: str,
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        decode_privacy_proof_envelope(archive)
+
+
+def test_decode_privacy_proof_envelope_rejects_oversized_nested_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(verange_module, "DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES", 4)
+    monkeypatch.setattr(verange_module, "DEFAULT_PRIVACY_MAX_PROOF_BYTES", 4)
+    monkeypatch.setattr(verange_module, "DEFAULT_PRIVACY_MAX_AUX_BYTES", 4)
+
+    cases = [
+        (
+            _open_verify_frame(public_inputs=b"12345"),
+            "privacyProofEnvelope.public_inputs must be no larger than 4 bytes",
+        ),
+        (
+            _open_verify_frame(proof_bytes=b"12345"),
+            "privacyProofEnvelope.proof_bytes must be no larger than 4 bytes",
+        ),
+        (
+            _open_verify_frame(aux=b"12345"),
+            "privacyProofEnvelope.aux must be no larger than 4 bytes",
+        ),
+    ]
+    for archive, expected in cases:
+        with pytest.raises(ValueError, match=expected):
+            decode_privacy_proof_envelope(archive)
+
+    assert decode_privacy_proof_envelope(
+        _open_verify_frame(public_inputs=b"1234", proof_bytes=b"1234", aux=b"1234")
+    )["aux"] == b"1234"
+
+
 def test_privacy_proof_envelope_rejects_non_plain_mappings() -> None:
     class EnvelopeDict(dict):
         pass
@@ -398,6 +552,7 @@ def test_privacy_proof_envelope_rejects_non_string_keys() -> None:
         {"publicInputs": "proof"},
         {"proofBytes": "proof"},
         {"aux": "proof"},
+        {"aux": None},
         {"publicInputs": " AQI="},
         {"publicInputs": "AQ I="},
         {"proofBytes": "AQI= "},
@@ -505,6 +660,8 @@ def test_verange_package_root_exports_catalog_entrypoint_aliases() -> None:
         {"aggregationCount": 0},
         {"commitmentScheme": "sha256-dev"},
         {"commitment": bytes([0x44]) * 32, "valueCommitment": bytes([0x45]) * 32},
+        {"commitment": [True] * 32},
+        {"commitment": memoryview(array("H", [0x4444] * 16))},
         {"payload": _payload(), "payloadDigest": bytes([0xEE]) * 32},
         {"payloadDigest": None, "payload": None},
         {"maxPayloadBytes": None, "payload": _payload(), "payloadDigest": None},
@@ -519,6 +676,34 @@ def test_verange_commitment_builder_rejects_malformed_inputs(
         "commitmentScheme": "pedersen-v1",
         "domainSeparator": "boi:amount-range:v1",
         "payloadDigest": hashlib.sha256(_payload()).digest(),
+    }
+    base.update(patch)
+
+    with pytest.raises((TypeError, ValueError), match="rangeCommitment"):
+        build_range_commitment(base)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"payload": [True]},
+        {"payload": memoryview(array("H", [0x4142]))},
+        {
+            "maxPayloadBytes": 64,
+            "max_payload_bytes": 64,
+            "payload": _payload(),
+        },
+        {"maxPayloadBytes": None, "payload": _payload()},
+    ],
+)
+def test_verange_commitment_builder_rejects_unsafe_payload_shapes_and_limits(
+    patch: dict[str, object],
+) -> None:
+    base = {
+        "commitment": bytes([0x44]) * 32,
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
     }
     base.update(patch)
 
@@ -560,7 +745,16 @@ def test_verange_commitment_builder_rejects_malformed_inputs(
         {"circuitId": "other_range_v1"},
         {"vkHash": bytes(32)},
         {"maxPayloadBytes": None},
+        {"maxPayloadBytes": 64, "max_payload_bytes": 64},
+        {"maxProofBytes": None},
+        {"maxProofBytes": 64, "max_proof_bytes": 64},
+        {"maxPublicInputBytes": None},
+        {"maxPublicInputBytes": 512, "max_public_input_bytes": 512},
         {"proofBytes": b""},
+        {"proofBytes": [True]},
+        {"proofBytes": memoryview(array("H", [0x0102]))},
+        {"aux": None},
+        {"aux": [True]},
         {"production": True},
         {"productionReady": True},
         {"production_ready": True},
@@ -578,6 +772,67 @@ def test_verange_proof_envelope_rejects_unsafe_shapes(
 
     with pytest.raises((TypeError, ValueError), match="veRangeProofEnvelope|privacyProofEnvelope"):
         build_verange_proof_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"maxPayloadBytes": None},
+        {"maxPayloadBytes": 64, "max_payload_bytes": 64},
+        {"maxProofBytes": None},
+        {"maxProofBytes": 64, "max_proof_bytes": 64},
+        {"maxPublicInputBytes": None},
+        {"maxPublicInputBytes": 512, "max_public_input_bytes": 512},
+        {"commitment": [True] * 32},
+        {"commitment": memoryview(array("H", [0x4444] * 16))},
+        {"aux": None},
+        {"aux": [True]},
+    ],
+)
+def test_verange_dev_fixture_rejects_unsafe_limit_aliases_and_byte_shapes(
+    patch: dict[str, object],
+) -> None:
+    options = {
+        "commitment": bytes([0x44]) * 32,
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
+        "payloadDigest": hashlib.sha256(_payload()).digest(),
+        "vkHash": bytes([0x55]) * 32,
+    }
+    options.update(patch)
+
+    with pytest.raises((TypeError, ValueError), match="veRangeDevProofFixture"):
+        build_verange_dev_proof_fixture(options)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"payload": [True]},
+        {"payload": memoryview(array("H", [0x4142]))},
+        {
+            "maxPayloadBytes": 64,
+            "max_payload_bytes": 64,
+            "payload": _payload(),
+        },
+        {"maxPayloadBytes": None, "payload": _payload()},
+    ],
+)
+def test_verange_dev_fixture_rejects_unsafe_payload_shapes_and_limits(
+    patch: dict[str, object],
+) -> None:
+    options = {
+        "commitment": bytes([0x44]) * 32,
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
+        "vkHash": bytes([0x55]) * 32,
+    }
+    options.update(patch)
+
+    with pytest.raises((TypeError, ValueError), match="veRangeDevProofFixture"):
+        build_verange_dev_proof_fixture(options)
 
 
 def test_verange_local_verifier_rejects_tampered_dev_fixtures() -> None:

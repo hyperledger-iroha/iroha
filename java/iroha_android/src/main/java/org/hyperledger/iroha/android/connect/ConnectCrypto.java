@@ -101,7 +101,13 @@ public final class ConnectCrypto {
     final X25519Agreement agreement = new X25519Agreement();
     agreement.init(local);
     final byte[] shared = new byte[KEY_LENGTH];
-    agreement.calculateAgreement(peer, shared, 0);
+    try {
+      agreement.calculateAgreement(peer, shared, 0);
+    } catch (final RuntimeException ex) {
+      Arrays.fill(shared, (byte) 0);
+      throw new ConnectProtocolException(
+          "x25519 agreement failed (invalid public key or all-zero shared secret)", ex);
+    }
     if (isAllZero(shared)) {
       Arrays.fill(shared, (byte) 0);
       throw new ConnectProtocolException(
@@ -131,8 +137,8 @@ public final class ConnectCrypto {
     Objects.requireNonNull(direction, "direction");
     Objects.requireNonNull(envelope, "envelope");
 
-    final byte[] aad = buildAad(sessionId, direction, sequence);
     final byte[] nonce = nonceFromSequence(sequence);
+    final byte[] aad = buildAad(sessionId, direction, sequence);
     return runAead(true, key, nonce, aad, envelope);
   }
 
@@ -148,8 +154,8 @@ public final class ConnectCrypto {
     Objects.requireNonNull(direction, "direction");
     Objects.requireNonNull(ciphertext, "ciphertext");
 
-    final byte[] aad = buildAad(sessionId, direction, sequence);
     final byte[] nonce = nonceFromSequence(sequence);
+    final byte[] aad = buildAad(sessionId, direction, sequence);
     return runAead(false, key, nonce, aad, ciphertext);
   }
 
@@ -236,7 +242,8 @@ public final class ConnectCrypto {
     return out;
   }
 
-  public static byte[] nonceFromSequence(final long sequence) {
+  public static byte[] nonceFromSequence(final long sequence) throws ConnectProtocolException {
+    requireNonNegativeSequence(sequence);
     final byte[] nonce = new byte[NONCE_LENGTH];
     final ByteBuffer buffer = ByteBuffer.wrap(nonce).order(ByteOrder.LITTLE_ENDIAN);
     buffer.putInt(0);
@@ -309,6 +316,13 @@ public final class ConnectCrypto {
       }
     }
     return true;
+  }
+
+  private static void requireNonNegativeSequence(final long sequence)
+      throws ConnectProtocolException {
+    if (sequence < 0L) {
+      throw new ConnectProtocolException("sequence must be non-negative");
+    }
   }
 
   private static void requireLength(final byte[] value, final int expected, final String name)

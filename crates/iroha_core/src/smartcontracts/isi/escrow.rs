@@ -265,6 +265,11 @@ fn ensure_close_proof_uses_canonical_transfer_v2_envelope(
             "anonymous escrow close proof backend mismatch",
         ));
     }
+    if proof.backend != proof.vk_ref.backend {
+        return Err(validation_err(
+            "anonymous escrow close proof verifier-key backend mismatch",
+        ));
+    }
     if proof.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
         return Err(validation_err(
             "anonymous escrow close proof requires halo2/ipa backend",
@@ -2108,6 +2113,19 @@ mod tests {
                     proof
                 },
                 "backend mismatch",
+            ),
+            (
+                "verifier_key_backend",
+                {
+                    let mut proof =
+                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
+                    proof.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+                        "stark/fri/sha256-goldilocks",
+                        "anonymous_escrow",
+                    );
+                    proof
+                },
+                "verifier-key backend mismatch",
             ),
         ] {
             let err = ensure_close_proof_spends_escrow_commitment(&proof, escrow_commitment)

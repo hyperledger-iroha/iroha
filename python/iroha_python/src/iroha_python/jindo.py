@@ -11,17 +11,17 @@ from .verange import (
     DEFAULT_PRIVACY_MAX_PROOF_BYTES,
     DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES,
     _MISSING,
+    _build_privacy_proof_envelope_internal,
     _bounded_bytes,
     _canonical_json_bytes,
+    _decode_privacy_proof_envelope_internal,
     _fixed_bytes,
-    _normalize_backend,
+    _normalize_backend_allowing_unsupported,
     _positive_u32,
     _read_single_alias,
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
-    build_privacy_proof_envelope,
-    decode_privacy_proof_envelope,
 )
 
 JINDO_BACKEND = "unsupported"
@@ -56,7 +56,7 @@ def _normalize_version(value: Any, context: str) -> int:
 
 
 def _normalize_backend_tag(value: Any, context: str) -> str:
-    _tag, decoded = _normalize_backend(
+    _tag, decoded = _normalize_backend_allowing_unsupported(
         JINDO_BACKEND if value is _MISSING or value is None else value,
         context,
     )
@@ -680,7 +680,7 @@ def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
     source = _require_mapping(options, "jindoLatticeProofEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "jindoLatticeProofEnvelope")
     parts = _proof_parts(source, "jindoLatticeProofEnvelope", require_proof_bytes=True)
-    return build_privacy_proof_envelope(
+    return _build_privacy_proof_envelope_internal(
         {
             "backend": parts["backend"],
             "circuitId": parts["circuit_id"],
@@ -690,7 +690,8 @@ def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
             "aux": source.get("aux", b""),
             "maxProofBytes": parts["max_proof_bytes"],
             "maxPublicInputBytes": parts["max_public_input_bytes"],
-        }
+        },
+        allow_unsupported_backend=True,
     )
 
 
@@ -730,7 +731,7 @@ def build_jindo_lattice_dev_proof_fixture(options: Mapping[str, Any]) -> dict[st
         vk_hash=parts["vk_hash"],
         public_input_bytes=parts["public_input_bytes"],
     )
-    envelope = build_privacy_proof_envelope(
+    envelope = _build_privacy_proof_envelope_internal(
         {
             "backend": parts["backend"],
             "circuitId": parts["circuit_id"],
@@ -740,7 +741,8 @@ def build_jindo_lattice_dev_proof_fixture(options: Mapping[str, Any]) -> dict[st
             "aux": source.get("aux", b""),
             "maxProofBytes": parts["max_proof_bytes"],
             "maxPublicInputBytes": parts["max_public_input_bytes"],
-        }
+        },
+        allow_unsupported_backend=True,
     )
     return {
         "kind": "jindo-lattice-dev-fixture-v0",
@@ -913,7 +915,10 @@ def verify_jindo_lattice_proof_locally(options: Any) -> dict[str, Any]:
         "jindoLatticeLocalVerification.envelope",
         "proof envelope",
     )
-    decoded = decode_privacy_proof_envelope(envelope_value)
+    decoded = _decode_privacy_proof_envelope_internal(
+        envelope_value,
+        allow_unsupported_backend=True,
+    )
     if decoded["backend"] != "Unsupported":
         raise ValueError(
             "jindoLatticeLocalVerification.envelope.backend must be Unsupported until a production Jindo backend is registered"

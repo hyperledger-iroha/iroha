@@ -15,10 +15,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
-ACTIVE_LAUNCH_DOMAIN = 2
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
+ACTIVE_LAUNCH_DOMAIN = 1
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
@@ -35,7 +35,7 @@ EVM_NATIVE_DOTNET_PHASE = "dotnet-sdk"
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
-        "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
         "pytests/scripts/sccp_release_bundle_test.py",
         "pytests/scripts/sccp_release_readiness_report_test.py",
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -43,6 +43,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
         "pytests/scripts/sccp_evm_destination_evidence_test.py",
         "pytests/scripts/sccp_evm_live_evidence_test.py",
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
@@ -99,6 +100,7 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pass ",
         "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
         "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "package declarations expose Ethereum mainnet SCCP facade methods",
         "package declarations expose BSC mainnet Parlia finality evidence hooks",
     ),
     "python-sdk": (" passed in ",),
@@ -125,15 +127,19 @@ EVM_JS_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
+    "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+    "buildEthereumMainnetSccpLocalAdmissionSubmission",
     "consensusProvider",
     "BscMainnetSccpProver",
     "BscMainnetSccp",
     "BscMainnetSccp.collectInboundEvidenceFromReceipt",
     "BscMainnetSccp.proveInboundToSora",
     "BscMainnetSccp.submitInboundToIroha",
+    "BscMainnetSccp.buildLocalAdmissionSubmission",
     "BscMainnetSccp.buildBscCalldata",
     "BscMainnetSccp.submitOutboundToBsc",
     "buildBscMainnetSccpDestinationSubmission",
+    "buildBscMainnetSccpLocalAdmissionSubmission",
     "EvmSccpProver",
     "witnessProvider",
     "proveFn",
@@ -156,15 +162,19 @@ EVM_PYTHON_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collect_inbound_evidence_from_receipt",
     "EthereumMainnetSccp.prove_inbound_to_sora",
     "EthereumMainnetSccp.submit_inbound_to_iroha",
+    "EthereumMainnetSccp.build_local_admission_submission",
+    "build_ethereum_mainnet_sccp_local_admission_submission",
     "consensus_provider",
     "BscMainnetSccpProver",
     "BscMainnetSccp",
     "BscMainnetSccp.collect_inbound_evidence_from_receipt",
     "BscMainnetSccp.prove_inbound_to_sora",
     "BscMainnetSccp.submit_inbound_to_iroha",
+    "BscMainnetSccp.build_local_admission_submission",
     "BscMainnetSccp.build_bsc_calldata",
     "BscMainnetSccp.submit_outbound_to_bsc",
     "build_bsc_mainnet_sccp_destination_submission",
+    "build_bsc_mainnet_sccp_local_admission_submission",
     "EvmSccpProver",
     "witness_provider",
     "prove",
@@ -183,16 +193,23 @@ EVM_SWIFT_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
+    "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+    "buildEthereumMainnetSccpLocalAdmissionSubmission",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetSccp.OutboundSubmitFunction",
     "EthereumMainnetConsensusProvider",
     "EthereumMainnetBeaconFinalityEvidence",
+    "EthereumMainnetReceiptProof",
     "EthereumMainnetInboundEvidence.init(beaconFinalityEvidence:)",
     "BscMainnetSccpProver",
     "BscMainnetSccp",
     "BscMainnetSccp.collectInboundEvidenceFromReceipt",
     "BscMainnetSccp.proveInboundToSora",
     "BscMainnetSccp.submitInboundToIroha",
+    "BscMainnetSccp.buildLocalAdmissionSubmission",
     "BscMainnetSccp.buildBscCalldata",
     "BscMainnetSccp.submitOutboundToBsc",
     "BscMainnetSccp.OutboundSubmitFunction",
@@ -200,6 +217,7 @@ EVM_SWIFT_USER_PROVER_HELPERS = (
     "BscMainnetParliaFinalityEvidence",
     "BscMainnetInboundEvidence.init(parliaFinalityEvidence:)",
     "buildBscMainnetSccpDestinationSubmission",
+    "buildBscMainnetSccpLocalAdmissionSubmission",
     "EvmSccpProver",
     "EvmSccpWitnessProvider",
     "EvmSccpProver.ProveFunction",
@@ -217,16 +235,23 @@ EVM_KOTLIN_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetConsensusProvider",
     "EthereumMainnetBeaconFinalityEvidence",
+    "EthereumMainnetReceiptProof",
     "EthereumMainnetInboundEvidence.withBeaconFinalityEvidence",
     "EthereumMainnetOutboundSubmitter",
+    "SccpEthereumMainnet.buildLocalAdmissionSubmission",
+    "EthereumMainnetLocalAdmissionSubmissionInput",
     "BscSccpProver",
     "BscMainnetSccp",
     "BscMainnetSccp.collectInboundEvidenceFromReceipt",
     "BscMainnetSccp.proveInboundToSora",
     "BscMainnetSccp.submitInboundToIroha",
+    "BscMainnetSccp.buildLocalAdmissionSubmission",
     "BscMainnetSccp.buildBscCalldata",
     "BscMainnetSccp.submitOutboundToBsc",
     "BscMainnetConsensusProvider",
@@ -234,6 +259,8 @@ EVM_KOTLIN_USER_PROVER_HELPERS = (
     "BscMainnetInboundEvidence.withParliaFinalityEvidence",
     "BscMainnetOutboundSubmitter",
     "SccpBsc.buildSubmission",
+    "SccpBsc.buildLocalAdmissionSubmission",
+    "BscMainnetLocalAdmissionSubmissionInput",
     "EvmSccpProver",
     "EvmSccpWitnessProvider",
     "EvmSccpProofEngine",
@@ -251,16 +278,25 @@ EVM_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
+    "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+    "EthereumMainnetSccp.buildLocalAdmission",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetSccp.ConsensusProvider",
     "EthereumMainnetSccp.BeaconFinalityEvidence",
+    "EthereumMainnetSccp.ReceiptProof",
     "InboundEvidence.withBeaconFinalityEvidence",
     "EthereumMainnetSccp.OutboundSubmitter",
+    "EthereumMainnetSccp.LocalAdmissionSubmissionInput",
     "BscSccpProver",
     "BscMainnetSccp",
     "BscMainnetSccp.collectInboundEvidenceFromReceipt",
     "BscMainnetSccp.proveInboundToSora",
     "BscMainnetSccp.submitInboundToIroha",
+    "BscMainnetSccp.buildLocalAdmissionSubmission",
+    "BscMainnetSccp.buildLocalAdmission",
     "BscMainnetSccp.buildBscCalldata",
     "BscMainnetSccp.submitOutboundToBsc",
     "BscMainnetSccp.ConsensusProvider",
@@ -268,6 +304,7 @@ EVM_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "InboundEvidence.withParliaFinalityEvidence",
     "BscMainnetSccp.OutboundSubmitter",
     "BscSccpProver.buildSubmission",
+    "BscMainnetSccp.LocalAdmissionSubmissionInput",
     "EvmSccpProver",
     "EvmSccpProver.WitnessProvider",
     "EvmSccpProver.ProofEngine",
@@ -283,16 +320,19 @@ EVM_DOTNET_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
     "EthereumMainnetSccp.BuildEthereumCalldata",
     "EthereumMainnetSccp.SubmitOutboundToEthereumAsync",
+    "EthereumMainnetSccp.BuildLocalAdmissionSubmission",
     "EthereumMainnetSccp.DestinationBinding",
     "EthereumMainnetSccp.DestinationBindingHash",
     "IEthereumMainnetExecutionProvider",
     "IEthereumMainnetConsensusProvider",
     "EthereumMainnetBeaconFinalityEvidence",
+    "EthereumMainnetReceiptProof",
     "EthereumMainnetTransparentPublicInputs",
     "EthereumMainnetOutboundProofRequestInput",
     "EthereumMainnetOutboundProofRequest",
     "EthereumMainnetOutboundProofResult",
     "EthereumMainnetSccpSubmission",
+    "EthereumMainnetLocalAdmissionSubmissionInput",
     "EthereumMainnetInboundEvidence.WithBeaconFinalityEvidence",
     "IEthereumMainnetInboundProver",
     "IEthereumMainnetInboundSubmitter",
@@ -302,6 +342,7 @@ EVM_DOTNET_USER_PROVER_HELPERS = (
     "BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
     "BscMainnetSccp.ProveInboundToSoraAsync",
     "BscMainnetSccp.SubmitInboundToIrohaAsync",
+    "BscMainnetSccp.BuildLocalAdmissionSubmission",
     "BscMainnetSccp.BuildOutboundProofRequest",
     "BscMainnetSccp.ProveOutboundToBscAsync",
     "BscMainnetSccp.BuildBscCalldata",
@@ -316,6 +357,7 @@ EVM_DOTNET_USER_PROVER_HELPERS = (
     "BscMainnetOutboundProofRequest",
     "BscMainnetOutboundProofResult",
     "BscMainnetSccpSubmission",
+    "BscMainnetLocalAdmissionSubmissionInput",
     "BscMainnetInboundEvidence.WithParliaFinalityEvidence",
     "IBscMainnetInboundProver",
     "IBscMainnetInboundSubmitter",
@@ -801,6 +843,19 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     return transcript[start:next_start]
 
 
+def _transcript_has_full_corridor_completion(transcript: str) -> bool:
+    completion = transcript.rfind(CORRIDOR_COMPLETION_SENTINEL)
+    if completion < 0:
+        return False
+    marker_positions = [
+        transcript.find(f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}")
+        for phase in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    ]
+    if any(position < 0 for position in marker_positions):
+        return False
+    return completion > max(marker_positions)
+
+
 def _phase_command_lines(phase_block: str) -> list[str]:
     return [
         line.strip()
@@ -825,8 +880,13 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
         errors.append("evidence artifact is a dry-run transcript")
     if phase_block is None:
         errors.append("evidence artifact is missing the phase marker")
-    if CORRIDOR_COMPLETION_SENTINEL not in transcript:
-        errors.append("evidence artifact is missing the completion sentinel")
+    elif (
+        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
+        errors.append(
+            "evidence artifact is missing the phase-block completion sentinel"
+        )
     required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
     if required_fragments is None:
         errors.append("evidence artifact has no expected command fragment configured")
@@ -1168,10 +1228,26 @@ def _cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         source_gate_audit_hashes = source_gate.get("audit_hashes")
         if not isinstance(source_gate_audit_hashes, dict):
             source_gate_audit_hashes = {}
+        evm_live_metadata = lane.get("evm_live_metadata")
+        if not isinstance(evm_live_metadata, dict):
+            evm_live_metadata = {}
         rows.append(
             {
                 "domain": lane.get("domain"),
                 "chain": lane.get("chain"),
+                "evm_source_rpc_chain_id": evm_live_metadata.get(
+                    "source_rpc_chain_id",
+                    "",
+                ),
+                "evm_source_block_tag": evm_live_metadata.get("source_block_tag", ""),
+                "evm_destination_rpc_chain_id": evm_live_metadata.get(
+                    "destination_rpc_chain_id",
+                    "",
+                ),
+                "evm_destination_block_tag": evm_live_metadata.get(
+                    "destination_block_tag",
+                    "",
+                ),
                 "source_verifier_material_hash": source_hashes.get(
                     "source_verifier_material_hash"
                 ),
@@ -1278,13 +1354,15 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
 
     lines.extend(["", "## Cryptographic Evidence", ""])
     lines.append(
-        "| Domain | Chain | Source Material | Source Deployment | "
+        "| Domain | Chain | EVM Source Chain ID | EVM Source Tag | "
+        "EVM Destination Chain ID | EVM Destination Tag | "
+        "Source Material | Source Deployment | "
         "Destination Binding | Source Gate | Source Gate Audits | "
         "Route Allowlist | Route Canary | Canary Source | Canary Block | "
         "Canary Timestamp |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
     for row in report["cryptographic_evidence"]:
         canary_source = row["route_canary_evidence_source"] or "-"
@@ -1294,11 +1372,18 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         if not row["source_adapter_gate_required"] and source_gate == "-":
             source_gate = "not required"
         lines.append(
-            "| {domain} | `{chain}` | {source} | {deploy} | {dest} | "
+            "| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
+            "`{evm_source_tag}` | `{evm_dest_rpc_chain_id}` | "
+            "`{evm_dest_tag}` | "
+            "{source} | {deploy} | {dest} | "
             "{source_gate} | {source_gate_audits} | {route} | {canary} | "
             "`{canary_source}` | {canary_block} | {canary_timestamp} |".format(
                 domain=row["domain"],
                 chain=row["chain"],
+                evm_source_rpc_chain_id=row["evm_source_rpc_chain_id"] or "-",
+                evm_source_tag=row["evm_source_block_tag"] or "-",
+                evm_dest_rpc_chain_id=row["evm_destination_rpc_chain_id"] or "-",
+                evm_dest_tag=row["evm_destination_block_tag"] or "-",
                 source=_hash_cell(row["source_verifier_material_hash"]),
                 deploy=_hash_cell(row["source_adapter_engine_deployment_hash"]),
                 dest=_hash_cell(row["destination_binding_hash"]),
@@ -1374,6 +1459,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
+            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 1` and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]

@@ -86,6 +86,20 @@ function slicedPrivacyView(archive, prefix = [0xff, 0x7f, 0x42], suffix = [0x24,
   return backing.subarray(prefix.length, prefix.length + archive.length);
 }
 
+function int8PrivacyFrame(schemaByte) {
+  const frame = privacyNoritoFrameWithPayload(schemaByte);
+  const backing = new ArrayBuffer(frame.length);
+  new Uint8Array(backing).set(frame);
+  return new Int8Array(backing);
+}
+
+function sharedPrivacyFrame(schemaByte) {
+  const frame = privacyNoritoFrameWithPayload(schemaByte);
+  const backing = new SharedArrayBuffer(frame.length);
+  new Uint8Array(backing).set(frame);
+  return new Uint8Array(backing);
+}
+
 function malformedPrivacyRequestArchives() {
   const badMagic = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
   badMagic[0] = 0x00;
@@ -353,8 +367,14 @@ test("privacy native availability probes clear request copies after native failu
     },
   );
 
-  assert.deepEqual(Buffer.from(throwingProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
-  assert.deepEqual(Buffer.from(badOutputProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+  assert.deepEqual(
+    Buffer.from(throwingProbe),
+    Buffer.alloc(privacyNoritoFrame(0x52).length),
+  );
+  assert.deepEqual(
+    Buffer.from(badOutputProbe),
+    Buffer.alloc(privacyNoritoFrame(0x52).length),
+  );
 });
 
 test("privacy native availability probes reject unsafe raw output", () => {
@@ -993,15 +1013,89 @@ test("privacy native wrappers reject non-byte native output", () => {
     () => {
       assert.throws(
         () => privacyCapabilitiesV1(),
-        /native privacyCapabilitiesV1 output must be a Buffer, string, or ArrayBuffer view/,
+        /native privacyCapabilitiesV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
       );
       assert.throws(
         () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
-        /native privacyBuildProofV1 output must be a Buffer, string, or ArrayBuffer view/,
+        /native privacyBuildProofV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
       );
       assert.throws(
         () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
-        /native privacyVerifyProofV1 output must be a Buffer, string, or ArrayBuffer view/,
+        /native privacyVerifyProofV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+});
+
+test("privacy native wrappers reject ambiguous byte views", () => {
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyCapabilitiesV1() {
+        return int8PrivacyFrame(0x50);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyBuildProofV1() {
+        return new Uint16Array(24);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+        /native privacyBuildProofV1 output must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyBuildProofV1() {
+        assert.fail("signed typed-array build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        assert.fail("wide typed-array verify request must not reach native dispatch");
+      },
+    }),
+    () => {
+      assert.throws(
+        () => privacyBuildProofV1(int8PrivacyFrame(0x52)),
+        /requestArchive must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(new Uint16Array(24)),
+        /requestArchive must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer/,
+      );
+    },
+  );
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyBuildProofV1() {
+        assert.fail("shared-memory build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        return sharedPrivacyFrame(0x56);
+      },
+    }),
+    () => {
+      assert.throws(
+        () => privacyBuildProofV1(sharedPrivacyFrame(0x52)),
+        /requestArchive must not use shared memory/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+        /native privacyVerifyProofV1 output must not use shared memory/,
       );
     },
   );

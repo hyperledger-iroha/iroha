@@ -130,6 +130,12 @@ public final class OfflineNoteV2 {
     public VerifyingKeyIdReference(final String backend, final String name) {
       this.backend = requireNonBlank(backend, "verifying key backend");
       this.name = requireNonBlank(name, "verifying key name");
+      if (this.backend.indexOf(':') >= 0) {
+        throw new IllegalArgumentException("verifying key backend must not contain ':'");
+      }
+      if (this.name.indexOf(':') >= 0) {
+        throw new IllegalArgumentException("verifying key name must not contain ':'");
+      }
     }
 
     public String backend() {
@@ -953,6 +959,15 @@ public final class OfflineNoteV2 {
       if (this.outputClaims.isEmpty()) {
         throw new IllegalArgumentException("output claims must not be empty");
       }
+      final List<String> committed = new ArrayList<>();
+      for (final byte[] commitment : this.outputCommitments) {
+        committed.add(hexLower(commitment));
+      }
+      for (final AuditOutputClaimV2 claim : this.outputClaims) {
+        if (!committed.contains(hexLower(claim.noteCommitment()))) {
+          throw new IllegalArgumentException("audit output claim is not listed in output commitments");
+        }
+      }
     }
 
     public byte[] tokenId() {
@@ -1447,13 +1462,7 @@ public final class OfflineNoteV2 {
         final SingleKeyPayload payload = single.get();
         final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
         encoder.writeUInt(0, 32);
-        writeField(
-            encoder,
-            child ->
-                writeConstVec(
-                    child,
-                    PublicKeyCodec.compactPublicKeyPayload(
-                        payload.curveId(), payload.publicKey())));
+        writeField(encoder, child -> writePublicKey(child, payload.curveId(), payload.publicKey()));
         return encoder.toByteArray();
       }
       final Optional<MultisigPolicyPayload> multisig =
@@ -1502,14 +1511,15 @@ public final class OfflineNoteV2 {
           memberEncoder -> {
             writeField(
                 memberEncoder,
-                child ->
-                    writeConstVec(
-                        child,
-                        PublicKeyCodec.compactPublicKeyPayload(
-                            member.curveId(), member.publicKey())));
+                child -> writePublicKey(child, member.curveId(), member.publicKey()));
             writeField(memberEncoder, child -> child.writeUInt(member.weight(), 16));
           });
     }
+  }
+
+  private static void writePublicKey(
+      final NoritoEncoder encoder, final int curveId, final byte[] publicKey) {
+    writeConstVec(encoder, PublicKeyCodec.compactPublicKeyPayload(curveId, publicKey));
   }
 
   private static void writeAssetId(final NoritoEncoder encoder, final String assetId) {
@@ -1817,7 +1827,7 @@ public final class OfflineNoteV2 {
   }
 
   private static String requireNonBlank(final String value, final String field) {
-    final String checked = Objects.requireNonNull(value, field);
+    final String checked = Objects.requireNonNull(value, field).trim();
     if (checked.trim().isEmpty()) {
       throw new IllegalArgumentException(field + " must not be empty");
     }

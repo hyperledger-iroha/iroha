@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { keccak_256 } from "@noble/hashes/sha3";
+import { AccountAddress } from "../src/address.js";
 import { noritoEncodeInstruction } from "../src/norito.js";
 import {
   SCCP_DOMAIN_SOL,
@@ -12,7 +13,11 @@ import {
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_SORA_POLKADOT,
   SCCP_DOMAIN_SORA2,
+  SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_CODEC_TEXT_UTF8,
+  SCCP_CODEC_EVM_HEX,
+  SCCP_CODEC_SOLANA_BASE58,
+  SCCP_CODEC_TON_RAW,
   SCCP_CODEC_TRON_BASE58CHECK,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
@@ -64,6 +69,7 @@ import {
   SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
   SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_ZERO_HASH_V1,
+  SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
   BscMainnetSccpProver,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
@@ -199,12 +205,14 @@ import {
   canonicalTronSccpReceiptProofBytes,
   canonicalTronSccpReceiptStateProofBytes,
   canonicalTronSccpTransactionSourceProofBytes,
+  parseTronTriggerSmartContractRawData,
   ethSyncCommitteeHash,
   ethSyncCommitteeHashFromPayload,
   ethSyncCommitteePayloadHash,
   ethBeaconBlockHeaderRoot,
   ethBeaconBodyRootFromExecutionPayloadBranch,
   ethExecutionPayloadHeaderRootFromRlp,
+  ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteeTransitionMessageHash,
   ethSyncCommitteeTransitionSignatureHash,
   bscMainnetSccpDestinationBinding,
@@ -308,19 +316,27 @@ import {
   tonValidatorSetTransitionSignatureHash,
   tronSccpDestinationBinding,
   tronSccpDestinationBindingHash,
+  SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1,
   tairaXorRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
+  buildTairaXorTronToTairaTransferPayload,
   buildTairaXorSccpRecordDescriptor,
   buildRecordSccpMessageInstructionBytes,
   buildTairaXorSccpBurnRecordContractPayload,
   buildTairaXorSccpBurnRecordZkIvmRequest,
   tairaXorCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
+  tairaXorTronToTairaCanonicalTransferPayloadBytes,
+  tairaXorTronToTairaTransferMessageId,
   tairaXorTransferPayloadHash,
   tairaXorBurnSourceEventDigest,
   tairaXorFinalizeFromTairaCallData,
   tairaXorBurnToTairaCallData,
+  tairaXorBurnToTairaAccountCallData,
+  isTairaXorTronBurnStartedEventName,
+  bindTairaXorTronBurnStartedEvent,
+  bindTairaXorTronToTairaSourceProofPackage,
   tronSccpReceiptProofHash,
   tronSccpReceiptStateProofHash,
   tronSccpSourceMessageCallData,
@@ -335,6 +351,7 @@ import {
   tronWitnessScheduleHashFromPayload,
   tronWitnessSchedulePayloadHash,
   sccpTransferMessageId,
+  sccpPayloadHash,
 } from "../src/sccp.js";
 
 const HEX32_A = `0x${"aa".repeat(32)}`;
@@ -361,6 +378,12 @@ function testBytesToHex(bytes) {
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function testSccpTransferMessageIdFromBytes(bytes) {
+  return testBytesToHex(
+    keccak_256(testConcatBytes(testTextEncoder.encode("sccp:transfer:v1"), bytes)),
+  );
+}
+
 function testHexToBytes(value, byteLength = null) {
   const hex = value.replace(/^0x/u, "").toLowerCase();
   assert.match(hex, /^[0-9a-f]*$/u);
@@ -372,6 +395,13 @@ function testHexToBytes(value, byteLength = null) {
   }
   return out;
 }
+
+const TAIRA_ACCOUNT_ID = AccountAddress.fromAccount({
+  publicKey: testHexToBytes("641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201"),
+}).toI105(SCCP_TAIRA_NETWORK_PREFIX_V1);
+const TAIRA_OTHER_ACCOUNT_ID = AccountAddress.fromAccount({
+  publicKey: testHexToBytes("3b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8"),
+}).toI105(SCCP_TAIRA_NETWORK_PREFIX_V1);
 
 function testConcatBytes(...parts) {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -802,9 +832,9 @@ const ETH_NEXT_SYNC_COMMITTEE_HASH =
 const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH =
   "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17";
 const ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH =
-  "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec";
+  "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e";
 const ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH =
-  "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858";
+  "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d";
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HEX = `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`;
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HASH =
   "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429";
@@ -976,6 +1006,15 @@ const TRON_RECEIPT_STATE_PROOF_HASH =
   "0x847c5ee3e6f4f83fef4d754a9aed93fae38c6677011cae03b10228c17c60b13b";
 const TRON_SOURCE_MESSAGE_CALL_DATA_HEX =
   `06841e30${"0".repeat(63)}5${"0".repeat(64)}${"34".repeat(32)}`;
+const TRON_TRANSACTION_SOURCE_RAW_DATA_HEX =
+  "0x0a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
+  "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
+  "54726967676572536d617274436f6e74726163741294010a15417e5f4552091a" +
+  "69125d5dfcb7b8c2659029395bdf121541454545454545454545454545454545" +
+  "4545454545226406841e30000000000000000000000000000000000000000000" +
+  "0000000000000000000005000000000000000000000000000000000000000000" +
+  "0000000000000000000000343434343434343434343434343434343434343434" +
+  "34343434343434343434347090e5ee3a900180e1eb17";
 const TRON_TRANSACTION_SOURCE_BYTES_HEX =
   "0x0af3010a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
   "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
@@ -6780,6 +6819,10 @@ const sampleSourceRecordInput = (sourceDomain) => {
     input.bridgeAddress = `0x${"11".repeat(20)}`;
     input.sourceBridgeEmitterCodeHash = `0x${"77".repeat(32)}`;
   }
+  if (sourceDomain === SCCP_DOMAIN_ETH) {
+    input.networkId = SCCP_ETH_MAINNET_NETWORK_ID;
+    input.configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
+  }
   if (
     [
       SCCP_DOMAIN_SOL,
@@ -6801,7 +6844,7 @@ const sampleSourceRecordInput = (sourceDomain) => {
 
 test("derives SCCP source material and deployment record hashes for UI tooling", () => {
   const materialVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd"],
+    [SCCP_DOMAIN_ETH, "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"],
     [SCCP_DOMAIN_BSC, "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a"],
     [SCCP_DOMAIN_SOL, "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331"],
     [SCCP_DOMAIN_TON, "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc"],
@@ -6811,7 +6854,7 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     [SCCP_DOMAIN_SORA2, "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d"],
   ]);
   const deploymentVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d"],
+    [SCCP_DOMAIN_ETH, "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4"],
     [SCCP_DOMAIN_BSC, "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d"],
     [SCCP_DOMAIN_SOL, "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc"],
     [SCCP_DOMAIN_TON, "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887"],
@@ -6876,7 +6919,23 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
         ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
         networkId: `0x${"33".repeat(32)}`,
       }),
-    /sourceBridgeNetworkId is not used for sourceDomain/,
+    /sourceBridgeNetworkId must be Ethereum mainnet chain id/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
+        ownerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /sourceBridgeOwnerAddress is not used for sourceDomain/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
+        configHash: `0x${"99".repeat(32)}`,
+      }),
+    /sourceBridgeConfigHash must match ETH source bridge config fields/,
   );
   assert.throws(
     () =>
@@ -10111,8 +10170,8 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
   const nextSyncCommitteePayload = canonicalEthSyncCommitteePayloadBytes(nextCommittee);
   const transitionMessage = {
     sourceDomain: SCCP_DOMAIN_ETH,
-    fromSyncPeriod: 7n,
-    toSyncPeriod: 8n,
+    fromSyncPeriod: 0n,
+    toSyncPeriod: 1n,
     transitionSlot: 19n,
     finalizedBeaconRoot: HEX32_A,
     parentSyncCommitteeHash: ETH_SYNC_COMMITTEE_HASH,
@@ -10140,6 +10199,9 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
   assert.equal(Buffer.from(nextSyncCommitteePayload).toString("hex"), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX);
   assert.equal(ethSyncCommitteeHashFromPayload(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_HASH);
   assert.equal(ethSyncCommitteePayloadHash(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH);
+  assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
   assert.throws(
     () =>
       canonicalEthSyncCommitteePayloadBytes({
@@ -10173,9 +10235,34 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
         ...transitionMessage,
-        from_sync_period: 7n,
+        from_sync_period: 0n,
       }),
     /fromSyncPeriod must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        toSyncPeriod: 2n,
+      }),
+    /toSyncPeriod/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        fromSyncPeriod: 1n,
+        toSyncPeriod: 2n,
+      }),
+    /transitionSlot must belong to fromSyncPeriod/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        transitionSlot: 0n,
+      }),
+    /transitionSlot must not be zero/u,
   );
   assert.throws(
     () =>
@@ -10766,6 +10853,71 @@ test("derives TON ShardStateUnsplit accounts roots for UI proof material", () =>
   assert.throws(() => tonShardStateAccountsRootHash(basechainCustom), /custom/);
 });
 
+test("parses and binds canonical TRON TriggerSmartContract raw_data bytes", () => {
+  const parsed = parseTronTriggerSmartContractRawData(
+    TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+    {
+      expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      expectedContractAddress: `0x${"45".repeat(20)}`,
+      expectedCallData: TRON_SOURCE_MESSAGE_CALL_DATA_HEX,
+    },
+  );
+  assert.deepEqual(parsed, {
+    rawDataHash:
+      "0x98eb38e4a22e8efa64a0f612cc1b90f4a4e547fde105c38a1e9ea899b26d472e",
+    ownerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    ownerAddress20: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    contractAddress: `0x41${"45".repeat(20)}`,
+    contractAddress20: `0x${"45".repeat(20)}`,
+    callData: `0x${TRON_SOURCE_MESSAGE_CALL_DATA_HEX}`,
+    refBlockNum: "12345",
+    timestampMs: "123450000",
+    expirationMs: "123456789",
+    feeLimit: "50000000",
+  });
+  assert.deepEqual(
+    parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+      expectedOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      expectedContractAddress: `0x41${"45".repeat(20)}`,
+      expectedCallData: `0x${TRON_SOURCE_MESSAGE_CALL_DATA_HEX}`,
+    }),
+    parsed,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedOwnerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /owner_address/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedContractAddress: `0x${"46".repeat(20)}`,
+      }),
+    /contract_address/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedCallData: `0x${"00".repeat(4)}`,
+      }),
+    /call data/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        owner_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      }),
+    /expectedOwnerAddress must not use multiple aliases/u,
+  );
+  assert.throws(
+    () => parseTronTriggerSmartContractRawData("0x0af301"),
+    /truncated protobuf bytes field|canonical TRON TriggerSmartContract/u,
+  );
+});
+
 test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness material", () => {
   const sourceEventDigest = `0x${"34".repeat(32)}`;
   const inclusionBranch = [HEX32_E];
@@ -10889,6 +11041,7 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     EVM_RECEIPT_ROOT_MPT_VALUE_HEX,
   );
   assert.throws(() => canonicalEvmReceiptRootMptValue("0x1234"), /32 bytes/);
+  assert.throws(() => canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1), /must not be zero/);
   assert.equal(
     `0x${Buffer.from(canonicalTronReceiptRootMptValue(HEX32_B)).toString("hex")}`,
     TRON_RECEIPT_ROOT_MPT_VALUE_HEX,
@@ -13842,7 +13995,7 @@ test("rejects SCCP prover results bound to a different request context", async (
 });
 
 test("builds canonical TAIRA XOR outbound transfer payloads and message ids", () => {
-  const sender = "testu4bridge@taira";
+  const sender = TAIRA_ACCOUNT_ID;
   const recipient = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const amount = 25_000_000_000_000_000n;
   const nonce = 42n;
@@ -13912,8 +14065,432 @@ test("builds canonical TAIRA XOR outbound transfer payloads and message ids", ()
   );
 });
 
+test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const bridgeAddress = `0x${"22".repeat(20)}`;
+  const payload = buildTairaXorTronToTairaTransferPayload({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_TRON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TRON_BASE58CHECK,
+    sender: tronSender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient: tairaRecipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+  });
+  assert.deepEqual(
+    tairaXorTronToTairaCanonicalTransferPayloadBytes({
+      sender: tronSender,
+      recipient: tairaRecipient,
+      amount,
+      nonce,
+    }),
+    canonicalSccpTransferPayloadBytes(payload),
+  );
+
+  const messageId = tairaXorTronToTairaTransferMessageId({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const messageBundle = {
+    version: 1,
+    commitmentRoot: HEX32_D,
+    commitment: {
+      version: 1,
+      kind: "Transfer",
+      targetDomain: SCCP_DOMAIN_SORA,
+      messageId,
+      payloadHash,
+    },
+    merkleProof: { steps: [] },
+    payload: { kind: "Transfer", value: payload },
+    finalityProof: "0x010203",
+  };
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const proofPackage = {
+    messageBundle,
+    sourceEventDigest,
+    txId: "11".repeat(32),
+    messageId,
+    commitmentRoot: HEX32_D,
+  };
+
+  const bound = bindTairaXorTronToTairaSourceProofPackage({
+    proofPackage,
+    settlementDefaults: { contract_alias: "sccp.taira_xor" },
+    txId: `0x${"11".repeat(32)}`,
+    tronSender,
+    tairaRecipient,
+    amount,
+    bridgeAddress,
+  });
+
+  assert.equal(bound.txId, "11".repeat(32));
+  assert.equal(bound.messageId, messageId);
+  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.sourceEventDigest, sourceEventDigest);
+  assert.equal(bound.amount, amount.toString());
+  assert.deepEqual(bound.settlement, {
+    contract_alias: "sccp.taira_xor",
+    entrypoint: "finalize_inbound",
+    route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+  });
+});
+
+test("binds TAIRA XOR TRON burn-started events", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const bridgeAddress = tronSender;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 1000n;
+  const nonce = 7n;
+  const routeIdHash = tairaXorRouteIdHash();
+  const assetKeyHash = tairaXorAssetKeyHash();
+  const tairaRecipientHash = testBytesToHex(
+    keccak_256(testTextEncoder.encode(tairaRecipient)),
+  );
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const sampleEvent = (overrides = {}) => ({
+    transaction_id: "11".repeat(32),
+    event_name: "TairaXorBurnStarted",
+    contract_address: bridgeAddress,
+    result: {
+      sourceEventDigest,
+      burner: tronSender,
+      tairaRecipientHash,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+      routeIdHash,
+      assetKeyHash,
+      tairaRecipient: testBytesToHex(testTextEncoder.encode(tairaRecipient)),
+    },
+    ...overrides,
+  });
+
+  assert.equal(isTairaXorTronBurnStartedEventName("TairaXorBurnStarted"), true);
+  assert.equal(isTairaXorTronBurnStartedEventName("BurnToTaira"), true);
+  assert.equal(isTairaXorTronBurnStartedEventName("Approval"), false);
+
+  const bound = bindTairaXorTronBurnStartedEvent({
+    event: sampleEvent(),
+    bridgeAddress,
+    tronSender,
+    tairaRecipient,
+    amount,
+    sourceEventDigest,
+  });
+
+  assert.equal(bound.eventName, "tairaxorburnstarted");
+  assert.equal(bound.sourceEventDigest, sourceEventDigest);
+  assert.equal(bound.routeIdHash, routeIdHash);
+  assert.equal(bound.assetKeyHash, assetKeyHash);
+  assert.equal(bound.tairaRecipient, tairaRecipient);
+  assert.equal(bound.tairaRecipientHash, tairaRecipientHash);
+  assert.equal(bound.amount, amount.toString());
+  assert.equal(bound.nonce, nonce.toString());
+
+  assert.equal(
+    bindTairaXorTronBurnStartedEvent({
+      event: sampleEvent({ event_name: "BurnToTaira" }),
+      bridgeAddress,
+      tronSender,
+      tairaRecipient,
+      amount,
+    }).sourceEventDigest,
+    sourceEventDigest,
+  );
+});
+
+test("rejects adversarial TAIRA XOR TRON burn-started events", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const bridgeAddress = tronSender;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 1000n;
+  const nonce = 7n;
+  const routeIdHash = tairaXorRouteIdHash();
+  const assetKeyHash = tairaXorAssetKeyHash();
+  const tairaRecipientHash = testBytesToHex(
+    keccak_256(testTextEncoder.encode(tairaRecipient)),
+  );
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const sampleEvent = () => ({
+    transaction_id: "11".repeat(32),
+    event_name: "TairaXorBurnStarted",
+    contract_address: bridgeAddress,
+    result: {
+      sourceEventDigest,
+      burner: tronSender,
+      tairaRecipientHash,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+      routeIdHash,
+      assetKeyHash,
+      tairaRecipient: testBytesToHex(testTextEncoder.encode(tairaRecipient)),
+    },
+  });
+  const bind = (mutate = () => {}) => {
+    const event = sampleEvent();
+    mutate(event);
+    return bindTairaXorTronBurnStartedEvent({
+      event,
+      bridgeAddress,
+      tronSender,
+      tairaRecipient,
+      amount,
+      sourceEventDigest,
+    });
+  };
+
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.event_name = "Approval";
+      }),
+    /TairaXorBurnStarted/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.sourceEventDigest = HEX32_E;
+      }),
+    /expected digest/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.routeIdHash = HEX32_A;
+      }),
+    /route hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.assetKeyHash = HEX32_A;
+      }),
+    /asset hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.burner = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /burner/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.amount = "1001";
+      }),
+    /amount/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.nonce = "8";
+      }),
+    /digest/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        delete event.result.nonce;
+      }),
+    /burn nonce/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.tairaRecipient = TAIRA_OTHER_ACCOUNT_ID;
+      }),
+    /TAIRA recipient/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.tairaRecipientHash = HEX32_A;
+      }),
+    /recipient hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.contract_address = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /contract address/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.burner = tronSender;
+        event.burner = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /conflict/,
+  );
+});
+
+test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 1000n;
+  const nonce = 7n;
+  const bridgeAddress = `0x${"22".repeat(20)}`;
+  const payload = buildTairaXorTronToTairaTransferPayload({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const messageId = tairaXorTronToTairaTransferMessageId({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const samplePackage = () => ({
+    messageBundle: {
+      version: 1,
+      commitmentRoot: HEX32_D,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: SCCP_DOMAIN_SORA,
+        messageId,
+        payloadHash,
+      },
+      merkleProof: { steps: [] },
+      payload: { kind: "Transfer", value: { ...payload } },
+      finalityProof: "0x010203",
+    },
+    settlement: {
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    },
+    sourceEventDigest,
+    txId: "11".repeat(32),
+    messageId,
+    commitmentRoot: HEX32_D,
+  });
+  const bind = (mutate = () => {}, inputOverrides = {}) => {
+    const proofPackage = samplePackage();
+    mutate(proofPackage);
+    return bindTairaXorTronToTairaSourceProofPackage({
+      proofPackage,
+      txId: "11".repeat(32),
+      tronSender,
+      tairaRecipient,
+      amount,
+      bridgeAddress,
+      ...inputOverrides,
+    });
+  };
+
+  assert.throws(() => bind((pkg) => { pkg.txId = "22".repeat(32); }), /txId/);
+  assert.throws(
+    () => bind((pkg) => { pkg.messageBundle.commitment.targetDomain = SCCP_DOMAIN_TRON; }),
+    /target TAIRA|target_domain/,
+  );
+  assert.throws(
+    () => bind((pkg) => { pkg.messageBundle.payload.value.sender = "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"; }),
+    /sender/,
+  );
+  assert.throws(
+    () => bind((pkg) => { pkg.messageBundle.payload.value.route_id = "evil_route"; }),
+    /route/,
+  );
+  assert.throws(
+    () => bind((pkg) => { pkg.messageBundle.commitment.payloadHash = HEX32_A; }),
+    /payload hash/,
+  );
+  assert.throws(() => bind((pkg) => { pkg.messageId = HEX32_A; }), /messageId/);
+  assert.throws(() => bind((pkg) => { pkg.commitmentRoot = HEX32_A; }), /commitmentRoot/);
+  assert.throws(() => bind((pkg) => { pkg.sourceEventDigest = HEX32_E; }), /burn source event digest/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.payload = { unsafe: true }; }), /payload/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.payload_bytes = "0x01"; }), /payload/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.entrypoint = "burn_and_record"; }), /finalize_inbound/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.route = "evil_route"; }), /taira_tron_xor/);
+  assert.throws(
+    () => bind((pkg) => { pkg.settlement.route_id = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1; }),
+    /proofPackage\.settlement\.route must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { entrypoint: "burn_and_record" },
+      }),
+    /settlementDefaults\.entrypoint must be finalize_inbound/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { route: "evil_route" },
+      }),
+    /settlementDefaults\.route must be taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { payloadJson: { unsafe: true } },
+      }),
+    /settlementDefaults payload must be generated by Torii/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: {
+          route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+          route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+        },
+      }),
+    /settlementDefaults\.route must not use multiple aliases/,
+  );
+});
+
 test("canonicalizes normalized SCCP message proof bundles for browser proof requests", () => {
-  const sender = "testu4bridge@taira";
+  const sender = TAIRA_ACCOUNT_ID;
   const recipient = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const amount = 25_000_000_000_000_000n;
   const payload = buildTairaXorTransferPayload({
@@ -13989,7 +14566,7 @@ test("builds a proof-gated TAIRA XOR SCCP record descriptor", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
     networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
-    tairaAccountId: "testu4bridge@taira",
+    tairaAccountId: TAIRA_ACCOUNT_ID,
     recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
     amount: 25_000_000_000_000_000n,
     nonce: 42n,
@@ -14040,7 +14617,7 @@ test("rejects stale TAIRA XOR SCCP record descriptor bindings", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
     networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
-    tairaAccountId: "testu4bridge@taira",
+    tairaAccountId: TAIRA_ACCOUNT_ID,
     recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
     amount: 1000n,
     nonce: 7n,
@@ -14113,11 +14690,60 @@ test("encodes RecordSccpMessage instructions with the Rust canonical fixture", (
   assert.throws(() => buildRecordSccpMessageInstructionBytes([]), /must not be empty/);
 });
 
+test("validates canonical SCCP codec payloads before hashing", () => {
+  const recipients = [
+    {
+      domain: SCCP_DOMAIN_ETH,
+      codec: SCCP_CODEC_EVM_HEX,
+      recipient: "0x52908400098527886E0F7030069857D2E4169EE7",
+      route: "taira_eth_xor",
+    },
+    {
+      domain: SCCP_DOMAIN_BSC,
+      codec: SCCP_CODEC_EVM_HEX,
+      recipient: "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+      route: "taira_bsc_xor",
+    },
+    {
+      domain: SCCP_DOMAIN_SOL,
+      codec: SCCP_CODEC_SOLANA_BASE58,
+      recipient: SOLANA_PROGRAM_42,
+      route: "taira_sol_xor",
+    },
+    {
+      domain: SCCP_DOMAIN_TON,
+      codec: SCCP_CODEC_TON_RAW,
+      recipient: "0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      route: "taira_ton_xor",
+    },
+  ];
+  for (const { domain, codec, recipient, route } of recipients) {
+    const payload = {
+      version: 1,
+      source_domain: SCCP_DOMAIN_SORA,
+      dest_domain: domain,
+      nonce: 1,
+      asset_home_domain: SCCP_DOMAIN_SORA,
+      asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+      asset_id: "xor",
+      amount: 1,
+      sender_codec: SCCP_CODEC_TEXT_UTF8,
+      sender: TAIRA_ACCOUNT_ID,
+      recipient_codec: codec,
+      recipient,
+      route_id_codec: SCCP_CODEC_TEXT_UTF8,
+      route_id: route,
+    };
+    assert.ok(canonicalSccpTransferPayloadBytes(payload).length > 0);
+    assert.match(sccpTransferMessageId(payload), /^0x[0-9a-f]{64}$/u);
+  }
+});
+
 test("builds a TAIRA XOR burn-record contract payload and ZK IVM request", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
     networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
-    sender: "testu4bridge@taira",
+    sender: TAIRA_ACCOUNT_ID,
     recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
     amount: "25000000000000000",
     nonce: 42,
@@ -14167,7 +14793,7 @@ test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
     networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
-    sender: "testu4bridge@taira",
+    sender: TAIRA_ACCOUNT_ID,
     recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
     amount: 1000,
     nonce: 7,
@@ -14179,7 +14805,7 @@ test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
     () =>
       buildTairaXorSccpBurnRecordZkIvmRequest({
         ...input,
-        authority: "testu4other@taira",
+        authority: TAIRA_OTHER_ACCOUNT_ID,
       }),
     /authority must match/,
   );
@@ -14236,40 +14862,38 @@ test("builds route-bound TAIRA XOR TRON payload and source-event hashes", () => 
   assert.equal(tairaXorAssetKeyHash(), assetKeyHash);
 
   const bridgeAddress = `0x${"11".repeat(20)}`;
-  const recipientAddress = `0x${"22".repeat(20)}`;
+  const recipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const transferAmount = 12345678901234567890n;
-  const expectedTransferPayloadHash = testBytesToHex(
-    keccak_256(
-      testConcatBytes(
-        keccak_256(testTextEncoder.encode("iroha:sccp:taira-xor:transfer-payload:v1")),
-        testHexToBytes(routeIdHash, 32),
-        testHexToBytes(assetKeyHash, 32),
-        testAbiWordAddress(bridgeAddress),
-        testAbiWordAddress(recipientAddress),
-        testAbiWordU256(transferAmount),
-      ),
-    ),
-  );
+  const transferNonce = 9n;
+  const canonicalTransferPayload = tairaXorCanonicalTransferPayloadBytes({
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress,
+    amount: transferAmount,
+    nonce: transferNonce,
+  });
+  const expectedTransferPayloadHash = sccpPayloadHash(canonicalTransferPayload);
   assert.equal(
     tairaXorTransferPayloadHash({
-      bridgeAddress,
+      sender: TAIRA_ACCOUNT_ID,
       recipientAddress,
       amount: transferAmount,
+      nonce: transferNonce,
     }),
     expectedTransferPayloadHash,
   );
   assert.equal(
     tairaXorTransferPayloadHash({
-      routeIdHash,
-      assetKeyHash,
-      bridgeAddress: `0x41${"11".repeat(20)}`,
+      routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      tairaAccountId: TAIRA_ACCOUNT_ID,
       recipient: recipientAddress,
       amount: transferAmount.toString(),
+      nonce: transferNonce.toString(),
     }),
     expectedTransferPayloadHash,
   );
 
-  const tairaRecipient = "testu4bridge@taira";
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
   const tairaRecipientHash = testBytesToHex(
     keccak_256(testTextEncoder.encode(tairaRecipient)),
   );
@@ -14318,37 +14942,48 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
   const routeIdHash = tairaXorRouteIdHash();
   const assetKeyHash = tairaXorAssetKeyHash();
   const proofBytes = Uint8Array.from([1, 2, 3, 4, 5]);
+  const recipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const amount = 1000n;
+  const canonicalPayloadBytes = tairaXorCanonicalTransferPayloadBytes({
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress,
+    amount,
+    nonce: 42n,
+  });
   const publicInputs = {
-    messageId: HEX32_A,
-    payloadHash: HEX32_B,
+    messageId: tairaXorTransferMessageId({
+      sender: TAIRA_ACCOUNT_ID,
+      recipientAddress,
+      amount,
+      nonce: 42n,
+    }),
+    payloadHash: sccpPayloadHash(canonicalPayloadBytes),
     targetDomain: SCCP_DOMAIN_TRON,
     commitmentRoot: HEX32_C,
     finalityHeight: 9,
     finalityBlockHash: HEX32_D,
   };
   const statementHash = HEX32_E;
-  const recipientAddress = `0x${"44".repeat(20)}`;
-  const amount = 1000n;
   const finalizeSelector = testBytesToHex(
     keccak_256(
       testTextEncoder.encode(
-        "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)",
+        "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)",
       ),
     ).slice(0, 4),
   );
   assert.equal(TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1, finalizeSelector);
   const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const encodedProofBytes = testAbiDynamicBytes(proofBytes);
+  const encodedCanonicalPayloadBytes = testAbiDynamicBytes(canonicalPayloadBytes);
   const expectedFinalizeCallData = testBytesToHex(
     testConcatBytes(
       testHexToBytes(finalizeSelector, 4),
-      testAbiWordU256(12 * 32),
+      testAbiWordU256(9 * 32),
       ...publicInputWords,
       testHexToBytes(statementHash, 32),
-      testHexToBytes(routeIdHash, 32),
-      testHexToBytes(assetKeyHash, 32),
-      testAbiWordAddress(recipientAddress),
-      testAbiWordU256(amount),
-      testAbiDynamicBytes(proofBytes),
+      testAbiWordU256(9 * 32 + encodedProofBytes.length),
+      encodedProofBytes,
+      encodedCanonicalPayloadBytes,
     ),
   );
   assert.equal(
@@ -14356,13 +14991,58 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
       proofBytes,
       publicInputs,
       statementHash,
-      recipientAddress,
-      amount,
+      canonicalPayloadBytes,
     }),
     expectedFinalizeCallData,
   );
+  assert.equal(
+    tairaXorFinalizeFromTairaCallData({
+      proofBytes,
+      publicInputs,
+      statementHash,
+      canonicalPayloadBytes,
+      sender: TAIRA_ACCOUNT_ID,
+      recipientAddress,
+      amount,
+      nonce: 42n,
+    }),
+    expectedFinalizeCallData,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes,
+        publicInputs,
+        statementHash,
+        canonicalPayloadBytes,
+        sender: TAIRA_OTHER_ACCOUNT_ID,
+      }),
+    /sender must match canonicalPayloadBytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes,
+        publicInputs,
+        statementHash,
+        canonicalPayloadBytes,
+        recipientAddress: "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E",
+      }),
+    /recipientAddress must match canonicalPayloadBytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes,
+        publicInputs,
+        statementHash,
+        canonicalPayloadBytes,
+        amount: amount + 1n,
+      }),
+    /amount must match canonicalPayloadBytes/,
+  );
 
-  const tairaRecipient = "testu4bridge@taira";
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
   const recipientBytes = testTextEncoder.encode(tairaRecipient);
   const burnSelector = testBytesToHex(
     keccak_256(testTextEncoder.encode("burnToTaira(bytes32,bytes32,bytes,uint256)")).slice(
@@ -14388,15 +15068,31 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
     }),
     expectedBurnCallData,
   );
+  assert.equal(
+    tairaXorBurnToTairaAccountCallData({
+      tairaRecipient,
+      amount,
+    }),
+    expectedBurnCallData,
+  );
+  assert.equal(
+    tairaXorBurnToTairaAccountCallData({
+      tairaAccountId: tairaRecipient,
+      amount,
+    }),
+    expectedBurnCallData,
+  );
 });
 
 test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(() => tairaXorRouteIdHash(" taira_tron_xor"), /canonical/);
+  assert.throws(() => tairaXorRouteIdHash("other_route"), /routeId must be taira_tron_xor/);
   assert.throws(() => tairaXorAssetKeyHash(""), /non-empty string/);
+  assert.throws(() => tairaXorAssetKeyHash("wrong"), /assetKey must be xor/);
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
         amount: 1,
         nonce: 1,
@@ -14406,7 +15102,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: " TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         amount: 1,
         nonce: 1,
@@ -14416,7 +15112,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         routeId: "other_route",
         amount: 1,
@@ -14427,7 +15123,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         assetKey: "wrong",
         amount: 1,
@@ -14438,7 +15134,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         amount: 0,
         nonce: 1,
@@ -14448,7 +15144,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         amount: 1,
         nonce: (1n << 64n).toString(),
@@ -14467,7 +15163,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         asset_id: "xor",
         amount: 1,
         sender_codec: SCCP_CODEC_TEXT_UTF8,
-        sender: "testu4bridge@taira",
+        sender: TAIRA_ACCOUNT_ID,
         recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
         recipient: "0x1111111111111111111111111111111111111111",
         route_id_codec: SCCP_CODEC_TEXT_UTF8,
@@ -14477,21 +15173,81 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   );
   assert.throws(
     () =>
-      tairaXorTransferPayloadHash({
-        bridgeAddress: `0x${"00".repeat(20)}`,
-        recipientAddress: `0x${"22".repeat(20)}`,
+      canonicalSccpTransferPayloadBytes({
+        version: 1,
+        source_domain: SCCP_DOMAIN_SORA,
+        dest_domain: SCCP_DOMAIN_ETH,
+        nonce: 1,
+        asset_home_domain: SCCP_DOMAIN_SORA,
+        asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+        asset_id: "xor",
         amount: 1,
+        sender_codec: SCCP_CODEC_TEXT_UTF8,
+        sender: TAIRA_ACCOUNT_ID,
+        recipient_codec: SCCP_CODEC_EVM_HEX,
+        recipient: "0x52908400098527886e0f7030069857d2e4169ee7",
+        route_id_codec: SCCP_CODEC_TEXT_UTF8,
+        route_id: "taira_eth_xor",
       }),
-    /non-zero TRON address/,
+    /EIP-55/,
+  );
+  assert.throws(
+    () =>
+      canonicalSccpTransferPayloadBytes({
+        version: 1,
+        source_domain: SCCP_DOMAIN_SORA,
+        dest_domain: SCCP_DOMAIN_SOL,
+        nonce: 1,
+        asset_home_domain: SCCP_DOMAIN_SORA,
+        asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+        asset_id: "xor",
+        amount: 1,
+        sender_codec: SCCP_CODEC_TEXT_UTF8,
+        sender: TAIRA_ACCOUNT_ID,
+        recipient_codec: SCCP_CODEC_SOLANA_BASE58,
+        recipient: "not-solana",
+        route_id_codec: SCCP_CODEC_TEXT_UTF8,
+        route_id: "taira_sol_xor",
+      }),
+    /base58/,
+  );
+  assert.throws(
+    () =>
+      canonicalSccpTransferPayloadBytes({
+        version: 1,
+        source_domain: SCCP_DOMAIN_SORA,
+        dest_domain: SCCP_DOMAIN_TON,
+        nonce: 1,
+        asset_home_domain: SCCP_DOMAIN_SORA,
+        asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+        asset_id: "xor",
+        amount: 1,
+        sender_codec: SCCP_CODEC_TEXT_UTF8,
+        sender: TAIRA_ACCOUNT_ID,
+        recipient_codec: SCCP_CODEC_TON_RAW,
+        recipient: "00:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        route_id_codec: SCCP_CODEC_TEXT_UTF8,
+        route_id: "taira_ton_xor",
+      }),
+    /canonical i32/,
   );
   assert.throws(
     () =>
       tairaXorTransferPayloadHash({
-        routeIdHash: HEX32_A,
-        assetKeyHash: HEX32_A,
-        bridgeAddress: `0x${"11".repeat(20)}`,
-        recipientAddress: `0x${"22".repeat(20)}`,
+        sender: "merchant@taira",
+        recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        amount: 1,
+        nonce: 1,
+      }),
+    /canonical TAIRA I105 account id/,
+  );
+  assert.throws(
+    () =>
+      tairaXorTransferPayloadHash({
+        sender: TAIRA_ACCOUNT_ID,
+        recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         amount: -1,
+        nonce: 1,
       }),
     /amount must be a non-negative safe integer|amount must not be negative/,
   );
@@ -14511,7 +15267,33 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
       tairaXorBurnSourceEventDigest({
         bridgeAddress: `0x${"11".repeat(20)}`,
         burnerAddress: `0x${"22".repeat(20)}`,
-        tairaRecipient: "testu4bridge@taira",
+        tairaRecipient: "merchant@taira",
+        amount: 1,
+        nonce: 0,
+      }),
+    /canonical TAIRA I105 account id/,
+  );
+  assert.equal(SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1, 256);
+  const tooLongTairaRecipientBytes = new Uint8Array(
+    SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 + 1,
+  ).fill(0x61);
+  assert.throws(
+    () =>
+      tairaXorBurnSourceEventDigest({
+        bridgeAddress: `0x${"11".repeat(20)}`,
+        burnerAddress: `0x${"22".repeat(20)}`,
+        tairaRecipientBytes: tooLongTairaRecipientBytes,
+        amount: 1,
+        nonce: 0,
+      }),
+    /tairaRecipientBytes must be at most 256 bytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnSourceEventDigest({
+        bridgeAddress: `0x${"11".repeat(20)}`,
+        burnerAddress: `0x${"22".repeat(20)}`,
+        tairaRecipient: TAIRA_ACCOUNT_ID,
         amount: 1,
       }),
     /nonce/,
@@ -14519,11 +15301,154 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(
     () =>
       tairaXorTransferPayloadHash({
-        bridgeAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-        recipientAddress: `0x${"22".repeat(20)}`,
+        sender: TAIRA_ACCOUNT_ID,
+        recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
         amount: 1,
+        nonce: 1,
       }),
     /checksum|base58check/,
+  );
+
+  const finalizeRecipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const finalizePayloadInput = {
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress: finalizeRecipientAddress,
+    amount: 7,
+    nonce: 3,
+  };
+  const finalizePayload = tairaXorCanonicalTransferPayloadBytes(finalizePayloadInput);
+  const finalizePublicInputsForPayload = (payloadBytes, overrides = {}) => ({
+    messageId: testSccpTransferMessageIdFromBytes(payloadBytes),
+    payloadHash: sccpPayloadHash(payloadBytes),
+    targetDomain: SCCP_DOMAIN_TRON,
+    commitmentRoot: HEX32_C,
+    finalityHeight: 9,
+    finalityBlockHash: HEX32_D,
+    ...overrides,
+  });
+  const assertFinalizePayloadRejected = (payloadBytes, pattern) => {
+    assert.throws(
+      () =>
+        tairaXorFinalizeFromTairaCallData({
+          proofBytes: [1],
+          publicInputs: finalizePublicInputsForPayload(payloadBytes),
+          statementHash: HEX32_E,
+          canonicalPayloadBytes: payloadBytes,
+        }),
+      pattern,
+    );
+  };
+  const wrongVersionPayload = Uint8Array.from(finalizePayload);
+  wrongVersionPayload[0] = 2;
+  assertFinalizePayloadRejected(wrongVersionPayload, /version must be 1/);
+  const wrongSourcePayload = Uint8Array.from(finalizePayload);
+  wrongSourcePayload[1] = SCCP_DOMAIN_ETH;
+  assertFinalizePayloadRejected(wrongSourcePayload, /source_domain must be SORA/);
+  const wrongDestinationPayload = Uint8Array.from(finalizePayload);
+  wrongDestinationPayload[5] = SCCP_DOMAIN_ETH;
+  assertFinalizePayloadRejected(wrongDestinationPayload, /dest_domain must be TRON/);
+  const wrongAssetHomePayload = Uint8Array.from(finalizePayload);
+  wrongAssetHomePayload[17] = SCCP_DOMAIN_TRON;
+  assertFinalizePayloadRejected(wrongAssetHomePayload, /asset_home_domain must be SORA/);
+  const wrongAssetCodecPayload = Uint8Array.from(finalizePayload);
+  wrongAssetCodecPayload[21] = SCCP_CODEC_EVM_HEX;
+  assertFinalizePayloadRejected(wrongAssetCodecPayload, /asset_id_codec must be TEXT_UTF8/);
+  const zeroAmountPayload = Uint8Array.from(finalizePayload);
+  zeroAmountPayload.fill(0, 29, 45);
+  assertFinalizePayloadRejected(zeroAmountPayload, /amount must be greater than zero/);
+  assertFinalizePayloadRejected(finalizePayload.subarray(0, 20), /too short/);
+  assertFinalizePayloadRejected(
+    testConcatBytes(finalizePayload, Uint8Array.of(0)),
+    /trailing bytes/,
+  );
+  assertFinalizePayloadRejected(
+    canonicalSccpTransferPayloadBytes({
+      version: 1,
+      source_domain: SCCP_DOMAIN_SORA,
+      dest_domain: SCCP_DOMAIN_TRON,
+      nonce: 3,
+      asset_home_domain: SCCP_DOMAIN_SORA,
+      asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+      asset_id: "wrapped-xor",
+      amount: 7,
+      sender_codec: SCCP_CODEC_TEXT_UTF8,
+      sender: TAIRA_ACCOUNT_ID,
+      recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+      recipient: finalizeRecipientAddress,
+      route_id_codec: SCCP_CODEC_TEXT_UTF8,
+      route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    }),
+    /asset_id must be xor/,
+  );
+  assertFinalizePayloadRejected(
+    canonicalSccpTransferPayloadBytes({
+      version: 1,
+      source_domain: SCCP_DOMAIN_SORA,
+      dest_domain: SCCP_DOMAIN_TRON,
+      nonce: 3,
+      asset_home_domain: SCCP_DOMAIN_SORA,
+      asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+      asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      amount: 7,
+      sender_codec: SCCP_CODEC_TEXT_UTF8,
+      sender: "merchant@taira",
+      recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+      recipient: finalizeRecipientAddress,
+      route_id_codec: SCCP_CODEC_TEXT_UTF8,
+      route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    }),
+    /canonical TAIRA I105 account id/,
+  );
+  assertFinalizePayloadRejected(
+    canonicalSccpTransferPayloadBytes({
+      version: 1,
+      source_domain: SCCP_DOMAIN_SORA,
+      dest_domain: SCCP_DOMAIN_TRON,
+      nonce: 3,
+      asset_home_domain: SCCP_DOMAIN_SORA,
+      asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+      asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      amount: 7,
+      sender_codec: SCCP_CODEC_TEXT_UTF8,
+      sender: TAIRA_ACCOUNT_ID,
+      recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+      recipient: finalizeRecipientAddress,
+      route_id_codec: SCCP_CODEC_TEXT_UTF8,
+      route_id: "other_taira_tron_xor",
+    }),
+    /route_id must be taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes: [1],
+        publicInputs: finalizePublicInputsForPayload(finalizePayload, { messageId: HEX32_A }),
+        statementHash: HEX32_E,
+        canonicalPayloadBytes: finalizePayload,
+      }),
+    /messageId must match canonicalPayloadBytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes: [1],
+        publicInputs: finalizePublicInputsForPayload(finalizePayload, { payloadHash: HEX32_A }),
+        statementHash: HEX32_E,
+        canonicalPayloadBytes: finalizePayload,
+      }),
+    /payloadHash must match canonicalPayloadBytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorFinalizeFromTairaCallData({
+        proofBytes: [1],
+        publicInputs: finalizePublicInputsForPayload(finalizePayload, {
+          targetDomain: SCCP_DOMAIN_ETH,
+        }),
+        statementHash: HEX32_E,
+        canonicalPayloadBytes: finalizePayload,
+      }),
+    /targetDomain must be TRON/,
   );
   assert.throws(
     () =>
@@ -14543,5 +15468,72 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         amount: 1,
       }),
     /tairaRecipientBytes must not be empty/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaCallData({
+        tairaRecipientBytes: tooLongTairaRecipientBytes,
+        amount: 1,
+      }),
+    /tairaRecipientBytes must be at most 256 bytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipientBytes: testTextEncoder.encode(TAIRA_ACCOUNT_ID),
+        amount: 1,
+      }),
+    /tairaRecipientBytes is not accepted/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: testTextEncoder.encode(TAIRA_ACCOUNT_ID),
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id string/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: `0x${testBytesToHex(testTextEncoder.encode(TAIRA_ACCOUNT_ID)).slice(2)}`,
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id string/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: "alice@taira",
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        routeId: "other_route",
+        amount: 1,
+      }),
+    /routeId must be taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        routeIdHash: HEX32_A,
+        amount: 1,
+      }),
+    /routeIdHash must match taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        assetKeyHash: HEX32_A,
+        amount: 1,
+      }),
+    /assetKeyHash must match xor/,
   );
 });

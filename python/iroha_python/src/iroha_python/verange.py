@@ -268,13 +268,17 @@ def _bytes_value(value: Any, context: str, *, allow_empty: bool = False) -> byte
         raise TypeError(f"{context} is required")
     if isinstance(value, str):
         data = _decode_string_bytes(value, context)
-    elif isinstance(value, (bytes, bytearray, memoryview)):
+    elif isinstance(value, (bytes, bytearray)):
         data = bytes(value)
+    elif isinstance(value, memoryview):
+        data = _open_verify_memoryview_bytes(value, context)
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        try:
-            data = bytes(value)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{context} must be bytes-like") from exc
+        buffer = bytearray()
+        for index, byte in enumerate(value):
+            if isinstance(byte, bool) or not isinstance(byte, int) or byte < 0 or byte > 0xFF:
+                raise TypeError(f"{context}[{index}] must be an integer between 0 and 255")
+            buffer.append(byte)
+        data = bytes(buffer)
     else:
         raise TypeError(f"{context} must be bytes-like")
     if not data and not allow_empty:
@@ -339,6 +343,15 @@ def _open_verify_fixed_bytes(
     if nonzero and all(byte == 0 for byte in data):
         raise ValueError(f"{context} must be nonzero")
     return data
+
+
+def _optional_aux_value(source: Mapping[str, Any], context: str) -> Any:
+    if "aux" not in source:
+        return b""
+    value = source["aux"]
+    if value is None:
+        raise TypeError(f"{context}.aux must be bytes-like when present")
+    return value
 
 
 def _bounded_bytes(
@@ -428,6 +441,14 @@ def _normalize_payload_digest(source: Mapping[str, Any], context: str) -> bytes:
         f"{context}.payload",
         "payload",
     )
+    max_payload_key, max_payload_value = _read_single_alias(
+        source,
+        ("maxPayloadBytes", "max_payload_bytes"),
+        f"{context}.maxPayloadBytes",
+        "max payload byte limit",
+    )
+    if max_payload_key is not None and payload_key is None:
+        raise TypeError(f"{context}.maxPayloadBytes requires {context}.payload")
     explicit_digest = (
         None
         if digest_key is None
@@ -440,7 +461,11 @@ def _normalize_payload_digest(source: Mapping[str, Any], context: str) -> bytes:
         payload_digest = hashlib.sha256(payload_bytes).digest()
     else:
         max_payload_bytes = _positive_u32(
-            source.get("maxPayloadBytes", source.get("max_payload_bytes", VERANGE_MAX_PAYLOAD_BYTES)),
+            (
+                VERANGE_MAX_PAYLOAD_BYTES
+                if max_payload_key is None
+                else max_payload_value
+            ),
             f"{context}.maxPayloadBytes",
         )
         payload_bytes = _bounded_bytes(
@@ -459,7 +484,12 @@ def _normalize_payload_digest(source: Mapping[str, Any], context: str) -> bytes:
     return explicit_digest if explicit_digest is not None else payload_digest  # type: ignore[return-value]
 
 
-def _normalize_backend(value: Any, context: str) -> tuple[int, str]:
+def _normalize_backend(
+    value: Any,
+    context: str,
+    *,
+    allow_unsupported: bool = False,
+) -> tuple[int, str]:
     raw_value = VERANGE_BACKEND if value is _MISSING or value is None else value
     text = _require_non_blank_string(
         raw_value,
@@ -474,7 +504,17 @@ def _normalize_backend(value: Any, context: str) -> tuple[int, str]:
     )
     if normalized not in _BACKEND_TAGS:
         raise ValueError(f"{context} uses unsupported backend tag {text}")
-    return _BACKEND_TAGS[normalized]
+    tag, decoded = _BACKEND_TAGS[normalized]
+    if decoded == "Unsupported" and not allow_unsupported:
+        raise ValueError(f"{context} uses unsupported backend tag {text}")
+    return tag, decoded
+
+
+def _normalize_backend_allowing_unsupported(
+    value: Any,
+    context: str,
+) -> tuple[int, str]:
+    return _normalize_backend(value, context, allow_unsupported=True)
 
 
 def _normalize_verange_backend(value: Any, context: str) -> str:
@@ -768,9 +808,33 @@ def _normalize_proof_parts(
         "payload_digest": first["payload_digest"].hex(),
     }
     public_input_bytes = _canonical_json_bytes(public_inputs, f"{context}.publicInputs")
-    max_proof_bytes = _positive_u32(
-        source.get("maxProofBytes", source.get("max_proof_bytes", DEFAULT_PRIVACY_MAX_PROOF_BYTES)),
+    _max_proof_key, max_proof_value = _read_single_alias(
+        source,
+        ("maxProofBytes", "max_proof_bytes"),
         f"{context}.maxProofBytes",
+        "max proof byte limit",
+    )
+    _max_public_input_key, max_public_input_value = _read_single_alias(
+        source,
+        ("maxPublicInputBytes", "max_public_input_bytes"),
+        f"{context}.maxPublicInputBytes",
+        "max public input byte limit",
+    )
+    max_proof_bytes = _positive_u32(
+        (
+            DEFAULT_PRIVACY_MAX_PROOF_BYTES
+            if max_proof_value is _MISSING
+            else max_proof_value
+        ),
+        f"{context}.maxProofBytes",
+    )
+    max_public_input_bytes = _positive_u32(
+        (
+            DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES
+            if max_public_input_value is _MISSING
+            else max_public_input_value
+        ),
+        f"{context}.maxPublicInputBytes",
     )
     return {
         "backend": _normalize_verange_backend(backend_value, f"{context}.backendTag"),
@@ -788,10 +852,7 @@ def _normalize_proof_parts(
             )
         ),
         "max_proof_bytes": max_proof_bytes,
-        "max_public_input_bytes": source.get(
-            "maxPublicInputBytes",
-            source.get("max_public_input_bytes", DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES),
-        ),
+        "max_public_input_bytes": max_public_input_bytes,
     }
 
 
@@ -810,8 +871,41 @@ def _read_field(payload: bytes, offset: int, context: str) -> tuple[bytes, int]:
     return payload[offset:end], end
 
 
-def _encode_open_verify_payload(envelope: Mapping[str, Any]) -> bytes:
-    tag, _decoded = _normalize_backend(envelope["backend"], "OpenVerifyEnvelope.backend")
+def _decode_open_verify_circuit_id(value: bytes, context: str) -> str:
+    if not value:
+        raise ValueError(f"{context} must be non-empty")
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{context} must contain valid UTF-8") from exc
+    if text.strip() != text or not text.strip():
+        raise ValueError(f"{context} must be clean and non-empty")
+    return text
+
+
+def _check_decoded_open_verify_field_size(field: str, data: bytes) -> None:
+    limits = {
+        "public_inputs": DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES,
+        "proof_bytes": DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+        "aux": DEFAULT_PRIVACY_MAX_AUX_BYTES,
+    }
+    max_bytes = limits[field]
+    if len(data) > max_bytes:
+        raise ValueError(
+            f"privacyProofEnvelope.{field} must be no larger than {max_bytes} bytes"
+        )
+
+
+def _encode_open_verify_payload(
+    envelope: Mapping[str, Any],
+    *,
+    allow_unsupported_backend: bool = False,
+) -> bytes:
+    tag, _decoded = _normalize_backend(
+        envelope["backend"],
+        "OpenVerifyEnvelope.backend",
+        allow_unsupported=allow_unsupported_backend,
+    )
     circuit_id = _require_non_blank_string(
         envelope["circuit_id"],
         "OpenVerifyEnvelope.circuit_id",
@@ -860,6 +954,14 @@ def _frame_open_verify_payload(payload: bytes) -> bytes:
 def build_privacy_proof_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical Norito bytes for an OpenVerify proof envelope."""
 
+    return _build_privacy_proof_envelope_internal(options)
+
+
+def _build_privacy_proof_envelope_internal(
+    options: Mapping[str, Any],
+    *,
+    allow_unsupported_backend: bool = False,
+) -> bytes:
     source = _require_plain_mapping(options, "privacyProofEnvelope")
     _reject_unknown_fields(
         source,
@@ -953,6 +1055,7 @@ def build_privacy_proof_envelope(options: Mapping[str, Any]) -> bytes:
         "backend": _normalize_backend(
             backend_label,
             "privacyProofEnvelope.backendTag",
+            allow_unsupported=allow_unsupported_backend,
         )[1],
         "circuit_id": circuit_id,
         "vk_hash": _open_verify_fixed_bytes(
@@ -972,18 +1075,31 @@ def build_privacy_proof_envelope(options: Mapping[str, Any]) -> bytes:
             max_bytes=max_proof_bytes,
         ),
         "aux": _open_verify_bounded_bytes(
-            source.get("aux", b""),
+            _optional_aux_value(source, "privacyProofEnvelope"),
             "privacyProofEnvelope.aux",
             max_bytes=DEFAULT_PRIVACY_MAX_AUX_BYTES,
             allow_empty=True,
         ),
     }
-    return _frame_open_verify_payload(_encode_open_verify_payload(envelope))
+    return _frame_open_verify_payload(
+        _encode_open_verify_payload(
+            envelope,
+            allow_unsupported_backend=allow_unsupported_backend,
+        )
+    )
 
 
 def decode_privacy_proof_envelope(value: Any) -> dict[str, Any]:
     """Decode standalone Norito bytes for an OpenVerify proof envelope."""
 
+    return _decode_privacy_proof_envelope_internal(value)
+
+
+def _decode_privacy_proof_envelope_internal(
+    value: Any,
+    *,
+    allow_unsupported_backend: bool = False,
+) -> dict[str, Any]:
     data = _bytes_value(value, "privacyProofEnvelope")
     if len(data) < 40 or data[:4] != b"NRT0":
         raise ValueError("privacyProofEnvelope is not an NRT0 frame")
@@ -1014,8 +1130,13 @@ def decode_privacy_proof_envelope(value: Any) -> dict[str, Any]:
     backend_tag = int.from_bytes(fields["backend"], "little")
     if backend_tag not in _BACKEND_NAMES_BY_TAG:
         raise ValueError("privacyProofEnvelope.backend uses unsupported tag")
+    backend_name = _BACKEND_NAMES_BY_TAG[backend_tag]
+    if backend_name == "Unsupported" and not allow_unsupported_backend:
+        raise ValueError("privacyProofEnvelope.backend uses unsupported tag")
     if len(fields["vk_hash"]) != 32:
         raise ValueError("privacyProofEnvelope.vk_hash must contain exactly 32 bytes")
+    if all(byte == 0 for byte in fields["vk_hash"]):
+        raise ValueError("privacyProofEnvelope.vk_hash must be nonzero")
     circuit_id, end = _read_field(fields["circuit_id"], 0, "privacyProofEnvelope.circuit_id")
     if end != len(fields["circuit_id"]):
         raise ValueError("privacyProofEnvelope.circuit_id has trailing bytes")
@@ -1023,10 +1144,16 @@ def decode_privacy_proof_envelope(value: Any) -> dict[str, Any]:
         inner, end = _read_field(fields[field], 0, f"privacyProofEnvelope.{field}")
         if end != len(fields[field]):
             raise ValueError(f"privacyProofEnvelope.{field} has trailing bytes")
+        if field != "aux" and not inner:
+            raise ValueError(f"privacyProofEnvelope.{field} must be non-empty")
+        _check_decoded_open_verify_field_size(field, inner)
         fields[field] = inner
     return {
-        "backend": _BACKEND_NAMES_BY_TAG[backend_tag],
-        "circuit_id": circuit_id.decode("utf-8"),
+        "backend": backend_name,
+        "circuit_id": _decode_open_verify_circuit_id(
+            circuit_id,
+            "privacyProofEnvelope.circuit_id",
+        ),
         "vk_hash": fields["vk_hash"],
         "public_inputs": fields["public_inputs"],
         "proof_bytes": fields["proof_bytes"],
@@ -1090,6 +1217,12 @@ def build_verange_proof_envelope(options: Mapping[str, Any]) -> bytes:
         "veRangeProofEnvelope",
     )
     parts = _normalize_proof_parts(source, "veRangeProofEnvelope", require_proof_bytes=True)
+    aux = _open_verify_bounded_bytes(
+        _optional_aux_value(source, "veRangeProofEnvelope"),
+        "veRangeProofEnvelope.aux",
+        max_bytes=DEFAULT_PRIVACY_MAX_AUX_BYTES,
+        allow_empty=True,
+    )
     return build_privacy_proof_envelope(
         {
             "backend": parts["backend"],
@@ -1097,7 +1230,7 @@ def build_verange_proof_envelope(options: Mapping[str, Any]) -> bytes:
             "vkHash": parts["vk_hash"],
             "publicInputs": parts["public_input_bytes"],
             "proofBytes": parts["proof_bytes"],
-            "aux": source.get("aux", b""),
+            "aux": aux,
             "maxProofBytes": parts["max_proof_bytes"],
             "maxPublicInputBytes": parts["max_public_input_bytes"],
         }
@@ -1174,6 +1307,12 @@ def build_verange_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any
         vk_hash=parts["vk_hash"],
         public_input_bytes=parts["public_input_bytes"],
     )
+    aux = _open_verify_bounded_bytes(
+        _optional_aux_value(source, "veRangeDevProofFixture"),
+        "veRangeDevProofFixture.aux",
+        max_bytes=DEFAULT_PRIVACY_MAX_AUX_BYTES,
+        allow_empty=True,
+    )
     envelope = build_privacy_proof_envelope(
         {
             "backend": parts["backend"],
@@ -1181,7 +1320,7 @@ def build_verange_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any
             "vkHash": parts["vk_hash"],
             "publicInputs": parts["public_input_bytes"],
             "proofBytes": proof_bytes,
-            "aux": source.get("aux", b""),
+            "aux": aux,
             "maxProofBytes": parts["max_proof_bytes"],
             "maxPublicInputBytes": parts["max_public_input_bytes"],
         }

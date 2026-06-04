@@ -30,6 +30,8 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1,
@@ -47,6 +49,8 @@ import {
   canProveKagemushaRecursiveSpendAppendOutputProofCircuitId,
   canRedeemKagemushaRecursiveSpendWitnessless,
   canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  isKagemushaRecursiveSpendLineageProofCircuitId,
+  isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
   isSupportedKagemushaRecursiveSpendAppendProofTransition,
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
@@ -99,6 +103,7 @@ import {
   bscValidatorSetTransitionMessageHash,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
+  EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
   ethereumMainnetSccpDestinationBinding,
   BscMainnetSccp,
@@ -169,6 +174,8 @@ import {
   canonicalSccpSourceAdapterEngineDeploymentBytes,
   canonicalSccpSourceVerifierMaterialBytes,
   canonicalEthSyncCommitteePayloadBytes,
+  SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
+  ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteePayloadHash,
   ethSyncCommitteeHashFromPayload,
   buildSubstrateSccpRuntimeStorageProofRequest,
@@ -493,6 +500,13 @@ function declarationInterface(name) {
   return match[0];
 }
 
+function declarationClass(name) {
+  const start = DECLARATIONS_TEXT.indexOf(`export class ${name} {`);
+  assert.notEqual(start, -1, `missing declaration class ${name}`);
+  const end = DECLARATIONS_TEXT.indexOf("\nexport ", start + 1);
+  return end === -1 ? DECLARATIONS_TEXT.slice(start) : DECLARATIONS_TEXT.slice(start, end);
+}
+
 function abiWord(value) {
   let remaining = BigInt(value);
   const out = new Uint8Array(32);
@@ -784,6 +798,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
     "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -800,6 +816,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "canRedeemKagemushaRecursiveSpendWitnessless",
     "requiresKagemushaRecursiveSpendLineageWitnessForRedeem",
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
+    "isKagemushaRecursiveSpendLineageProofCircuitId",
+    "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
     "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "isSupportedKagemushaRecursiveSpendAppendProofTransition",
@@ -835,6 +853,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-spend-lineage-v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-spend-lineage-onehop-v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-spend-lineage-append-v1",
   );
   assert.equal(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS, 64);
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64);
@@ -921,7 +947,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     ),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -935,6 +961,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "",
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   ]) {
     assert.equal(
       isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
@@ -943,9 +970,34 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
       "unknown-kagemusha-recursive-spend-circuit",
     ),
     false,
+  );
+  for (const circuitId of [
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  ]) {
+    assert.equal(isKagemushaRecursiveSpendLineageProofCircuitId(circuitId), true);
+  }
+  assert.equal(
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
@@ -956,6 +1008,18 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
     true,
   );
@@ -974,6 +1038,18 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
     true,
   );
@@ -987,6 +1063,20 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     canRedeemKagemushaRecursiveSpendWitnessless(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       1,
+    ),
+    true,
+  );
+  assert.equal(
+    canRedeemKagemushaRecursiveSpendWitnessless(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canRedeemKagemushaRecursiveSpendWitnessless(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+      2,
     ),
     true,
   );
@@ -1046,11 +1136,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage("1"), false);
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(63),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(64),
@@ -1096,6 +1186,20 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       1,
     ),
     true,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -1178,6 +1282,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "unknown-kagemusha-recursive-spend-circuit",
       1,
@@ -1209,6 +1321,13 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
     true,
@@ -1454,6 +1573,7 @@ test("package dist privacy proof envelopes reject production metadata claims", (
     proofBytes: Buffer.from("proof"),
   };
   for (const payload of [
+    { ...base, backend: "unsupported" },
     { ...base, production: true },
     { ...base, productionReady: true },
     { ...base, production_ready: true },
@@ -2826,11 +2946,11 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
 test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2842,11 +2962,68 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
+    /export interface EthereumMainnetBeaconRestConsensusProviderOptions[\s\S]*endpoint\?: string \| URL;[\s\S]*fetch\?: EthereumMainnetBeaconRestFetch;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*syncCommitteePayload\?: EthSyncCommitteePayloadInput \| BinaryLike;[\s\S]*verifyFinalityCheckpoint\?: boolean;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
     /export interface EthereumMainnetInboundEvidenceInput[\s\S]*beaconFinality\?: EthereumMainnetBeaconFinalityEvidenceInput;[\s\S]*finalityEvidence\?: EthereumMainnetBeaconFinalityEvidenceInput;[\s\S]*receiptProofHash\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
     /proveInboundToSora\([\s\S]*executionProvider\?: EthereumMainnetExecutionProvider;[\s\S]*consensusProvider\?: EthereumMainnetConsensusProvider;[\s\S]*proveInbound\?: EthereumMainnetInboundProveFn;/,
+  );
+});
+
+test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
+  assert.equal(
+    new EthereumMainnetBeaconRestConsensusProvider({
+      endpoint: "https://beacon.example",
+      fetch: async () => ({ ok: true, json: async () => ({ data: {} }) }),
+      syncCommitteeRoot: "0x".padEnd(66, "1"),
+    }) instanceof EthereumMainnetBeaconRestConsensusProvider,
+    true,
+  );
+  const declaration = declarationClass("EthereumMainnetSccp");
+  assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
+  assert.match(
+    declaration,
+    /collectInboundEvidenceFromReceipt\([\s\S]*input\?: EthereumMainnetInboundEvidenceInput,[\s\S]*\): Promise<EthereumMainnetInboundEvidence>;/u,
+  );
+  assert.match(
+    declaration,
+    /proveInboundToSora\([\s\S]*input: EthereumMainnetInboundEvidenceInput,[\s\S]*\): Promise<Uint8Array>;/u,
+  );
+  assert.match(
+    declaration,
+    /submitInboundToIroha\([\s\S]*input: BinaryLike,[\s\S]*\): Promise<unknown>;/u,
+  );
+  assert.match(
+    declaration,
+    /buildOutboundProofRequest\(input: EvmSccpProofRequestInput\): EvmSccpProofRequest;/u,
+  );
+  assert.match(
+    declaration,
+    /proveOutboundToEthereum\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): Promise<EvmSccpProofResult>;/u,
+  );
+  assert.match(
+    declaration,
+    /buildEthereumCalldata\(input: EthereumMainnetSccpSubmissionInput\): EvmSccpSubmission;/u,
+  );
+  assert.match(
+    declaration,
+    /submitOutboundToEthereum\([\s\S]*input: EthereumMainnetSccpSubmissionInput & \{[\s\S]*\): Promise<unknown>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetInboundProveFn = \([\s\S]*\) => BinaryLike \| Promise<BinaryLike>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetSubmitInboundFn = \([\s\S]*proofBytes: Uint8Array,[\s\S]*\) => unknown \| Promise<unknown>;/u,
   );
 });
 
@@ -2865,8 +3042,13 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
     /\bsnarkjs\b/iu,
     /\bremoteProver\b/u,
     /\bremote prover\b/iu,
+    /\bremote_prover\b/iu,
+    /\bremote-prover\b/iu,
     /\bproverUrl\b/u,
+    /\bproverURL\b/u,
+    /\bprover_url\b/iu,
     /\bproverEndpoint\b/u,
+    /\bprover_endpoint\b/iu,
   ];
   for (const [artifact, source] of Object.entries(artifacts)) {
     for (const pattern of forbidden) {
@@ -2874,6 +3056,43 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
     }
   }
 }
+
+test("browser SCCP no-WASM guard catches remote-prover identifier variants", () => {
+  const samples = [
+    "WebAssembly.compile(bytes)",
+    "import './proof.wasm'",
+    "import snarkjs from 'snarkjs'",
+    "const remoteProver = endpoint",
+    "fallback remote prover",
+    "const remote_prover = endpoint",
+    "remote-prover endpoint",
+    "const proverUrl = endpoint",
+    "const proverURL = endpoint",
+    "const prover_url = endpoint",
+    "const proverEndpoint = endpoint",
+    "const prover_endpoint = endpoint",
+  ];
+  const forbidden = [
+    /\bWebAssembly\b/u,
+    /\bwasm\b/iu,
+    /\bsnarkjs\b/iu,
+    /\bremoteProver\b/u,
+    /\bremote prover\b/iu,
+    /\bremote_prover\b/iu,
+    /\bremote-prover\b/iu,
+    /\bproverUrl\b/u,
+    /\bproverURL\b/u,
+    /\bprover_url\b/iu,
+    /\bproverEndpoint\b/u,
+    /\bprover_endpoint\b/iu,
+  ];
+  for (const sample of samples) {
+    assert(
+      forbidden.some((pattern) => pattern.test(sample)),
+      `${sample} must match a browser SCCP no-WASM guard`,
+    );
+  }
+});
 
 test("browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned", () => {
   assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned();
@@ -2902,7 +3121,7 @@ test("package declarations expose BSC mainnet Parlia finality evidence hooks", (
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetInboundEvidenceInput[\s\S]*parliaFinality\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*finalityEvidence\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*receiptProof\?: BscSccpReceiptProofInput;/,
+    /export interface BscMainnetInboundEvidenceInput[\s\S]*parliaFinality\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*finalityEvidence\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*receiptProof\?: BscSccpReceiptProofInput;[\s\S]*receiptProofHash\?: string;[\s\S]*receipt_proof_hash\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -4200,11 +4419,13 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     finalityPolicyHash: `0x${"88".repeat(32)}`,
     bridgeAddress: `0x${"11".repeat(20)}`,
     sourceBridgeEmitterCodeHash: `0x${"77".repeat(32)}`,
+    networkId: SCCP_ETH_MAINNET_NETWORK_ID,
+    configHash: "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
   };
   assert.ok(canonicalSccpSourceVerifierMaterialBytes(material).length > 0);
   assert.equal(
     sccpSourceVerifierMaterialHash(material),
-    "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+    "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
   );
   assert.equal(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1, "sccp-source-adapter-v1");
   assert.equal(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1, "fastpq-lane-balanced");
@@ -4226,7 +4447,7 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.ok(canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0);
   assert.equal(
     sccpSourceAdapterEngineDeploymentHash(deployment),
-    "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+    "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
   );
   assert.equal(sccpDestinationBindingKey(SCCP_DOMAIN_SOL), "sccp:0:3:sol:solana-program-v1:2");
   assert.equal(
@@ -4415,6 +4636,9 @@ test("package dist entrypoint exports ETH sync-committee payload helpers", () =>
     ethSyncCommitteePayloadHash(payload),
     "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
   );
+  assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
 });
 
 test("package dist entrypoint exports ETH beacon execution-payload SSZ helpers", () => {
@@ -4772,6 +4996,7 @@ test("package dist entrypoint exports TRON receipt-state transcript helpers", ()
     Buffer.from(canonicalEvmReceiptRootMptValue(input.receiptRoot)).toString("hex"),
     `f8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
   );
+  assert.throws(() => canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`), /must not be zero/u);
   assert.equal(
     Buffer.from(canonicalTronReceiptRootMptValue(input.receiptRoot)).toString("hex"),
     `f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,

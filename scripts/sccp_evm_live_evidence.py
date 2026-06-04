@@ -40,6 +40,7 @@ EXPECTED_RPC_CHAIN_IDS = {
     evidence.SCCP_DOMAIN_ETH: 1,
     evidence.SCCP_DOMAIN_BSC: 56,
 }
+EVM_LIVE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
 EVM_MESSAGE_PROOF_ACCEPTED_ABI = (
     b"MessageProofAccepted(bytes32,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)"
 )
@@ -141,11 +142,60 @@ def _parse_rpc_chain_id(value: str) -> int:
     return parsed
 
 
+def parse_block_tag(value: str) -> str:
+    """Parse a stable/canonical JSON-RPC block tag for read-only evidence."""
+
+    if value != value.strip():
+        raise argparse.ArgumentTypeError(
+            "--block-tag must not contain surrounding whitespace"
+        )
+    if value in EVM_LIVE_ALLOWED_BLOCK_TAGS:
+        return value
+    if value.startswith("0x"):
+        text = value[2:]
+        if (
+            not text
+            or any(symbol not in "0123456789abcdef" for symbol in text)
+            or (len(text) > 1 and text.startswith("0"))
+        ):
+            raise argparse.ArgumentTypeError(
+                "--block-tag must be latest, safe, finalized, or a positive "
+                "canonical lowercase 0x block number"
+            )
+        parsed = int(text, 16)
+        if parsed <= 0:
+            raise argparse.ArgumentTypeError(
+                "--block-tag block number must be positive"
+            )
+        return "0x" + format(parsed, "x")
+    raise argparse.ArgumentTypeError(
+        "--block-tag must be latest, safe, finalized, or a positive canonical "
+        "lowercase 0x block number"
+    )
+
+
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
     except KeyError as exc:
         raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from exc
+
+
+def default_block_tag_for_domain(domain: int) -> str:
+    """Return the default live-read block tag for an EVM-family destination lane."""
+
+    return "finalized" if domain == evidence.SCCP_DOMAIN_ETH else "latest"
+
+
+def _default_network_id_for_domain(domain: int) -> bytes:
+    try:
+        return evidence.evm_mainnet_network_id_for_domain(domain)
+    except argparse.ArgumentTypeError:
+        raise
+    except Exception as exc:
+        raise argparse.ArgumentTypeError(
+            "domain must have a canonical EVM mainnet network id"
+        ) from exc
 
 
 def _http_error_detail(exc: urllib.error.HTTPError) -> str:
@@ -412,6 +462,7 @@ def collect_destination_bridge_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only EVM destination bridge evidence."""
 
+    block_tag = parse_block_tag(block_tag)
     bridge = _parse_address_text(bridge_address, label="bridge address")
     chain_id = _rpc_quantity(
         _json_rpc(
@@ -423,6 +474,13 @@ def collect_destination_bridge_evidence(
         ),
         method="eth_chainId",
     )
+    expected_chain_id = _default_rpc_chain_id_for_domain(domain)
+    if chain_id != expected_chain_id:
+        chain = evidence.DOMAIN_PROFILES[domain]["chain"]
+        raise ValueError(
+            f"eth_chainId for {chain} lane must be canonical mainnet chain id "
+            f"{expected_chain_id}, got {chain_id}"
+        )
     bridge_code_hash, bridge_runtime_bytecode_hex = _runtime_code_hash(
         rpc_url,
         address=bridge,
@@ -545,6 +603,8 @@ def _route_canary_message_proof_event_summary(
     *,
     expected_log_index: int,
     transaction_hash: bytes,
+    expected_block_hash: bytes,
+    expected_block_number: int,
     route_allowlist_hash: bytes,
     bridge_address: bytes,
     expected_source_domain: int,
@@ -580,7 +640,37 @@ def _route_canary_message_proof_event_summary(
         method="route-canary logIndex",
     )
     if log_index != expected_log_index:
-        return None
+        raise RuntimeError(
+            "route-canary transaction receipt contained a MessageProofAccepted "
+            "event at an unexpected log index"
+        )
+    log_transaction_hash = _parse_exact_hex32_blob(
+        log.get("transactionHash"),
+        label="route-canary log transactionHash",
+    )
+    if log_transaction_hash != transaction_hash:
+        raise RuntimeError(
+            "route-canary MessageProofAccepted log transactionHash does not "
+            "match receipt transactionHash"
+        )
+    log_block_hash = _parse_exact_hex32_blob(
+        log.get("blockHash"),
+        label="route-canary log blockHash",
+    )
+    if log_block_hash != expected_block_hash:
+        raise RuntimeError(
+            "route-canary MessageProofAccepted log blockHash does not match "
+            "receipt blockHash"
+        )
+    log_block_number = _rpc_quantity(
+        log.get("blockNumber"),
+        method="route-canary log blockNumber",
+    )
+    if log_block_number != expected_block_number:
+        raise RuntimeError(
+            "route-canary MessageProofAccepted log blockNumber does not match "
+            "receipt blockNumber"
+        )
     if len(topics) != 3:
         raise RuntimeError(
             "route-canary MessageProofAccepted log must contain exactly three topics"
@@ -806,6 +896,8 @@ def _route_canary_transaction_call_summary(
     *,
     transaction_hash: bytes,
     bridge_address: bytes,
+    expected_block_hash: bytes,
+    expected_block_number: int,
     event_summary: dict[str, Any],
     expected_source_domain: int,
     expected_target_domain: int,
@@ -819,6 +911,22 @@ def _route_canary_transaction_call_summary(
     tx_to = _parse_exact_address(response.get("to"), label="route-canary transaction to")
     if tx_to != bridge_address:
         raise RuntimeError("route-canary transaction to does not match destination bridge")
+    tx_block_hash = _parse_exact_hex32_blob(
+        response.get("blockHash"),
+        label="route-canary transaction blockHash",
+    )
+    if tx_block_hash != expected_block_hash:
+        raise RuntimeError(
+            "route-canary transaction blockHash does not match receipt blockHash"
+        )
+    tx_block_number = _rpc_quantity(
+        response.get("blockNumber"),
+        method="route-canary transaction blockNumber",
+    )
+    if tx_block_number != expected_block_number:
+        raise RuntimeError(
+            "route-canary transaction blockNumber does not match receipt blockNumber"
+        )
     input_value = response.get("input", response.get("data"))
     call_data = _parse_exact_hex_blob(
         input_value,
@@ -827,6 +935,9 @@ def _route_canary_transaction_call_summary(
     return {
         "transaction_hash": _hex(tx_hash),
         "to": _hex(tx_to),
+        "transaction_block_hash": _hex(tx_block_hash),
+        "transaction_block_number": tx_block_number,
+        "transaction_block_matches": True,
         **_route_canary_submit_call_data_summary(
             call_data,
             event_summary=event_summary,
@@ -886,6 +997,7 @@ def _collect_route_canary_transaction_evidence(
     opener: Urlopen,
     timeout: float,
 ) -> dict[str, Any]:
+    block_tag = parse_block_tag(block_tag)
     transaction_hash_hex = _hex(transaction_hash)
     receipt = _json_rpc(
         rpc_url,
@@ -939,13 +1051,24 @@ def _collect_route_canary_transaction_evidence(
     if not isinstance(logs, list):
         raise RuntimeError("route-canary transaction receipt returned no logs list")
     event_summary = None
-    for log in logs:
+    for index, log in enumerate(logs):
         if not isinstance(log, dict):
-            continue
+            raise RuntimeError(
+                f"route-canary transaction receipt logs[{index}] must be an object"
+            )
+        if log.get("removed") is True:
+            raise RuntimeError(
+                "route-canary transaction receipt must not contain removed logs"
+            )
         candidate = _route_canary_message_proof_event_summary(
             log,
             expected_log_index=log_index,
             transaction_hash=transaction_hash,
+            expected_block_hash=_parse_hex32(
+                str(receipt_block["block_hash"]),
+                label="route-canary receipt block hash",
+            ),
+            expected_block_number=int(receipt_block["block_number"]),
             route_allowlist_hash=route_allowlist_hash,
             bridge_address=bridge_address,
             expected_source_domain=expected_source_domain,
@@ -981,6 +1104,11 @@ def _collect_route_canary_transaction_evidence(
         transaction,
         transaction_hash=transaction_hash,
         bridge_address=bridge_address,
+        expected_block_hash=_parse_hex32(
+            str(receipt_block["block_hash"]),
+            label="route-canary receipt block hash",
+        ),
+        expected_block_number=int(receipt_block["block_number"]),
         event_summary=event_summary,
         expected_source_domain=expected_source_domain,
         expected_target_domain=expected_target_domain,
@@ -1071,6 +1199,8 @@ def _route_canary_receipt_block_summary(
         receipt_block_number_text,
         method="route-canary receipt blockNumber",
     )
+    if receipt_block_number == 0:
+        raise RuntimeError("route-canary receipt blockNumber must be non-zero")
     receipt_block_hash = _parse_exact_hex32_blob(
         receipt.get("blockHash"),
         label="route-canary receipt blockHash",
@@ -1168,6 +1298,10 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 [
                     "--route-canary-transaction-hash",
                     str(route_canary_transaction["transaction_hash"]),
+                    "--route-canary-transaction-block-number",
+                    str(route_canary_transaction["transaction_block_number"]),
+                    "--route-canary-transaction-block-hash",
+                    str(route_canary_transaction["transaction_block_hash"]),
                     "--route-canary-log-index",
                     str(route_canary_transaction["log_index"]),
                     "--route-canary-receipt-block-number",
@@ -1379,8 +1513,11 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction.get("call_matches") is True
         and transaction.get("message_proof_used") is True
         and transaction.get("receipt_block_matches") is True
+        and transaction.get("transaction_block_matches") is True
         and type(transaction.get("block_number")) is int
         and isinstance(transaction.get("block_hash"), str)
+        and type(transaction.get("transaction_block_number")) is int
+        and isinstance(transaction.get("transaction_block_hash"), str)
         and isinstance(transaction.get("block_receipts_root"), str)
     )
 
@@ -1390,6 +1527,11 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     destination = summary.get("destination_bridge")
     if not isinstance(destination, dict):
         return ["destination bridge evidence"]
+    if (
+        destination.get("domain") == evidence.SCCP_DOMAIN_ETH
+        and summary.get("block_tag") != "finalized"
+    ):
+        missing.append("--block-tag finalized")
     if destination.get("expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
     if destination.get("expected_network_id_matches") is not True:
@@ -1427,6 +1569,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     destination_binding_hash = evidence._destination_binding_hash_from_args(args)
     rendered = evidence.render_toml(args, destination_binding_hash)
     comments = [
+        "# sccp_evm_block_tag = " + json.dumps(str(summary["block_tag"])),
         "# sccp_evm_rpc_chain_id = " + json.dumps(str(destination["rpc_chain_id"])),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(str(destination["bridge_code_hash"])),
@@ -1524,28 +1667,34 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect all requested evidence and return a JSON-serializable summary."""
 
+    block_tag = parse_block_tag(
+        args.block_tag
+        if getattr(args, "block_tag", None) is not None
+        else default_block_tag_for_domain(args.domain)
+    )
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
-        "block_tag": args.block_tag,
+        "block_tag": block_tag,
     }
-    destination = collect_destination_bridge_evidence(
-        args.rpc_url,
-        domain=args.domain,
-        bridge_address=args.bridge_address,
-        block_tag=args.block_tag,
-        opener=opener,
-        timeout=args.timeout,
-    )
     canonical_rpc_chain_id = _default_rpc_chain_id_for_domain(args.domain)
     expected_rpc_chain_id = getattr(args, "expected_rpc_chain_id", None)
     if expected_rpc_chain_id is None:
         expected_rpc_chain_id = canonical_rpc_chain_id
     elif expected_rpc_chain_id != canonical_rpc_chain_id:
+        chain = evidence.DOMAIN_PROFILES[args.domain]["chain"]
         raise ValueError(
             "--expected-rpc-chain-id must match the canonical "
-            f"{destination['chain']} mainnet chain id {canonical_rpc_chain_id}"
+            f"{chain} mainnet chain id {canonical_rpc_chain_id}"
         )
+    destination = collect_destination_bridge_evidence(
+        args.rpc_url,
+        domain=args.domain,
+        bridge_address=args.bridge_address,
+        block_tag=block_tag,
+        opener=opener,
+        timeout=args.timeout,
+    )
     if expected_rpc_chain_id != destination["rpc_chain_id"]:
         raise ValueError(
             "--expected-rpc-chain-id does not match eth_chainId for "
@@ -1554,15 +1703,23 @@ def collect_live_evidence(
         )
     destination["expected_rpc_chain_id"] = expected_rpc_chain_id
     destination["expected_rpc_chain_id_matches"] = True
+    canonical_network_id = _default_network_id_for_domain(args.domain)
     expected_network_id = getattr(args, "expected_network_id", None)
-    if expected_network_id is not None:
-        if _hex(expected_network_id) != destination["network_id"]:
-            raise ValueError(
-                "--expected-network-id does not match bridge networkId(): "
-                f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
-            )
-        destination["expected_network_id"] = _hex(expected_network_id)
-        destination["expected_network_id_matches"] = True
+    if expected_network_id is None:
+        expected_network_id = canonical_network_id
+    elif expected_network_id != canonical_network_id:
+        raise ValueError(
+            "--expected-network-id must match the canonical "
+            f"{destination['chain']} mainnet EIP-155 network id "
+            f"{_hex(canonical_network_id)}"
+        )
+    if _hex(expected_network_id) != destination["network_id"]:
+        raise ValueError(
+            "--expected-network-id does not match bridge networkId(): "
+            f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
+        )
+    destination["expected_network_id"] = _hex(expected_network_id)
+    destination["expected_network_id_matches"] = True
     expected_bridge_code_hash = getattr(args, "expected_bridge_code_hash", None)
     if expected_bridge_code_hash is not None:
         if _hex(expected_bridge_code_hash) != destination["bridge_code_hash"]:
@@ -1613,7 +1770,7 @@ def collect_live_evidence(
             route_allowlist_hash=route_allowlist_hash,
             transaction_hash=route_canary_transaction_hash,
             log_index=route_canary_log_index,
-            block_tag=args.block_tag,
+            block_tag=block_tag,
             opener=opener,
             timeout=args.timeout,
         )
@@ -1685,6 +1842,13 @@ def collect_live_evidence(
         args.route_canary_call_data_sha256 = _parse_hex32(
             str(route_canary_transaction["call_data_sha256"]),
             label="route canary call data SHA-256",
+        )
+        args.route_canary_transaction_block_number = int(
+            route_canary_transaction["transaction_block_number"]
+        )
+        args.route_canary_transaction_block_hash = _parse_hex32(
+            str(route_canary_transaction["transaction_block_hash"]),
+            label="route canary transaction block hash",
         )
         args.route_canary_receipt_block_number = int(
             route_canary_transaction["block_number"]
@@ -1767,7 +1931,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expected-network-id",
         type=lambda value: _parse_hex32(value, label="expected network id"),
-        help="Expected non-zero bridge networkId() bytes32.",
+        help=(
+            "Expected bridge networkId() bytes32. Defaults to the canonical "
+            "mainnet EIP-155 id for --domain: eth=1, bsc=56; an explicit "
+            "value must match that canonical id."
+        ),
     )
     parser.add_argument(
         "--expected-rpc-chain-id",
@@ -1874,8 +2042,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--block-tag",
-        default="latest",
-        help="JSON-RPC block tag for eth_call/eth_getCode. Defaults to latest.",
+        default=None,
+        type=parse_block_tag,
+        help=(
+            "JSON-RPC block tag for eth_call/eth_getCode. Must be latest, "
+            "safe, finalized, or a positive canonical lowercase 0x block "
+            "number. Defaults to finalized for Ethereum mainnet and latest "
+            "for BSC."
+        ),
     )
     parser.add_argument(
         "--full-toml",

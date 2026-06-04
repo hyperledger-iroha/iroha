@@ -85,6 +85,25 @@ pub(super) fn sign(
     }
 }
 
+pub(super) fn validate_secret_key(suite: MlDsaSuite, secret_key: &[u8]) -> Result<(), MlDsaError> {
+    match suite {
+        MlDsaSuite::MlDsa44 => mldsa44::validate_secret_key(secret_key).map(drop),
+        MlDsaSuite::MlDsa65 => mldsa65::validate_secret_key(secret_key).map(drop),
+        MlDsaSuite::MlDsa87 => mldsa87::validate_secret_key(secret_key).map(drop),
+    }
+}
+
+pub(super) fn public_key_from_secret_key(
+    suite: MlDsaSuite,
+    secret_key: &[u8],
+) -> Result<Vec<u8>, MlDsaError> {
+    match suite {
+        MlDsaSuite::MlDsa44 => mldsa44::validate_secret_key(secret_key),
+        MlDsaSuite::MlDsa65 => mldsa65::validate_secret_key(secret_key),
+        MlDsaSuite::MlDsa87 => mldsa87::validate_secret_key(secret_key),
+    }
+}
+
 fn shake256_into(out: &mut [u8], inputs: &[&[u8]]) {
     let mut h = Shake256::default();
     for input in inputs {
@@ -212,6 +231,105 @@ macro_rules! mldsa_suite {
                     public_key,
                     secret_key,
                 })
+            }
+
+            pub(super) fn validate_secret_key(secret_key: &[u8]) -> Result<Vec<u8>, MlDsaError> {
+                validate_mldsa_secret_key_len($suite, secret_key)?;
+
+                let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
+                let mut tr = Zeroizing::new([0u8; TRBYTES]);
+                let mut key = Zeroizing::new([0u8; SEEDBYTES]);
+                let mut t0 = Polyveck::<$k>::default();
+                let mut s1 = Polyvecl::<$l>::default();
+                let mut s2 = Polyveck::<$k>::default();
+
+                unsafe {
+                    $unpack_sk(
+                        rho.as_mut_ptr(),
+                        tr.as_mut_ptr(),
+                        key.as_mut_ptr(),
+                        &mut t0,
+                        &mut s1,
+                        &mut s2,
+                        secret_key.as_ptr(),
+                    );
+                }
+
+                let (public_key, recomputed_t0) =
+                    public_and_t0_from_secret_parts(rho.as_ref(), &s1, &s2);
+                if recomputed_t0 != t0 {
+                    return Err(MlDsaError::SecretKeyMismatch {
+                        suite: $suite,
+                        kind: "t0 does not match rho, s1, and s2",
+                    });
+                }
+
+                let mut expected_tr = Zeroizing::new([0u8; TRBYTES]);
+                shake256_into(expected_tr.as_mut(), &[&public_key]);
+                if expected_tr.as_ref() != tr.as_ref() {
+                    return Err(MlDsaError::SecretKeyMismatch {
+                        suite: $suite,
+                        kind: "tr does not match reconstructed public key",
+                    });
+                }
+
+                let mut canonical = Zeroizing::new(vec![0u8; $sk_len]);
+                unsafe {
+                    $pack_sk(
+                        canonical.as_mut_ptr(),
+                        rho.as_ptr(),
+                        tr.as_ptr(),
+                        key.as_ptr(),
+                        &t0,
+                        &s1,
+                        &s2,
+                    );
+                }
+                if canonical.as_slice() != secret_key {
+                    return Err(MlDsaError::SecretKeyMismatch {
+                        suite: $suite,
+                        kind: "secret key is not canonically encoded",
+                    });
+                }
+
+                Ok(public_key)
+            }
+
+            fn public_and_t0_from_secret_parts(
+                rho: &[u8],
+                s1: &Polyvecl<$l>,
+                s2: &Polyveck<$k>,
+            ) -> (Vec<u8>, Polyveck<$k>) {
+                let mut mat = Zeroizing::new(vec![Polyvecl::<$l>::default(); $k]);
+                let mut s1hat = s1.clone();
+                let mut t1 = Polyveck::<$k>::default();
+                let mut t0 = Polyveck::<$k>::default();
+
+                unsafe {
+                    $matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
+                    $vecl_ntt(&mut s1hat);
+                    $matrix_pointwise(&mut t1, mat.as_ptr(), &s1hat);
+                    $veck_reduce(&mut t1);
+                    $veck_invntt(&mut t1);
+                }
+
+                let t1_before_add = t1.clone();
+                unsafe {
+                    $veck_add(&mut t1, &t1_before_add, s2);
+                    $veck_caddq(&mut t1);
+                }
+
+                let t1_unrounded = t1.clone();
+                unsafe {
+                    $veck_power2round(&mut t1, &mut t0, &t1_unrounded);
+                }
+
+                let mut public_key = vec![0u8; $pk_len];
+                unsafe {
+                    $pack_pk(public_key.as_mut_ptr(), rho.as_ptr(), &t1);
+                }
+
+                (public_key, t0)
             }
 
             #[allow(clippy::too_many_lines)]

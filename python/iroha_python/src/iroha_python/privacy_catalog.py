@@ -17,6 +17,7 @@ PRIVACY_CRITERIA = (
     "post_quantum",
 )
 _ALGORITHM_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
+_BACKEND_FAMILY_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_.")
 PRODUCTION_GATE_VERSION = "privacy-production-gate-v1"
 PRODUCTION_GATE_REQUIREMENTS = (
     ("real_proving", "real proving engine is not registered"),
@@ -82,6 +83,7 @@ REQUIRED_PRIVACY_PLAN_ROWS = (
     ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
     ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
     ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
+    ("zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"),
     ("orchard-halo2-actions-v1", "research-target-as-of-2026-05", "halo2-ipa-orchard"),
     ("penumbra-masp-v1", "research-target-as-of-2026-05", "groth16-bls12-377"),
     (
@@ -173,7 +175,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "er.\",\"Generate a ZK-ACE authorization proof and submit a protected transparent transfer.\"],\"sdkE"
     "ntrypoints\":[\"buildRegisterZkAceIdentityCommitmentInstruction\",\"buildRotateZkAceIdentityCommitme"
     "ntInstruction\",\"buildRevokeZkAceIdentityCommitmentInstruction\",\"buildZkAceAuthorizedTransferInst"
-    "ruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints\":[\"buildShieldedZkAceAuthorize"
+    "ruction\"],\"plannedSdkEntrypoints\":[\"buildZkAceAuthorizationProofV1\",\"buildShieldedZkAceAuthorize"
     "dTransferInstruction\"],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
     "ceIdentityCommitment\",\"zk::RevokeZkAceIdentityCommitment\",\"zk::SubmitZkAceAuthorizedTransfer\",\"a"
     "ctive stark/fri/sha256-goldilocks ZK-ACE verifier key\",\"ZK-ACE identity source-account allowli"
@@ -513,9 +515,9 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "l\":\"https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-e"
     "ncryption-standards\"},{\"label\":\"FIPS 203 ML-KEM\",\"url\":\"https://csrc.nist.gov/pubs/fips/203/fina"
     "l\"},{\"label\":\"FIPS 204 ML-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/204/final\"},{\"label\":\"FIPS"
-    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note payload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"duplicate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier parameters and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive nullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.\"],\"sdkEntrypoints\":[\"buildRegisterAs"
-    "setHiddenZkPoolInstruction\",\"buildAssetHiddenZkTransferInstruction\"],\"plannedSdkEntrypoints\":[\"b"
-    "uildPqMaspStarkTransferProofV0\",\"generateMlDsaKeyPair\",\"encapsulateMlKem\"],\"chainRequirements\":["
+    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note payload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"duplicate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier parameters and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive nullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"b"
+    "uildPqMaspStarkTransferProofV0\",\"buildPqMaspStarkRegisterPoolInstruction\",\"buildPqMaspSt"
+    "arkTransferInstruction\",\"generateMlDsaKeyPair\",\"encapsulateMlKem\"],\"chainRequirements\":["
     "\"STARK/FRI verifier enabled\",\"ML-DSA transaction authorization\",\"ML-KEM note payload encryption\""
     ",\"zk::RegisterAssetHiddenZkPool\",\"zk::AssetHiddenZkTransfer\",\"active PQ MASP verifier key\"]}]"
 )
@@ -969,7 +971,7 @@ def _is_lowercase_hyphenated_identifier(value: str) -> bool:
 
 
 def _is_sdk_entrypoint_name(value: str) -> bool:
-    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$"
+    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
     rest_chars = first_chars + "0123456789"
     segments = value.split(".")
     if any(not segment for segment in segments):
@@ -1014,6 +1016,15 @@ def _is_proof_family_name(value: str) -> bool:
         return False
     parts.append("".join(segment))
     return all(part for part in parts)
+
+
+def _is_backend_family_name(value: str) -> bool:
+    return (
+        bool(value)
+        and value[0] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and value[-1] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and all(char in _BACKEND_FAMILY_NAME_CHARS for char in value)
+    )
 
 
 def _is_verifier_key_id(value: str) -> bool:
@@ -1369,7 +1380,13 @@ def _entrypoint_is_explicit_dev_fixture(entrypoint: str) -> bool:
 
 def _entrypoint_is_local_verifier(entrypoint: str) -> bool:
     name = entrypoint.rsplit(".", 1)[-1]
-    return name.startswith("verify") and name.endswith("Locally")
+    lower = name.lower()
+    return lower.startswith("verify") and (
+        lower.endswith("locally")
+        or lower.endswith("local")
+        or "localverifier" in lower
+        or "localonly" in lower
+    )
 
 
 def _entrypoint_is_instruction_builder(entrypoint: str) -> bool:
@@ -1385,12 +1402,25 @@ def _entrypoint_is_planned_ledger_mutation(entrypoint: str) -> bool:
     )
 
 
+def _entrypoint_is_proof_helper(entrypoint: str) -> bool:
+    name = entrypoint.rsplit(".", 1)[-1]
+    return (
+        "ProofEnvelope" in name
+        or "ProofWitness" in name
+        or "ProofPublicInputs" in name
+        or "ProofRequest" in name
+        or "ProofCommitment" in name
+    )
+
+
 def _entrypoint_is_production_proof_builder(entrypoint: str) -> bool:
     name = entrypoint.rsplit(".", 1)[-1]
     return (
         name.startswith("build")
         and "Proof" in name
         and not _entrypoint_is_instruction_builder(entrypoint)
+        and not _entrypoint_is_planned_ledger_mutation(entrypoint)
+        and not _entrypoint_is_proof_helper(entrypoint)
         and not _entrypoint_is_dev_fixture(entrypoint)
     )
 
@@ -1794,6 +1824,16 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             "privacy algorithm catalog entry "
             f"{index} research targets cannot advertise local-only "
             "verifier SDK entrypoints"
+        )
+    if (
+        descriptor.get("implementation_stage") == _RESEARCH_STAGE_MAY_2026
+        and sdk_entrypoints
+    ):
+        raise RuntimeError(
+            "privacy algorithm catalog entry "
+            f"{index} research targets cannot advertise executable "
+            "SDK entrypoints; keep them in planned_sdk_entrypoints until "
+            "the production stage advances"
         )
     if descriptor.get("implementation_stage") == "chain-executable" and any(
         _entrypoint_is_dev_fixture(entrypoint)
@@ -2442,6 +2482,12 @@ def _with_boi_compatibility_fields(descriptor: Mapping[str, Any]) -> dict[str, A
         raise RuntimeError(
             f"privacy algorithm catalog entry {algorithm_id!r} is missing backend family metadata"
         )
+    if not _is_backend_family_name(backend_family):
+        raise RuntimeError(
+            "privacy algorithm catalog entry "
+            f"{algorithm_id!r} backend family metadata must be non-empty and use "
+            "request-portable verifier-key backend characters"
+        )
     if _catalog_label_claims_production_readiness(backend_family):
         raise RuntimeError(
             "privacy algorithm catalog entry "
@@ -2506,29 +2552,31 @@ def _validate_required_privacy_plan_rows(
                 f"{algorithm_id!r} must keep backend family {backend_family!r} "
                 "until the production inventory is deliberately updated"
             )
+        if not any(
+            _entrypoint_is_production_proof_builder(entrypoint)
+            for entrypoint in descriptor.get("planned_sdk_entrypoints", [])
+        ):
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must retain a planned production proof "
+                "builder until production gates pass"
+            )
 
 
 def _validate_research_target_sdk_entrypoints(
     descriptors: tuple[Mapping[str, Any], ...],
 ) -> None:
-    non_research_executable_entrypoints = {
-        entrypoint
-        for descriptor in descriptors
-        if descriptor.get("implementation_stage") != _RESEARCH_STAGE_MAY_2026
-        for entrypoint in descriptor.get("sdk_entrypoints", [])
-        if isinstance(entrypoint, str)
-    }
     for descriptor in descriptors:
         if descriptor.get("implementation_stage") != _RESEARCH_STAGE_MAY_2026:
             continue
-        for entrypoint in descriptor.get("sdk_entrypoints", []):
-            if entrypoint not in non_research_executable_entrypoints:
-                raise RuntimeError(
-                    "privacy algorithm catalog research target "
-                    f"{descriptor.get('id')!r} cannot advertise new "
-                    f"executable SDK entrypoint {entrypoint!r}; keep it in "
-                    "planned_sdk_entrypoints until the production stage advances"
-                )
+        sdk_entrypoints = descriptor.get("sdk_entrypoints", [])
+        if sdk_entrypoints:
+            raise RuntimeError(
+                "privacy algorithm catalog research target "
+                f"{descriptor.get('id')!r} cannot advertise executable "
+                "SDK entrypoints; keep them in planned_sdk_entrypoints until "
+                "the production stage advances"
+            )
 
 
 def _load_descriptors() -> tuple[dict[str, Any], ...]:
@@ -2551,6 +2599,8 @@ def _load_descriptors() -> tuple[dict[str, Any], ...]:
             )
         if (
             algorithm_id != algorithm_id.lower()
+            or algorithm_id[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"
+            or algorithm_id[-1] not in "abcdefghijklmnopqrstuvwxyz0123456789"
             or any(char not in _ALGORITHM_ID_CHARS for char in algorithm_id)
         ):
             raise RuntimeError(

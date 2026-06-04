@@ -60,8 +60,12 @@ class VerifyingKeyBackendTagTest {
             "zcash-orchard" to VerifyingKeyBackendTag.HALO2_IPA_ORCHARD,
             "groth16/bls12-377" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
             "penumbra-masp" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
+            "halo2/ipa/penumbra" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
+            "halo2/ipa/masp" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
             "monero-fcmp++" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
             "fcmp-plus-plus-curve-tree" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
+            "halo2/ipa/monero" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
+            "halo2/ipa/curve-tree" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
             "jindo-lattice-pcs-zk" to VerifyingKeyBackendTag.LATTICE_PCS_SIS,
             "verange-transparent-range" to VerifyingKeyBackendTag.VERANGE,
             "anonymous-pgc-k-out-of-n" to VerifyingKeyBackendTag.ANONYMOUS_PGC,
@@ -88,23 +92,19 @@ class VerifyingKeyBackendTagTest {
     }
 
     @Test
-    fun `adversarial pending backend aliases stay fail closed but not canonical`() {
+    fun `adversarial pending backend label splices stay unsupported`() {
         val cases = listOf(
-            "halo2/ipa/orchard/dev-fixture" to VerifyingKeyBackendTag.HALO2_IPA_ORCHARD,
-            "stark/fri/miden/claimed-production" to VerifyingKeyBackendTag.MIDEN_STARK,
-            "anonymous-pgc-k-out-of-n-v1-production" to VerifyingKeyBackendTag.ANONYMOUS_PGC,
-            "sis-hints-anoncred-pq-v0-devfixture" to VerifyingKeyBackendTag.SIS_WITH_HINTS,
-            "groth16/bls12-377/../../prod" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
-            "post-quantum-masp/audit-claimed" to VerifyingKeyBackendTag.PQ_MASP_STARK_FRI,
-            "halo2/ipa/penumbra" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
-            "halo2/ipa/masp" to VerifyingKeyBackendTag.GROTH16_BLS12_377,
-            "halo2/ipa/monero" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
-            "halo2/ipa/curve-tree" to VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE,
+            "halo2/ipa/orchard/dev-fixture",
+            "stark/fri/miden/claimed-production",
+            "anonymous-pgc-k-out-of-n-v1-production",
+            "sis-hints-anoncred-pq-v0-devfixture",
+            "groth16/bls12-377/../../prod",
+            "post-quantum-masp/audit-claimed",
         )
 
-        for ((label, tag) in cases) {
-            assertEquals(tag, VerifyingKeyBackendTag.fromCatalogLabel(label))
-            assertTrue(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+        for (label in cases) {
+            assertEquals(VerifyingKeyBackendTag.UNSUPPORTED, VerifyingKeyBackendTag.fromCatalogLabel(label))
+            assertFalse(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
             assertFailsWith<IllegalArgumentException> {
                 VerifyingKeyBackendTag.parse(label)
             }
@@ -211,6 +211,9 @@ class VerifyingKeyBackendTagTest {
             "stark/fri/random-profile",
             "stark/fri/sha512-goldilocks",
             "stark/fri/audit-proof-v1",
+            "stark/fri/sha256 goldilocks",
+            "stark/fri/sha256+goldilocks",
+            "halo2/ipa+mock",
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",

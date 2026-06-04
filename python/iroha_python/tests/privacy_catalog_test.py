@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -345,20 +346,54 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_backend_drift(
         )
 
 
-def test_privacy_catalog_research_targets_can_only_reuse_non_research_sdk_entrypoints() -> None:
+@pytest.mark.parametrize(
+    "planned_entrypoints",
+    [
+        [],
+        ["deriveOrchardWitness"],
+        ["buildAnonymousPgcProductionInstruction"],
+        ["buildAnonymousPgcProofTransaction"],
+        ["buildSubmitAnonymousPgcProof"],
+        ["buildAnonymousPgcProofEnvelope"],
+        ["buildAnonymousPgcProofWitness"],
+        ["buildAnonymousPgcProofPublicInputs"],
+        ["buildAnonymousPgcProofRequest"],
+        ["buildAnonymousPgcProofCommitment"],
+        ["buildAnonymousPgcDevProofFixture"],
+    ],
+)
+def test_privacy_catalog_rejects_required_production_privacy_plan_without_proof_builder(
+    planned_entrypoints,
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["planned_sdk_entrypoints"] = planned_entrypoints
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain a planned production "
+            "proof builder until production gates pass"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_research_targets_keep_executable_entrypoints_planned_only() -> None:
     descriptors = get_privacy_algorithm_descriptors()
-    non_research_entrypoints = {
-        entrypoint
+    assert any(
+        descriptor["sdk_entrypoints"]
         for descriptor in descriptors
         if descriptor["implementation_stage"] != "research-target-as-of-2026-05"
-        for entrypoint in descriptor["sdk_entrypoints"]
-    }
-
-    assert non_research_entrypoints
+    )
     for descriptor in descriptors:
         if descriptor["implementation_stage"] != "research-target-as-of-2026-05":
             continue
-        assert set(descriptor["sdk_entrypoints"]) <= non_research_entrypoints
+        assert descriptor["sdk_entrypoints"] == []
+        assert descriptor["planned_sdk_entrypoints"]
 
 
 def test_privacy_catalog_research_targets_keep_exact_protocol_source_references() -> None:
@@ -401,18 +436,18 @@ def test_privacy_catalog_research_targets_keep_production_readiness_notes() -> N
         )
 
 
-def test_privacy_catalog_rejects_research_target_new_executable_sdk_entrypoint() -> None:
+def test_privacy_catalog_rejects_research_target_executable_sdk_entrypoint() -> None:
     descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
     for descriptor in descriptors:
         if descriptor["id"] == "orchard-halo2-actions-v1":
-            descriptor["sdk_entrypoints"] = ["buildOrchardActionBundleProofV1"]
+            descriptor["sdk_entrypoints"] = ["verifySharedOrchardProof"]
             break
 
     with pytest.raises(
         RuntimeError,
         match=(
             "research target 'orchard-halo2-actions-v1' cannot advertise "
-            "new executable SDK entrypoint 'buildOrchardActionBundleProofV1'"
+            "executable SDK entrypoints"
         ),
     ):
         privacy_catalog._validate_research_target_sdk_entrypoints(tuple(descriptors))
@@ -584,6 +619,10 @@ def test_privacy_catalog_loader_rejects_bad_verifier_key_ids(
         "shield space",
         "shield\nsecond",
         "shield.example",
+        "_shield",
+        "-shield",
+        "shield_",
+        "shield-",
     ],
 )
 def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
@@ -993,6 +1032,46 @@ def test_privacy_catalog_loader_rejects_backend_family_production_claims(
 
 
 @pytest.mark.parametrize(
+    "backend_family",
+    [
+        "",
+        "halo2/ipa/pasta",
+        "halo2:ipa:pasta",
+        "halo2 ipa pasta",
+        "Halo2-ipa-pasta",
+        ".halo2-ipa-pasta",
+        "-halo2-ipa-pasta",
+        "_halo2-ipa-pasta",
+        "halo2-ipa-pasta.",
+        "halo2-ipa-pasta-",
+        "halo2-ipa-pasta_",
+    ],
+)
+def test_privacy_catalog_loader_rejects_unportable_backend_families(
+    monkeypatch,
+    backend_family,
+) -> None:
+    patched_backend_families = dict(privacy_catalog.BACKEND_FAMILY_BY_ALGORITHM_ID)
+    patched_backend_families["shield"] = backend_family
+    monkeypatch.setattr(
+        privacy_catalog,
+        "BACKEND_FAMILY_BY_ALGORITHM_ID",
+        patched_backend_families,
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps([_raw_descriptor(id="shield")]),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="request-portable verifier-key backend characters",
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
     ("source_references", "message"),
     [
         ({"label": "paper", "url": "https://example.test"}, "must be a list"),
@@ -1359,7 +1438,11 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_verifie
                 "url": "https://zips.z.cash/zip-0224",
             }
         ],
-        sdkEntrypoints=["buildShapeProof"],
+        sdkEntrypoints=(
+            []
+            if implementation_stage == "research-target-as-of-2026-05"
+            else ["buildShapeProof"]
+        ),
         plannedSdkEntrypoints=(
             []
             if implementation_stage == "production-hardened"
@@ -1414,7 +1497,11 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_concret
                 "url": "https://zips.z.cash/zip-0224",
             }
         ],
-        sdkEntrypoints=["buildShapeProof"],
+        sdkEntrypoints=(
+            []
+            if implementation_stage == "research-target-as-of-2026-05"
+            else ["buildShapeProof"]
+        ),
         plannedSdkEntrypoints=(
             []
             if implementation_stage == "production-hardened"
@@ -1470,7 +1557,11 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_non_non
                 "url": "https://zips.z.cash/zip-0224",
             }
         ],
-        sdkEntrypoints=["buildShapeProof"],
+        sdkEntrypoints=(
+            []
+            if implementation_stage == "research-target-as-of-2026-05"
+            else ["buildShapeProof"]
+        ),
         plannedSdkEntrypoints=(
             []
             if implementation_stage == "production-hardened"
@@ -1524,7 +1615,11 @@ def test_privacy_catalog_loader_rejects_pre_production_stages_without_planned_sd
                 "url": "https://zips.z.cash/zip-0224",
             }
         ],
-        sdkEntrypoints=["buildShapeProof"],
+        sdkEntrypoints=(
+            []
+            if implementation_stage == "research-target-as-of-2026-05"
+            else ["buildShapeProof"]
+        ),
         plannedSdkEntrypoints=[],
     )
     monkeypatch.setattr(
@@ -2068,7 +2163,10 @@ def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_local_ve
     "entrypoint",
     [
         "verifyShapeProofLocally",
+        "verifyShapeProofLocal",
+        "verifyShapeProofLocalVerifier",
         "Iroha.Privacy.verifyShapeProofLocally",
+        "Iroha.Privacy.verifyShapeProofLocalVerifier",
     ],
 )
 def test_privacy_catalog_loader_rejects_local_verifier_entrypoints_without_dev_fixture(
@@ -2150,7 +2248,9 @@ def test_privacy_catalog_loader_rejects_chain_executable_dev_fixture_entrypoints
     "entrypoint",
     [
         "verifyShapeProofLocally",
+        "verifyShapeProofLocal",
         "Iroha.Privacy.verifyShapeProofLocally",
+        "Iroha.Privacy.verifyShapeProofLocalVerifier",
     ],
 )
 def test_privacy_catalog_loader_rejects_chain_executable_local_verifier_entrypoints(
@@ -2763,7 +2863,10 @@ def test_privacy_catalog_loader_rejects_research_target_dev_fixture_entrypoints(
     "entrypoint",
     [
         "verifyShapeProofLocally",
+        "verifyShapeProofLocal",
+        "verifyShapeProofLocalVerifier",
         "Iroha.Privacy.verifyShapeProofLocally",
+        "Iroha.Privacy.verifyShapeProofLocalVerifier",
     ],
 )
 def test_privacy_catalog_loader_rejects_research_target_local_verifier_entrypoints(
@@ -2786,6 +2889,40 @@ def test_privacy_catalog_loader_rejects_research_target_local_verifier_entrypoin
     with pytest.raises(
         RuntimeError,
         match="research targets cannot advertise local-only verifier SDK entrypoints",
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "verifyShapeProof",
+        "buildShapeProductionProof",
+        "buildShapeProofEnvelope",
+        "buildShapeProductionInstruction",
+    ],
+)
+def test_privacy_catalog_loader_rejects_research_target_executable_entrypoints(
+    monkeypatch,
+    entrypoint,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    implementationStage="research-target-as-of-2026-05",
+                    sdkEntrypoints=[entrypoint],
+                    plannedSdkEntrypoints=["buildShapeProductionProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="research targets cannot advertise executable SDK entrypoints",
     ):
         privacy_catalog._load_descriptors()
 
@@ -2862,8 +2999,25 @@ def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_planned_
         privacy_catalog._load_descriptors()
 
 
+@pytest.mark.parametrize(
+    "planned_entrypoints",
+    [
+        [
+            "buildShapeProductionInstruction",
+            "buildShapeProofInstruction",
+        ],
+        ["buildShapeProofTransaction"],
+        ["buildSubmitShapeProof"],
+        ["buildShapeProofEnvelope"],
+        ["buildShapeProofWitness"],
+        ["buildShapeProofPublicInputs"],
+        ["buildShapeProofRequest"],
+        ["buildShapeProofCommitment"],
+    ],
+)
 def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_planned_production_proof_builder(
     monkeypatch,
+    planned_entrypoints,
 ) -> None:
     monkeypatch.setattr(
         privacy_catalog,
@@ -2878,10 +3032,7 @@ def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_planned_
                     securityNotes=[
                         "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
                     ],
-                    plannedSdkEntrypoints=[
-                        "buildShapeProductionInstruction",
-                        "buildShapeProofInstruction",
-                    ],
+                    plannedSdkEntrypoints=planned_entrypoints,
                 )
             ]
         ),
@@ -2978,7 +3129,10 @@ def test_privacy_catalog_loader_rejects_planned_fixture_or_mock_entrypoints(
     "entrypoint",
     [
         "verifyFutureShapeProofLocally",
+        "verifyFutureShapeProofLocal",
+        "verifyFutureShapeProofLocalVerifier",
         "Iroha.Privacy.verifyFutureShapeProofLocally",
+        "Iroha.Privacy.verifyFutureShapeProofLocalVerifier",
     ],
 )
 def test_privacy_catalog_loader_rejects_planned_local_verifier_entrypoints(
@@ -3008,7 +3162,10 @@ def test_privacy_catalog_loader_rejects_planned_local_verifier_entrypoints(
     "entrypoint",
     [
         "verifyShapeProofLocally",
+        "verifyShapeProofLocal",
+        "verifyShapeProofLocalVerifier",
         "Iroha.Privacy.verifyShapeProofLocally",
+        "Iroha.Privacy.verifyShapeProofLocalVerifier",
     ],
 )
 def test_privacy_catalog_loader_rejects_production_hardened_local_verifier_entrypoints(
@@ -3036,6 +3193,29 @@ def test_privacy_catalog_loader_rejects_production_hardened_local_verifier_entry
         ),
     ):
         privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "expected"),
+    [
+        ("buildShapeProductionProof", True),
+        ("Iroha.Privacy.buildShapeProductionProof", True),
+        ("buildShapeProofInstruction", False),
+        ("buildShapeProofTransaction", False),
+        ("buildSubmitShapeProof", False),
+        ("buildShapeProofEnvelope", False),
+        ("buildShapeProofWitness", False),
+        ("buildShapeProofPublicInputs", False),
+        ("buildShapeProofRequest", False),
+        ("buildShapeProofCommitment", False),
+        ("buildShapeDevProofFixture", False),
+    ],
+)
+def test_privacy_catalog_production_proof_builder_rejects_ledger_mutation_aliases(
+    entrypoint,
+    expected,
+) -> None:
+    assert privacy_catalog._entrypoint_is_production_proof_builder(entrypoint) is expected
 
 
 def test_privacy_catalog_loader_rejects_catalog_stage_sdk_entrypoints(
@@ -3136,7 +3316,10 @@ def test_privacy_capabilities_treats_hostile_client_attributes_as_unavailable() 
     assert capabilities["privacy_algorithms"][0]["id"] == "transparent-transfer"
 
 
-@pytest.mark.parametrize("bad_id", ["Shield", "shield/../../admin", "shield.v1"])
+@pytest.mark.parametrize(
+    "bad_id",
+    ["Shield", "shield/../../admin", "shield.v1", "_shield", "-shield", "shield_", "shield-"],
+)
 def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
     monkeypatch.setattr(
         privacy_catalog,
@@ -3279,6 +3462,16 @@ def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
             "sdkEntrypoints",
             ["buildProof-withSuffix"],
             "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "sdkEntrypoints",
+            ["build$Proof"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["buildFuture$Proof"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
         ),
         (
             "plannedSdkEntrypoints",
@@ -3687,7 +3880,10 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildRotateZkAceIdentityCommitmentInstruction",
         "buildRevokeZkAceIdentityCommitmentInstruction",
         "buildZkAceAuthorizedTransferInstruction",
+    ]
+    assert zk_ace["planned_sdk_entrypoints"] == [
         "buildZkAceAuthorizationProofV1",
+        "buildShieldedZkAceAuthorizedTransferInstruction",
     ]
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
     assert zk_ace["verifier_key_metadata"]["pq_layers"] == {
@@ -4030,6 +4226,8 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 privacy_catalog._entrypoint_is_local_verifier(entrypoint)
                 for entrypoint in descriptor["sdk_entrypoints"]
             )
+            assert descriptor["sdk_entrypoints"] == []
+            assert descriptor["planned_sdk_entrypoints"]
             security_notes_text = " ".join(descriptor["security_notes"]).lower()
             assert all(
                 token in security_notes_text
@@ -4134,6 +4332,32 @@ def test_planned_privacy_sdk_entrypoints_remain_unexported_and_fail_closed() -> 
             assert descriptor["planned_sdk_entrypoints"]
             assert set(descriptor["planned_sdk_entrypoints"]).isdisjoint(
                 descriptor["sdk_entrypoints"]
+            )
+
+
+def test_planned_privacy_sdk_entrypoints_have_no_public_python_definitions() -> None:
+    planned_entrypoints = {
+        entrypoint
+        for descriptor in get_privacy_algorithm_descriptors()
+        for entrypoint in descriptor["planned_sdk_entrypoints"]
+    }
+    planned_name_variants = set().union(
+        *(_planned_entrypoint_name_variants(entrypoint) for entrypoint in planned_entrypoints)
+    )
+    source_root = Path(privacy_catalog.__file__).resolve().parent
+
+    assert planned_entrypoints
+    for source_path in sorted(source_root.rglob("*.py")):
+        text = source_path.read_text(encoding="utf8")
+        for entrypoint in planned_name_variants:
+            pattern = re.compile(
+                rf"^(?:def\s+{re.escape(entrypoint)}\s*\(|{re.escape(entrypoint)}\s*=)",
+                re.MULTILINE,
+            )
+            assert not pattern.search(text), (
+                f"{entrypoint} is still a planned production privacy entrypoint "
+                f"and must not be publicly defined in {source_path.relative_to(source_root)} "
+                "until the production gate passes"
             )
 
 

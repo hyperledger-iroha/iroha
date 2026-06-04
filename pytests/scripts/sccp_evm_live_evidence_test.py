@@ -8,8 +8,9 @@ from types import SimpleNamespace
 
 EVM_SOURCE_VERIFIER_MATERIAL_HASH = "aa" * 32
 EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "99" * 32
+ETH_MAINNET_NETWORK_ID = "00" * 31 + "01"
 EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "aa81ee4abc97ec4806105a463ad20de7575eb5805317291d70f4af805b3f5bf3"
+    "06d0aa09a6d3613931fd1cdb7885fc94e82e12197802020bc1d137cf81dcda5b"
 )
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 
@@ -132,6 +133,7 @@ def fake_opener_for(
     rpc_chain_id=1,
     source_domain=0,
     target_domain=1,
+    network_id_override=None,
     verifier_code_hash_override=None,
     backend_hash_override=None,
     destination_binding_override=None,
@@ -139,10 +141,19 @@ def fake_opener_for(
     route_canary_used=True,
     route_canary_destination_binding_override=None,
     route_canary_wrong_selector=False,
+    route_canary_receipt_block_number=None,
     route_canary_block_response_hash=None,
     route_canary_block_response_number=None,
     route_canary_block_receipts_root=None,
+    route_canary_log_transaction_hash=None,
+    route_canary_log_block_hash=None,
+    route_canary_log_block_number=None,
+    route_canary_transaction_block_hash=None,
+    route_canary_transaction_block_number=None,
     duplicate_route_canary_log=False,
+    extra_route_canary_log_index=None,
+    route_canary_removed_log=False,
+    route_canary_non_object_log=False,
 ):
     bridge = "0x" + "11" * 20
     verifier_address_bytes = (
@@ -151,7 +162,9 @@ def fake_opener_for(
         else bytes.fromhex("22" * 20)
     )
     verifier = "0x" + verifier_address_bytes.hex()
-    network_id = bytes.fromhex("33" * 32)
+    network_id = module.evidence.evm_mainnet_network_id_for_domain(target_domain)
+    if network_id_override is not None:
+        network_id = network_id_override
     bridge_runtime = bytes.fromhex("60806040526001")
     verifier_runtime = bytes.fromhex("60806040526002")
     verifier_code_hash = module.evidence.runtime_bytecode_hash(verifier_runtime)
@@ -168,7 +181,11 @@ def fake_opener_for(
     )
     destination_binding = (
         bytes.fromhex("44" * 32)
-        if verifier_equals_bridge or source_domain != module.evidence.SCCP_DOMAIN_SORA
+        if (
+            verifier_equals_bridge
+            or source_domain != module.evidence.SCCP_DOMAIN_SORA
+            or network_id_override is not None
+        )
         else module.evidence.evm_destination_binding_hash(
             network_id=network_id,
             source_domain=source_domain,
@@ -193,7 +210,9 @@ def fake_opener_for(
     route_canary_finality_height = abi_word_u32(123)
     route_canary_finality_block_hash = bytes.fromhex("99" * 32)
     route_canary_receipt_block_hash = "0x" + "aa" * 32
-    route_canary_receipt_block_number = "0x1234"
+    route_canary_receipt_block_number = (
+        route_canary_receipt_block_number or "0x1234"
+    )
     route_canary_block_response_hash = (
         route_canary_block_response_hash or route_canary_receipt_block_hash
     )
@@ -222,6 +241,11 @@ def fake_opener_for(
     )
     route_canary_log = {
         "address": bridge,
+        "transactionHash": route_canary_log_transaction_hash
+        or ("0x" + route_canary_transaction_hash.hex()),
+        "blockHash": route_canary_log_block_hash or route_canary_receipt_block_hash,
+        "blockNumber": route_canary_log_block_number
+        or route_canary_receipt_block_number,
         "logIndex": "0x0",
         "topics": [
             "0x" + module.EVM_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
@@ -242,9 +266,17 @@ def fake_opener_for(
             ).hex()
         ),
     }
+    if route_canary_removed_log:
+        route_canary_log["removed"] = True
     route_canary_logs = [route_canary_log]
     if duplicate_route_canary_log:
         route_canary_logs.append(dict(route_canary_log))
+    if extra_route_canary_log_index is not None:
+        extra_log = dict(route_canary_log)
+        extra_log["logIndex"] = extra_route_canary_log_index
+        route_canary_logs.append(extra_log)
+    if route_canary_non_object_log:
+        route_canary_logs.append("not-a-log")
     call_words = {
         (bridge, "verifier()"): abi_word_address(verifier_address_bytes),
         (bridge, "verifierCodeHash()"): verifier_code_hash,
@@ -347,6 +379,10 @@ def fake_opener_for(
                     "id": 1,
                     "result": {
                         "hash": "0x" + route_canary_transaction_hash.hex(),
+                        "blockHash": route_canary_transaction_block_hash
+                        or route_canary_receipt_block_hash,
+                        "blockNumber": route_canary_transaction_block_number
+                        or route_canary_receipt_block_number,
                         "to": bridge,
                         "input": "0x" + route_canary_call_data.hex(),
                     },
@@ -571,7 +607,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert destination["expected_rpc_chain_id_matches"] is True
     assert destination["bridge_address"] == fake.bridge
     assert destination["verifier_address"] == fake.verifier
-    assert destination["network_id"] == "0x" + "33" * 32
+    assert destination["network_id"] == "0x" + ETH_MAINNET_NETWORK_ID
     assert destination["bridge_code_hash"] == "0x" + fake.bridge_code_hash.hex()
     assert destination["expected_bridge_code_hash_matches"] is True
     assert destination["verifier_code_hash"] == "0x" + fake.verifier_code_hash.hex()
@@ -584,7 +620,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert destination["expected_network_id_matches"] is True
     assert destination["expected_destination_binding_hash_matches"] is True
     assert summary["torii_destination_query_params"] == {
-        "network_id_hex": "0x" + "33" * 32,
+        "network_id_hex": "0x" + ETH_MAINNET_NETWORK_ID,
         "verifier_address_hex": fake.verifier,
         "bridge_address_hex": fake.bridge,
         "verifier_code_hash_hex": "0x" + fake.verifier_code_hash.hex(),
@@ -597,6 +633,8 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert "--route-allowlist-hash" in offline_args
     assert "--route-canary-evidence-hash" in offline_args
     assert "--route-canary-transaction-hash" in offline_args
+    assert "--route-canary-transaction-block-number" in offline_args
+    assert "--route-canary-transaction-block-hash" in offline_args
     assert "--route-canary-call-data-sha256" in offline_args
     assert "--route-canary-payload-hash" in offline_args
     assert "--route-canary-finality-height" in offline_args
@@ -629,6 +667,11 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         "0x" + fake.route_canary_finality_block_hash.hex()
     )
     assert summary["route_canary_transaction"]["receipt_block_matches"] is True
+    assert summary["route_canary_transaction"]["transaction_block_matches"] is True
+    assert summary["route_canary_transaction"]["transaction_block_number"] == 0x1234
+    assert summary["route_canary_transaction"]["transaction_block_hash"] == (
+        "0x" + fake.route_canary_receipt_block_hash.hex()
+    )
     assert summary["route_canary_transaction"]["block_receipts_root"] == "0x" + "bb" * 32
     assert summary["source_record_hashes"] == {
         "source_verifier_material_hash": "0x" + EVM_SOURCE_VERIFIER_MATERIAL_HASH,
@@ -638,6 +681,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     }
 
     rendered = module.render_offline_toml(summary)
+    assert '# sccp_evm_block_tag = "finalized"' in rendered
     assert '# sccp_evm_rpc_chain_id = "1"' in rendered
     assert (
         '# sccp_evm_bridge_runtime_code_hash = "0x'
@@ -664,7 +708,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         + '"'
         in rendered
     )
-    assert '# sccp_evm_destination_network_id = "0x' + "33" * 32 + '"' in rendered
+    assert '# sccp_evm_destination_network_id = "0x' + ETH_MAINNET_NETWORK_ID + '"' in rendered
     assert "# sccp_evm_destination_binding_key = " in rendered
     assert 'destination_binding_key = "evm:0:1:' in rendered
     assert '# sccp_evm_destination_binding_hash = "0x' in rendered
@@ -675,6 +719,8 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         in rendered
     )
     assert "# sccp_evm_route_canary_transaction_hash" in rendered
+    assert "# sccp_evm_route_canary_transaction_block_number" in rendered
+    assert "# sccp_evm_route_canary_transaction_block_hash" in rendered
     assert "# sccp_evm_route_canary_call_data_sha256" in rendered
     assert "# sccp_evm_route_canary_payload_hash" in rendered
     assert "# sccp_evm_route_canary_finality_height" in rendered
@@ -682,7 +728,9 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert "# sccp_evm_route_canary_proof_version" in rendered
     assert "# sccp_evm_route_canary_proof_source_domain" in rendered
     assert "evm_route_canary_transaction_hash = " in rendered
+    assert "evm_route_canary_transaction_block_hash = " in rendered
     for key in (
+        "# sccp_evm_block_tag = ",
         "# sccp_evm_rpc_chain_id = ",
         "# sccp_evm_bridge_runtime_code_hash = ",
         "# sccp_evm_verifier_runtime_code_hash = ",
@@ -698,6 +746,46 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         + '"'
         in rendered
     )
+
+
+def test_live_evm_eth_toml_requires_finalized_block_tag():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="latest",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    assert summary["block_tag"] == "latest"
+    assert "offline_toml_sha256" not in summary
+    try:
+        module.render_offline_toml(summary)
+    except ValueError as exc:
+        assert "--block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("Ethereum destination TOML rendered from non-finalized block tag")
 
 
 def test_live_evm_evidence_rejects_aliased_verifier_and_bridge():
@@ -849,11 +937,21 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
             None,
         ),
         (
+            fake_opener_for(module, route_canary_receipt_block_number="0x0"),
+            "receipt blockNumber must be non-zero",
+            placeholder_hash,
+        ),
+        (
             fake_opener_for(
                 module,
                 route_canary_block_response_hash="0x" + "ab" * 32,
             ),
             "block hash does not match receipt blockHash",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_block_response_number="0x1235"),
+            "block number does not match receipt blockNumber",
             None,
         ),
         (
@@ -867,6 +965,52 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         (
             fake_opener_for(module, duplicate_route_canary_log=True),
             "more than one matching MessageProofAccepted",
+            None,
+        ),
+        (
+            fake_opener_for(module, extra_route_canary_log_index="0x1"),
+            "unexpected log index",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_removed_log=True),
+            "must not contain removed logs",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_non_object_log=True),
+            "logs[1] must be an object",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_log_transaction_hash="0x" + "45" * 32,
+            ),
+            "log transactionHash does not match receipt transactionHash",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_log_block_hash="0x" + "ab" * 32),
+            "log blockHash does not match receipt blockHash",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_log_block_number="0x1235"),
+            "log blockNumber does not match receipt blockNumber",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_transaction_block_hash="0x" + "ab" * 32,
+            ),
+            "transaction blockHash does not match receipt blockHash",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_transaction_block_number="0x1235"),
+            "transaction blockNumber does not match receipt blockNumber",
             None,
         ),
     ):
@@ -1109,14 +1253,25 @@ def test_live_evm_evidence_rejects_bridge_destination_binding_drift():
 
 def test_live_evm_evidence_rejects_rpc_chain_id_drift():
     module = load_live_module()
-    fake = fake_opener_for(module, rpc_chain_id=56)
+    calls = []
+
+    def wrong_chain_opener(request, timeout):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        method = payload["method"]
+        calls.append(method)
+        if method == "eth_chainId":
+            return FakeResponse(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": "0x38"}
+            )
+        raise AssertionError(f"unexpected RPC after wrong chain id: {method}")
 
     try:
         module.collect_live_evidence(
             SimpleNamespace(
                 rpc_url="https://ethereum.example",
                 domain=module.evidence.SCCP_DOMAIN_ETH,
-                bridge_address=fake.bridge,
+                bridge_address="0x" + "11" * 20,
                 expected_rpc_chain_id=None,
                 expected_network_id=None,
                 expected_bridge_code_hash=None,
@@ -1125,25 +1280,29 @@ def test_live_evm_evidence_rejects_rpc_chain_id_drift():
                 block_tag="latest",
                 timeout=1.0,
             ),
-            opener=fake.opener,
+            opener=wrong_chain_opener,
         )
     except ValueError as exc:
-        assert "expected-rpc-chain-id" in str(exc)
-        assert "expected 1, got 56" in str(exc)
+        assert "eth_chainId for eth lane" in str(exc)
+        assert "canonical mainnet chain id 1, got 56" in str(exc)
     else:
         raise AssertionError("wrong EVM RPC chain id was accepted")
+    assert calls == ["eth_chainId"]
 
 
 def test_live_evm_evidence_rejects_noncanonical_expected_rpc_chain_id():
     module = load_live_module()
-    fake = fake_opener_for(module, rpc_chain_id=56)
+
+    def no_rpc_opener(_request, timeout):
+        del timeout
+        raise AssertionError("noncanonical expected chain id should fail before RPC")
 
     try:
         module.collect_live_evidence(
             SimpleNamespace(
                 rpc_url="https://bsc.example",
                 domain=module.evidence.SCCP_DOMAIN_ETH,
-                bridge_address=fake.bridge,
+                bridge_address="0x" + "11" * 20,
                 expected_rpc_chain_id=56,
                 expected_network_id=None,
                 expected_bridge_code_hash=None,
@@ -1152,7 +1311,7 @@ def test_live_evm_evidence_rejects_noncanonical_expected_rpc_chain_id():
                 block_tag="latest",
                 timeout=1.0,
             ),
-            opener=fake.opener,
+            opener=no_rpc_opener,
         )
     except ValueError as exc:
         assert "canonical eth mainnet chain id 1" in str(exc)
@@ -1200,6 +1359,107 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
             raise AssertionError(f"noncanonical EVM exact hex {value!r} was accepted")
 
 
+def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():
+    module = load_live_module()
+
+    assert module.parse_block_tag("latest") == "latest"
+    assert module.parse_block_tag("safe") == "safe"
+    assert module.parse_block_tag("finalized") == "finalized"
+    assert module.parse_block_tag("0x1234") == "0x1234"
+
+    for value in (
+        "pending",
+        "earliest",
+        " 0x1234",
+        "0x01234",
+        "0X1234",
+        "1234",
+        "0x0",
+    ):
+        try:
+            module.parse_block_tag(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "block-tag" in str(exc)
+        else:
+            raise AssertionError(
+                f"unstable/noncanonical block tag {value!r} was accepted"
+            )
+
+
+def test_live_evm_cli_defaults_eth_to_finalized_and_bsc_to_latest():
+    module = load_live_module()
+    parser = module.build_parser()
+
+    eth_fake = fake_opener_for(module)
+    eth_args = parser.parse_args(
+        [
+            "--rpc-url",
+            "https://ethereum.example",
+            "--domain",
+            "eth",
+            "--bridge-address",
+            eth_fake.bridge,
+        ]
+    )
+    eth_summary = module.collect_live_evidence(eth_args, opener=eth_fake.opener)
+    assert eth_summary["block_tag"] == "finalized"
+
+    bsc_fake = fake_opener_for(
+        module,
+        rpc_chain_id=56,
+        target_domain=module.evidence.SCCP_DOMAIN_BSC,
+    )
+    bsc_args = parser.parse_args(
+        [
+            "--rpc-url",
+            "https://bsc.example",
+            "--domain",
+            "bsc",
+            "--bridge-address",
+            bsc_fake.bridge,
+        ]
+    )
+    bsc_summary = module.collect_live_evidence(bsc_args, opener=bsc_fake.opener)
+    assert bsc_summary["block_tag"] == "latest"
+
+
+def test_live_evm_direct_collectors_reject_unstable_block_tag_before_rpc():
+    module = load_live_module()
+
+    def opener(_request, _timeout):
+        raise AssertionError("collector should reject block tag before JSON-RPC")
+
+    try:
+        module.collect_destination_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address="0x" + "11" * 20,
+            block_tag="pending",
+            opener=opener,
+            timeout=1.0,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "block-tag" in str(exc)
+    else:
+        raise AssertionError("unstable destination collector block tag was accepted")
+
+    try:
+        module._collect_route_canary_transaction_evidence(
+            "https://ethereum.example",
+            destination={},
+            route_allowlist_hash=bytes.fromhex("aa" * 32),
+            transaction_hash=bytes.fromhex("bb" * 32),
+            log_index=0,
+            block_tag="pending",
+            opener=opener,
+            timeout=1.0,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "block-tag" in str(exc)
+    else:
+        raise AssertionError("unstable route-canary block tag was accepted")
+
+
 def test_live_evm_full_toml_requires_expected_bridge_code_hash():
     module = load_live_module()
     fake = fake_opener_for(module)
@@ -1234,7 +1494,7 @@ def test_live_evm_full_toml_requires_expected_bridge_code_hash():
         raise AssertionError("full TOML rendered without pinned bridge code hash")
 
 
-def test_live_evm_full_toml_requires_expected_network_id():
+def test_live_evm_defaults_expected_network_id_to_canonical_mainnet_id():
     module = load_live_module()
     fake = fake_opener_for(module)
 
@@ -1259,13 +1519,68 @@ def test_live_evm_full_toml_requires_expected_network_id():
         opener=fake.opener,
     )
 
+    destination = summary["destination_bridge"]
+    assert destination["expected_network_id"] == "0x" + ETH_MAINNET_NETWORK_ID
+    assert destination["expected_network_id_matches"] is True
     assert "offline_toml_sha256" not in summary
     try:
         module.render_offline_toml(summary)
     except ValueError as exc:
-        assert "expected-network-id" in str(exc)
+        message = str(exc)
+        assert "expected-network-id" not in message
+        assert "route-canary" in message
     else:
-        raise AssertionError("full TOML rendered without pinned network id")
+        raise AssertionError("full TOML rendered without route canary evidence")
+
+
+def test_live_evm_rejects_wrong_expected_network_id():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                rpc_url="https://ethereum.example",
+                domain=module.evidence.SCCP_DOMAIN_ETH,
+                bridge_address=fake.bridge,
+                expected_network_id=bytes.fromhex("44" * 32),
+                expected_bridge_code_hash=None,
+                expected_destination_binding_hash=None,
+                route_allowlist_hash=None,
+                block_tag="latest",
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except ValueError as exc:
+        assert "expected-network-id must match the canonical" in str(exc)
+    else:
+        raise AssertionError("wrong EVM destination network id was accepted")
+
+
+def test_live_evm_rejects_noncanonical_bridge_network_id_by_default():
+    module = load_live_module()
+    fake = fake_opener_for(module, network_id_override=bytes.fromhex("44" * 32))
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                rpc_url="https://ethereum.example",
+                domain=module.evidence.SCCP_DOMAIN_ETH,
+                bridge_address=fake.bridge,
+                expected_network_id=None,
+                expected_bridge_code_hash=None,
+                expected_destination_binding_hash=None,
+                route_allowlist_hash=None,
+                block_tag="latest",
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except ValueError as exc:
+        assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
+    else:
+        raise AssertionError("noncanonical EVM destination network id was accepted")
 
 
 def test_live_evm_evidence_rejects_wrong_backend_and_target():
@@ -1356,7 +1671,7 @@ def test_live_evm_cli_json_and_toml_outputs(capsys):
         "--bridge-address",
         fake.bridge,
         "--expected-network-id",
-        "0x" + "33" * 32,
+        "0x" + ETH_MAINNET_NETWORK_ID,
         "--expected-rpc-chain-id",
         "1",
         "--expected-bridge-code-hash",
@@ -1407,6 +1722,8 @@ def test_live_evm_cli_json_and_toml_outputs(capsys):
         assert "[[zk.sccp_route_allowlists]]" in rendered
         assert '# sccp_route_canary_status = "passed"' in rendered
         assert "# sccp_evm_route_canary_transaction_hash" in rendered
+        assert "# sccp_evm_route_canary_transaction_block_hash" in rendered
         assert "evm_route_canary_transaction_hash = " in rendered
+        assert "evm_route_canary_transaction_block_hash = " in rendered
     finally:
         module.collect_live_evidence = original_collect

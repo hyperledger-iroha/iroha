@@ -42,7 +42,8 @@ fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
                 format!("command {command:?} timed out after {CLI_COMMAND_TIMEOUT:?}"),
             ));
         }
-        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(CLI_COMMAND_TIMEOUT - elapsed));
+        let remaining = CLI_COMMAND_TIMEOUT.saturating_sub(elapsed);
+        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(remaining));
     }
 }
 

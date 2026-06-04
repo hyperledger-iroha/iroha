@@ -6485,6 +6485,216 @@ pub struct SccpRecentMessagesDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+/// TAIRA burn-record verifier key reference advertised in route manifests.
+pub struct SccpRouteManifestVkRefDto {
+    /// Verifier backend key.
+    pub backend: String,
+    /// Verifier key name.
+    pub name: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// TAIRA burn-record material advertised in route manifests.
+pub struct SccpRouteManifestBurnRecordDto {
+    /// Canonical settlement asset definition id.
+    pub settlement_asset_definition_id: String,
+    /// Base64-encoded TAIRA burn-record contract artifact.
+    pub contract_artifact_b64: String,
+    /// Hex-encoded SHA-256 digest of the contract artifact.
+    pub artifact_sha256: String,
+    /// Hex-encoded TAIRA burn-record contract code hash.
+    pub code_hash: String,
+    /// Verifier key reference used by the burn-record contract.
+    pub vk_ref: SccpRouteManifestVkRefDto,
+    /// Settlement gas limit.
+    pub gas_limit: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Destination rollout material advertised in route manifests.
+pub struct SccpRouteManifestDestinationRolloutDto {
+    /// Material format version.
+    pub version: u8,
+    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    pub destination_network_id: String,
+    /// SCCP source domain.
+    pub source_domain: u32,
+    /// SCCP target domain.
+    pub target_domain: u32,
+    /// Destination verifier contract address.
+    pub verifier_identity: String,
+    /// Destination verifier backend.
+    pub verifier_backend: String,
+    /// SCCP proof family.
+    pub proof_family: String,
+    /// Hex-encoded verifier code digest.
+    pub verifier_code_hash: String,
+    /// Hex-encoded verifier key digest.
+    pub verifier_key_hash: String,
+    /// Canonical destination binding hash.
+    pub destination_binding_hash: String,
+    /// Canonical destination binding key.
+    pub destination_binding_key: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Destination binding material advertised in route manifests.
+pub struct SccpRouteManifestDestinationBindingDto {
+    /// Material format version.
+    pub version: u8,
+    /// Canonical destination binding key.
+    pub key: String,
+    /// SCCP source domain.
+    pub source_domain: u32,
+    /// SCCP target domain.
+    pub target_domain: u32,
+    /// Hex-encoded canonical destination binding hash.
+    pub binding_hash: String,
+    /// Hex-encoded TRON destination network id.
+    pub network_id_hex: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// TAIRA settlement defaults advertised in route manifests.
+pub struct SccpRouteManifestSettlementDto {
+    /// Bridge-message submission path.
+    pub submit_path: String,
+    /// Settlement mode.
+    pub mode: String,
+    /// Stable route identifier.
+    pub route_id: String,
+    /// Stable asset key within the route.
+    pub asset_key: String,
+    /// Optional settlement contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Optional settlement contract alias.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Post-deploy live evidence advertised in route manifests.
+pub struct SccpRouteManifestPostDeployEvidenceDto {
+    /// Whether full TOML evidence is complete.
+    pub full_toml_ready: bool,
+    /// Hex-encoded source bridge config hash.
+    pub source_bridge_config_hash: String,
+    /// Hex-encoded source event transaction id.
+    pub source_event_transaction_id: String,
+    /// Hex-encoded route canary evidence hash.
+    pub route_canary_evidence_hash: String,
+    /// Hex-encoded route canary transaction id.
+    pub route_canary_transaction_id: String,
+    /// Optional hex-encoded offline full TOML SHA-256 digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub offline_full_toml_sha256: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Concrete SCCP route manifest advertised to wallet clients.
+pub struct SccpRouteManifestDto {
+    /// Material format version.
+    pub version: u8,
+    /// Stable route identifier.
+    pub route_id: String,
+    /// Stable asset key within the route.
+    pub asset_key: String,
+    /// TRON network key.
+    pub tron_network: String,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// CAIP-compatible TRON chain id hex.
+    pub chain_id_hex: String,
+    /// SCCP counterparty domain identifier.
+    pub counterparty_domain: u32,
+    /// Destination verifier target name.
+    pub verifier_target: String,
+    /// Whether this route is production-ready.
+    pub production_ready: bool,
+    /// Disabled reason surfaced when the route is not production-ready.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
+    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    pub network_id_hex: String,
+    /// TRON TairaXOR token contract address.
+    pub taira_xor_token_address: String,
+    /// TRON TairaXOR bridge contract address.
+    pub taira_xor_bridge_address: String,
+    /// TRON SCCP source bridge contract address.
+    pub sccp_tron_source_bridge_address: String,
+    /// TRON destination verifier contract address.
+    pub tron_verifier_address: String,
+    /// TRON destination verifier contract address.
+    pub sccp_tron_destination_verifier_address: String,
+    /// Destination rollout proof material.
+    pub destination_rollout: SccpRouteManifestDestinationRolloutDto,
+    /// Destination binding material.
+    pub destination_binding: SccpRouteManifestDestinationBindingDto,
+    /// TAIRA burn-record material.
+    pub taira_xor_burn_record: SccpRouteManifestBurnRecordDto,
+    /// Settlement defaults.
+    pub settlement: SccpRouteManifestSettlementDto,
+    /// Post-deploy live evidence.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub post_deploy_live_evidence: Option<SccpRouteManifestPostDeployEvidenceDto>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Public SCCP proof manifest collection keyed by counterparty domain.
 pub struct SccpProofManifestSetDto {
     /// Numeric SCCP domain identifier for the local Nexus chain.
@@ -6495,6 +6705,8 @@ pub struct SccpProofManifestSetDto {
     pub proof_family: String,
     /// Per-counterparty proof manifests.
     pub manifests: Vec<SccpProofManifestV1>,
+    /// Concrete route manifests advertised to wallet clients.
+    pub routes: Vec<SccpRouteManifestDto>,
 }
 
 fn sccp_codec_key(codec: u8) -> Result<&'static str> {
@@ -6618,7 +6830,99 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
     })
 }
 
-fn sccp_proof_manifest_snapshot() -> Result<SccpProofManifestSetDto> {
+fn sccp_route_manifest_post_deploy_evidence(
+    manifest: &iroha_config::parameters::actual::SccpRouteManifest,
+) -> Option<SccpRouteManifestPostDeployEvidenceDto> {
+    Some(SccpRouteManifestPostDeployEvidenceDto {
+        full_toml_ready: manifest.post_deploy_full_toml_ready?,
+        source_bridge_config_hash: manifest.post_deploy_source_bridge_config_hash.clone()?,
+        source_event_transaction_id: manifest.post_deploy_source_event_transaction_id.clone()?,
+        route_canary_evidence_hash: manifest.post_deploy_route_canary_evidence_hash.clone()?,
+        route_canary_transaction_id: manifest.post_deploy_route_canary_transaction_id.clone()?,
+        offline_full_toml_sha256: manifest.post_deploy_offline_full_toml_sha256.clone(),
+    })
+}
+
+fn sccp_route_manifest_dto(
+    manifest: &iroha_config::parameters::actual::SccpRouteManifest,
+) -> SccpRouteManifestDto {
+    SccpRouteManifestDto {
+        version: manifest.version,
+        route_id: manifest.route_id.clone(),
+        asset_key: manifest.asset_key.clone(),
+        tron_network: manifest.tron_network.clone(),
+        chain: manifest.chain.clone(),
+        chain_id_hex: manifest.chain_id_hex.clone(),
+        counterparty_domain: manifest.counterparty_domain,
+        verifier_target: manifest.verifier_target.clone(),
+        production_ready: manifest.production_ready,
+        disabled_reason: manifest.disabled_reason.clone(),
+        network_id_hex: manifest.network_id_hex.clone(),
+        taira_xor_token_address: manifest.taira_xor_token_address.clone(),
+        taira_xor_bridge_address: manifest.taira_xor_bridge_address.clone(),
+        sccp_tron_source_bridge_address: manifest.sccp_tron_source_bridge_address.clone(),
+        tron_verifier_address: manifest.tron_verifier_address.clone(),
+        sccp_tron_destination_verifier_address: manifest.tron_verifier_address.clone(),
+        destination_rollout: SccpRouteManifestDestinationRolloutDto {
+            version: 1,
+            destination_network_id: manifest.network_id_hex.clone(),
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: manifest.counterparty_domain,
+            verifier_identity: manifest.tron_verifier_address.clone(),
+            verifier_backend: "tron-groth16-bn254-v1".to_owned(),
+            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+            verifier_code_hash: manifest.verifier_code_hash.clone(),
+            verifier_key_hash: manifest.verifier_key_hash.clone(),
+            destination_binding_hash: manifest.destination_binding_hash.clone(),
+            destination_binding_key: manifest.destination_binding_key.clone(),
+        },
+        destination_binding: SccpRouteManifestDestinationBindingDto {
+            version: 1,
+            key: manifest.destination_binding_key.clone(),
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: manifest.counterparty_domain,
+            binding_hash: manifest.destination_binding_hash.clone(),
+            network_id_hex: manifest.network_id_hex.clone(),
+        },
+        taira_xor_burn_record: SccpRouteManifestBurnRecordDto {
+            settlement_asset_definition_id: manifest
+                .taira_burn_record_settlement_asset_definition_id
+                .clone(),
+            contract_artifact_b64: manifest.taira_burn_record_contract_artifact_b64.clone(),
+            artifact_sha256: manifest.taira_burn_record_artifact_sha256.clone(),
+            code_hash: manifest.taira_burn_record_code_hash.clone(),
+            vk_ref: SccpRouteManifestVkRefDto {
+                backend: manifest.taira_burn_record_vk_backend.clone(),
+                name: manifest.taira_burn_record_vk_name.clone(),
+            },
+            gas_limit: manifest.taira_burn_record_gas_limit,
+        },
+        settlement: SccpRouteManifestSettlementDto {
+            submit_path: "/v1/bridge/messages".to_owned(),
+            mode: "finalize_inbound".to_owned(),
+            route_id: manifest.route_id.clone(),
+            asset_key: manifest.asset_key.clone(),
+            contract_address: manifest.settlement_contract_address.clone(),
+            contract_alias: manifest.settlement_contract_alias.clone(),
+        },
+        post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
+    }
+}
+
+fn sccp_route_manifests_from_zk_config(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> Vec<SccpRouteManifestDto> {
+    zk_config
+        .sccp_route_manifests
+        .iter()
+        .filter(|manifest| {
+            manifest.production_ready || zk_config.sccp_allow_unready_transparent_proofs
+        })
+        .map(sccp_route_manifest_dto)
+        .collect()
+}
+
+fn sccp_proof_manifest_snapshot(state: &CoreState) -> Result<SccpProofManifestSetDto> {
     let manifests = iroha_sccp::SCCP_CORE_REMOTE_DOMAINS
         .into_iter()
         .map(|domain| {
@@ -6634,6 +6938,7 @@ fn sccp_proof_manifest_snapshot() -> Result<SccpProofManifestSetDto> {
         local_chain: "sora".to_owned(),
         proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
         manifests,
+        routes: sccp_route_manifests_from_zk_config(&state.zk_snapshot()),
     })
 }
 
@@ -7474,11 +7779,20 @@ fn validate_sccp_destination_binding_matches_configured_launch_policy(
 }
 
 #[cfg(feature = "app_api")]
+fn sccp_allow_unready_transparent_proofs(state: &CoreState) -> bool {
+    state.zk_snapshot().sccp_allow_unready_transparent_proofs
+}
+
+#[cfg(feature = "app_api")]
 fn validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
     destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    allow_unready: bool,
 ) -> Result<()> {
+    if allow_unready {
+        return Ok(());
+    }
     let zk_config = state.zk_snapshot();
     let configured_destination_rollout =
         sccp_configured_destination_rollout_for_bundle(state, bundle)?;
@@ -7825,6 +8139,18 @@ fn sccp_configured_source_lane_for_bundle(
     Ok(lane)
 }
 
+#[cfg(feature = "app_api")]
+fn sccp_configured_source_lane_for_bundle_with_policy(
+    state: &CoreState,
+    bundle: &NexusSccpMessageProofV1,
+    allow_unready: bool,
+) -> Result<Option<SccpConfiguredSourceLaneV1>> {
+    if allow_unready {
+        return Ok(None);
+    }
+    sccp_configured_source_lane_for_bundle(state, bundle)
+}
+
 fn sccp_message_manifest_for_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Result<SccpProofManifestV1> {
@@ -7955,6 +8281,13 @@ fn sccp_message_artifact_for_destination_material(
             &configured_source_lane.deployment,
             true,
         ));
+    }
+    if allow_unready && destination_binding.is_none() && proof_bytes.is_none() {
+        if let Some(artifact) =
+            iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle)
+        {
+            return Ok(Some(artifact));
+        }
     }
     if proof_bytes.is_none()
         && matches!(
@@ -8125,7 +8458,14 @@ fn bridge_proof_from_sccp_message_bundle(
     allow_unready: bool,
     configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
-    let bundle_structure_is_valid = if let Some(configured_source_lane) = configured_source_lane {
+    let diagnostic_taira_tron_xor = allow_unready
+        && configured_source_lane.is_none()
+        && destination_binding.is_none()
+        && proof_bytes.is_none()
+        && iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle);
+    let bundle_structure_is_valid = if diagnostic_taira_tron_xor {
+        true
+    } else if let Some(configured_source_lane) = configured_source_lane {
         verify_message_bundle_structure_with_source_verifier_material_and_deployment(
             bundle,
             &configured_source_lane.material,
@@ -8160,7 +8500,9 @@ fn bridge_proof_from_sccp_message_bundle(
         None
     };
     let destination_binding = destination_binding.or(fallback_destination_binding.as_ref());
-    let public_inputs = if let Some(configured_source_lane) = configured_source_lane {
+    let public_inputs = if diagnostic_taira_tron_xor {
+        iroha_sccp::sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)
+    } else if let Some(configured_source_lane) = configured_source_lane {
         sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
             bundle,
             &configured_source_lane.material,
@@ -8569,6 +8911,24 @@ mod sccp_message_backend_tests {
         format!("0x{}", digit.to_string().repeat(40))
     }
 
+    fn test_sccp_evm_mainnet_network_id(domain: u32) -> String {
+        match domain {
+            iroha_sccp::SCCP_DOMAIN_ETH => {
+                format!(
+                    "0x{}",
+                    hex::encode(iroha_sccp::sccp_eth_mainnet_network_id_word_v1())
+                )
+            }
+            iroha_sccp::SCCP_DOMAIN_BSC => {
+                format!(
+                    "0x{}",
+                    hex::encode(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1())
+                )
+            }
+            _ => unreachable!("test helper only supports EVM mainnet domains"),
+        }
+    }
+
     fn test_sccp_h256_is_nonzero(hash: &[u8; 32]) -> bool {
         hash.iter().any(|byte| *byte != 0)
     }
@@ -8711,7 +9071,7 @@ mod sccp_message_backend_tests {
                     test_sccp_evm_address(seed + 10),
                     test_sccp_hex32_string(seed + 11),
                     test_sccp_hex32_string(seed + 12),
-                    test_sccp_hex32_string(seed + 13),
+                    test_sccp_evm_mainnet_network_id(domain),
                     test_sccp_evm_address(seed + 14),
                 )
                 .expect("EVM-family SCCP destination rollout")
@@ -9544,6 +9904,46 @@ mod sccp_message_backend_tests {
             merkle_proof,
             payload,
             finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
+    fn sample_taira_tron_xor_diagnostic_message_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
+            amount: 17,
+            sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+            sender: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@universal".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+                .as_bytes()
+                .to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            target_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            message_id: iroha_sccp::sccp_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                &payload,
+            )),
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
         }
     }
 
@@ -10424,7 +10824,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_bsc_lane_launch_policy() {
+    fn destination_binding_query_respects_ethereum_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -11495,7 +11895,12 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_proof_manifest_snapshot_matches_counterparty_backends() {
-        let snapshot = sccp_proof_manifest_snapshot().expect("proof manifests");
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let snapshot = sccp_proof_manifest_snapshot(&state).expect("proof manifests");
         assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(snapshot.local_chain, "sora");
         assert_eq!(
@@ -11506,6 +11911,7 @@ mod sccp_message_backend_tests {
             snapshot.manifests.len(),
             iroha_sccp::SCCP_CORE_REMOTE_DOMAINS.len()
         );
+        assert!(snapshot.routes.is_empty());
 
         let eth = snapshot
             .manifests
@@ -11560,6 +11966,39 @@ mod sccp_message_backend_tests {
             message.contains("source-chain proof envelope")
                 && message.contains("not Nexus finality")
         }));
+    }
+
+    #[test]
+    fn bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed() {
+        let bundle = sample_taira_tron_xor_diagnostic_message_bundle(51);
+        let signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:taira-tron-xor-diagnostic".to_vec(),
+            Algorithm::Secp256k1,
+        );
+        let proof = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
+            .expect("diagnostic proof builds when unready SCCP is allowed");
+        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) =
+            &proof.payload
+        else {
+            panic!("expected transparent diagnostic proof");
+        };
+        let artifact =
+            iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)
+                .expect("diagnostic artifact decodes");
+        assert!(iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(&artifact));
+        assert_eq!(proof.range.start_height, 51);
+        assert_eq!(proof.range.end_height, 51);
+        assert_eq!(
+            proof.manifest_hash,
+            iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed)
+        );
+
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
+            .expect_err("diagnostic proof must be blocked without the unready flag");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| { message.contains("failed structural verification") })
+        );
     }
 
     #[test]
@@ -12652,15 +13091,17 @@ pub async fn handle_v1_sccp_message_proof_artifact(
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
     let bundle = sccp_message_bundle_for_request(state, message_id)?.ok_or_else(sccp_not_found)?;
-    let allow_unready = false;
+    let allow_unready = sccp_allow_unready_transparent_proofs(state);
     let destination_material =
         sccp_destination_query_material_for_bundle(&bundle, &evm_destination, allow_unready)?;
     validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
         state,
         &bundle,
         destination_material.binding_for_configured_rollout(),
+        allow_unready,
     )?;
-    let configured_source_lane = sccp_configured_source_lane_for_bundle(state, &bundle)?;
+    let configured_source_lane =
+        sccp_configured_source_lane_for_bundle_with_policy(state, &bundle, allow_unready)?;
     if let Some(message) = sccp_message_lane_disabled_message(
         &bundle,
         "proof artifact generation",
@@ -12702,15 +13143,17 @@ pub async fn handle_v1_sccp_message_proof_job(
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
     let bundle = sccp_message_bundle_for_request(state, message_id)?.ok_or_else(sccp_not_found)?;
-    let allow_unready = false;
+    let allow_unready = sccp_allow_unready_transparent_proofs(state);
     let destination_material =
         sccp_destination_query_material_for_bundle(&bundle, &evm_destination, allow_unready)?;
     validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
         state,
         &bundle,
         destination_material.binding_for_configured_rollout(),
+        allow_unready,
     )?;
-    let configured_source_lane = sccp_configured_source_lane_for_bundle(state, &bundle)?;
+    let configured_source_lane =
+        sccp_configured_source_lane_for_bundle_with_policy(state, &bundle, allow_unready)?;
     if let Some(message) = sccp_message_lane_disabled_message(
         &bundle,
         "proof job generation",
@@ -12752,8 +13195,11 @@ pub async fn handle_v1_sccp_capabilities(
 
 /// GET /v1/sccp/manifests — relay-operator SCCP proof manifest discovery for chain-specific verifier profiles.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_manifests(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
-    let snapshot = sccp_proof_manifest_snapshot()?;
+pub async fn handle_v1_sccp_manifests(
+    state: &CoreState,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let snapshot = sccp_proof_manifest_snapshot(state)?;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -18477,7 +18923,7 @@ pub async fn handle_post_bridge_proof_submit(
         ));
     }
 
-    let allow_unready = false;
+    let allow_unready = sccp_allow_unready_transparent_proofs(state.as_ref());
     let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
         match (burn_bundle.as_ref(), message_bundle.as_ref()) {
             (Some(bundle), None) => {
@@ -18493,8 +18939,11 @@ pub async fn handle_post_bridge_proof_submit(
             (None, Some(bundle)) => {
                 let (counterparty_domain, counterparty_chain) =
                     sccp_counterparty_for_message_payload(&bundle.payload)?;
-                let configured_source_lane =
-                    sccp_configured_source_lane_for_bundle(state.as_ref(), bundle)?;
+                let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
+                    state.as_ref(),
+                    bundle,
+                    allow_unready,
+                )?;
                 let destination_material = sccp_destination_query_material_for_bundle(
                     bundle,
                     &evm_destination_fields,
@@ -18504,6 +18953,7 @@ pub async fn handle_post_bridge_proof_submit(
                     state.as_ref(),
                     bundle,
                     destination_material.binding_for_configured_rollout(),
+                    allow_unready,
                 )?;
                 (
                     "message",
@@ -18723,7 +19173,7 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let allow_unready = false;
+    let allow_unready = sccp_allow_unready_transparent_proofs(state.as_ref());
     let destination_material = sccp_destination_query_material_for_bundle(
         &message_bundle,
         &evm_destination_fields,
@@ -18733,9 +19183,13 @@ pub async fn handle_post_bridge_message_submit(
         state.as_ref(),
         &message_bundle,
         destination_material.binding_for_configured_rollout(),
+        allow_unready,
     )?;
-    let configured_source_lane =
-        sccp_configured_source_lane_for_bundle(state.as_ref(), &message_bundle)?;
+    let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
+        state.as_ref(),
+        &message_bundle,
+        allow_unready,
+    )?;
     let bridge_proof = bridge_proof_from_sccp_message_bundle(
         &message_bundle,
         signer,

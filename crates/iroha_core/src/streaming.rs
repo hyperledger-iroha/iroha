@@ -788,6 +788,20 @@ pub enum StreamingProcessError {
         /// Feature bits exposed locally.
         supported_bits: u32,
     },
+    /// Peer advertised an invalid streaming protocol version.
+    #[error("invalid streaming protocol version {found}")]
+    InvalidProtocolVersion {
+        /// Protocol version received from the peer.
+        found: u16,
+    },
+    /// Peer advertised a capability report for the wrong endpoint role.
+    #[error("invalid capability report role (expected {expected:?}, found {found:?})")]
+    InvalidCapabilityReportRole {
+        /// Endpoint role required for the frame.
+        expected: CapabilityRole,
+        /// Endpoint role received from the peer.
+        found: CapabilityRole,
+    },
     /// Viewer requires privacy overlay while the publisher cannot provide it.
     #[error(
         "viewer requires privacy overlay but publisher capabilities do not advertise a provider"
@@ -1792,8 +1806,7 @@ impl StreamingHandle {
         resolution: TransportCapabilityResolution,
     ) -> Result<(), StreamingProcessError> {
         self.with_session(peer, role, |session| {
-            session.record_transport_capabilities(resolution);
-            Ok(())
+            session.record_transport_capabilities(resolution)
         })?;
         self.try_persist_snapshots();
         Ok(())
@@ -2521,6 +2534,17 @@ impl StreamingHandle {
         report: &CapabilityReport,
         resolution: TransportCapabilityResolution,
     ) -> Result<CapabilityAck, StreamingProcessError> {
+        if report.endpoint_role != CapabilityRole::Viewer {
+            return Err(StreamingProcessError::InvalidCapabilityReportRole {
+                expected: CapabilityRole::Viewer,
+                found: report.endpoint_role,
+            });
+        }
+        if report.protocol_version == 0 {
+            return Err(StreamingProcessError::InvalidProtocolVersion {
+                found: report.protocol_version,
+            });
+        }
         let report_bits = report.feature_bits.bits();
         let supported_bits = self.capabilities.bits();
         let viewer_requires_privacy = (report_bits & FEATURE_PRIVACY_REQUIRED) != 0;
@@ -2946,10 +2970,7 @@ impl StreamingHandle {
         } else {
             CapabilityRole::Viewer
         };
-        self.with_session(peer, role, |session| {
-            session.process_feedback_hint(hint);
-            Ok(())
-        })
+        self.with_session(peer, role, |session| session.process_feedback_hint(hint))
     }
 
     fn handle_receiver_report(
@@ -2958,7 +2979,7 @@ impl StreamingHandle {
         report: &ReceiverReport,
     ) -> Result<(), StreamingProcessError> {
         let parity = self.with_session(peer, CapabilityRole::Publisher, |session| {
-            Ok(session.process_receiver_report(report))
+            session.process_receiver_report(report)
         })?;
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = &self.telemetry {
@@ -4292,6 +4313,57 @@ mod tests {
             handle.transport_capabilities_hash(viewer_peer.id()),
             Some(resolution.capabilities_hash())
         );
+    }
+
+    #[test]
+    fn rejects_invalid_transport_capabilities_without_overwriting_hash() {
+        let viewer_keys = KeyPair::random();
+        let viewer_peer = make_peer(&viewer_keys, 13550);
+        let handle = StreamingHandle::new();
+        let valid = sample_resolution();
+        handle
+            .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, valid)
+            .expect("record valid capabilities");
+
+        for (invalid_transport, expected_reason) in [
+            (
+                TransportCapabilityResolution {
+                    use_datagram: true,
+                    max_segment_datagram_size: 0,
+                    ..valid
+                },
+                "datagram transport resolution requires nonzero datagram size",
+            ),
+            (
+                TransportCapabilityResolution {
+                    use_datagram: false,
+                    max_segment_datagram_size: 1_200,
+                    ..valid
+                },
+                "stream transport resolution must not carry datagram size",
+            ),
+        ] {
+            let err = handle
+                .record_transport_capabilities(
+                    &viewer_peer,
+                    CapabilityRole::Viewer,
+                    invalid_transport,
+                )
+                .expect_err("invalid transport capabilities rejected");
+            match err {
+                StreamingProcessError::Handshake(HandshakeError::InvalidTransportCapabilities(
+                    reason,
+                )) => {
+                    assert!(reason.contains(expected_reason));
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(handle.transport_capabilities(viewer_peer.id()), Some(valid));
+            assert_eq!(
+                handle.transport_capabilities_hash(viewer_peer.id()),
+                Some(valid.capabilities_hash())
+            );
+        }
     }
 
     #[test]
@@ -6440,6 +6512,75 @@ mod tests {
 
     #[cfg(feature = "quic")]
     #[test]
+    fn zero_capability_report_protocol_version_rejected() {
+        use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
+
+        let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
+        let report = CapabilityReport {
+            stream_id: hash_with(0xDE),
+            endpoint_role: CapabilityRole::Viewer,
+            protocol_version: 0,
+            max_resolution: Resolution::R720p,
+            hdr_supported: false,
+            capture_hdr: false,
+            neural_bundles: Vec::new(),
+            audio_caps: AudioCapability {
+                sample_rates: vec![48_000],
+                ambisonics: false,
+                max_channels: 2,
+            },
+            feature_bits: CapabilityFlags::from_bits(0),
+            max_datagram_size: 900,
+            dplpmtud: false,
+        };
+        let resolution = sample_resolution();
+        let err = handle
+            .build_capability_ack(&report, resolution)
+            .expect_err("publisher should reject zero protocol version");
+        assert!(matches!(
+            err,
+            StreamingProcessError::InvalidProtocolVersion { found: 0 }
+        ));
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
+    fn non_viewer_capability_report_role_rejected() {
+        use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
+
+        let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
+        let report = CapabilityReport {
+            stream_id: hash_with(0xDF),
+            endpoint_role: CapabilityRole::Publisher,
+            protocol_version: 1,
+            max_resolution: Resolution::R720p,
+            hdr_supported: false,
+            capture_hdr: false,
+            neural_bundles: Vec::new(),
+            audio_caps: AudioCapability {
+                sample_rates: vec![48_000],
+                ambisonics: false,
+                max_channels: 2,
+            },
+            feature_bits: CapabilityFlags::from_bits(0),
+            max_datagram_size: 900,
+            dplpmtud: false,
+        };
+        let resolution = sample_resolution();
+        let err = handle
+            .build_capability_ack(&report, resolution)
+            .expect_err("publisher should reject non-viewer report role");
+        assert!(matches!(
+            err,
+            StreamingProcessError::InvalidCapabilityReportRole {
+                expected: CapabilityRole::Viewer,
+                found: CapabilityRole::Publisher
+            }
+        ));
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
     fn publisher_rejects_missing_bundle_acceleration_support() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
 
@@ -6503,6 +6644,8 @@ mod tests {
             negotiated_capabilities: Some(CapabilityFlags::from_bits(0b101)),
             kyber_remote_public: Some(vec![0x55, 0x66, 0x77]),
             kyber_remote_fingerprint: Some(hash_with(0x22)),
+            kyber_local_public: None,
+            kyber_local_fingerprint: None,
         };
         let entry = StreamingSnapshotEntry {
             role: CapabilityRole::Viewer,

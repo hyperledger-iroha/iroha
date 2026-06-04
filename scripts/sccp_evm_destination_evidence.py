@@ -2,10 +2,12 @@
 """Render SCCP EVM-family destination rollout evidence.
 
 This helper is offline by design. Operators pass the live ETH or BSC
-destination verifier deployment material, bridge wrapper address, and network
-id to recompute the EVM Groth16 destination binding hash. With independently
-pinned destination binding and source record hashes, the script also validates
-the governed route allowlist hash and can render the matching
+destination verifier deployment material and bridge wrapper address; the
+script defaults the EVM network id to the selected domain's canonical mainnet
+EIP-155 chain id and rejects mismatched overrides while recomputing the EVM
+Groth16 destination binding hash. With independently pinned destination binding
+and source record hashes, the script also validates the governed route
+allowlist hash and can render the matching
 `zk.sccp_destination_rollouts` and `zk.sccp_route_allowlists` TOML records.
 """
 
@@ -38,21 +40,28 @@ SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 EVM_DESTINATION_BINDING_LABEL = b"iroha:sccp:evm-destination-binding:v1"
 SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
 EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v3"
+ETH_MAINNET_NETWORK_ID = (1).to_bytes(32, "big")
+BSC_MAINNET_NETWORK_ID = (56).to_bytes(32, "big")
 
 DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
         "chain": "eth",
         "rpc_chain_id": "1",
+        "block_tag": "finalized",
+        "network_id": ETH_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
         "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
     },
     SCCP_DOMAIN_BSC: {
         "chain": "bsc",
         "rpc_chain_id": "56",
+        "block_tag": "latest",
+        "network_id": BSC_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:bsc:destination-anchor:bsc-mainnet:v1",
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
     },
 }
+EVM_BLOCK_TAGS = ("finalized", "safe", "latest")
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -141,6 +150,30 @@ def parse_destination_domain(value: str) -> int:
         return aliases[normalized]
     except KeyError as exc:
         raise argparse.ArgumentTypeError("domain must be eth or bsc") from exc
+
+
+def evm_mainnet_network_id_for_domain(domain: int) -> bytes:
+    """Return the canonical bytes32 EIP-155 network id for an EVM SCCP domain."""
+
+    try:
+        return bytes(DOMAIN_PROFILES[domain]["network_id"])
+    except KeyError as exc:
+        raise ValueError("domain must be ETH or BSC") from exc
+
+
+def _require_domain_network_id(domain: int, network_id: bytes | None) -> bytes:
+    network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
+    profile = DOMAIN_PROFILES.get(domain)
+    if profile is None:
+        raise ValueError("domain must be ETH or BSC")
+    expected = bytes(profile["network_id"])
+    if network_id != expected:
+        raise ValueError(
+            "network_id must match "
+            f"{profile['chain'].upper()} mainnet EIP-155 chain id "
+            f"{profile['rpc_chain_id']}: expected {_hex(expected)}, got {_hex(network_id)}"
+        )
+    return network_id
 
 
 def parse_u32_decimal(value: str, *, label: str) -> int:
@@ -437,7 +470,7 @@ def evm_destination_binding_hash(
     if proof_family != SCCP_PROOF_FAMILY_STARK_FRI:
         raise ValueError(f"proof_family must be {SCCP_PROOF_FAMILY_STARK_FRI}")
 
-    network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
+    network_id = _require_domain_network_id(target_domain, network_id)
     verifier_address = _require_fixed_bytes(
         verifier_address,
         label="verifier_address",
@@ -706,11 +739,7 @@ def evm_route_canary_transaction_evidence_hash(
         label="proof_family_hash",
         byte_length=32,
     )
-    network_id = _require_fixed_bytes(
-        network_id,
-        label="network_id",
-        byte_length=32,
-    )
+    network_id = _require_domain_network_id(target_domain, network_id)
     _require_distinct_hash_roles(
         (
             ("transaction_hash", transaction_hash),
@@ -761,6 +790,14 @@ def _profile(args: argparse.Namespace) -> dict[str, str]:
         return DOMAIN_PROFILES[args.domain]
     except KeyError as exc:
         raise ValueError("domain must be ETH or BSC") from exc
+
+
+def _block_tag_from_args(args: argparse.Namespace) -> str:
+    profile = _profile(args)
+    block_tag = getattr(args, "block_tag", None) or profile["block_tag"]
+    if block_tag not in EVM_BLOCK_TAGS:
+        raise ValueError("block_tag must be finalized, safe, or latest")
+    return block_tag
 
 
 def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
@@ -842,6 +879,8 @@ def _route_canary_toml_lines(
 
 _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_transaction_hash",
+    "route_canary_transaction_block_number",
+    "route_canary_transaction_block_hash",
     "route_canary_log_index",
     "route_canary_receipt_block_number",
     "route_canary_receipt_block_hash",
@@ -881,6 +920,14 @@ def _route_canary_transaction_toml_lines(args: argparse.Namespace) -> list[str]:
         _toml_line(
             "evm_route_canary_transaction_hash",
             _hex(values["transaction_hash"]),
+        ),
+        _toml_line(
+            "evm_route_canary_transaction_block_number",
+            values["transaction_block_number"],
+        ),
+        _toml_line(
+            "evm_route_canary_transaction_block_hash",
+            _hex(values["transaction_block_hash"]),
         ),
         _toml_line("evm_route_canary_log_index", values["log_index"]),
         _toml_line(
@@ -984,19 +1031,41 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
     )
     if receipt_block_number == 0:
         raise ValueError("EVM route canary receipt block number must be positive")
+    transaction_block_number = parse_u64_decimal(
+        str(getattr(args, "route_canary_transaction_block_number")),
+        label="route_canary_transaction_block_number",
+    )
+    if transaction_block_number == 0:
+        raise ValueError("EVM route canary transaction block number must be positive")
+    transaction_block_hash = _require_fixed_bytes(
+        getattr(args, "route_canary_transaction_block_hash"),
+        label="route_canary_transaction_block_hash",
+        byte_length=32,
+    )
+    receipt_block_hash = _require_fixed_bytes(
+        getattr(args, "route_canary_receipt_block_hash"),
+        label="route_canary_receipt_block_hash",
+        byte_length=32,
+    )
+    if transaction_block_number != receipt_block_number:
+        raise ValueError(
+            "EVM route canary transaction block number must match receipt block number"
+        )
+    if transaction_block_hash != receipt_block_hash:
+        raise ValueError(
+            "EVM route canary transaction block hash must match receipt block hash"
+        )
     values = {
         "transaction_hash": _require_fixed_bytes(
             getattr(args, "route_canary_transaction_hash"),
             label="route_canary_transaction_hash",
             byte_length=32,
         ),
+        "transaction_block_number": transaction_block_number,
+        "transaction_block_hash": transaction_block_hash,
         "log_index": log_index,
         "receipt_block_number": receipt_block_number,
-        "receipt_block_hash": _require_fixed_bytes(
-            getattr(args, "route_canary_receipt_block_hash"),
-            label="route_canary_receipt_block_hash",
-            byte_length=32,
-        ),
+        "receipt_block_hash": receipt_block_hash,
         "block_receipts_root": _require_fixed_bytes(
             getattr(args, "route_canary_block_receipts_root"),
             label="route_canary_block_receipts_root",
@@ -1096,6 +1165,10 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
     return [
         "# sccp_evm_route_canary_transaction_hash = "
         + json.dumps(_hex(values["transaction_hash"])),
+        "# sccp_evm_route_canary_transaction_block_number = "
+        + json.dumps(str(values["transaction_block_number"])),
+        "# sccp_evm_route_canary_transaction_block_hash = "
+        + json.dumps(_hex(values["transaction_block_hash"])),
         "# sccp_evm_route_canary_log_index = "
         + json.dumps(str(values["log_index"])),
         "# sccp_evm_route_canary_receipt_block_number = "
@@ -1279,6 +1352,15 @@ def _destination_binding_key_from_args(args: argparse.Namespace) -> str:
     )
 
 
+def apply_canonical_network_id(args: argparse.Namespace) -> None:
+    """Default or validate the EVM mainnet network id for the selected domain."""
+
+    if getattr(args, "network_id", None) is None:
+        args.network_id = evm_mainnet_network_id_for_domain(args.domain)
+        return
+    args.network_id = _require_domain_network_id(args.domain, args.network_id)
+
+
 def _route_allowlist_hash_from_args(
     args: argparse.Namespace,
     destination_binding_hash: bytes,
@@ -1333,6 +1415,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
 
     apply_runtime_bytecode_hash(args)
     apply_bridge_runtime_bytecode_hash(args)
+    block_tag = _block_tag_from_args(args)
+    if args.domain == SCCP_DOMAIN_ETH and block_tag != "finalized":
+        raise ValueError("Ethereum destination TOML requires --block-tag finalized")
     expected_hash = _destination_binding_hash_from_args(args)
     expected_pin = getattr(args, "expected_destination_binding_hash", None)
     if expected_pin is None:
@@ -1385,6 +1470,7 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
     sections = [
         "# sccp_evm_rpc_chain_id = "
         + json.dumps(str(_profile(args)["rpc_chain_id"])),
+        "# sccp_evm_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(_hex(args.bridge_code_hash)),
     ]
@@ -1473,6 +1559,7 @@ def _json_summary(
         "source_domain": SCCP_DOMAIN_SORA,
         "target_domain": args.domain,
         "chain": profile["chain"],
+        "block_tag": _block_tag_from_args(args),
         "verifier_backend": SCCP_EVM_GROTH16_BACKEND,
         "proof_family": SCCP_PROOF_FAMILY_STARK_FRI,
         "network_id": _hex(args.network_id),
@@ -1556,9 +1643,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--network-id",
-        required=True,
         type=lambda value: parse_hex_bytes(value, label="network id", byte_length=32),
-        help="EVM chain/network id as a non-zero bytes32 hex value.",
+        help=(
+            "Optional EVM chain/network id override as a non-zero bytes32 hex "
+            "value. Defaults to the selected domain's canonical mainnet EIP-155 "
+            "chain id and rejects any mismatch."
+        ),
     )
     parser.add_argument(
         "--verifier-address",
@@ -1571,6 +1661,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=lambda value: parse_evm_address(value, label="bridge address"),
         help="Deployed SCCP message bridge wrapper address.",
+    )
+    parser.add_argument(
+        "--block-tag",
+        choices=EVM_BLOCK_TAGS,
+        help=(
+            "EVM block tag represented by the audited rollout evidence. "
+            "Defaults to finalized for Ethereum and latest for BSC; production "
+            "Ethereum TOML requires finalized."
+        ),
     )
     parser.add_argument(
         "--bridge-code-hash",
@@ -1706,6 +1805,29 @@ def build_parser() -> argparse.ArgumentParser:
             label="route canary log index",
         ),
         help="Canonical decimal log index of the MessageProofAccepted canary event.",
+    )
+    parser.add_argument(
+        "--route-canary-transaction-block-number",
+        type=lambda value: parse_u64_decimal(
+            value,
+            label="route canary transaction block number",
+        ),
+        help=(
+            "Canonical decimal block number returned by eth_getTransactionByHash "
+            "for the canary transaction. Must match the receipt block number."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-transaction-block-hash",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="route canary transaction block hash",
+            byte_length=32,
+        ),
+        help=(
+            "Block hash returned by eth_getTransactionByHash for the canary "
+            "transaction. Must match the receipt block hash."
+        ),
     )
     parser.add_argument(
         "--route-canary-receipt-block-number",
@@ -1852,6 +1974,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        apply_canonical_network_id(args)
         apply_runtime_bytecode_hash(args)
         apply_bridge_runtime_bytecode_hash(args)
         destination_binding_hash = _destination_binding_hash_from_args(args)

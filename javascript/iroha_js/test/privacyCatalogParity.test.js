@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -347,6 +347,50 @@ const PUBLIC_PRIVACY_API_DECLARATION_SURFACES = Object.freeze([
     path: "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
   }),
 ]);
+const PUBLIC_PRIVACY_API_SOURCE_SCAN_SURFACES = Object.freeze([
+  Object.freeze({
+    label: "JS src SDK",
+    root: "javascript/iroha_js/src",
+    extensions: Object.freeze([".js"]),
+    language: "javascript",
+  }),
+  Object.freeze({
+    label: "JS dist SDK",
+    root: "javascript/iroha_js/dist",
+    extensions: Object.freeze([".js"]),
+    language: "javascript",
+  }),
+  Object.freeze({
+    label: "Python SDK",
+    root: "python/iroha_python/src/iroha_python",
+    extensions: Object.freeze([".py"]),
+    language: "python",
+  }),
+  Object.freeze({
+    label: "Swift SDK",
+    root: "IrohaSwift/Sources/IrohaSwift",
+    extensions: Object.freeze([".swift"]),
+    language: "swift",
+  }),
+  Object.freeze({
+    label: "Java Android SDK",
+    root: "java/iroha_android/src/main/java",
+    extensions: Object.freeze([".java"]),
+    language: "java",
+  }),
+  Object.freeze({
+    label: "Kotlin JVM SDK",
+    root: "kotlin/core-jvm/src/main/java",
+    extensions: Object.freeze([".kt"]),
+    language: "kotlin",
+  }),
+  Object.freeze({
+    label: "C# SDK",
+    root: "csharp/src",
+    extensions: Object.freeze([".cs"]),
+    language: "csharp",
+  }),
+]);
 function snakeEntrypointName(entrypoint) {
   return entrypoint.replace(/(?<!^)(?=[A-Z])/g, "_").toLowerCase();
 }
@@ -367,6 +411,7 @@ function publicApiNameVariants(entrypoint) {
 }
 
 function rawJsPrivacyDescriptor(patch = {}) {
+  const researchPatch = patch.implementationStage === "research-target-as-of-2026-05";
   return {
     id: "shield",
     name: "Shape check",
@@ -399,7 +444,7 @@ function rawJsPrivacyDescriptor(patch = {}) {
     failureModes: ["shape proof rejected"],
     setupSteps: ["Register shape verifier key"],
     executionSteps: ["Build shape proof"],
-    sdkEntrypoints: ["buildShapeProof"],
+    sdkEntrypoints: researchPatch ? [] : ["buildShapeProof"],
     plannedSdkEntrypoints: [],
     chainRequirements: ["shape verifier key registry"],
     ...patch,
@@ -443,7 +488,14 @@ function entrypointIsDevFixture(entrypoint) {
 function entrypointIsLocalVerifier(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  return name.startsWith("verify") && name.endsWith("Locally");
+  const lower = name.toLowerCase();
+  return (
+    lower.startsWith("verify") &&
+    (lower.endsWith("locally") ||
+      lower.endsWith("local") ||
+      lower.includes("localverifier") ||
+      lower.includes("localonly"))
+  );
 }
 
 function entrypointIsInstructionBuilder(entrypoint) {
@@ -462,6 +514,18 @@ function entrypointIsPlannedLedgerMutation(entrypoint) {
   );
 }
 
+function entrypointIsProofHelper(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return (
+    name.includes("ProofEnvelope") ||
+    name.includes("ProofWitness") ||
+    name.includes("ProofPublicInputs") ||
+    name.includes("ProofRequest") ||
+    name.includes("ProofCommitment")
+  );
+}
+
 function entrypointIsProductionProofBuilder(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
@@ -469,6 +533,8 @@ function entrypointIsProductionProofBuilder(entrypoint) {
     name.startsWith("build") &&
     name.includes("Proof") &&
     !entrypointIsInstructionBuilder(entrypoint) &&
+    !entrypointIsPlannedLedgerMutation(entrypoint) &&
+    !entrypointIsProofHelper(entrypoint) &&
     !entrypointIsDevFixture(entrypoint)
   );
 }
@@ -629,6 +695,91 @@ function fileText(relativePath) {
   return readFileSync(new URL(relativePath, `file://${REPO_ROOT}/`), "utf8");
 }
 
+function sourceFilesUnder(relativeRoot, extensions) {
+  const files = [];
+  const ignoredDirectories = new Set([".git", ".gradle", ".swiftpm", "bin", "build", "dist", "node_modules", "obj"]);
+  const walk = (absoluteDirectory, relativeDirectory) => {
+    for (const entry of readdirSync(absoluteDirectory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!ignoredDirectories.has(entry.name)) {
+          walk(
+            `${absoluteDirectory}/${entry.name}`,
+            relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`,
+          );
+        }
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (extensions.some((extension) => entry.name.endsWith(extension))) {
+        files.push(
+          relativeDirectory === ""
+            ? `${relativeRoot}/${entry.name}`
+            : `${relativeRoot}/${relativeDirectory}/${entry.name}`,
+        );
+      }
+    }
+  };
+  walk(`${REPO_ROOT}/${relativeRoot}`, "");
+  return files.sort();
+}
+
+function publicDeclarationPatterns(language, name) {
+  const escaped = escapeRegExp(name);
+  switch (language) {
+    case "javascript":
+      return [
+        new RegExp(`\\bexport\\s+(?:async\\s+)?function\\s+${escaped}\\s*\\(`),
+        new RegExp(`\\bexport\\s+(?:const|let|var)\\s+${escaped}\\b`),
+        new RegExp(`\\bexport\\s*\\{[^}]*\\b${escaped}\\b[^}]*\\}`),
+      ];
+    case "python":
+      return [
+        new RegExp(`^(?:def\\s+${escaped}\\s*\\(|${escaped}\\s*=)`, "m"),
+      ];
+    case "swift":
+      return [
+        new RegExp(`^\\s*public\\s+(?:static\\s+)?func\\s+${escaped}\\s*\\(`, "m"),
+        new RegExp(`^\\s*public\\s+(?:static\\s+)?(?:let|var)\\s+${escaped}\\b`, "m"),
+      ];
+    case "java":
+      return [
+        new RegExp(
+          `^\\s*public\\s+(?:static\\s+)?(?:final\\s+)?[\\w<>\\[\\].?,\\s]+\\s+${escaped}\\s*\\(`,
+          "m",
+        ),
+      ];
+    case "kotlin":
+      return [
+        new RegExp(`^\\s*(?!(?:private|internal)\\b)(?:public\\s+)?fun\\s+${escaped}\\s*\\(`, "m"),
+        new RegExp(
+          `^\\s*(?!(?:private|internal)\\b)(?:public\\s+)?(?:val|var)\\s+${escaped}\\b`,
+          "m",
+        ),
+      ];
+    case "csharp":
+      return [
+        new RegExp(
+          `^\\s*public\\s+(?:static\\s+)?[\\w<>\\[\\].?,\\s]+\\s+${escaped}\\s*(?:\\(|\\{)`,
+          "m",
+        ),
+      ];
+    default:
+      throw new Error(`unsupported source declaration scan language ${language}`);
+  }
+}
+
+function publicPrivacyApiSourceTexts() {
+  return PUBLIC_PRIVACY_API_SOURCE_SCAN_SURFACES.flatMap((surface) =>
+    sourceFilesUnder(surface.root, surface.extensions).map((path) => ({
+      ...surface,
+      path,
+      text: fileText(path),
+    })),
+  );
+}
+
 function assertPythonCatalogDefensiveCopyCoverage() {
   const text = fileText("python/iroha_python/tests/privacy_catalog_test.py");
   for (const snippet of [
@@ -665,6 +816,10 @@ function extractJsBackendFamilyEntries(text, label) {
   return entries;
 }
 
+function isBackendFamilyName(value) {
+  return /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/.test(value);
+}
+
 function assertBackendFamilyRegistrationParity(pythonCatalog) {
   const expected = pythonCatalog.descriptors.map((descriptor) => [
     descriptor.id,
@@ -699,6 +854,16 @@ function assertBackendFamilyRegistrationParity(pythonCatalog) {
       `${source.label} must reject backend-family production/mainnet/audit claim labels`,
     );
     assert.ok(
+      fileText(source.path).includes("function isBackendFamilyName(value)") &&
+        fileText(source.path).includes("!isBackendFamilyName(backendFamily)"),
+      `${source.label} must reject backend-family labels that cannot be encoded as vk_ref backend components`,
+    );
+    assert.match(
+      fileText(source.path),
+      /function\s+isBackendFamilyName\([^)]*\)\s*\{[\s\S]*\^\[a-z0-9\]\(\?:\[a-z0-9_\.\-\]\*\[a-z0-9\]\)\?\$/,
+      `${source.label} must reject uppercase and edge-separator backend-family aliases before vk_ref binding`,
+    );
+    assert.ok(
       fileText(source.path).includes("compactProductionClaimText(value)") &&
         fileText(source.path).includes("PRODUCTION_CLAIM_CONFUSABLES"),
       `${source.label} must fold Unicode-confusable production/mainnet/audit claim labels before compact matching`,
@@ -708,12 +873,45 @@ function assertBackendFamilyRegistrationParity(pythonCatalog) {
       expected,
       `${source.label} backend-family registration map drifted from Python catalog`,
     );
+    for (const [algorithmId, backendFamily] of extractJsBackendFamilyEntries(
+      fileText(source.path),
+      source.label,
+    )) {
+      assert.ok(
+        isBackendFamilyName(backendFamily),
+        `${source.label} backend family for ${algorithmId} must be a vk_ref backend component`,
+      );
+    }
+    assert.equal(
+      isBackendFamilyName("Halo2-ipa-pasta"),
+      false,
+      `${source.label} backend family validator must reject uppercase aliases`,
+    );
+    for (const backendFamily of [
+      ".halo2-ipa-pasta",
+      "-halo2-ipa-pasta",
+      "_halo2-ipa-pasta",
+      "halo2-ipa-pasta.",
+      "halo2-ipa-pasta-",
+      "halo2-ipa-pasta_",
+    ]) {
+      assert.equal(
+        isBackendFamilyName(backendFamily),
+        false,
+        `${source.label} backend family validator must reject edge separator ${backendFamily}`,
+      );
+    }
   }
   const pythonCatalogSource = fileText("python/iroha_python/src/iroha_python/privacy_catalog.py");
   assert.ok(
     pythonCatalogSource.includes("_compact_production_claim_text") &&
       pythonCatalogSource.includes("_PRODUCTION_CLAIM_CONFUSABLES"),
     "Python privacy catalog must fold Unicode-confusable production/mainnet/audit claim labels before compact matching",
+  );
+  assert.ok(
+    pythonCatalogSource.includes("def _is_backend_family_name(value: str) -> bool") &&
+      pythonCatalogSource.includes("_is_backend_family_name(backend_family)"),
+    "Python privacy catalog must reject backend-family labels that cannot be encoded as vk_ref backend components",
   );
 }
 
@@ -1139,6 +1337,11 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
       false,
       `${label} ${descriptor.id} research targets must not expose local-only verifier SDK entrypoints`,
     );
+    assert.equal(
+      descriptor.sdk_entrypoints.length,
+      0,
+      `${label} ${descriptor.id} research targets must keep executable SDK entrypoints planned-only`,
+    );
     const requiredResearchSourceUrls = RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID[descriptor.id];
     assert.ok(
       requiredResearchSourceUrls,
@@ -1224,29 +1427,34 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       `${label} ${algorithmId} required production privacy plan backend drifted`,
     );
     assert.ok(
-      descriptor.planned_sdk_entrypoints.length > 0,
-      `${label} ${algorithmId} required production privacy plan row must remain planned until production gates pass`,
+      descriptor.planned_sdk_entrypoints.some(entrypointIsProductionProofBuilder),
+      `${label} ${algorithmId} required production privacy plan row must retain a planned production proof builder until production gates pass`,
     );
   }
 }
 
-function assertResearchTargetSdkEntrypointsReused(label, descriptors) {
-  const nonResearchEntrypoints = new Set(
-    descriptors
-      .filter((descriptor) => descriptor.implementation_stage !== "research-target-as-of-2026-05")
-      .flatMap((descriptor) => descriptor.sdk_entrypoints),
+function assertResearchTargetSdkEntrypointsFailClosed(label, descriptors) {
+  assert.ok(
+    descriptors.some(
+      (descriptor) =>
+        descriptor.implementation_stage !== "research-target-as-of-2026-05" &&
+        descriptor.sdk_entrypoints.length > 0,
+    ),
+    `${label} non-research SDK entrypoints missing`,
   );
-  assert.ok(nonResearchEntrypoints.size > 0, `${label} non-research SDK entrypoints missing`);
   for (const descriptor of descriptors) {
     if (descriptor.implementation_stage !== "research-target-as-of-2026-05") {
       continue;
     }
-    for (const entrypoint of descriptor.sdk_entrypoints) {
-      assert.ok(
-        nonResearchEntrypoints.has(entrypoint),
-        `${label} ${descriptor.id} research target SDK entrypoint ${entrypoint} must be reused from a non-research row`,
-      );
-    }
+    assert.equal(
+      descriptor.sdk_entrypoints.length,
+      0,
+      `${label} ${descriptor.id} research target executable SDK entrypoints must stay planned-only`,
+    );
+    assert.ok(
+      descriptor.planned_sdk_entrypoints.length > 0,
+      `${label} ${descriptor.id} research target planned SDK entrypoints missing`,
+    );
   }
 }
 
@@ -1285,7 +1493,7 @@ function assertCatalogParity(label, criteria, descriptors, pythonCatalog) {
     `${label} privacy algorithm id order drifted`,
   );
   assertRequiredPrivacyPlanRows(label, normalizedDescriptors);
-  assertResearchTargetSdkEntrypointsReused(label, normalizedDescriptors);
+  assertResearchTargetSdkEntrypointsFailClosed(label, normalizedDescriptors);
 
   const verifierKeyIds = normalizedDescriptors
     .map((descriptor) => descriptor.verifier_key_id)
@@ -1331,6 +1539,55 @@ test("privacy algorithm catalogs stay fail-closed and in parity across JS and Py
   assertPythonCatalogDefensiveCopyCoverage();
   assertRustNativeProductionGateParity(pythonCatalog);
   assertRustNativeCatalogParity(pythonCatalog);
+});
+
+test("privacy algorithm catalogs require proof builders on required production plan rows", () => {
+  for (const [label, text] of [
+    ["JS source", fileText("javascript/iroha_js/src/privacyAlgorithms.js")],
+    ["JS dist", fileText("javascript/iroha_js/dist/privacyAlgorithms.js")],
+  ]) {
+    assert.match(
+      text,
+      /function\s+entrypointIsProofHelper\([^)]*\)\s*\{[\s\S]*ProofEnvelope[\s\S]*ProofWitness[\s\S]*ProofPublicInputs[\s\S]*ProofRequest[\s\S]*ProofCommitment/,
+      `${label} must classify proof helper and wrapper entrypoints`,
+    );
+    assert.match(
+      text,
+      /function\s+entrypointIsProductionProofBuilder\([^)]*\)\s*\{[\s\S]*name\.startsWith\("build"\)[\s\S]*name\.includes\("Proof"\)[\s\S]*!entrypointIsInstructionBuilder\(entrypoint\)[\s\S]*!entrypointIsPlannedLedgerMutation\(entrypoint\)[\s\S]*!entrypointIsProofHelper\(entrypoint\)[\s\S]*!entrypointIsDevFixture\(entrypoint\)/,
+      `${label} production proof-builder classifier must reject ledger mutations and proof helpers`,
+    );
+    assert.match(
+      text,
+      /function\s+validateRequiredPrivacyPlanRows\([^)]*\)\s*\{[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*entrypointIsProductionProofBuilder[\s\S]*must retain a planned production proof builder/,
+      `${label} required production plan rows must require planned production proof builders`,
+    );
+  }
+
+  const pythonCatalogSource = fileText(
+    "python/iroha_python/src/iroha_python/privacy_catalog.py",
+  );
+  assert.match(
+    pythonCatalogSource,
+    /def\s+_validate_required_privacy_plan_rows[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*_entrypoint_is_production_proof_builder[\s\S]*must retain a planned production proof/,
+    "Python required production plan rows must require planned production proof builders",
+  );
+  assert.match(
+    pythonCatalogSource,
+    /def\s+_entrypoint_is_production_proof_builder[\s\S]*_entrypoint_is_instruction_builder\(entrypoint\)[\s\S]*_entrypoint_is_planned_ledger_mutation\(entrypoint\)[\s\S]*_entrypoint_is_dev_fixture\(entrypoint\)/,
+    "Python production proof-builder classifier must reject ledger mutations",
+  );
+  assert.match(
+    pythonCatalogSource,
+    /def\s+_entrypoint_is_proof_helper[\s\S]*ProofEnvelope[\s\S]*ProofWitness[\s\S]*ProofPublicInputs[\s\S]*ProofRequest[\s\S]*ProofCommitment[\s\S]*def\s+_entrypoint_is_production_proof_builder[\s\S]*_entrypoint_is_proof_helper\(entrypoint\)/,
+    "Python production proof-builder classifier must reject proof helpers",
+  );
+
+  const pythonCatalogTests = fileText("python/iroha_python/tests/privacy_catalog_test.py");
+  assert.match(
+    pythonCatalogTests,
+    /(?=[\s\S]*test_privacy_catalog_rejects_required_production_privacy_plan_without_proof_builder)(?=[\s\S]*deriveOrchardWitness)(?=[\s\S]*buildAnonymousPgcProductionInstruction)(?=[\s\S]*buildAnonymousPgcProofTransaction)(?=[\s\S]*buildSubmitAnonymousPgcProof)(?=[\s\S]*buildAnonymousPgcProofEnvelope)(?=[\s\S]*buildAnonymousPgcProofWitness)(?=[\s\S]*buildAnonymousPgcProofPublicInputs)(?=[\s\S]*buildAnonymousPgcProofRequest)(?=[\s\S]*buildAnonymousPgcProofCommitment)(?=[\s\S]*buildAnonymousPgcDevProofFixture)/,
+    "Python tests must cover helper-only, instruction-only, transaction-only, submit-only, proof-helper-only, and fixture-only required rows",
+  );
 });
 
 test("privacy algorithm JS getters return immutable fail-closed production metadata", () => {
@@ -2178,7 +2435,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "research-target-as-of-2026-05",
-        sdkEntrypoints: ["buildShapeProof"],
+        sdkEntrypoints: [],
         plannedSdkEntrypoints: [],
       },
       /plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages/,
@@ -2473,6 +2730,8 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /plannedSdkEntrypoints\[0\] must be clean and already trimmed/,
     ],
     [{ sdkEntrypoints: ["buildProof-withSuffix"] }, /must be an SDK entrypoint name/],
+    [{ sdkEntrypoints: ["build$Proof"] }, /must be an SDK entrypoint name/],
+    [{ plannedSdkEntrypoints: ["buildFuture$Proof"] }, /must be an SDK entrypoint name/],
     [
       { plannedSdkEntrypoints: ["buildFutureDev.Proof.Fixture"] },
       /fixture\/mock entrypoint/,
@@ -2482,7 +2741,15 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /local-only verifier entrypoint/,
     ],
     [
+      { plannedSdkEntrypoints: ["verifyFutureShapeProofLocal"] },
+      /local-only verifier entrypoint/,
+    ],
+    [
       { plannedSdkEntrypoints: ["Iroha.Privacy.verifyFutureShapeProofLocally"] },
+      /local-only verifier entrypoint/,
+    ],
+    [
+      { plannedSdkEntrypoints: ["Iroha.Privacy.verifyFutureShapeProofLocalVerifier"] },
       /local-only verifier entrypoint/,
     ],
     [
@@ -2503,6 +2770,13 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       {
         implementationStage: "chain-executable",
         sdkEntrypoints: ["verifyShapeProofLocally"],
+      },
+      /chain-executable targets cannot advertise local-only verifier SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "chain-executable",
+        sdkEntrypoints: ["verifyShapeProofLocal"],
       },
       /chain-executable targets cannot advertise local-only verifier SDK entrypoints/,
     ],
@@ -2883,10 +3157,50 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "research-target-as-of-2026-05",
+        sdkEntrypoints: ["verifyShapeProofLocalVerifier"],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /research targets cannot advertise local-only verifier SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "research-target-as-of-2026-05",
         sdkEntrypoints: ["Iroha.Privacy.verifyShapeProofLocally"],
         plannedSdkEntrypoints: ["buildShapeProductionProof"],
       },
       /research targets cannot advertise local-only verifier SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "research-target-as-of-2026-05",
+        sdkEntrypoints: ["verifyShapeProof"],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /research targets cannot advertise executable SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "research-target-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeProductionProof"],
+        plannedSdkEntrypoints: ["buildShapeProductionProofV1"],
+      },
+      /research targets cannot advertise executable SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "research-target-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeProofEnvelope"],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /research targets cannot advertise executable SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "research-target-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeProductionInstruction"],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /research targets cannot advertise executable SDK entrypoints/,
     ],
     [
       {
@@ -2919,6 +3233,13 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "production-hardened",
+        sdkEntrypoints: ["verifyShapeProofLocalVerifier"],
+      },
+      /production-hardened targets cannot advertise local-only verifier SDK entrypoints/,
+    ],
+    [
+      {
+        implementationStage: "production-hardened",
         sdkEntrypoints: ["Iroha.Privacy.verifyShapeProofLocally"],
       },
       /production-hardened targets cannot advertise local-only verifier SDK entrypoints/,
@@ -2927,6 +3248,14 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       {
         implementationStage: "sdk-builder",
         sdkEntrypoints: ["verifyShapeProofLocally"],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /executable local-only verifier SDK entrypoints must be paired with an explicit DevFixture entrypoint/,
+    ],
+    [
+      {
+        implementationStage: "sdk-builder",
+        sdkEntrypoints: ["verifyShapeProofLocalVerifier"],
         plannedSdkEntrypoints: ["buildShapeProductionProof"],
       },
       /executable local-only verifier SDK entrypoints must be paired with an explicit DevFixture entrypoint/,
@@ -3032,6 +3361,83 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofTransaction"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildSubmitShapeProof"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofEnvelope"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofWitness"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofPublicInputs"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofRequest"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProofCommitment"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
         sdkEntrypoints: ["buildProof"],
         plannedSdkEntrypoints: ["buildProof"],
       },
@@ -3069,6 +3475,7 @@ test("planned privacy SDK entrypoints remain unexported until production gates p
   const publicApiDeclarationTexts = PUBLIC_PRIVACY_API_DECLARATION_SURFACES.map(
     ({ label, path }) => [label, fileText(path)],
   );
+  const publicApiSourceTexts = publicPrivacyApiSourceTexts();
   const moduleExportSurfaces = [
     ["JS src package", jsSrcPackage],
     ["JS src crypto", jsSrcCrypto],
@@ -3118,6 +3525,17 @@ test("planned privacy SDK entrypoints remain unexported until production gates p
           false,
           `${entrypoint} must not be declared as ${name} in ${label} until production gates pass`,
         );
+      }
+    }
+    for (const source of publicApiSourceTexts) {
+      for (const name of publicApiNameVariants(entrypoint)) {
+        for (const pattern of publicDeclarationPatterns(source.language, name)) {
+          assert.equal(
+            pattern.test(source.text),
+            false,
+            `${entrypoint} must not be publicly declared as ${name} in ${source.label} ${source.path} until production gates pass`,
+          );
+        }
       }
     }
     for (const name of publicApiNameVariants(entrypoint)) {

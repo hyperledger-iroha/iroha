@@ -89,6 +89,7 @@ fn zk_roots_get_respects_cap_and_max() {
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),
         sccp_route_allowlists: Vec::new(),
+        sccp_route_manifests: Vec::new(),
         poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,

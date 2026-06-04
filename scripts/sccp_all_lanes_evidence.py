@@ -71,6 +71,7 @@ class LaneProfile:
     source_state_verifier_id: str = ""
     source_bridge_emitter_id: str = ""
     destination_verifier_key_hash_required: bool = False
+    eth_source_bridge_config_required: bool = False
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
@@ -103,6 +104,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         route_allowlist_id="sccp:eth:route-allowlist:ethereum-mainnet:v1",
         source_bridge_emitter_id="sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
         destination_verifier_key_hash_required=True,
+        eth_source_bridge_config_required=True,
     ),
     SCCP_DOMAIN_BSC: LaneProfile(
         domain=SCCP_DOMAIN_BSC,
@@ -269,10 +271,16 @@ TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
 SUBSTRATE_RUNTIME_STORAGE_GATE_FIELDS = ("substrate_runtime_storage_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
+    "_comment_evm_source_block_tag",
     "_comment_evm_source_bridge_address",
     "_comment_evm_source_bridge_code_hash",
     "_comment_evm_source_bridge_runtime_bytecode_hex",
+    "_comment_eth_source_bridge_network_id",
+    "_comment_eth_source_bridge_config_hash",
     "_comment_evm_source_deployment_transaction_hash",
+    "_comment_evm_source_deployment_transaction_block_hash",
+    "_comment_evm_source_deployment_transaction_block_number",
+    "_comment_evm_source_deployment_transaction_input_sha256",
     "_comment_evm_source_deployment_receipt_status",
     "_comment_evm_source_deployment_contract_address",
     "_comment_evm_source_deployment_block_hash",
@@ -295,6 +303,7 @@ EVM_TRON_DESTINATION_NETWORK_BINDING_FIELDS = (
 )
 EVM_DESTINATION_VERIFIER_LIVE_COMMENT_FIELDS = (
     "_comment_evm_rpc_chain_id",
+    "_comment_evm_block_tag",
     "_comment_evm_bridge_code_hash",
     "_comment_evm_bridge_runtime_bytecode_hex",
     "_comment_evm_verifier_code_hash",
@@ -423,10 +432,16 @@ SOURCE_MATERIAL_FIELDS = frozenset(
         "source_bridge_config_hash",
         "_comment_source_verifier_material_hash",
         "_comment_evm_source_rpc_chain_id",
+        "_comment_evm_source_block_tag",
         "_comment_evm_source_bridge_address",
         "_comment_evm_source_bridge_code_hash",
         "_comment_evm_source_bridge_runtime_bytecode_hex",
+        "_comment_eth_source_bridge_network_id",
+        "_comment_eth_source_bridge_config_hash",
         "_comment_evm_source_deployment_transaction_hash",
+        "_comment_evm_source_deployment_transaction_block_hash",
+        "_comment_evm_source_deployment_transaction_block_number",
+        "_comment_evm_source_deployment_transaction_input_sha256",
         "_comment_evm_source_deployment_receipt_status",
         "_comment_evm_source_deployment_contract_address",
         "_comment_evm_source_deployment_block_hash",
@@ -502,6 +517,7 @@ DESTINATION_ROLLOUT_FIELDS = frozenset(
         "_comment_destination_binding_key",
         "_comment_destination_binding_hash",
         "_comment_evm_rpc_chain_id",
+        "_comment_evm_block_tag",
         "_comment_evm_bridge_code_hash",
         "_comment_evm_bridge_runtime_bytecode_hex",
         "_comment_evm_verifier_code_hash",
@@ -559,6 +575,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "route_canary_route_allowlist_hash",
         "route_canary_destination_binding_hash",
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -604,6 +622,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "_comment_route_canary_route_allowlist_hash",
         "_comment_route_canary_destination_binding_hash",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",
@@ -646,6 +666,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
 )
 
 DESTINATION_ROLLOUT_COMMENT_KEYS = {
+    "sccp_evm_block_tag": "_comment_evm_block_tag",
     "sccp_evm_destination_network_id": "_comment_destination_network_id",
     "sccp_evm_destination_bridge_address": "_comment_destination_bridge_address",
     "sccp_evm_destination_binding_key": "_comment_destination_binding_key",
@@ -747,6 +768,7 @@ SOURCE_RECORD_COMMENT_KEYS = {
         "_comment_source_verifier_material_hash"
     ),
     "sccp_evm_source_rpc_chain_id": "_comment_evm_source_rpc_chain_id",
+    "sccp_evm_source_block_tag": "_comment_evm_source_block_tag",
     "sccp_evm_source_bridge_address": "_comment_evm_source_bridge_address",
     "sccp_evm_source_bridge_runtime_code_hash": (
         "_comment_evm_source_bridge_code_hash"
@@ -754,8 +776,19 @@ SOURCE_RECORD_COMMENT_KEYS = {
     "sccp_evm_source_bridge_runtime_bytecode_hex": (
         "_comment_evm_source_bridge_runtime_bytecode_hex"
     ),
+    "sccp_eth_source_bridge_network_id": "_comment_eth_source_bridge_network_id",
+    "sccp_eth_source_bridge_config_hash": "_comment_eth_source_bridge_config_hash",
     "sccp_evm_source_deployment_transaction_hash": (
         "_comment_evm_source_deployment_transaction_hash"
+    ),
+    "sccp_evm_source_deployment_transaction_block_hash": (
+        "_comment_evm_source_deployment_transaction_block_hash"
+    ),
+    "sccp_evm_source_deployment_transaction_block_number": (
+        "_comment_evm_source_deployment_transaction_block_number"
+    ),
+    "sccp_evm_source_deployment_transaction_input_sha256": (
+        "_comment_evm_source_deployment_transaction_input_sha256"
     ),
     "sccp_evm_source_deployment_receipt_status": (
         "_comment_evm_source_deployment_receipt_status"
@@ -818,6 +851,12 @@ ROUTE_ALLOWLIST_COMMENT_KEYS = {
     ),
     "sccp_evm_route_canary_transaction_hash": (
         "_comment_evm_route_canary_transaction_hash"
+    ),
+    "sccp_evm_route_canary_transaction_block_number": (
+        "_comment_evm_route_canary_transaction_block_number"
+    ),
+    "sccp_evm_route_canary_transaction_block_hash": (
+        "_comment_evm_route_canary_transaction_block_hash"
     ),
     "sccp_evm_route_canary_log_index": "_comment_evm_route_canary_log_index",
     "sccp_evm_route_canary_receipt_block_number": (
@@ -1550,7 +1589,17 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         )
         _expect_empty_hex_or_absent(errors, record, "source_bridge_emitter_code_hash")
 
-    if profile.tron_source_bridge_config_required:
+    if profile.eth_source_bridge_config_required:
+        _expect_nonzero_hex(errors, record, "source_bridge_network_id")
+        _expect_empty_hex_or_absent(
+            errors,
+            record,
+            "source_bridge_owner_address",
+            byte_length=20,
+        )
+        _expect_nonzero_hex(errors, record, "source_bridge_config_hash")
+        errors.extend(_check_eth_source_bridge_config_hash(material=record))
+    elif profile.tron_source_bridge_config_required:
         _expect_nonzero_hex(errors, record, "source_bridge_network_id")
         _expect_nonzero_hex(
             errors,
@@ -1696,6 +1745,11 @@ def _check_evm_live_source_bridge_evidence(
             f"EVM source live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
+    if (
+        profile.domain == SCCP_DOMAIN_ETH
+        and record.get("_comment_evm_source_block_tag") != "finalized"
+    ):
+        errors.append("Ethereum source live block-tag metadata must be finalized")
 
     bridge_address = _hex_bytes(
         record.get("_comment_evm_source_bridge_address"),
@@ -1777,6 +1831,32 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction hash metadata must be a non-zero "
             "32-byte hex value"
         )
+    transaction_block_hash = _hex_bytes(
+        record.get("_comment_evm_source_deployment_transaction_block_hash"),
+        byte_length=32,
+    )
+    if transaction_block_hash is None or not any(transaction_block_hash):
+        errors.append(
+            "EVM source deployment transaction block hash metadata must be a "
+            "non-zero 32-byte hex value"
+        )
+    transaction_block_number = record.get(
+        "_comment_evm_source_deployment_transaction_block_number"
+    )
+    if not _is_canonical_decimal_text(transaction_block_number, positive=True):
+        errors.append(
+            "EVM source deployment transaction block number metadata must be a "
+            "positive integer"
+        )
+    transaction_input_sha256 = _hex_bytes(
+        record.get("_comment_evm_source_deployment_transaction_input_sha256"),
+        byte_length=32,
+    )
+    if transaction_input_sha256 is None or not any(transaction_input_sha256):
+        errors.append(
+            "EVM source deployment transaction input SHA-256 metadata must be a "
+            "non-zero 32-byte hex value"
+        )
     receipt_status = record.get("_comment_evm_source_deployment_receipt_status")
     if receipt_status != "0x1":
         errors.append("EVM source deployment receipt status metadata must be 0x1")
@@ -1799,6 +1879,15 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment block hash metadata must be a non-zero "
             "32-byte hex value"
         )
+    elif (
+        transaction_block_hash is not None
+        and any(transaction_block_hash)
+        and transaction_block_hash != block_hash
+    ):
+        errors.append(
+            "EVM source deployment transaction block hash metadata must match "
+            "deployment receipt block hash metadata"
+        )
     receipt_block_number = record.get("_comment_evm_source_deployment_block_number")
     if not _is_canonical_decimal_text(receipt_block_number, positive=True):
         errors.append(
@@ -1807,6 +1896,14 @@ def _check_evm_live_source_bridge_evidence(
     elif int(receipt_block_number, 10) <= 0:
         errors.append(
             "EVM source deployment block number metadata must be a positive integer"
+        )
+    elif (
+        _is_canonical_decimal_text(transaction_block_number, positive=True)
+        and transaction_block_number != receipt_block_number
+    ):
+        errors.append(
+            "EVM source deployment transaction block number metadata must match "
+            "deployment receipt block number metadata"
         )
     receipt_block_receipts_root = record.get(
         "_comment_evm_source_deployment_block_receipts_root"
@@ -1884,7 +1981,9 @@ def _check_deployment(
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_empty_hex_or_absent(errors, record, field)
 
-    if profile.tron_source_bridge_config_required:
+    if profile.eth_source_bridge_config_required:
+        errors.extend(_check_eth_source_bridge_config_hash(material))
+    elif profile.tron_source_bridge_config_required:
         errors.extend(_check_tron_source_bridge_config_hash(material))
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_nonzero_hex(errors, record, field)
@@ -2683,6 +2782,43 @@ def _check_tron_source_bridge_config_hash(material: dict[str, Any]) -> list[str]
     return []
 
 
+def _check_eth_source_bridge_config_hash(material: dict[str, Any]) -> list[str]:
+    try:
+        module = _load_sibling_module("sccp_eth_source_bridge_evidence.py")
+        expected = module.eth_source_bridge_config_hash(
+            bridge_address=_required_exact_hex_bytes(
+                material,
+                "source_bridge_emitter_address",
+                byte_length=20,
+            ),
+            source_bridge_code_hash=_required_exact_hex_bytes(
+                material,
+                "source_bridge_emitter_code_hash",
+                byte_length=32,
+            ),
+            network_id=_required_exact_hex_bytes(
+                material,
+                "source_bridge_network_id",
+                byte_length=32,
+            ),
+            source_domain=material["source_domain"],
+            target_domain=SCCP_DOMAIN_SORA,
+        )
+        configured = _required_exact_hex_bytes(
+            material,
+            "source_bridge_config_hash",
+            byte_length=32,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return [f"ETH source bridge config hash cannot be recomputed: {exc}"]
+    if expected != configured:
+        return [
+            "source_bridge_config_hash does not match ETH bridge address, "
+            "network id, and runtime code hash"
+        ]
+    return []
+
+
 def _check_required_hash_comment(
     errors: list[str],
     record: dict[str, Any],
@@ -3298,6 +3434,11 @@ def _check_evm_live_bridge_evidence(
             f"EVM live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
+    if (
+        profile.domain == SCCP_DOMAIN_ETH
+        and record.get("_comment_evm_block_tag") != "finalized"
+    ):
+        errors.append("Ethereum destination live block-tag metadata must be finalized")
 
     bridge_code_hash = _hex_bytes(
         record.get("_comment_evm_bridge_code_hash"),
@@ -4226,6 +4367,8 @@ def _check_evm_route_canary_transaction_evidence(
 ) -> list[str]:
     fields = (
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -4242,6 +4385,8 @@ def _check_evm_route_canary_transaction_evidence(
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",
@@ -4278,6 +4423,11 @@ def _check_evm_route_canary_transaction_evidence(
             "evm_route_canary_receipt_block_hash",
             "_comment_evm_route_canary_receipt_block_hash",
             "EVM route canary receipt block hash",
+        ),
+        (
+            "evm_route_canary_transaction_block_hash",
+            "_comment_evm_route_canary_transaction_block_hash",
+            "EVM route canary transaction block hash",
         ),
         (
             "evm_route_canary_block_receipts_root",
@@ -4360,6 +4510,14 @@ def _check_evm_route_canary_transaction_evidence(
         label="EVM route canary receipt block number",
         positive=True,
     )
+    _check_route_canary_decimal_comment_matches_record(
+        errors,
+        record,
+        "evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_number",
+        label="EVM route canary transaction block number",
+        positive=True,
+    )
     _check_route_canary_bool_comment_matches_record(
         errors,
         record,
@@ -4378,6 +4536,31 @@ def _check_evm_route_canary_transaction_evidence(
     if transaction_hash is None or not any(transaction_hash):
         errors.append(
             "EVM route canary transaction hash metadata must be a non-zero bytes32"
+        )
+    transaction_block_number = _canonical_decimal_int(
+        _first_record_value(
+            record,
+            "evm_route_canary_transaction_block_number",
+            "_comment_evm_route_canary_transaction_block_number",
+        ),
+        positive=True,
+    )
+    if transaction_block_number is None:
+        errors.append(
+            "EVM route canary transaction block number metadata must be a "
+            "canonical positive decimal"
+        )
+    transaction_block_hash = _exact_hex_bytes(
+        _first_record_value(
+            record,
+            "evm_route_canary_transaction_block_hash",
+            "_comment_evm_route_canary_transaction_block_hash",
+        ),
+        byte_length=32,
+    )
+    if transaction_block_hash is None or not any(transaction_block_hash):
+        errors.append(
+            "EVM route canary transaction block hash metadata must be a non-zero bytes32"
         )
     log_index = _canonical_route_canary_log_index(
         _first_record_value(
@@ -4411,6 +4594,24 @@ def _check_evm_route_canary_transaction_evidence(
     if receipt_block_hash is None or not any(receipt_block_hash):
         errors.append(
             "EVM route canary receipt block hash metadata must be a non-zero bytes32"
+        )
+    elif (
+        transaction_block_hash is not None
+        and any(transaction_block_hash)
+        and transaction_block_hash != receipt_block_hash
+    ):
+        errors.append(
+            "EVM route canary transaction block hash metadata must match "
+            "receipt block hash metadata"
+        )
+    if (
+        transaction_block_number is not None
+        and receipt_block_number is not None
+        and transaction_block_number != receipt_block_number
+    ):
+        errors.append(
+            "EVM route canary transaction block number metadata must match "
+            "receipt block number metadata"
         )
     block_receipts_root = _exact_hex_bytes(
         _first_record_value(
@@ -6139,6 +6340,8 @@ def _check_route_canary_evidence(
             errors.append(f"{field} is only valid for TRON route canary evidence")
     for field in (
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -6155,6 +6358,8 @@ def _check_route_canary_evidence(
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",
@@ -6413,6 +6618,76 @@ def _release_checklist(
     }
 
 
+def _evm_live_metadata_summary(
+    profile: LaneProfile,
+    material: dict[str, Any] | None,
+    destination: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return public EVM live-read metadata carried by lane evidence."""
+
+    if profile.chain not in ("eth", "bsc"):
+        return {
+            "required": False,
+            "ready": True,
+            "source_rpc_chain_id": "",
+            "source_block_tag": "",
+            "destination_rpc_chain_id": "",
+            "destination_block_tag": "",
+        }
+    source_rpc_chain_id = (
+        str(material.get("_comment_evm_source_rpc_chain_id"))
+        if material is not None
+        and material.get("_comment_evm_source_rpc_chain_id") is not None
+        else ""
+    )
+    source_block_tag = (
+        str(material.get("_comment_evm_source_block_tag"))
+        if material is not None and material.get("_comment_evm_source_block_tag") is not None
+        else ""
+    )
+    destination_rpc_chain_id = (
+        str(destination.get("_comment_evm_rpc_chain_id"))
+        if destination is not None
+        and destination.get("_comment_evm_rpc_chain_id") is not None
+        else ""
+    )
+    destination_block_tag = (
+        str(destination.get("_comment_evm_block_tag"))
+        if destination is not None and destination.get("_comment_evm_block_tag") is not None
+        else ""
+    )
+    expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
+    source_chain_id_ready = (
+        _is_canonical_decimal_text(source_rpc_chain_id, positive=True)
+        and int(source_rpc_chain_id, 10) == expected_chain_id
+    )
+    destination_chain_id_ready = (
+        _is_canonical_decimal_text(destination_rpc_chain_id, positive=True)
+        and int(destination_rpc_chain_id, 10) == expected_chain_id
+    )
+    if profile.domain == SCCP_DOMAIN_ETH:
+        ready = (
+            source_chain_id_ready
+            and destination_chain_id_ready
+            and source_block_tag == "finalized"
+            and destination_block_tag == "finalized"
+        )
+    else:
+        ready = (
+            source_chain_id_ready
+            and destination_chain_id_ready
+            and bool(source_block_tag and destination_block_tag)
+        )
+    return {
+        "required": True,
+        "ready": ready,
+        "source_rpc_chain_id": source_rpc_chain_id,
+        "source_block_tag": source_block_tag,
+        "destination_rpc_chain_id": destination_rpc_chain_id,
+        "destination_block_tag": destination_block_tag,
+    }
+
+
 def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """Return a production-readiness summary for a merged SCCP evidence bundle."""
 
@@ -6520,6 +6795,11 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
             destination_binding,
             route_allowlist_summary,
         )
+        evm_live_metadata = _evm_live_metadata_summary(
+            profile,
+            material,
+            destination,
+        )
         if source_adapter_gate.get("required") is True:
             for gate_blocker in source_adapter_gate.get("blockers", []):
                 if gate_blocker not in blockers:
@@ -6537,6 +6817,7 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
                 },
                 "source_record_hashes": source_record_hashes,
                 "source_adapter_gate": source_adapter_gate,
+                "evm_live_metadata": evm_live_metadata,
                 "destination_binding": destination_binding,
                 "route_allowlist": route_allowlist_summary,
                 "blockers": blockers,

@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.android.model.zk;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -89,79 +92,7 @@ public enum VerifyingKeyBackendTag {
       return UNSUPPORTED;
     }
     final String compact = compactAscii(label);
-
-    if ("unsupported".equals(label) || "unsupported".equals(compact)) {
-      return UNSUPPORTED;
-    }
-    if (compact.contains("pqmasp") || compact.contains("postquantummasp")) {
-      return PQ_MASP_STARK_FRI;
-    }
-    if (compact.contains("anonymouspgc") || compact.contains("pgckoutofn")) {
-      return ANONYMOUS_PGC;
-    }
-    if (compact.contains("verange")) {
-      return VERANGE;
-    }
-    if (compact.contains("zkat") || compact.contains("policyprivateauthenticator")) {
-      return ZKAT;
-    }
-    if (compact.contains("zkams") || compact.contains("recursiveanonymousadmission")) {
-      return RECURSIVE_ANONYMOUS_ADMISSION;
-    }
-    if (compact.contains("vega") || compact.contains("existingcredentialzk")) {
-      return VEGA_EXISTING_CREDENTIAL_ZK;
-    }
-    if (compact.contains("silentthreshold")
-        || compact.contains("thresholdanonymouscredential")) {
-      return SILENT_THRESHOLD_ANONCRED;
-    }
-    if (compact.contains("zkx509") || compact.contains("x509") || compact.contains("zkvmx509")) {
-      return ZK_X509;
-    }
-    if (compact.contains("siswithhints")
-        || compact.contains("sishints")
-        || compact.contains("latticeanonymouscredentials")) {
-      return SIS_WITH_HINTS;
-    }
-    if (compact.contains("orchard") || compact.contains("zcashorchard")) {
-      return HALO2_IPA_ORCHARD;
-    }
-    if (compact.contains("penumbra")
-        || compact.contains("masp")
-        || compact.contains("bls12377")
-        || compact.contains("decaf377")) {
-      return GROTH16_BLS12_377;
-    }
-    if (compact.contains("fcmp") || compact.contains("monero") || compact.contains("curvetree")) {
-      return FCMP_PLUS_PLUS_CURVE_TREE;
-    }
-    if (compact.contains("lattice") || compact.contains("pcssis") || compact.contains("jindo")) {
-      return LATTICE_PCS_SIS;
-    }
-    if (compact.contains("miden")) {
-      return MIDEN_STARK;
-    }
-    if (compact.contains("aztec")) {
-      return AZTEC_PLONKISH_PRIVATE_KERNEL;
-    }
-    if (compact.contains("halo2") && compact.contains("bn254")) {
-      return HALO2_BN254;
-    }
-    if (compact.contains("groth16")) {
-      return GROTH16;
-    }
-    if (compact.contains("stark")) {
-      return STARK;
-    }
-    if ("halo2ipa".equals(compact)
-        || "halo2ipapasta".equals(compact)
-        || "halo2pasta".equals(compact)
-        || (compact.contains("halo2")
-            && (compact.contains("ipa") || compact.contains("pasta")))) {
-      return HALO2_IPA_PASTA;
-    }
-
-    return UNSUPPORTED;
+    return CATALOG_BACKEND_ALIASES.getOrDefault(compact, UNSUPPORTED);
   }
 
   public static boolean isPendingProductionBackendLabel(final String raw) {
@@ -210,9 +141,91 @@ public enum VerifyingKeyBackendTag {
           "halo2/pasta/kagemusha-folded-v1",
           "halo2/pasta/kagemusha-recursive-aggregation-v1",
           "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+          "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+          "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
           "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
           "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
           "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified");
+
+  private static final Map<String, VerifyingKeyBackendTag> CATALOG_BACKEND_ALIASES =
+      catalogBackendAliases();
+
+  private static Map<String, VerifyingKeyBackendTag> catalogBackendAliases() {
+    final Map<String, VerifyingKeyBackendTag> aliases = new HashMap<>();
+    aliases.put("unsupported", UNSUPPORTED);
+    aliases.put("halo2ipa", HALO2_IPA_PASTA);
+    aliases.put("halo2ipapasta", HALO2_IPA_PASTA);
+    aliases.put("halo2pasta", HALO2_IPA_PASTA);
+    aliases.put("halo2pastaipavotebool", HALO2_IPA_PASTA);
+    aliases.put("halo2bn254", HALO2_BN254);
+    aliases.put("groth16", GROTH16);
+    aliases.put("groth16bn254", GROTH16);
+    aliases.put("stark", STARK);
+    aliases.put("starkfri", STARK);
+    aliases.put("starkfrisha256goldilocks", STARK);
+    aliases.put("halo2ipaorchard", HALO2_IPA_ORCHARD);
+    aliases.put("orchard", HALO2_IPA_ORCHARD);
+    aliases.put("zcashorchard", HALO2_IPA_ORCHARD);
+    aliases.put("groth16bls12377", GROTH16_BLS12_377);
+    aliases.put("groth16bls12377decaf377", GROTH16_BLS12_377);
+    aliases.put("bls12377", GROTH16_BLS12_377);
+    aliases.put("decaf377", GROTH16_BLS12_377);
+    aliases.put("masp", GROTH16_BLS12_377);
+    aliases.put("penumbra", GROTH16_BLS12_377);
+    aliases.put("penumbramasp", GROTH16_BLS12_377);
+    aliases.put("halo2ipapenumbra", GROTH16_BLS12_377);
+    aliases.put("halo2ipamasp", GROTH16_BLS12_377);
+    aliases.put("fcmppluspluscurvetree", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("fcmp", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("monero", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("monerofcmp", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("monerofcmpplusplus", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("curvetree", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("halo2ipamonero", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("halo2ipacurvetree", FCMP_PLUS_PLUS_CURVE_TREE);
+    aliases.put("latticepcssis", LATTICE_PCS_SIS);
+    aliases.put("latticepcszk", LATTICE_PCS_SIS);
+    aliases.put("jindo", LATTICE_PCS_SIS);
+    aliases.put("jindolatticepcszk", LATTICE_PCS_SIS);
+    aliases.put("jindolatticepcszkv0", LATTICE_PCS_SIS);
+    aliases.put("jindolatticepcssis", LATTICE_PCS_SIS);
+    aliases.put("starkfrimiden", MIDEN_STARK);
+    aliases.put("midenstark", MIDEN_STARK);
+    aliases.put("aztecplonkishprivatekernel", AZTEC_PLONKISH_PRIVATE_KERNEL);
+    aliases.put("aztecprivatekernel", AZTEC_PLONKISH_PRIVATE_KERNEL);
+    aliases.put("pqmaspstarkfri", PQ_MASP_STARK_FRI);
+    aliases.put("pqmaspstark", PQ_MASP_STARK_FRI);
+    aliases.put("starkfripqmaspstarkfri", PQ_MASP_STARK_FRI);
+    aliases.put("postquantummasp", PQ_MASP_STARK_FRI);
+    aliases.put("anonymouspgc", ANONYMOUS_PGC);
+    aliases.put("anonymouspgckoutofn", ANONYMOUS_PGC);
+    aliases.put("anonymouspgckoutofnv1", ANONYMOUS_PGC);
+    aliases.put("verange", VERANGE);
+    aliases.put("verangetransparentrange", VERANGE);
+    aliases.put("verangetransparentrangev1", VERANGE);
+    aliases.put("zkat", ZKAT);
+    aliases.put("zkatpolicyprivateauthenticator", ZKAT);
+    aliases.put("zkatpolicyprivateauthv1", ZKAT);
+    aliases.put("recursiveanonymousadmission", RECURSIVE_ANONYMOUS_ADMISSION);
+    aliases.put("recursiveanonymousadmissionv0", RECURSIVE_ANONYMOUS_ADMISSION);
+    aliases.put("zkamsrecursiveadmission", RECURSIVE_ANONYMOUS_ADMISSION);
+    aliases.put("zkamsrecursiveadmissionv0", RECURSIVE_ANONYMOUS_ADMISSION);
+    aliases.put("vegaexistingcredentialzk", VEGA_EXISTING_CREDENTIAL_ZK);
+    aliases.put("vegaexistingcredentialzkv0", VEGA_EXISTING_CREDENTIAL_ZK);
+    aliases.put("silentthresholdanoncred", SILENT_THRESHOLD_ANONCRED);
+    aliases.put("silentthresholdanoncredv0", SILENT_THRESHOLD_ANONCRED);
+    aliases.put("silentthresholdanonymouscredential", SILENT_THRESHOLD_ANONCRED);
+    aliases.put("thresholdanonymouscredentials", SILENT_THRESHOLD_ANONCRED);
+    aliases.put("zkx509", ZK_X509);
+    aliases.put("zkvmx509identity", ZK_X509);
+    aliases.put("zkx509onchainidentity", ZK_X509);
+    aliases.put("zkx509onchainidentityv0", ZK_X509);
+    aliases.put("siswithhints", SIS_WITH_HINTS);
+    aliases.put("sishints", SIS_WITH_HINTS);
+    aliases.put("sishintsanoncredpqv0", SIS_WITH_HINTS);
+    aliases.put("latticeanonymouscredentials", SIS_WITH_HINTS);
+    return Collections.unmodifiableMap(aliases);
+  }
 
   private static final Set<String> STARK_FRI_PRODUCTION_BACKENDS =
       Set.of(

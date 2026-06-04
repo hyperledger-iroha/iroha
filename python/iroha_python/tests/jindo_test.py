@@ -11,11 +11,14 @@ from iroha_python import (
     build_jindo_lattice_dev_proof_fixture,
     build_jindo_lattice_proof_envelope,
     build_jindo_lattice_public_inputs,
-    decode_privacy_proof_envelope,
     verifyJindoLatticeProofLocally,
     verify_jindo_lattice_proof_locally,
 )
-from iroha_python.verange import build_privacy_proof_envelope
+from iroha_python.verange import (
+    _build_privacy_proof_envelope_internal,
+    _decode_privacy_proof_envelope_internal,
+    decode_privacy_proof_envelope,
+)
 
 
 def _polynomial(degree: int = 1024) -> dict[str, object]:
@@ -74,7 +77,12 @@ def test_jindo_builders_normalize_public_inputs_and_envelopes() -> None:
             "proofBytes": b"prepared-jindo-lattice-proof",
         }
     )
-    decoded_prepared = decode_privacy_proof_envelope(prepared)
+    with pytest.raises(ValueError, match="unsupported tag"):
+        decode_privacy_proof_envelope(prepared)
+    decoded_prepared = _decode_privacy_proof_envelope_internal(
+        prepared,
+        allow_unsupported_backend=True,
+    )
     assert decoded_prepared["backend"] == "Unsupported"
     assert decoded_prepared["circuit_id"] == (
         "lattice/jindo-pcs-v0:jindo_lattice_pcs_zk_v0"
@@ -113,7 +121,10 @@ def test_jindo_package_root_exports_catalog_entrypoint_aliases() -> None:
             "proofBytes": b"prepared-jindo-lattice-proof",
         }
     )
-    assert decode_privacy_proof_envelope(prepared)["proof_bytes"] == (
+    assert _decode_privacy_proof_envelope_internal(
+        prepared,
+        allow_unsupported_backend=True,
+    )["proof_bytes"] == (
         b"prepared-jindo-lattice-proof"
     )
 
@@ -217,7 +228,12 @@ def test_jindo_proof_envelope_rejects_unsafe_shapes(
 def test_jindo_local_verifier_rejects_tampered_dev_fixtures() -> None:
     fixture_input = {**_base(), "vkHash": bytes([0xAA]) * 32}
     fixture = build_jindo_lattice_dev_proof_fixture(fixture_input)
-    decoded = decode_privacy_proof_envelope(fixture["envelope"])
+    with pytest.raises(ValueError, match="unsupported tag"):
+        decode_privacy_proof_envelope(fixture["envelope"])
+    decoded = _decode_privacy_proof_envelope_internal(
+        fixture["envelope"],
+        allow_unsupported_backend=True,
+    )
     public_inputs = json.loads(decoded["public_inputs"].decode("utf-8"))
     tampered_proof = bytearray(decoded["proof_bytes"])
     tampered_proof[-1] ^= 0xFF
@@ -234,14 +250,15 @@ def test_jindo_local_verifier_rejects_tampered_dev_fixtures() -> None:
     ).encode("utf-8")
 
     def rebuild(**patch: object) -> bytes:
-        return build_privacy_proof_envelope(
+        return _build_privacy_proof_envelope_internal(
             {
                 "backend": patch.get("backend", "unsupported"),
                 "circuitId": patch.get("circuitId", decoded["circuit_id"]),
                 "vkHash": patch.get("vkHash", bytes([0xAA]) * 32),
                 "publicInputs": patch.get("publicInputs", decoded["public_inputs"]),
                 "proofBytes": patch.get("proofBytes", decoded["proof_bytes"]),
-            }
+            },
+            allow_unsupported_backend=True,
         )
 
     cases = [

@@ -27,8 +27,8 @@ use tracing::warn;
 use crate::{
     capability,
     config::{
-        AdaptiveDifficultyConfig, EmergencyThrottleConfig, PowConfig, QuotaConfig, RelayMode,
-        SlowlorisConfig, TokenPolicySource,
+        AdaptiveDifficultyConfig, ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
+        RelayMode, SlowlorisConfig, TokenPolicySource,
     },
     metrics::Metrics,
 };
@@ -58,7 +58,7 @@ impl DoSControls {
         token: Option<TokenPolicySource>,
         metrics: Arc<Metrics>,
         mode: RelayMode,
-    ) -> Self {
+    ) -> Result<Self, ConfigError> {
         let mut adaptive_cfg = config.adaptive.clone();
         adaptive_cfg.apply_defaults();
 
@@ -95,7 +95,7 @@ impl DoSControls {
                 config.replay_filter().bits_usize(),
                 config.replay_filter().hash_count(),
                 config.replay_filter().ttl(),
-            )))
+            )?))
         } else {
             None
         };
@@ -103,7 +103,7 @@ impl DoSControls {
             .emergency_throttle()
             .map(|cfg| EmergencyThrottle::new(cfg.clone()));
 
-        Self {
+        Ok(Self {
             adaptive,
             remote_limiter,
             descriptor_limiter,
@@ -116,7 +116,7 @@ impl DoSControls {
             remote_limits,
             descriptor_limits,
             emergency,
-        }
+        })
     }
 
     /// Returns the current PoW parameters (possibly adapted).
@@ -479,6 +479,7 @@ fn token_outcome_label(error: &TokenPolicyError) -> &'static str {
             TokenVerifyError::NotYetValid { .. } => "not_yet_valid",
             TokenVerifyError::Expired { .. } => "expired",
             TokenVerifyError::TtlExceeded { .. } => "ttl_exceeded",
+            TokenVerifyError::InvalidTemporalBounds => "invalid_temporal_bounds",
             TokenVerifyError::Clock(_) => "store_error",
             TokenVerifyError::Signature(_) => "signature_invalid",
             TokenVerifyError::Store(_) => "store_error",
@@ -724,7 +725,7 @@ impl AdaptiveDifficulty {
             return;
         }
         let mut guard = self.window.lock().expect("adaptive window mutex poisoned");
-        guard.successes = guard.successes.strict_add(1);
+        guard.successes = guard.successes.saturating_add(1);
         Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
     }
 
@@ -733,7 +734,7 @@ impl AdaptiveDifficulty {
             return;
         }
         let mut guard = self.window.lock().expect("adaptive window mutex poisoned");
-        guard.pow_failures = guard.pow_failures.strict_add(1);
+        guard.pow_failures = guard.pow_failures.saturating_add(1);
         Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
     }
 
@@ -751,18 +752,16 @@ impl AdaptiveDifficulty {
 
         let mut updated = current.load(Ordering::Relaxed);
         if stats.pow_failures >= cfg.pow_failure_threshold && updated < cfg.max_difficulty {
-            updated = updated.strict_add(cfg.increase_step);
-            if updated > cfg.max_difficulty {
-                updated = cfg.max_difficulty;
-            }
+            updated = updated
+                .saturating_add(cfg.increase_step)
+                .min(cfg.max_difficulty);
         } else if stats.pow_failures == 0
             && stats.successes >= cfg.success_threshold
             && updated > cfg.min_difficulty
         {
-            updated = updated.strict_sub(cfg.decrease_step);
-            if updated < cfg.min_difficulty {
-                updated = cfg.min_difficulty;
-            }
+            updated = updated
+                .saturating_sub(cfg.decrease_step)
+                .max(cfg.min_difficulty);
         }
 
         stats.start = now;
@@ -991,17 +990,25 @@ struct ReplayFilter {
 }
 
 impl ReplayFilter {
-    fn new(bits: usize, hash_count: u8, ttl: Duration) -> Self {
-        let size = bits.max(64).next_power_of_two();
+    fn new(bits: usize, hash_count: u8, ttl: Duration) -> Result<Self, ConfigError> {
+        const MAX_BITS: usize = 1 << 24; // 16,777,216 counters
+
+        let clamped = bits.max(64);
+        if clamped > MAX_BITS {
+            return Err(ConfigError::ReplayFilter(
+                "replay_filter.bits must not exceed 16,777,216".to_string(),
+            ));
+        }
+        let size = clamped.next_power_of_two();
         let mask = size - 1;
         debug_assert!(hash_count > 0);
-        Self {
+        Ok(Self {
             mask,
             hash_count,
             ttl,
             counters: vec![0u16; size],
             entries: VecDeque::new(),
-        }
+        })
     }
 
     fn ttl(&self) -> Duration {
@@ -1176,6 +1183,70 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_difficulty_counters_saturate_without_panic() {
+        let metrics = Arc::new(Metrics::new());
+        let cfg = AdaptiveDifficultyConfig {
+            min_difficulty: 4,
+            max_difficulty: 10,
+            pow_failure_threshold: u32::MAX,
+            success_threshold: u32::MAX,
+            window_secs: 60,
+            ..AdaptiveDifficultyConfig::default()
+        };
+        let adaptive = AdaptiveDifficulty::new(base_params(), cfg, metrics);
+        let now = Instant::now();
+
+        {
+            let mut stats = adaptive.window.lock().expect("window lock");
+            stats.start = now;
+            stats.successes = u32::MAX;
+            stats.pow_failures = u32::MAX;
+        }
+
+        adaptive.observe_success(now);
+        adaptive.observe_pow_failure(now);
+
+        let stats = adaptive.window.lock().expect("window lock");
+        assert_eq!(stats.successes, u32::MAX);
+        assert_eq!(stats.pow_failures, u32::MAX);
+    }
+
+    #[test]
+    fn adaptive_difficulty_steps_saturate_before_clamp() {
+        let metrics = Metrics::new();
+        let cfg = AdaptiveDifficultyConfig {
+            min_difficulty: 3,
+            max_difficulty: u8::MAX,
+            pow_failure_threshold: 1,
+            success_threshold: 1,
+            window_secs: 1,
+            increase_step: 250,
+            decrease_step: 250,
+            ..AdaptiveDifficultyConfig::default()
+        };
+        let start = Instant::now();
+        let now = start + Duration::from_secs(2);
+
+        let current = AtomicU8::new(250);
+        let mut stats = WindowStats {
+            start,
+            successes: 0,
+            pow_failures: 1,
+        };
+        AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
+        assert_eq!(current.load(Ordering::Relaxed), u8::MAX);
+
+        let current = AtomicU8::new(4);
+        let mut stats = WindowStats {
+            start,
+            successes: 1,
+            pow_failures: 0,
+        };
+        AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
+        assert_eq!(current.load(Ordering::Relaxed), cfg.min_difficulty);
+    }
+
+    #[test]
     fn remote_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
@@ -1196,7 +1267,8 @@ mod tests {
             None,
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
         let remote: SocketAddr = "127.0.0.1:2000".parse().expect("remote addr");
 
         controls.begin(remote, None).expect("first attempt allowed");
@@ -1232,7 +1304,8 @@ mod tests {
             None,
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
         let remote: SocketAddr = "127.0.0.2:2000".parse().expect("remote addr");
         let descriptor = [0xAB; 32];
 
@@ -1271,7 +1344,8 @@ mod tests {
             None,
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
         let remote: SocketAddr = "127.0.0.3:3030".parse().expect("remote addr");
 
         let throttle = controls
@@ -1307,7 +1381,8 @@ mod tests {
             None,
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
         let remote: SocketAddr = "127.0.0.4:4040".parse().expect("remote addr");
 
         controls
@@ -1323,7 +1398,7 @@ mod tests {
     #[test]
     fn replay_filter_allows_reentry_after_ttl() {
         let ttl = Duration::from_millis(200);
-        let mut filter = ReplayFilter::new(128, 3, ttl);
+        let mut filter = ReplayFilter::new(128, 3, ttl).expect("replay filter");
         let key = b"descriptor-key";
         let now = Instant::now();
 
@@ -1339,6 +1414,18 @@ mod tests {
             ),
             "entry should expire after TTL"
         );
+    }
+
+    #[test]
+    fn replay_filter_constructor_rejects_overflowing_bits_without_panic() {
+        match ReplayFilter::new(usize::MAX, 3, Duration::from_secs(1)) {
+            Err(ConfigError::ReplayFilter(message)) => assert!(
+                message.contains("bits"),
+                "unexpected replay filter error: {message}"
+            ),
+            Err(other) => panic!("expected replay filter config error, got {other:?}"),
+            Ok(_) => panic!("expected replay filter config error, got Ok(_)"),
+        }
     }
 
     #[test]
@@ -1372,7 +1459,8 @@ mod tests {
             None,
             metrics,
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
         let params = controls
             .current_puzzle_parameters()
             .expect("puzzle params present");
@@ -1415,7 +1503,8 @@ mod tests {
             Some(token_policy),
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
 
         let relay_id = [0xAB; 32];
         let transcript_hash = [0xCD; 32];
@@ -1498,7 +1587,8 @@ mod tests {
             Some(token_policy),
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
 
         let err = controls
             .verify_token(
@@ -1561,7 +1651,8 @@ mod tests {
             Some(token_policy),
             Arc::clone(&metrics),
             RelayMode::Entry,
-        );
+        )
+        .expect("dos controls");
 
         let now = issued + Duration::from_secs(5);
         controls

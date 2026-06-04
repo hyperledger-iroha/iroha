@@ -8,6 +8,7 @@
 
 use core::fmt::{self, Display, Formatter};
 
+use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -134,6 +135,31 @@ impl ConfidentialEncryptedPayload {
     #[must_use]
     pub fn ciphertext(&self) -> &[u8] {
         &self.ciphertext
+    }
+
+    /// Validate that the envelope is usable for confidential-note decryption.
+    ///
+    /// # Errors
+    /// Returns [`NoritoError`] when the version is unsupported, the ciphertext is empty, or the
+    /// X25519 ephemeral public key is malformed or low-order.
+    pub fn validate(&self) -> Result<(), NoritoError> {
+        if !self.is_supported() {
+            return Err(NoritoError::Message(format!(
+                "unsupported confidential payload version: {}",
+                self.version
+            )));
+        }
+        if self.ciphertext.is_empty() {
+            return Err(NoritoError::Message(
+                "confidential encrypted payload ciphertext must not be empty".to_owned(),
+            ));
+        }
+        X25519Sha256::decode_public_key(&self.ephemeral_pubkey).map_err(|err| {
+            NoritoError::Message(format!(
+                "invalid confidential encrypted payload X25519 ephemeral public key: {err}"
+            ))
+        })?;
+        Ok(())
     }
 
     /// Consume the envelope and return the ciphertext.
@@ -588,6 +614,36 @@ mod tests {
         assert_eq!(decoded, payload);
         assert!(decoded.is_supported());
         assert_eq!(decoded.version(), CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+    }
+
+    #[test]
+    fn encrypted_payload_validation_accepts_supported_nonempty_payload() {
+        let payload = ConfidentialEncryptedPayload::new([7u8; 32], [2u8; 24], vec![3, 4, 5]);
+        payload.validate().expect("payload validates");
+    }
+
+    #[test]
+    fn encrypted_payload_validation_rejects_empty_ciphertext() {
+        let payload = ConfidentialEncryptedPayload::new([7u8; 32], [2u8; 24], Vec::new());
+        let err = payload
+            .validate()
+            .expect_err("empty confidential ciphertext must fail");
+        assert!(
+            err.to_string().contains("ciphertext must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_validation_rejects_low_order_ephemeral_key() {
+        let payload = ConfidentialEncryptedPayload::new([0u8; 32], [2u8; 24], vec![3, 4, 5]);
+        let err = payload
+            .validate()
+            .expect_err("low-order X25519 ephemeral key must fail");
+        assert!(
+            err.to_string().contains("low-order"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

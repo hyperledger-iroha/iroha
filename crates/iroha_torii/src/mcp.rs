@@ -433,6 +433,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_iso20022_sese023_submit_tool());
     tools.push(iroha_iso20022_sese024_submit_tool());
     tools.push(iroha_iso20022_sese025_submit_tool());
+    tools.push(iroha_iso20022_colr012_submit_tool());
     tools.push(iroha_iso20022_status_get_tool());
     tools.push(iroha_queries_submit_tool());
     tools.push(iroha_transactions_list_tool());
@@ -1968,6 +1969,19 @@ async fn handle_tools_call(
                 inbound_headers,
                 &arguments,
                 "/v1/iso20022/sese025",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.colr012.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/colr012",
             )
             .await
             {
@@ -13794,6 +13808,15 @@ fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
     )
 }
 
+fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.colr012.submit",
+        "colr.012",
+        "/v1/iso20022/colr012",
+        "Submit an ISO 20022 colr.012 collateral substitution confirmation payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.status.get".to_owned(),
@@ -15717,6 +15740,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.iso20022.sese025.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.colr012.submit")
         );
         assert!(
             tools

@@ -1521,9 +1521,18 @@ fn build_encrypted_payload(
     let ciphertext = base64::engine::general_purpose::STANDARD
         .decode(ciphertext_b64)
         .map_err(|e| eyre::eyre!("invalid ciphertext base64: {e}"))?;
-    Ok(ConfidentialEncryptedPayload::new(
+    validate_encrypted_payload(ConfidentialEncryptedPayload::new(
         ephemeral, nonce, ciphertext,
     ))
+}
+
+fn validate_encrypted_payload(
+    payload: iroha::data_model::confidential::ConfidentialEncryptedPayload,
+) -> eyre::Result<iroha::data_model::confidential::ConfidentialEncryptedPayload> {
+    payload
+        .validate()
+        .map_err(|e| eyre::eyre!("invalid encrypted payload: {e}"))?;
+    Ok(payload)
 }
 
 fn encode_encrypted_payload(
@@ -1559,8 +1568,9 @@ impl Run for ShieldArgs {
             match &self.enc_payload {
                 Some(p) => {
                     let bytes = std::fs::read(p)?;
-                    norito::decode_from_bytes::<ConfidentialEncryptedPayload>(&bytes)
-                        .map_err(|e| eyre::eyre!("failed to decode encrypted payload: {e}"))?
+                    let payload = norito::decode_from_bytes::<ConfidentialEncryptedPayload>(&bytes)
+                        .map_err(|e| eyre::eyre!("failed to decode encrypted payload: {e}"))?;
+                    validate_encrypted_payload(payload)?
                 }
                 None => {
                     return Err(eyre::eyre!(
@@ -2014,7 +2024,7 @@ mod tests {
     #[test]
     fn encode_encrypted_payload_returns_expected_bytes() {
         use base64::Engine as _;
-        let epk = "11".repeat(32);
+        let epk = "07".repeat(32);
         let nonce = "22".repeat(24);
         let (payload, bytes) =
             encode_encrypted_payload(&epk, &nonce, "AQIDBA==").expect("encode envelope");
@@ -2043,6 +2053,30 @@ mod tests {
                 "{label} must not collapse into a generic supported backend",
             );
         }
+    }
+
+    #[test]
+    fn encode_encrypted_payload_rejects_empty_ciphertext() {
+        let epk = "07".repeat(32);
+        let nonce = "22".repeat(24);
+        let err = encode_encrypted_payload(&epk, &nonce, "")
+            .expect_err("empty encrypted payload ciphertext must fail");
+        assert!(
+            format!("{err}").contains("ciphertext must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encode_encrypted_payload_rejects_low_order_ephemeral_key() {
+        let epk = "00".repeat(32);
+        let nonce = "22".repeat(24);
+        let err = encode_encrypted_payload(&epk, &nonce, "AQIDBA==")
+            .expect_err("low-order X25519 ephemeral key must fail");
+        assert!(
+            format!("{err}").contains("low-order"),
+            "unexpected error: {err}"
+        );
     }
 }
 

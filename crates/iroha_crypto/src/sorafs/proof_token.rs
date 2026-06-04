@@ -11,7 +11,7 @@ use std::{
     vec::Vec,
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blake3::Hasher;
 use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
 use rand::{CryptoRng, RngCore};
@@ -117,12 +117,19 @@ impl<'a> FrameReader<'a> {
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
-        if self.cursor + len > self.bytes.len() {
+        let end = self.cursor.checked_add(len).ok_or(DecodeError::Truncated)?;
+        if end > self.bytes.len() {
             return Err(DecodeError::Truncated);
         }
-        let slice = &self.bytes[self.cursor..self.cursor + len];
-        self.cursor += len;
+        let slice = &self.bytes[self.cursor..end];
+        self.cursor = end;
         Ok(slice)
+    }
+
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
+        let mut out = [0u8; N];
+        out.copy_from_slice(self.take(N)?);
+        Ok(out)
     }
 
     fn remaining(&self) -> usize {
@@ -182,7 +189,8 @@ impl ProofToken {
         }
 
         let blinded_digest =
-            compute_blinded_digest(digest_key, &token_id, params.evidence_digest, &entry_ids);
+            compute_blinded_digest(digest_key, &token_id, params.evidence_digest, &entry_ids)
+                .map_err(MintError::Encoding)?;
 
         let mut token = Self {
             token_id,
@@ -193,36 +201,47 @@ impl ProofToken {
             blinded_digest,
             signature: Signature::from_bytes(&[0; SIGNATURE_LENGTH]),
         };
-        let message = signing_message(&token.body_without_signature());
+        let body = token
+            .body_without_signature()
+            .map_err(MintError::Encoding)?;
+        let message = signing_message(&body);
         token.signature = signing_key.sign(&message);
         Ok(token)
     }
 
-    /// Serialize the token frame.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let mut body = self.body_without_signature();
+    /// Try to serialize the token frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError`] when a directly constructed token contains entry
+    /// counts or fields that cannot be represented by the fixed-width v1 frame.
+    pub fn try_encode(&self) -> Result<Vec<u8>, EncodeError> {
+        let mut body = self.body_without_signature()?;
         let sig_bytes = self.signature.to_bytes();
-        let sig_len = u16::try_from(sig_bytes.len()).expect("ed25519 signature fits in u16");
+        let sig_len =
+            u16::try_from(sig_bytes.len()).map_err(|_| EncodeError::SignatureTooLong {
+                max: usize::from(u16::MAX),
+                actual: sig_bytes.len(),
+            })?;
         body.extend_from_slice(&sig_len.to_be_bytes());
         body.extend_from_slice(&sig_bytes);
 
         let mut out = Vec::with_capacity(FRAME_MAGIC.len() + body.len());
         out.extend_from_slice(FRAME_MAGIC);
         out.extend_from_slice(&body);
-        out
+        Ok(out)
+    }
+
+    /// Serialize the token frame.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        self.try_encode().unwrap_or_else(|_| FRAME_MAGIC.to_vec())
     }
 
     /// Serialize the token as URL-safe base64 (header-friendly).
     #[must_use]
     pub fn encode_base64(&self) -> String {
-        let payload = self.encode();
-        let mut buffer = vec![0u8; base64_encoded_len(payload.len())];
-        let written = URL_SAFE_NO_PAD
-            .encode_slice(payload, &mut buffer)
-            .expect("buffer sized using deterministic formula");
-        buffer.truncate(written);
-        String::from_utf8(buffer).expect("base64 output must be ASCII")
+        encode_base64_url_no_pad(&self.encode())
     }
 
     /// Decode a token from its binary frame.
@@ -242,19 +261,19 @@ impl ProofToken {
         }
         let mut reader = FrameReader::new(bytes, FRAME_MAGIC.len());
 
-        let version = reader.take(1)?[0];
+        let version = reader.take_array::<1>()?[0];
         if version != Self::VERSION {
             return Err(DecodeError::UnsupportedVersion(version));
         }
 
-        let flags = reader.take(1)?[0];
+        let flags = reader.take_array::<1>()?[0];
         if flags & !FLAG_HAS_EXPIRY != 0 {
             return Err(DecodeError::InvalidFlags(flags));
         }
-        let moderation = ModerationAction::from_u8(reader.take(1)?[0]);
-        let issued_at = u64::from_be_bytes(reader.take(8)?.try_into().unwrap());
+        let moderation = ModerationAction::from_u8(reader.take_array::<1>()?[0]);
+        let issued_at = u64::from_be_bytes(reader.take_array::<8>()?);
         let expires_at = if flags & FLAG_HAS_EXPIRY == FLAG_HAS_EXPIRY {
-            Some(u64::from_be_bytes(reader.take(8)?.try_into().unwrap()))
+            Some(u64::from_be_bytes(reader.take_array::<8>()?))
         } else {
             None
         };
@@ -266,11 +285,24 @@ impl ProofToken {
                 expires_at,
             });
         }
+        if unix_time_from_secs(issued_at).is_none() {
+            return Err(DecodeError::TimestampOutOfRange {
+                field: "issued_at",
+                value: issued_at,
+            });
+        }
+        if let Some(expires_at) = expires_at
+            && unix_time_from_secs(expires_at).is_none()
+        {
+            return Err(DecodeError::TimestampOutOfRange {
+                field: "expires_at",
+                value: expires_at,
+            });
+        }
 
-        let mut token_id = [0u8; 16];
-        token_id.copy_from_slice(reader.take(16)?);
+        let token_id = reader.take_array::<16>()?;
 
-        let entry_count = u16::from_be_bytes(reader.take(2)?.try_into().unwrap()) as usize;
+        let entry_count = u16::from_be_bytes(reader.take_array::<2>()?) as usize;
         if entry_count == 0 {
             return Err(DecodeError::MissingEntries);
         }
@@ -279,7 +311,7 @@ impl ProofToken {
         }
         let mut entry_ids = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
-            let len = u16::from_be_bytes(reader.take(2)?.try_into().unwrap()) as usize;
+            let len = u16::from_be_bytes(reader.take_array::<2>()?) as usize;
             if len == 0 || len > MAX_ENTRY_LEN {
                 return Err(DecodeError::InvalidEntryLength(len));
             }
@@ -288,10 +320,9 @@ impl ProofToken {
             entry_ids.push(entry.to_owned());
         }
 
-        let mut blinded_digest = [0u8; 32];
-        blinded_digest.copy_from_slice(reader.take(32)?);
+        let blinded_digest = reader.take_array::<32>()?;
 
-        let sig_len = u16::from_be_bytes(reader.take(2)?.try_into().unwrap()) as usize;
+        let sig_len = u16::from_be_bytes(reader.take_array::<2>()?) as usize;
         let remaining = reader.remaining();
         if sig_len != remaining {
             return Err(DecodeError::InvalidSignatureLength {
@@ -327,15 +358,8 @@ impl ProofToken {
     /// Returns [`DecodeError::Base64`] if the text is not valid base64 or any
     /// [`DecodeError`] emitted by [`ProofToken::decode`].
     pub fn decode_base64(s: &str) -> Result<Self, DecodeError> {
-        if s.len() % 4 == 1 {
-            return Err(DecodeError::Base64);
-        }
-        let mut buffer = vec![0u8; base64_decoded_capacity(s.len())];
-        let written = URL_SAFE_NO_PAD
-            .decode_slice(s.as_bytes(), &mut buffer)
-            .map_err(|_| DecodeError::Base64)?;
-        buffer.truncate(written);
-        Self::decode(&buffer)
+        let decoded = decode_base64_url_no_pad(s)?;
+        Self::decode(&decoded)
     }
 
     /// Return the moderation action classification.
@@ -347,14 +371,27 @@ impl ProofToken {
     /// UNIX timestamp (seconds) describing when the token was issued.
     #[must_use]
     pub fn issued_at(&self) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(self.issued_at)
+        self.checked_issued_at().unwrap_or(UNIX_EPOCH)
+    }
+
+    /// UNIX timestamp (seconds) describing when the token was issued, if it is
+    /// representable by `SystemTime`.
+    #[must_use]
+    pub fn checked_issued_at(&self) -> Option<SystemTime> {
+        unix_time_from_secs(self.issued_at)
     }
 
     /// Optional expiry timestamp.
     #[must_use]
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
-            .map(|ts| UNIX_EPOCH + Duration::from_secs(ts))
+            .map(|ts| unix_time_from_secs(ts).unwrap_or(UNIX_EPOCH))
+    }
+
+    /// Optional expiry timestamp, if present and representable by `SystemTime`.
+    #[must_use]
+    pub fn checked_expires_at(&self) -> Option<SystemTime> {
+        self.expires_at.and_then(unix_time_from_secs)
     }
 
     /// Token identifier bytes (UUID-compatible).
@@ -385,7 +422,10 @@ impl ProofToken {
         if verifying_key.is_weak() {
             return Err(VerificationError::InvalidSignature);
         }
-        let message = signing_message(&self.body_without_signature());
+        let body = self
+            .body_without_signature()
+            .map_err(|_| VerificationError::InvalidSignature)?;
+        let message = signing_message(&body);
         verifying_key
             .verify_strict(&message, &self.signature)
             .map_err(|_| VerificationError::InvalidSignature)
@@ -403,7 +443,8 @@ impl ProofToken {
         evidence_digest: &[u8; 32],
     ) -> Result<(), VerificationError> {
         let expected =
-            compute_blinded_digest(digest_key, &self.token_id, evidence_digest, &self.entry_ids);
+            compute_blinded_digest(digest_key, &self.token_id, evidence_digest, &self.entry_ids)
+                .map_err(|_| VerificationError::BlindedDigestMismatch)?;
         if expected == self.blinded_digest {
             Ok(())
         } else {
@@ -411,7 +452,7 @@ impl ProofToken {
         }
     }
 
-    fn body_without_signature(&self) -> Vec<u8> {
+    fn body_without_signature(&self) -> Result<Vec<u8>, EncodeError> {
         let mut out = Vec::new();
         out.push(Self::VERSION);
         let mut flags = 0u8;
@@ -425,17 +466,53 @@ impl ProofToken {
             out.extend_from_slice(&ts.to_be_bytes());
         }
         out.extend_from_slice(&self.token_id);
-        let entry_count = u16::try_from(self.entry_ids.len()).expect("entry count fits in u16");
+        let entry_count =
+            u16::try_from(self.entry_ids.len()).map_err(|_| EncodeError::EntryCountTooLarge {
+                max: usize::from(u16::MAX),
+                actual: self.entry_ids.len(),
+            })?;
         out.extend_from_slice(&entry_count.to_be_bytes());
         for entry in &self.entry_ids {
             let entry_bytes = entry.as_bytes();
-            let len = u16::try_from(entry_bytes.len()).expect("entry id fits in u16");
+            let len = u16::try_from(entry_bytes.len()).map_err(|_| EncodeError::EntryTooLong {
+                max: usize::from(u16::MAX),
+                actual: entry_bytes.len(),
+            })?;
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(entry_bytes);
         }
         out.extend_from_slice(&self.blinded_digest);
-        out
+        Ok(out)
     }
+}
+
+/// Errors surfaced while serializing proof tokens.
+#[derive(Debug, Clone, Copy, Error)]
+pub enum EncodeError {
+    /// More entries were present than the v1 frame can encode.
+    #[error("too many entry ids to encode: max {max}, got {actual}")]
+    EntryCountTooLarge {
+        /// Maximum number of entries encodable by the v1 frame.
+        max: usize,
+        /// Actual entry count observed.
+        actual: usize,
+    },
+    /// An entry identifier exceeded the v1 length prefix range.
+    #[error("entry id too long to encode: max {max} bytes, got {actual}")]
+    EntryTooLong {
+        /// Maximum size encodable by the v1 frame.
+        max: usize,
+        /// Actual entry size observed.
+        actual: usize,
+    },
+    /// Signature bytes exceeded the v1 length prefix range.
+    #[error("signature too long to encode: max {max} bytes, got {actual}")]
+    SignatureTooLong {
+        /// Maximum signature size encodable by the v1 frame.
+        max: usize,
+        /// Actual signature size observed.
+        actual: usize,
+    },
 }
 
 /// Errors surfaced when minting new tokens.
@@ -469,6 +546,9 @@ pub enum MintError {
     /// `expires_at` was equal to or earlier than `issued_at`.
     #[error("expires_at must be strictly greater than issued_at")]
     InvalidExpiry,
+    /// Token body could not be represented in the v1 frame.
+    #[error("proof token body encoding failed: {0}")]
+    Encoding(EncodeError),
 }
 
 /// Errors surfaced while decoding proof tokens.
@@ -506,6 +586,14 @@ pub enum DecodeError {
         /// Expiry timestamp (UNIX seconds).
         expires_at: u64,
     },
+    /// Timestamp could not be represented as `SystemTime`.
+    #[error("{field} timestamp {value} is out of range for system time")]
+    TimestampOutOfRange {
+        /// Timestamp field name.
+        field: &'static str,
+        /// UNIX-second timestamp carried by the frame.
+        value: u64,
+    },
     /// Signature length prefix did not match the trailing bytes.
     #[error("signature length mismatch (expected {expected}, actual {actual})")]
     InvalidSignatureLength {
@@ -536,23 +624,50 @@ fn to_unix_seconds(time: SystemTime) -> Result<u64, MintError> {
         .map(|duration| duration.as_secs())
 }
 
+fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
+}
+
+fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
+    let Some(encoded_len) = base64::encoded_len(bytes.len(), false) else {
+        return String::new();
+    };
+    let mut buffer = vec![0u8; encoded_len];
+    let Ok(written) = base64::Engine::encode_slice(&URL_SAFE_NO_PAD, bytes, &mut buffer) else {
+        return String::new();
+    };
+    buffer.truncate(written);
+    String::from_utf8(buffer).unwrap_or_default()
+}
+
+fn decode_base64_url_no_pad(s: &str) -> Result<Vec<u8>, DecodeError> {
+    let mut buffer = vec![0u8; base64::decoded_len_estimate(s.len())];
+    let written = base64::Engine::decode_slice(&URL_SAFE_NO_PAD, s, &mut buffer)
+        .map_err(|_| DecodeError::Base64)?;
+    buffer.truncate(written);
+    Ok(buffer)
+}
+
 fn compute_blinded_digest(
     digest_key: &ProofTokenDigestKey,
     token_id: &[u8; 16],
     evidence_digest: &[u8; 32],
     entries: &[String],
-) -> [u8; 32] {
+) -> Result<[u8; 32], EncodeError> {
     let mut hasher = Hasher::new_keyed(digest_key.as_bytes());
     hasher.update(DIGEST_DOMAIN);
     hasher.update(token_id);
     hasher.update(evidence_digest);
     for entry in entries {
         let entry_bytes = entry.as_bytes();
-        let len = u16::try_from(entry_bytes.len()).expect("entry id fits into u16");
+        let len = u16::try_from(entry_bytes.len()).map_err(|_| EncodeError::EntryTooLong {
+            max: usize::from(u16::MAX),
+            actual: entry_bytes.len(),
+        })?;
         hasher.update(&len.to_be_bytes());
         hasher.update(entry_bytes);
     }
-    hasher.finalize().into()
+    Ok(hasher.finalize().into())
 }
 
 fn signing_message(body: &[u8]) -> Vec<u8> {
@@ -560,28 +675,6 @@ fn signing_message(body: &[u8]) -> Vec<u8> {
     out.extend_from_slice(SIGNING_DOMAIN);
     out.extend_from_slice(body);
     out
-}
-
-fn base64_encoded_len(input_len: usize) -> usize {
-    let blocks = input_len / 3;
-    let rem = input_len % 3;
-    blocks * 4
-        + match rem {
-            0 => 0,
-            1 => 2,
-            _ => 3,
-        }
-}
-
-fn base64_decoded_capacity(encoded_len: usize) -> usize {
-    let blocks = encoded_len / 4;
-    let rem = encoded_len % 4;
-    blocks * 3
-        + match rem {
-            2 => 1,
-            3 => 2,
-            _ => 0,
-        }
 }
 
 #[cfg(test)]
@@ -627,6 +720,31 @@ mod tests {
     }
 
     #[test]
+    fn decode_truncated_token_prefixes_fail_closed() {
+        let mut rng = ChaCha20Rng::seed_from_u64(43);
+        let digest_key = ProofTokenDigestKey::new([3; 32]);
+        let signing = test_signing_key();
+        let evidence = [9u8; 32];
+        let params = ProofTokenParams {
+            moderation: ModerationAction::Block,
+            entry_ids: &["denylist/global", "manual/guardian"],
+            evidence_digest: &evidence,
+            issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_000),
+            expires_at: Some(UNIX_EPOCH + Duration::from_secs(1_714_000_600)),
+        };
+        let encoded = ProofToken::mint(&mut rng, &digest_key, &signing, &params)
+            .expect("mint")
+            .encode();
+
+        for len in 0..encoded.len() {
+            assert!(
+                ProofToken::decode(&encoded[..len]).is_err(),
+                "truncated prefix of length {len} must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn base64_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(17);
         let digest_key = ProofTokenDigestKey::new([11; 32]);
@@ -643,6 +761,17 @@ mod tests {
         let header = token.encode_base64();
         let decoded = ProofToken::decode_base64(&header).unwrap();
         assert_eq!(token, decoded);
+    }
+
+    #[test]
+    fn decode_base64_rejects_malformed_text_and_invalid_frames() {
+        let err = ProofToken::decode_base64("%%%").expect_err("invalid base64 should be rejected");
+        assert!(matches!(err, DecodeError::Base64));
+
+        let truncated = encode_base64_url_no_pad(FRAME_MAGIC);
+        let err =
+            ProofToken::decode_base64(&truncated).expect_err("truncated frame should be rejected");
+        assert!(matches!(err, DecodeError::Truncated));
     }
 
     #[test]
@@ -679,6 +808,72 @@ mod tests {
                 expires_at: 19
             }
         ));
+    }
+
+    #[test]
+    fn decode_rejects_unrepresentable_timestamps() {
+        let issued_overflow = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: u64::MAX,
+            expires_at: None,
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+        let err = ProofToken::decode(&issued_overflow.encode())
+            .expect_err("unrepresentable issued_at should fail closed");
+        match err {
+            DecodeError::TimestampOutOfRange { field, value } => {
+                assert_eq!(field, "issued_at");
+                assert_eq!(value, u64::MAX);
+            }
+            other => panic!("expected timestamp range error, got {other:?}"),
+        }
+
+        let expiry_overflow = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: Some(u64::MAX),
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+        let err = ProofToken::decode(&expiry_overflow.encode())
+            .expect_err("unrepresentable expires_at should fail closed");
+        match err {
+            DecodeError::TimestampOutOfRange { field, value } => {
+                assert_eq!(field, "expires_at");
+                assert_eq!(value, u64::MAX);
+            }
+            other => panic!("expected timestamp range error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timestamp_accessors_fail_closed_on_unrepresentable_values() {
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: u64::MAX,
+            expires_at: Some(u64::MAX),
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        assert!(token.checked_issued_at().is_none());
+        assert_eq!(token.issued_at(), UNIX_EPOCH);
+        assert!(token.checked_expires_at().is_none());
+        assert_eq!(token.expires_at(), Some(UNIX_EPOCH));
+
+        let no_expiry = ProofToken {
+            expires_at: None,
+            ..token
+        };
+        assert!(no_expiry.checked_expires_at().is_none());
+        assert!(no_expiry.expires_at().is_none());
     }
 
     #[test]
@@ -722,6 +917,73 @@ mod tests {
         bytes[offset] ^= 0x01;
         let decoded = ProofToken::decode(&bytes).unwrap();
         assert!(decoded.verify_signature(&verifying).is_err());
+    }
+
+    #[test]
+    fn try_encode_rejects_unencodable_direct_entry_count_without_panic() {
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: vec![String::new(); usize::from(u16::MAX) + 1],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        let err = token
+            .try_encode()
+            .expect_err("oversized direct entry count should not encode");
+        assert!(matches!(
+            err,
+            EncodeError::EntryCountTooLarge {
+                max,
+                actual
+            } if max == usize::from(u16::MAX) && actual == usize::from(u16::MAX) + 1
+        ));
+        assert!(matches!(
+            ProofToken::decode(&token.encode()),
+            Err(DecodeError::Truncated)
+        ));
+        assert!(
+            token
+                .verify_signature(&test_signing_key().verifying_key())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unencodable_direct_entry_lengths_fail_closed_without_panic() {
+        let digest_key = ProofTokenDigestKey::new([5; 32]);
+        let evidence = [4u8; 32];
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: vec!["x".repeat(usize::from(u16::MAX) + 1)],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        let err = token
+            .try_encode()
+            .expect_err("oversized direct entry should not encode");
+        assert!(matches!(
+            err,
+            EncodeError::EntryTooLong {
+                max,
+                actual
+            } if max == usize::from(u16::MAX) && actual == usize::from(u16::MAX) + 1
+        ));
+        assert!(matches!(
+            ProofToken::decode(&token.encode()),
+            Err(DecodeError::Truncated)
+        ));
+        assert!(matches!(
+            token.verify_blinded_digest(&digest_key, &evidence),
+            Err(VerificationError::BlindedDigestMismatch)
+        ));
     }
 
     #[test]
@@ -775,7 +1037,8 @@ mod tests {
 
         for counter in 0u32..2048 {
             token.token_id[..4].copy_from_slice(&counter.to_le_bytes());
-            let message = signing_message(&token.body_without_signature());
+            let body = token.body_without_signature().expect("body");
+            let message = signing_message(&body);
 
             for (m, r_point) in torsion_points.iter().enumerate() {
                 let k_mod = hash_mod_order(r_point, pk.as_bytes(), &message, order);

@@ -62,6 +62,9 @@ const BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS: u64 = 1_u64 << 52;
 const BFV_PROGRAM_REGISTER_COUNT_U16: u16 = 4;
 const BFV_PROGRAM_STATE_WIDTH_U16: u16 = 32;
 const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = 64;
+const RAM_LFE_PROOF_BACKEND_MAX_BYTES: usize = 128;
+const RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES: usize = 256;
+const RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES: usize = 1_048_576;
 const MAX_INPUT_BYTES: usize = 1_048_576;
 const MAX_SECRET_BYTES: usize = 4096;
 
@@ -192,6 +195,10 @@ pub struct BfvProgrammedPublicParameters {
     /// BFV envelope parameters used to encrypt identifier bytes.
     pub encryption: BfvIdentifierPublicParameters,
     /// Public evaluation-key bundle used by RAM-FHE evaluators.
+    ///
+    /// First-release programmed policies consume only the relinearization key.
+    /// Rotation and bootstrap refresh keys are governed by Soracloud FHE
+    /// execution policies instead of identifier-program public metadata.
     pub evaluation_keys: BfvEvaluationKeyBundle,
     /// Stable digest of the hidden compiled program kept in runtime config.
     pub hidden_program_digest: Hash,
@@ -426,11 +433,30 @@ pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash)
 
 /// Wrap BFV identifier-encryption parameters into the programmed RAM-FHE public bundle.
 #[must_use]
+///
+/// # Panics
+/// Panics when the supplied encryption parameters or evaluation keys are not
+/// valid programmed RAM-FHE material. New callers that handle untrusted input
+/// should use [`try_bfv_programmed_public_parameters`].
 pub fn bfv_programmed_public_parameters(
     encryption: BfvIdentifierPublicParameters,
     evaluation_keys: BfvEvaluationKeyBundle,
 ) -> BfvProgrammedPublicParameters {
-    bfv_programmed_public_parameters_with_program(
+    try_bfv_programmed_public_parameters(encryption, evaluation_keys)
+        .expect("programmed BFV public parameters must be valid")
+}
+
+/// Fallibly wrap BFV identifier-encryption parameters into the programmed
+/// RAM-FHE public bundle.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the encryption parameters are not registered
+/// production BFV parameters or the evaluation-key metadata is invalid.
+pub fn try_bfv_programmed_public_parameters(
+    encryption: BfvIdentifierPublicParameters,
+    evaluation_keys: BfvEvaluationKeyBundle,
+) -> Result<BfvProgrammedPublicParameters, RamLfeError> {
+    try_bfv_programmed_public_parameters_with_program(
         encryption,
         evaluation_keys,
         &default_bfv_programmed_hidden_program(),
@@ -441,6 +467,12 @@ pub fn bfv_programmed_public_parameters(
 
 /// Wrap BFV identifier-encryption parameters and explicit hidden-program metadata.
 #[must_use]
+///
+/// # Panics
+/// Panics when the supplied encryption parameters, evaluation keys, hidden
+/// program, or proof-verifier metadata are not valid programmed RAM-FHE
+/// material. New callers that handle untrusted input should use
+/// [`try_bfv_programmed_public_parameters_with_program`].
 pub fn bfv_programmed_public_parameters_with_program(
     encryption: BfvIdentifierPublicParameters,
     evaluation_keys: BfvEvaluationKeyBundle,
@@ -448,23 +480,51 @@ pub fn bfv_programmed_public_parameters_with_program(
     verification_mode: RamLfeVerificationMode,
     proof_verifier: Option<RamLfeProofVerifierMetadata>,
 ) -> BfvProgrammedPublicParameters {
-    let parameter_digest =
-        registered_bfv_parameter_digest(&encryption.parameters).expect("registered BFV params");
+    try_bfv_programmed_public_parameters_with_program(
+        encryption,
+        evaluation_keys,
+        program,
+        verification_mode,
+        proof_verifier,
+    )
+    .expect("programmed BFV public parameters must be valid")
+}
+
+/// Fallibly wrap BFV identifier-encryption parameters and explicit
+/// hidden-program metadata.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the encryption parameters are not registered
+/// production BFV parameters, the evaluation keys are not valid for the
+/// programmed backend, or the hidden-program/proof metadata fails admission.
+pub fn try_bfv_programmed_public_parameters_with_program(
+    encryption: BfvIdentifierPublicParameters,
+    evaluation_keys: BfvEvaluationKeyBundle,
+    program: &HiddenRamFheProgram,
+    verification_mode: RamLfeVerificationMode,
+    proof_verifier: Option<RamLfeProofVerifierMetadata>,
+) -> Result<BfvProgrammedPublicParameters, RamLfeError> {
+    encryption.validate().map_err(|err| map_bfv_error(&err))?;
+    validate_programmed_evaluation_keys(&evaluation_keys)?;
+    validate_hidden_ram_fhe_program(program)?;
+    validate_proof_verifier_metadata(verification_mode, proof_verifier.as_ref())?;
+    let parameter_digest = registered_bfv_parameter_digest(&encryption.parameters)
+        .map_err(|err| map_bfv_error(&err))?;
     let evaluation_key_digest = evaluation_keys
         .digest(&encryption.parameters)
-        .expect("valid BFV evaluation keys");
-    BfvProgrammedPublicParameters {
+        .map_err(|err| map_bfv_error(&err))?;
+    Ok(BfvProgrammedPublicParameters {
         encryption,
         evaluation_keys,
         hidden_program_digest: program
             .digest()
-            .expect("canonical hidden program digest must encode"),
+            .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?,
         parameter_digest,
         evaluation_key_digest,
         ram_fhe_profile: bfv_program_profile(),
         verification_mode,
         proof_verifier,
-    }
+    })
 }
 
 /// Decode programmed BFV public parameters, upgrading legacy raw BFV payloads.
@@ -845,6 +905,11 @@ fn validate_programmed_public_parameters(
             "programmed BFV backend requires plaintext_modulus={RAM_LFE_BFV_PLAINTEXT_MODULUS}"
         )));
     }
+    if public_parameters.hidden_program_digest == Hash::prehashed([0; Hash::LENGTH]) {
+        return Err(RamLfeError::Bfv(
+            "programmed BFV hidden-program digest must not be zero".to_owned(),
+        ));
+    }
     let parameter_digest = registered_bfv_parameter_digest(&encryption.parameters)
         .map_err(|err| map_bfv_error(&err))?;
     if public_parameters.parameter_digest != parameter_digest {
@@ -852,6 +917,7 @@ fn validate_programmed_public_parameters(
             "programmed BFV parameter digest does not match registered parameters".to_owned(),
         ));
     }
+    validate_programmed_evaluation_keys(&public_parameters.evaluation_keys)?;
     let evaluation_key_digest = public_parameters
         .evaluation_keys
         .digest(&encryption.parameters)
@@ -859,6 +925,22 @@ fn validate_programmed_public_parameters(
     if public_parameters.evaluation_key_digest != evaluation_key_digest {
         return Err(RamLfeError::Bfv(
             "programmed BFV evaluation-key digest does not match evaluation keys".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_programmed_evaluation_keys(
+    evaluation_keys: &BfvEvaluationKeyBundle,
+) -> Result<(), RamLfeError> {
+    if !evaluation_keys.rotation_keys.is_empty() {
+        return Err(RamLfeError::Bfv(
+            "programmed BFV public parameters must not publish rotation refresh keys".to_owned(),
+        ));
+    }
+    if evaluation_keys.bootstrap_key.is_some() {
+        return Err(RamLfeError::Bfv(
+            "programmed BFV public parameters must not publish bootstrap refresh keys".to_owned(),
         ));
     }
     Ok(())
@@ -887,19 +969,24 @@ fn validate_proof_verifier_metadata(
         )),
         (_, None) => Ok(()),
         (_, Some(metadata)) => {
-            if metadata.proof_backend.trim().is_empty() {
-                return Err(RamLfeError::Bfv(
-                    "proof verifier backend must not be empty".to_owned(),
-                ));
-            }
-            if metadata.proof_backend.trim().starts_with("debug/") {
+            validate_proof_metadata_identifier(
+                "proof verifier backend",
+                &metadata.proof_backend,
+                RAM_LFE_PROOF_BACKEND_MAX_BYTES,
+            )?;
+            if metadata.proof_backend.starts_with("debug/") {
                 return Err(RamLfeError::Bfv(
                     "debug proof backends are not supported".to_owned(),
                 ));
             }
-            if metadata.circuit_id.trim().is_empty() {
+            validate_proof_metadata_identifier(
+                "proof verifier circuit_id",
+                &metadata.circuit_id,
+                RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES,
+            )?;
+            if metadata.public_inputs_schema_hash == Hash::prehashed([0; Hash::LENGTH]) {
                 return Err(RamLfeError::Bfv(
-                    "proof verifier circuit_id must not be empty".to_owned(),
+                    "proof verifier public-input schema hash must not be zero".to_owned(),
                 ));
             }
             if metadata.verifying_key_bytes.is_empty() {
@@ -907,9 +994,45 @@ fn validate_proof_verifier_metadata(
                     "proof verifier bytes must not be empty".to_owned(),
                 ));
             }
+            if metadata.verifying_key_bytes.iter().all(|byte| *byte == 0) {
+                return Err(RamLfeError::Bfv(
+                    "proof verifier bytes must not be all zero".to_owned(),
+                ));
+            }
+            if metadata.verifying_key_bytes.len() > RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES {
+                return Err(RamLfeError::Bfv(format!(
+                    "proof verifier bytes exceed the maximum supported length {RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES}"
+                )));
+            }
             Ok(())
         }
     }
+}
+
+fn validate_proof_metadata_identifier(
+    field: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), RamLfeError> {
+    if value.is_empty() {
+        return Err(RamLfeError::Bfv(format!("{field} must not be empty")));
+    }
+    if value.len() > max_bytes {
+        return Err(RamLfeError::Bfv(format!(
+            "{field} exceeds the maximum supported length {max_bytes}"
+        )));
+    }
+    if value.trim() != value {
+        return Err(RamLfeError::Bfv(format!(
+            "{field} must be canonical without surrounding whitespace"
+        )));
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(RamLfeError::Bfv(format!(
+            "{field} must contain only printable ASCII bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn derive_program_initial_state(
@@ -1457,9 +1580,10 @@ fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters, decrypt,
-        derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
-        ram_lfe_bfv_parameters_v1,
+        BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
+        BfvParameters, bootstrap_key_from_seed, decrypt, derive_identifier_key_material_from_seed,
+        encrypt_identifier_from_seed, keygen_from_seed, ram_lfe_bfv_parameters_v1,
+        rotation_key_from_seed,
     };
 
     use super::*;
@@ -1495,12 +1619,7 @@ mod tests {
     #[test]
     fn bfv_affine_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
-        let params = BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: 1_u64 << 40,
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
-        };
+        let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"phone#retail";
         let (public_parameters, _, _) =
             derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
@@ -1564,6 +1683,36 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
         assert_ne!(first.opaque_id, Hash::prehashed([0; Hash::LENGTH]));
+    }
+
+    #[test]
+    fn try_bfv_programmed_public_parameters_rejects_unregistered_profile() {
+        let params = BfvParameters {
+            polynomial_degree: 64,
+            ciphertext_modulus: 1_u64 << 40,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        params
+            .validate()
+            .expect("sample BFV profile is structurally valid");
+        assert_ne!(params, ram_lfe_bfv_parameters_v1());
+        let (_, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"ram-lfe-unregistered-bfv-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 63,
+        };
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+
+        let err = try_bfv_programmed_public_parameters(public_parameters, evaluation_keys)
+            .expect_err("programmed BFV constructor must reject unregistered profiles");
+        assert!(err.to_string().contains("not registered"));
     }
 
     #[test]
@@ -1758,6 +1907,14 @@ mod tests {
         .expect_err("tampered parameter digest must be rejected");
         assert!(err.to_string().contains("parameter digest"));
 
+        let mut zero_program_digest = programmed.clone();
+        zero_program_digest.hidden_program_digest = Hash::prehashed([0; Hash::LENGTH]);
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&zero_program_digest).expect("encode zero program digest"),
+        )
+        .expect_err("zero hidden-program digest must be rejected");
+        assert!(err.to_string().contains("hidden-program digest"));
+
         let mut wrong_evaluation_digest = programmed;
         wrong_evaluation_digest.evaluation_key_digest = Hash::new(b"wrong-evaluation-keys");
         let err = decode_bfv_programmed_public_parameters(
@@ -1768,6 +1925,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn programmed_public_parameters_reject_profile_and_verifier_metadata_abuse() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();
@@ -1833,6 +1991,66 @@ mod tests {
         .expect_err("blank proof verifier backend must be rejected");
         assert!(err.to_string().contains("backend"));
 
+        let mut proof_with_padded_backend = programmed.clone();
+        proof_with_padded_backend.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_padded_backend.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            proof_backend: " halo2/ram-lfe-v1".to_owned(),
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_padded_backend).expect("encode padded backend"),
+        )
+        .expect_err("padded proof verifier backend must be rejected");
+        assert!(err.to_string().contains("canonical"));
+
+        let mut proof_with_control_circuit = programmed.clone();
+        proof_with_control_circuit.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_control_circuit.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            circuit_id: "ram-lfe\n-test".to_owned(),
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_control_circuit).expect("encode control circuit"),
+        )
+        .expect_err("control bytes in proof verifier circuit_id must be rejected");
+        assert!(err.to_string().contains("printable ASCII"));
+
+        let mut proof_with_zero_schema = programmed.clone();
+        proof_with_zero_schema.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_zero_schema.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            public_inputs_schema_hash: Hash::prehashed([0; Hash::LENGTH]),
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_zero_schema).expect("encode zero schema hash"),
+        )
+        .expect_err("zero proof verifier schema hash must be rejected");
+        assert!(err.to_string().contains("schema hash"));
+
+        let mut proof_with_oversized_vk = programmed.clone();
+        proof_with_oversized_vk.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_oversized_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            verifying_key_bytes: vec![0xAA; RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES + 1],
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_oversized_vk).expect("encode oversized verifying key"),
+        )
+        .expect_err("oversized proof verifier bytes must be rejected");
+        assert!(err.to_string().contains("maximum supported length"));
+
+        let mut proof_with_zero_vk = programmed.clone();
+        proof_with_zero_vk.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_zero_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            verifying_key_bytes: vec![0; 32],
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_zero_vk).expect("encode zero verifying key"),
+        )
+        .expect_err("all-zero proof verifier bytes must be rejected");
+        assert!(err.to_string().contains("all zero"));
+
         let mut proof_with_empty_vk = programmed;
         proof_with_empty_vk.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_empty_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -1844,6 +2062,68 @@ mod tests {
         )
         .expect_err("empty proof verifier bytes must be rejected");
         assert!(err.to_string().contains("verifier bytes"));
+    }
+
+    #[test]
+    fn programmed_public_parameters_reject_unused_refresh_keys() {
+        let secret = b"resolver-secret";
+        let params = ram_lfe_bfv_parameters_v1();
+        let associated_data = b"phone#retail";
+        let program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
+                .expect("derive BFV public parameters");
+        let programmed = bfv_programmed_public_parameters_with_program(
+            public_parameters.clone(),
+            BfvEvaluationKeyBundle {
+                relinearization_key,
+                rotation_keys: Vec::new(),
+                bootstrap_key: None,
+            },
+            &program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+
+        let mut with_rotation = programmed.clone();
+        with_rotation.evaluation_keys.rotation_keys.push(
+            rotation_key_from_seed(
+                &params,
+                &public_parameters.public_key,
+                1,
+                b"bfv-programmed-unused-rotation-key",
+            )
+            .expect("rotation key"),
+        );
+        with_rotation.evaluation_key_digest = with_rotation
+            .evaluation_keys
+            .digest(&params)
+            .expect("updated evaluation-key digest");
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&with_rotation).expect("encode rotation-key abuse"),
+        )
+        .expect_err("programmed public parameters must reject unused rotation keys");
+        assert!(err.to_string().contains("rotation refresh keys"));
+
+        let mut with_bootstrap = programmed;
+        with_bootstrap.evaluation_keys.bootstrap_key = Some(
+            bootstrap_key_from_seed(
+                &params,
+                &public_parameters.public_key,
+                "programmed-bootstrap-key",
+                b"bfv-programmed-unused-bootstrap-key",
+            )
+            .expect("bootstrap key"),
+        );
+        with_bootstrap.evaluation_key_digest = with_bootstrap
+            .evaluation_keys
+            .digest(&params)
+            .expect("updated evaluation-key digest");
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&with_bootstrap).expect("encode bootstrap-key abuse"),
+        )
+        .expect_err("programmed public parameters must reject unused bootstrap keys");
+        assert!(err.to_string().contains("bootstrap refresh keys"));
     }
 
     #[test]
@@ -1983,22 +2263,29 @@ mod tests {
             rotation_keys: Vec::new(),
             bootstrap_key: None,
         };
-        let programmed = bfv_programmed_public_parameters_with_program(
-            public_parameters,
-            evaluation_keys,
+        let debug_verifier = RamLfeProofVerifierMetadata {
+            proof_backend: "debug/ok".to_owned(),
+            circuit_id: "ram-lfe-test".to_owned(),
+            public_inputs_schema_hash: Hash::new(b"schema"),
+            verifying_key_bytes: vec![0xAA],
+        };
+        let err = try_bfv_programmed_public_parameters_with_program(
+            public_parameters.clone(),
+            evaluation_keys.clone(),
             &default_bfv_programmed_hidden_program(),
             RamLfeVerificationMode::Proof,
-            Some(RamLfeProofVerifierMetadata {
-                proof_backend: "debug/ok".to_owned(),
-                circuit_id: "ram-lfe-test".to_owned(),
-                public_inputs_schema_hash: Hash::new(b"schema"),
-                verifying_key_bytes: vec![0xAA],
-            }),
-        );
+            Some(debug_verifier.clone()),
+        )
+        .expect_err("debug proof backend must be rejected");
+        assert!(err.to_string().contains("debug proof backends"));
+
+        let mut programmed = bfv_programmed_public_parameters(public_parameters, evaluation_keys);
+        programmed.verification_mode = RamLfeVerificationMode::Proof;
+        programmed.proof_verifier = Some(debug_verifier);
         let encoded = norito::to_bytes(&programmed).expect("encode programmed params");
 
         let err = decode_bfv_programmed_public_parameters(&encoded)
-            .expect_err("debug proof backend must be rejected");
+            .expect_err("debug proof backend must be rejected while decoding");
         assert!(err.to_string().contains("debug proof backends"));
     }
 

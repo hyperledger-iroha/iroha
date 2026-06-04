@@ -92,11 +92,17 @@ pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
 /// Reserved chain-admission circuit id for lineage-proving recursive spend redemption.
 ///
-/// Proofs under this id must verify the private-hop verifier batch and the
-/// recursive spend accumulator transition in-circuit before the chain can
-/// accept them for public minting.
+/// This is the legacy family selector accepted by ABI helpers. Production
+/// verifier records use the profile-specific one-hop or append ids below so
+/// both keys can coexist in the verifier registry.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-lineage-v1";
+/// Profile-specific Reserved-lineage circuit id for the first offline hop.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-lineage-onehop-v1";
+/// Profile-specific Reserved-lineage circuit id for append proofs after hop one.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-lineage-append-v1";
 /// Maximum hop count admitted for witnessless Reserved-lineage redemption.
 ///
 /// The bound matches the compact-token hop cap so recursive spend-again-offline
@@ -176,9 +182,31 @@ pub fn can_redeem_kagemusha_recursive_spend_witnessless(
     hop_count: u32,
 ) -> bool {
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        && proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-        && hop_count >= 1
-        && hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+        && is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)
+        && (1..=KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1).contains(&hop_count)
+}
+
+/// Return `true` when a circuit id is any Reserved-lineage recursive spend profile.
+#[must_use]
+pub fn is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id: &str) -> bool {
+    matches!(
+        proof_circuit_id,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    )
+}
+
+/// Return `true` when a circuit id selects a Reserved-lineage append output profile.
+#[must_use]
+pub fn is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+    output_proof_circuit_id: &str,
+) -> bool {
+    matches!(
+        output_proof_circuit_id,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    )
 }
 
 /// Return `true` when redeem construction must carry a record-backed lineage witness.
@@ -196,8 +224,8 @@ pub fn requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
 #[must_use]
 pub fn can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count: u32) -> bool {
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        && previous_hop_count >= 1
-        && previous_hop_count < KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+        && (1..KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1)
+            .contains(&previous_hop_count)
 }
 
 /// Return `true` when append proving must carry previous recursive proof openings.
@@ -206,9 +234,9 @@ pub fn requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_appe
     output_proof_circuit_id: &str,
     previous_hop_count: u32,
 ) -> bool {
-    normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(output_proof_circuit_id)
-        == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-        && previous_hop_count >= 1
+    is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+        normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(output_proof_circuit_id),
+    ) && previous_hop_count >= 1
 }
 
 /// Normalize an append output proof circuit id for legacy ABI-6 compatibility.
@@ -218,6 +246,8 @@ pub fn normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
 ) -> &str {
     if output_proof_circuit_id.is_empty() {
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    } else if output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 {
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     } else {
         output_proof_circuit_id
     }
@@ -231,7 +261,7 @@ pub fn is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
     matches!(
         normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(output_proof_circuit_id),
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
 }
 
@@ -243,8 +273,7 @@ pub fn is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
     matches!(
         previous_proof_circuit_id,
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-    )
+    ) || is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
 }
 
 /// Return `true` when append requests must include the previous lineage verifier record.
@@ -252,7 +281,7 @@ pub fn is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
 pub fn requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
     previous_proof_circuit_id: &str,
 ) -> bool {
-    previous_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
 }
 
 /// Return `true` when an append proof circuit transition is structurally allowed.
@@ -275,14 +304,15 @@ pub fn is_supported_kagemusha_recursive_spend_append_proof_transition(
         (
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-        ) | (
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-        ) | (
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
         )
-    )
+    ) || (is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
+        && matches!(
+            normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                output_proof_circuit_id
+            ),
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+                | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        ))
 }
 
 /// Return the preferred append output proof circuit for the current release.
@@ -294,7 +324,7 @@ pub fn preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
     previous_hop_count: u32,
 ) -> &'static str {
     if can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count) {
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     } else {
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
     }
@@ -320,7 +350,7 @@ pub fn can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
             usize::try_from(previous_hop_count.saturating_add(1))
                 .is_ok_and(|output_hop_count| output_hop_count <= KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)
         }
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 => {
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {
             can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)
         }
         _ => false,
@@ -430,7 +460,7 @@ fn has_trusted_setup_kagemusha_backend_segment(backend: &str) -> bool {
 fn has_trusted_setup_kagemusha_backend_compact_label(backend: &str) -> bool {
     let compact = backend
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
     [
         "groth16",
@@ -459,7 +489,7 @@ fn is_developer_only_kagemusha_backend(backend: &str) -> bool {
     }
     let compact = backend
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
     compact.contains("debug") || compact.contains("mock")
 }
@@ -887,6 +917,7 @@ pub enum KagemushaFoldError {
 }
 
 impl core::fmt::Display for KagemushaFoldError {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidPublicInputDomain { expected, actual } => write!(
@@ -2823,6 +2854,12 @@ pub fn offline_note_recursive_public_inputs_schema_hash() -> [u8; Hash::LENGTH] 
     Hash::new(OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA).into()
 }
 
+/// Return the registry schema hash required for Offline V2 recursive note verifiers.
+#[must_use]
+pub fn offline_note_v2_recursive_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
+    offline_note_recursive_public_inputs_schema_hash()
+}
+
 /// Return the registry schema hash required for Kagemusha folded proof verifiers.
 #[must_use]
 pub fn kagemusha_folded_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
@@ -3046,7 +3083,7 @@ pub fn kagemusha_proof_public_inputs_statement_digest(
     if statement.envelope_backend != expected_tag {
         return Err(KagemushaFoldError::ProofStatementBackendTagMismatch {
             proof_backend: statement.proof_backend.clone(),
-            envelope_backend: statement.envelope_backend.clone(),
+            envelope_backend: statement.envelope_backend,
         });
     }
     if statement.vk_hash == [0u8; Hash::LENGTH] {
@@ -3177,16 +3214,10 @@ fn validate_kagemusha_step_shape_and_sets(
             output_count: output_commitments.len(),
         });
     }
-    if input_nullifiers
-        .iter()
-        .any(|nullifier| *nullifier == [0u8; Hash::LENGTH])
-    {
+    if input_nullifiers.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::ZeroInputNullifier { hop_index });
     }
-    if output_commitments
-        .iter()
-        .any(|commitment| *commitment == [0u8; Hash::LENGTH])
-    {
+    if output_commitments.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::ZeroOutputCommitment { hop_index });
     }
     Ok(())
@@ -3778,10 +3809,7 @@ fn validate_kagemusha_recursive_spend_topup_anchor_nullifiers(
             field: "topup_anchor_nullifiers",
         });
     }
-    if nullifiers
-        .iter()
-        .any(|nullifier| *nullifier == [0u8; Hash::LENGTH])
-    {
+    if nullifiers.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
             field: "topup_anchor_nullifiers",
         });
@@ -3926,7 +3954,7 @@ fn kagemusha_recursive_spend_proof_circuit(
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 => {
             Ok(KagemushaRecursiveSpendProofCircuit::SemanticAggregation)
         }
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 => {
+        circuit_id if is_kagemusha_recursive_spend_lineage_proof_circuit_id(circuit_id) => {
             Ok(KagemushaRecursiveSpendProofCircuit::Lineage)
         }
         _ => Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -4126,12 +4154,7 @@ fn kagemusha_recursive_spend_proof_chain_digest(
                 previous_recursive_proof,
             )?)
         }
-        (Some(_), None) => {
-            return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
-                field: "previous_recursive_proof",
-            });
-        }
-        (None, Some(_)) => {
+        (Some(_), None) | (None, Some(_)) => {
             return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "previous_recursive_proof",
             });
@@ -4249,6 +4272,7 @@ fn ensure_recursive_spend_verifier_context_matches(
 const KAGEMUSHA_RECURSIVE_SPEND_BINDING_ONLY_PREVIOUS_OPENINGS_ARCHIVE_DIGEST: [u8; Hash::LENGTH] =
     [0x4b; Hash::LENGTH];
 
+#[allow(clippy::too_many_lines)]
 fn kagemusha_recursive_spend_accumulator_from_parts(
     previous: Option<&KagemushaRecursiveSpendAccumulatorV1>,
     previous_recursive_proof: Option<&KagemushaRecursiveAggregationProof>,
@@ -4383,9 +4407,10 @@ fn kagemusha_recursive_spend_accumulator_from_parts(
     let mut current_input_nullifiers = step.input_nullifiers.clone();
     current_input_nullifiers.sort_unstable();
     validate_kagemusha_recursive_spend_topup_anchor_nullifiers(&current_input_nullifiers)?;
-    let topup_anchor_nullifiers = previous
-        .map(|accumulator| accumulator.topup_anchor_nullifiers.clone())
-        .unwrap_or_else(|| current_input_nullifiers.clone());
+    let topup_anchor_nullifiers = previous.map_or_else(
+        || current_input_nullifiers.clone(),
+        |accumulator| accumulator.topup_anchor_nullifiers.clone(),
+    );
     let nullifier_values = previous
         .map(|accumulator| vec![hash_bytes_from_hash(accumulator.nullifier_digest)])
         .unwrap_or_default()
@@ -4430,9 +4455,7 @@ fn kagemusha_recursive_spend_accumulator_from_parts(
         asset: asset.clone(),
         step_digests,
     })?;
-    let hop_count = previous
-        .map(|accumulator| accumulator.hop_count.saturating_add(1))
-        .unwrap_or(1);
+    let hop_count = previous.map_or(1, |accumulator| accumulator.hop_count.saturating_add(1));
     let hop_count_usize = usize::try_from(hop_count).unwrap_or(usize::MAX);
     if hop_count_usize > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
         return Err(KagemushaFoldError::TooManyHops {
@@ -4693,6 +4716,7 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_parts(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_parts(
     accumulator: &KagemushaRecursiveSpendAccumulatorV1,
     previous: Option<&KagemushaRecursiveSpendAccumulatorV1>,
@@ -4807,7 +4831,7 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_part
         resulting_nullifier_digest: accumulator.nullifier_digest,
         resulting_output_commitment_digest: accumulator.output_commitment_digest,
         resulting_fold_digest: accumulator.fold_digest,
-        resulting_accumulator_digest: kagemusha_recursive_spend_accumulator_digest(&accumulator)?,
+        resulting_accumulator_digest: kagemusha_recursive_spend_accumulator_digest(accumulator)?,
         resulting_public_inputs_hash:
             kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(accumulator)?,
     };
@@ -5586,6 +5610,7 @@ impl KagemushaRecursiveSpendTransitionProfileV1 {
     /// Returns [`KagemushaFoldError`] when previous-state fields are present for
     /// an initial hop, absent for an append, or any transition digest/root/note
     /// field is outside the Reserved-lineage circuit contract.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_context(&self) -> Result<(), KagemushaFoldError> {
         if self.domain != KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -6762,7 +6787,7 @@ fn validate_kagemusha_verified_fold_lineage_step_attachment(
 ) -> Result<(), KagemushaFoldError> {
     if !is_supported_kagemusha_proof_backend(step.attachment.backend.as_str()) {
         return Err(KagemushaFoldError::UnsupportedProofBackend {
-            backend: step.attachment.backend.to_string(),
+            backend: step.attachment.backend.clone(),
         });
     }
     if step.attachment.proof.backend != step.attachment.backend {
@@ -6866,7 +6891,7 @@ fn validate_kagemusha_verified_fold_lineage_record_entry(
     }
     let Some(expected_backend) = kagemusha_backend_tag(step.attachment.backend.as_str()) else {
         return Err(KagemushaFoldError::UnsupportedProofBackend {
-            backend: step.attachment.backend.to_string(),
+            backend: step.attachment.backend.clone(),
         });
     };
     if entry.record.backend != expected_backend {
@@ -6903,12 +6928,7 @@ fn validate_kagemusha_verified_fold_lineage_record_entry(
     }
     match &entry.record.key {
         Some(inline_key) if inline_key == &step.verifier_key => {}
-        Some(_) => {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "lineage_witness.record_bundle.verifier_records.key",
-            });
-        }
-        None => {
+        Some(_) | None => {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_witness.record_bundle.verifier_records.key",
             });
@@ -6949,7 +6969,7 @@ fn kagemusha_verified_fold_lineage_step_open_verify_envelope(
         norito::decode_from_bytes(&step.attachment.proof.bytes).map_err(|_| invalid())?;
     let Some(expected_backend) = kagemusha_backend_tag(step.attachment.backend.as_str()) else {
         return Err(KagemushaFoldError::UnsupportedProofBackend {
-            backend: step.attachment.backend.to_string(),
+            backend: step.attachment.backend.clone(),
         });
     };
     if envelope.backend != expected_backend {
@@ -7182,7 +7202,7 @@ pub fn kagemusha_recursive_previous_proof_open_envelope_domain_tag(
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
         b"verifier-key-backend",
-        proof.verifier_key_id.backend.as_str().as_bytes(),
+        proof.verifier_key_id.backend.as_bytes(),
     )?;
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
@@ -7235,7 +7255,7 @@ pub fn kagemusha_recursive_previous_proof_open_envelope_metadata(
         })?;
     let Some(expected_backend) = kagemusha_backend_tag(proof.proof.backend.as_str()) else {
         return Err(KagemushaFoldError::UnsupportedProofBackend {
-            backend: proof.proof.backend.to_string(),
+            backend: proof.proof.backend.clone(),
         });
     };
     if envelope.backend != expected_backend {
@@ -7422,7 +7442,13 @@ fn validate_kagemusha_recursive_spend_previous_lineage_record_selection(
         KagemushaRecursiveSpendProofCircuit::Lineage => {
             let record = previous_lineage_verifier_record
                 .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })?;
-            validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)
+            validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)?;
+            if record.circuit_id != bundle.recursive_proof.verifier_key_id.name {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: fields.circuit_id,
+                });
+            }
+            Ok(())
         }
     }
 }
@@ -7584,7 +7610,7 @@ fn validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
             field: fields.curve,
         });
     }
-    if record.circuit_id != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 {
+    if !is_kagemusha_recursive_spend_lineage_proof_circuit_id(&record.circuit_id) {
         return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
             field: fields.circuit_id,
         });
@@ -7632,6 +7658,7 @@ fn validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_kagemusha_recursive_spend_lineage_witness(
     bundle: &KagemushaRecursiveSpendBundleV1,
     witness: &KagemushaRecursiveSpendLineageWitnessV1,
@@ -7756,7 +7783,9 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
             }
         }
         let expected_hop_count = proof_index.saturating_add(1);
-        if previous_proof.public_inputs.hop_count != expected_hop_count as u32 {
+        let expected_hop_count_u32 =
+            u32::try_from(expected_hop_count).expect("hop count is bounded to u32");
+        if previous_proof.public_inputs.hop_count != expected_hop_count_u32 {
             return Err(KagemushaFoldError::HopCountMismatch {
                 expected: expected_hop_count,
                 actual: previous_proof.public_inputs.hop_count,
@@ -8011,6 +8040,7 @@ struct KagemushaCanonicalFoldParts {
     aggregation_statement: KagemushaPoseidonAggregationTranscriptStatement,
 }
 
+#[allow(clippy::too_many_lines)]
 fn kagemusha_canonical_fold_parts(
     chain_id: &ChainId,
     asset: &AssetDefinitionId,
@@ -8178,6 +8208,7 @@ pub fn kagemusha_poseidon_aggregation_transcript_statement(
 /// the verifier parameter fingerprint is all-zero, the fixed-window table
 /// schedule, shared-table manifest, or table-base digest is all-zero, or the
 /// verifier-witness batch digest is all-zero.
+#[allow(clippy::too_many_arguments)]
 pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     chain_id: &ChainId,
     asset: &AssetDefinitionId,
@@ -8208,9 +8239,9 @@ pub fn kagemusha_recursive_aggregation_evidence_from_steps(
 }
 
 struct KagemushaFoldDigestParts {
-    nullifier_digest: Hash,
-    output_commitment_digest: Hash,
-    fold_digest: Hash,
+    nullifier: Hash,
+    output_commitment: Hash,
+    fold: Hash,
 }
 
 fn kagemusha_fold_digest_parts_from_aggregation_statement(
@@ -8242,15 +8273,9 @@ fn kagemusha_fold_digest_parts_from_aggregation_statement(
     }
 
     Ok(KagemushaFoldDigestParts {
-        nullifier_digest: kagemusha_list_digest(
-            KAGEMUSHA_FOLD_NULLIFIER_DIGEST_DOMAIN,
-            all_inputs,
-        )?,
-        output_commitment_digest: kagemusha_list_digest(
-            KAGEMUSHA_FOLD_OUTPUT_DIGEST_DOMAIN,
-            all_outputs,
-        )?,
-        fold_digest: kagemusha_hash_preimage(&KagemushaFoldTranscriptDigestPreimage {
+        nullifier: kagemusha_list_digest(KAGEMUSHA_FOLD_NULLIFIER_DIGEST_DOMAIN, all_inputs)?,
+        output_commitment: kagemusha_list_digest(KAGEMUSHA_FOLD_OUTPUT_DIGEST_DOMAIN, all_outputs)?,
+        fold: kagemusha_hash_preimage(&KagemushaFoldTranscriptDigestPreimage {
             domain: KAGEMUSHA_FOLD_TRANSCRIPT_DIGEST_DOMAIN.to_owned(),
             chain_id: statement.chain_id.clone(),
             asset: statement.asset.clone(),
@@ -8283,9 +8308,9 @@ pub fn kagemusha_folded_public_inputs_from_aggregation_statement(
         initial_root: statement.initial_root,
         final_root: statement.final_root,
         hop_count: statement.hop_count,
-        nullifier_digest: parts.nullifier_digest,
-        output_commitment_digest: parts.output_commitment_digest,
-        fold_digest: parts.fold_digest,
+        nullifier_digest: parts.nullifier,
+        output_commitment_digest: parts.output_commitment,
+        fold_digest: parts.fold,
         aggregation_transcript_digest,
     })
 }
@@ -8532,6 +8557,14 @@ pub fn derive_offline_note_payment_token_id(
 
 #[cfg(test)]
 mod offline_note_tests {
+    #![allow(
+        clippy::assertions_on_constants,
+        clippy::items_after_statements,
+        clippy::option_if_let_else,
+        clippy::too_many_lines,
+        clippy::type_complexity
+    )]
+
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 
     use super::*;
@@ -8583,6 +8616,14 @@ mod offline_note_tests {
             DomainId::try_new("offline", "universal").expect("domain id"),
             name.parse().expect("asset name"),
         )
+    }
+
+    #[test]
+    fn offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash() {
+        assert_eq!(
+            offline_note_v2_recursive_public_inputs_schema_hash(),
+            offline_note_recursive_public_inputs_schema_hash()
+        );
     }
 
     fn kagemusha_step(
@@ -9576,6 +9617,14 @@ mod offline_note_tests {
             1
         ));
         assert!(can_redeem_kagemusha_recursive_spend_witnessless(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            1
+        ));
+        assert!(can_redeem_kagemusha_recursive_spend_witnessless(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            2
+        ));
+        assert!(can_redeem_kagemusha_recursive_spend_witnessless(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
         ));
@@ -9665,7 +9714,13 @@ mod offline_note_tests {
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
             ),
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        );
+        assert_eq!(
+            normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            ),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
         );
         assert_eq!(
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -9685,6 +9740,16 @@ mod offline_note_tests {
             )
         );
         assert!(
+            is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            )
+        );
+        assert!(
+            !is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+            )
+        );
+        assert!(
             !is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 "unknown-kagemusha-recursive-spend-circuit"
             )
@@ -9697,6 +9762,16 @@ mod offline_note_tests {
         assert!(
             is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            )
+        );
+        assert!(
+            is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+            )
+        );
+        assert!(
+            is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
             )
         );
         assert!(
@@ -9765,14 +9840,14 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(1),
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             "real appends prefer Reserved-lineage output inside the witnessless cap"
         );
         assert_eq!(
             preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 u32::try_from(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS - 1).expect("hop cap fits u32")
             ),
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
         );
         assert_eq!(
             preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -10866,7 +10941,7 @@ mod offline_note_tests {
             "recursive spend output stream must not reuse the folded-list digest domain"
         );
         assert_ne!(
-            accumulator0.fold_digest, folded_parts.fold_digest,
+            accumulator0.fold_digest, folded_parts.fold,
             "recursive spend fold stream must not reuse the checked folded-token transcript domain"
         );
         assert_ne!(
@@ -16243,11 +16318,10 @@ mod offline_note_tests {
         record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("vk length fits");
         record.max_proof_bytes = 4096;
         record.key = Some(verifier_key);
-        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+        KagemushaVerifiedFoldRecordBundle {
             bundle,
             verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id: vk_id, record }],
-        };
-        record_bundle
+        }
     }
 
     #[test]

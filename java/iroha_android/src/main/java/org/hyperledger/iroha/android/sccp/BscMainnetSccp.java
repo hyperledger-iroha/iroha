@@ -14,6 +14,12 @@ public final class BscMainnetSccp {
   public static final int DOMAIN_BSC = EvmSccpProver.DOMAIN_BSC;
   public static final long MAINNET_CHAIN_ID = SourceSccpProofs.BSC_MAINNET_CHAIN_ID;
   public static final String MAINNET_NETWORK_ID = SourceSccpProofs.BSC_MAINNET_NETWORK_ID;
+  public static final String LOCAL_ADMISSION_ENVELOPE_ENCODING_V1 =
+      "norito:sccp-local-admission:v1";
+  public static final String LOCAL_ADMISSION_SUBMISSION_KIND_V1 = "local_admission";
+  public static final String LOCAL_ADMISSION_ENTRYPOINT_V1 = "SubmitBridgeProof";
+  public static final String STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
+  public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
 
   private final EvmSccpProver.WitnessProvider witnessProvider;
   private final EvmSccpProver.ProofEngine proofEngine;
@@ -90,7 +96,7 @@ public final class BscMainnetSccp {
     final ExecutionProvider selectedProvider =
         Objects.requireNonNull(provider, "executionProvider");
     final Object chainId = selectedProvider.request("eth_chainId", Collections.emptyList());
-    requireMainnetChainId(normalizeMainnetChainId(chainId));
+    requireMainnetChainId(normalizeRpcChainId(chainId));
     return chainId;
   }
 
@@ -278,6 +284,70 @@ public final class BscMainnetSccp {
     return BscSccpProver.buildSubmission(input);
   }
 
+  public static LocalAdmissionSubmission buildLocalAdmissionSubmission(
+      final LocalAdmissionSubmissionInput input) {
+    Objects.requireNonNull(input, "input");
+    if (input.sourceDomain() != DOMAIN_BSC || input.targetDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission submissions must route BSC -> SORA");
+    }
+    if (!LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.equals(input.envelopeEncoding())) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission envelopeEncoding is not canonical");
+    }
+    if (!LOCAL_ADMISSION_SUBMISSION_KIND_V1.equals(input.submissionKind())) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission submissionKind is not canonical");
+    }
+    if (!LOCAL_ADMISSION_ENTRYPOINT_V1.equals(input.verifierEntrypoint())) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission verifierEntrypoint is not canonical");
+    }
+    if (!STARK_FRI_PROOF_FAMILY_V1.equals(input.proofFamily())) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission proofFamily is not canonical");
+    }
+    if (!EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1.equals(input.verifierBackend())) {
+      throw new IllegalArgumentException(
+          "BSC mainnet local-admission verifierBackend is not canonical");
+    }
+    final byte[] proofBytes = requireNativeRecursiveBytes(input.proofBytes(), "proofBytes");
+    final byte[] publicInputsBytes =
+        requireNativeRecursiveBytes(input.publicInputsBytes(), "publicInputsBytes");
+    final byte[] bundleBytes = requireNativeRecursiveBytes(input.bundleBytes(), "bundleBytes");
+    final byte[] envelopeBytes =
+        requireNativeRecursiveBytes(input.envelopeBytes(), "envelopeBytes");
+    final String statementHash = normalizeNonZeroHex32(input.statementHash(), "statementHash");
+    final String sourceVerifierMaterialHash =
+        normalizeNonZeroHex32(
+            input.sourceVerifierMaterialHash(), "sourceVerifierMaterialHash");
+    final String sourceAdapterEngineDeploymentHash =
+        normalizeNonZeroHex32(
+            input.sourceAdapterEngineDeploymentHash(),
+            "sourceAdapterEngineDeploymentHash");
+    final LocalAdmissionPayload payload =
+        new LocalAdmissionPayload(
+            proofBytes,
+            publicInputsBytes,
+            bundleBytes,
+            statementHash,
+            sourceVerifierMaterialHash,
+            sourceAdapterEngineDeploymentHash);
+    return new LocalAdmissionSubmission(
+        input.proofFamily(),
+        input.verifierBackend(),
+        DOMAIN_BSC,
+        DOMAIN_SORA,
+        statementHash,
+        sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash,
+        payload,
+        proofBytes,
+        publicInputsBytes,
+        bundleBytes,
+        envelopeBytes);
+  }
+
   public EvmSccpProver.ProofRequest buildOutboundProofRequest(
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequestInput resolved =
@@ -297,6 +367,10 @@ public final class BscMainnetSccp {
   public EvmSccpProver.Submission buildBscCalldata(
       final EvmSccpProver.SubmissionInput input) {
     return buildSubmission(input);
+  }
+
+  public LocalAdmissionSubmission buildLocalAdmission(final LocalAdmissionSubmissionInput input) {
+    return buildLocalAdmissionSubmission(input);
   }
 
   public Object submitOutboundToBsc(final EvmSccpProver.SubmissionInput input) {
@@ -322,52 +396,13 @@ public final class BscMainnetSccp {
         input.destinationBinding());
   }
 
-  private static long normalizeMainnetChainId(final Object value) {
-    if (value instanceof BigInteger) {
-      final BigInteger parsed = (BigInteger) value;
-      if (parsed.signum() < 0 || parsed.bitLength() > 63) {
-        throw new IllegalArgumentException("eth_chainId must fit positive i64");
-      }
-      return parsed.longValue();
+  private static long normalizeRpcChainId(final Object value) {
+    final String quantity = normalizeRpcQuantity(value, "eth_chainId");
+    final BigInteger parsed = new BigInteger(quantity.substring(2), 16);
+    if (parsed.bitLength() > 63) {
+      throw new IllegalArgumentException("eth_chainId must fit positive i64");
     }
-    if (value instanceof Byte
-        || value instanceof Short
-        || value instanceof Integer
-        || value instanceof Long) {
-      final long parsed = ((Number) value).longValue();
-      if (parsed < 0) {
-        throw new IllegalArgumentException("eth_chainId must be non-negative");
-      }
-      return parsed;
-    }
-    if (value instanceof Number) {
-      throw new IllegalArgumentException("eth_chainId must be an integral JSON-RPC quantity");
-    }
-    if (value instanceof String) {
-      final String text = (String) value;
-      if (!text.trim().equals(text)) {
-        throw new IllegalArgumentException("eth_chainId must be canonical");
-      }
-      final BigInteger parsed;
-      if (text.startsWith("0x")) {
-        final String hex = text.substring(2);
-        if (!hex.matches("0|[1-9a-f][0-9a-f]*")) {
-          throw new IllegalArgumentException(
-              "eth_chainId must be a canonical JSON-RPC quantity");
-        }
-        parsed = new BigInteger(hex, 16);
-      } else {
-        if (!text.matches("0|[1-9][0-9]*")) {
-          throw new IllegalArgumentException("eth_chainId must be a canonical decimal integer");
-        }
-        parsed = new BigInteger(text, 10);
-      }
-      if (parsed.bitLength() > 63) {
-        throw new IllegalArgumentException("eth_chainId must fit positive i64");
-      }
-      return parsed.longValue();
-    }
-    throw new IllegalArgumentException("eth_chainId must be a JSON-RPC quantity or integer");
+    return parsed.longValue();
   }
 
   @SuppressWarnings("unchecked")
@@ -534,6 +569,57 @@ public final class BscMainnetSccp {
     throw new IllegalArgumentException(label + " must be a JSON-RPC quantity or integer");
   }
 
+  private static byte[] requireNativeRecursiveBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length == 0) {
+      throw new IllegalArgumentException(label + " must not be empty");
+    }
+    boolean nonzero = false;
+    for (final byte value : copy) {
+      nonzero |= value != 0;
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException(label + " must not be all zero");
+    }
+    if (copy.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+    }
+    return copy;
+  }
+
+  private static String normalizeNonZeroHex32(final String value, final String label) {
+    final String text = Objects.requireNonNull(value, label);
+    if (!text.startsWith("0x") || text.length() != 66) {
+      throw new IllegalArgumentException(
+          label + " must be 32 bytes of canonical lowercase 0x hex");
+    }
+    boolean nonzero = false;
+    for (int index = 2; index < text.length(); index++) {
+      final char symbol = text.charAt(index);
+      if (!((symbol >= '0' && symbol <= '9') || (symbol >= 'a' && symbol <= 'f'))) {
+        throw new IllegalArgumentException(
+            label + " must be 32 bytes of canonical lowercase 0x hex");
+      }
+      nonzero |= symbol != '0';
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException(label + " must not be zero");
+    }
+    return text;
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final char[] out = new char[bytes.length * 2];
+    final char[] alphabet = "0123456789abcdef".toCharArray();
+    for (int index = 0; index < bytes.length; index++) {
+      final int value = bytes[index] & 0xff;
+      out[index * 2] = alphabet[value >>> 4];
+      out[index * 2 + 1] = alphabet[value & 0x0f];
+    }
+    return new String(out);
+  }
+
   /** App-supplied BSC JSON-RPC execution provider for native SCCP evidence collection. */
   public interface ExecutionProvider {
     Object request(String method, List<Object> params);
@@ -582,6 +668,230 @@ public final class BscMainnetSccp {
   /** App-supplied BSC transaction submitter for locally generated outbound proof calldata. */
   public interface OutboundSubmitter {
     Object submit(EvmSccpProver.Submission submission);
+  }
+
+  /** Input for BSC -> SORA local-admission submission packaging. */
+  public record LocalAdmissionSubmissionInput(
+      byte[] proofBytes,
+      byte[] publicInputsBytes,
+      byte[] bundleBytes,
+      byte[] envelopeBytes,
+      String statementHash,
+      String sourceVerifierMaterialHash,
+      String sourceAdapterEngineDeploymentHash,
+      int sourceDomain,
+      int targetDomain,
+      String proofFamily,
+      String verifierBackend,
+      String envelopeEncoding,
+      String submissionKind,
+      String verifierEntrypoint) {
+    public LocalAdmissionSubmissionInput(
+        final byte[] proofBytes,
+        final byte[] publicInputsBytes,
+        final byte[] bundleBytes,
+        final byte[] envelopeBytes,
+        final String statementHash,
+        final String sourceVerifierMaterialHash,
+        final String sourceAdapterEngineDeploymentHash) {
+      this(
+          proofBytes,
+          publicInputsBytes,
+          bundleBytes,
+          envelopeBytes,
+          statementHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash,
+          DOMAIN_BSC,
+          DOMAIN_SORA,
+          STARK_FRI_PROOF_FAMILY_V1,
+          EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+          LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+          LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+          LOCAL_ADMISSION_ENTRYPOINT_V1);
+    }
+
+    public LocalAdmissionSubmissionInput {
+      proofBytes = Arrays.copyOf(Objects.requireNonNull(proofBytes), proofBytes.length);
+      publicInputsBytes =
+          Arrays.copyOf(Objects.requireNonNull(publicInputsBytes), publicInputsBytes.length);
+      bundleBytes = Arrays.copyOf(Objects.requireNonNull(bundleBytes), bundleBytes.length);
+      envelopeBytes = Arrays.copyOf(Objects.requireNonNull(envelopeBytes), envelopeBytes.length);
+      proofFamily = Objects.requireNonNull(proofFamily, "proofFamily");
+      verifierBackend = Objects.requireNonNull(verifierBackend, "verifierBackend");
+      envelopeEncoding = Objects.requireNonNull(envelopeEncoding, "envelopeEncoding");
+      submissionKind = Objects.requireNonNull(submissionKind, "submissionKind");
+      verifierEntrypoint = Objects.requireNonNull(verifierEntrypoint, "verifierEntrypoint");
+    }
+
+    @Override
+    public byte[] proofBytes() {
+      return Arrays.copyOf(proofBytes, proofBytes.length);
+    }
+
+    @Override
+    public byte[] publicInputsBytes() {
+      return Arrays.copyOf(publicInputsBytes, publicInputsBytes.length);
+    }
+
+    @Override
+    public byte[] bundleBytes() {
+      return Arrays.copyOf(bundleBytes, bundleBytes.length);
+    }
+
+    @Override
+    public byte[] envelopeBytes() {
+      return Arrays.copyOf(envelopeBytes, envelopeBytes.length);
+    }
+  }
+
+  /** BSC local-admission payload mirrored from the core SCCP package. */
+  public record LocalAdmissionPayload(
+      int version,
+      byte[] proofBytes,
+      byte[] publicInputsBytes,
+      byte[] bundleBytes,
+      String statementHash,
+      String sourceVerifierMaterialHash,
+      String sourceAdapterEngineDeploymentHash,
+      String proofBytesHex,
+      String publicInputsBytesHex,
+      String bundleBytesHex) {
+    public LocalAdmissionPayload(
+        final byte[] proofBytes,
+        final byte[] publicInputsBytes,
+        final byte[] bundleBytes,
+        final String statementHash,
+        final String sourceVerifierMaterialHash,
+        final String sourceAdapterEngineDeploymentHash) {
+      this(
+          1,
+          proofBytes,
+          publicInputsBytes,
+          bundleBytes,
+          statementHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash,
+          "0x" + hexLower(proofBytes),
+          "0x" + hexLower(publicInputsBytes),
+          "0x" + hexLower(bundleBytes));
+    }
+
+    public LocalAdmissionPayload {
+      proofBytes = Arrays.copyOf(Objects.requireNonNull(proofBytes), proofBytes.length);
+      publicInputsBytes =
+          Arrays.copyOf(Objects.requireNonNull(publicInputsBytes), publicInputsBytes.length);
+      bundleBytes = Arrays.copyOf(Objects.requireNonNull(bundleBytes), bundleBytes.length);
+    }
+
+    @Override
+    public byte[] proofBytes() {
+      return Arrays.copyOf(proofBytes, proofBytes.length);
+    }
+
+    @Override
+    public byte[] publicInputsBytes() {
+      return Arrays.copyOf(publicInputsBytes, publicInputsBytes.length);
+    }
+
+    @Override
+    public byte[] bundleBytes() {
+      return Arrays.copyOf(bundleBytes, bundleBytes.length);
+    }
+  }
+
+  /** BSC -> SORA local-admission package ready for Torii bridge-proof submission. */
+  public record LocalAdmissionSubmission(
+      int version,
+      String proofFamily,
+      String verifierBackend,
+      String platformPayload,
+      String envelopeEncoding,
+      String submissionKind,
+      String verifierEntrypoint,
+      int sourceDomain,
+      int targetDomain,
+      String statementHash,
+      String sourceVerifierMaterialHash,
+      String sourceAdapterEngineDeploymentHash,
+      List<EvmSccpProver.SubmissionArgument> arguments,
+      LocalAdmissionPayload localAdmission,
+      byte[] proofBytes,
+      byte[] publicInputsBytes,
+      byte[] bundleBytes,
+      byte[] envelopeBytes,
+      String proofBytesHex,
+      String publicInputsBytesHex,
+      String bundleBytesHex,
+      String envelopeHex) {
+    public LocalAdmissionSubmission(
+        final String proofFamily,
+        final String verifierBackend,
+        final int sourceDomain,
+        final int targetDomain,
+        final String statementHash,
+        final String sourceVerifierMaterialHash,
+        final String sourceAdapterEngineDeploymentHash,
+        final LocalAdmissionPayload localAdmission,
+        final byte[] proofBytes,
+        final byte[] publicInputsBytes,
+        final byte[] bundleBytes,
+        final byte[] envelopeBytes) {
+      this(
+          1,
+          proofFamily,
+          verifierBackend,
+          LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+          LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+          LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+          LOCAL_ADMISSION_ENTRYPOINT_V1,
+          sourceDomain,
+          targetDomain,
+          statementHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash,
+          Collections.emptyList(),
+          localAdmission,
+          proofBytes,
+          publicInputsBytes,
+          bundleBytes,
+          envelopeBytes,
+          "0x" + hexLower(proofBytes),
+          "0x" + hexLower(publicInputsBytes),
+          "0x" + hexLower(bundleBytes),
+          "0x" + hexLower(envelopeBytes));
+    }
+
+    public LocalAdmissionSubmission {
+      arguments =
+          Collections.unmodifiableList(
+              arguments == null ? Collections.emptyList() : arguments);
+      proofBytes = Arrays.copyOf(Objects.requireNonNull(proofBytes), proofBytes.length);
+      publicInputsBytes =
+          Arrays.copyOf(Objects.requireNonNull(publicInputsBytes), publicInputsBytes.length);
+      bundleBytes = Arrays.copyOf(Objects.requireNonNull(bundleBytes), bundleBytes.length);
+      envelopeBytes = Arrays.copyOf(Objects.requireNonNull(envelopeBytes), envelopeBytes.length);
+    }
+
+    @Override
+    public byte[] proofBytes() {
+      return Arrays.copyOf(proofBytes, proofBytes.length);
+    }
+
+    @Override
+    public byte[] publicInputsBytes() {
+      return Arrays.copyOf(publicInputsBytes, publicInputsBytes.length);
+    }
+
+    @Override
+    public byte[] bundleBytes() {
+      return Arrays.copyOf(bundleBytes, bundleBytes.length);
+    }
+
+    @Override
+    public byte[] envelopeBytes() {
+      return Arrays.copyOf(envelopeBytes, envelopeBytes.length);
+    }
   }
 
   /** Locally collected BSC mainnet inbound evidence before source-proof generation. */

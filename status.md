@@ -1,6 +1,1586 @@
 # Status
 
-Last updated: 2026-06-03
+Last updated: 2026-06-04
+
+## 2026-06-04 - Yanked Halo2 Gadgets Dependency Removal
+
+- Removed the optional `halo2_gadgets = "0.3.1"` dependency from
+  `iroha_core`; the `zk-halo2-ipa-poseidon` feature remains as a compatibility
+  alias for `zk-halo2-ipa` and no longer pulls the yanked crate or the old
+  upstream `halo2_proofs v0.3` dependency tree.
+- Reworked the `zk_poseidon` micro-benchmark to use the local constrained Pow5
+  compatibility path and the vendored `halo2-axiom` IPA proof API instead of
+  `halo2_gadgets`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/iroha_core/benches/zk_poseidon.rs`
+  - `cargo tree -p iroha_core --features zk-halo2-ipa-poseidon | rg -n "halo2_gadgets|halo2_proofs v0\.3" || true`
+  - `cargo check -p iroha_core --bench zk_poseidon --features zk-halo2-ipa-poseidon`
+  - `cargo check -p iroha_core --features zk-halo2-ipa-poseidon`
+- Validation not run:
+  - Full workspace build/test; the change is scoped to the `iroha_core`
+    optional Halo2 IPA compatibility path.
+
+## 2026-06-04 - ISO Production Readiness Rollup
+
+- Added `scripts/iso_production_readiness.py` as the aggregate offline release
+  gate for ISO 20022. It verifies digest-bound summaries from
+  `iso_xsd_fixture_verify.py` and `iso_operator_evidence_verify.py`, requires
+  strict schema-backed/fixture-backed XSD proof by default, rejects
+  non-production evidence policy flags, provider/environment drift, missing
+  rail/notary/verify canary stages, missing rail/notary receipt kinds, weak
+  receipt evidence, missing direct receipt-archive verification, record-only
+  trust policy, and trust profiles with no public-key or X.509 trust pins.
+- Hardened receipt evidence binding across the operator verifier, evidence gate,
+  and readiness rollup. `iso_operator_receipt_verify.py` now emits a
+  digest-bound summary with production policy flags plus a `receipts[]` list
+  binding each verified receipt path to its `receipt_sha256`; the evidence gate
+  preserves and rechecks that summary, and the readiness rollup treats nested
+  receipt-summary tampering as malformed input while valid weak archive policy
+  remains a blocker.
+- Hardened the XSD/XML fixture manifest preflight so schema and fixture entries
+  must use canonical lowercase ISO message definition ids, checked-in schema
+  paths must remain under the XSD manifest tree, and XML fixture paths remain
+  contained under `fixtures/iso20022/`.
+- Added standalone XML fixtures for every checked-in payment XSD
+  (`pacs.008.001.08`, `pacs.009.001.08`, `pacs.002.001.10`,
+  `pacs.004.001.10`, and `camt.056.001.08`). The XSD preflight now reports no
+  schema-only entries, and `--require-fixture-for-schema` passes; the remaining
+  strict XSD blocker is official schema coverage for legacy return,
+  securities, and collateral fixtures.
+- Moved the active collateral substitution confirmation fixture and default
+  profile surface from the non-standard local `colr.007.001.08` placeholder to
+  the ISO `colr.012.001.05` family. IVM now parses `colr.012`, Torii exposes
+  `/v1/iso20022/colr012`, the rail adapter routes `colr.012` to that endpoint,
+  OpenAPI/MCP discovery include the new submission surface, and the old
+  `colr.007` parser/route remains only for legacy local compatibility.
+- Hardened the legacy `colr.007` compatibility path so operator file-drop
+  submission rejects it by default, receipt verification rejects legacy rail
+  source files by default, archived evidence rejects `--allow-legacy-colr007`
+  command or receipt-summary policy, and the readiness rollup records any
+  legacy override as a production blocker. The override remains available only
+  for local diagnostic audits.
+- Hardened trust-bundle provenance so production source URLs must be clean
+  HTTPS URLs without credentials, params, query strings, fragments, localhost,
+  local/private IP literals, malformed bracket syntax, or control characters;
+  `source.retrieved_at` must be a timezone-aware ISO 8601 timestamp and cannot
+  be in the future. The existing `--allow-insecure-source-url` remains the
+  explicit local-audit override.
+- Hardened trust-bundle material indexing so DER labels must be unique within
+  each material class, with direct negative coverage for current/legacy pin
+  alias conflicts and wrong DER material classes.
+- Hardened operator canary runbook planning so endpoint URLs are rejected if
+  they contain credentials, params, query strings, or fragments, relative paths
+  cannot escape the runbook directory, and runbook strings cannot carry control
+  characters. Canary command redaction now also handles
+  `--bearer-token-file=<path>` in addition to separated bearer-token arguments.
+- Hardened the direct rail-gateway and audit-notary adapters so operator CLI
+  URLs fail closed when they omit a host, contain credentials, params, query
+  strings, fragments, malformed bracket syntax, or control characters. The
+  local HTTP override still permits plaintext local endpoints for tests, but it
+  no longer permits credential or query smuggling.
+- Hardened direct rail-gateway single-message mode so relative `--message`
+  values resolve under `--inbox-dir` and absolute or traversal paths outside the
+  inbox are rejected before network delivery.
+- Hardened receipt and evidence verification so digest-correct but forged
+  receipts cannot carry credentialed, parameterized, query-bearing, fragmented,
+  malformed, or control-character endpoint URLs, and archived trust summaries
+  cannot carry smuggled, localhost, or local/private trust-source provenance or
+  missing, malformed, non-timezone, control-character, or future trust-source
+  retrieval timestamps.
+- Hardened archived canary command evidence so forged child command arrays
+  cannot carry credentialed, parameterized, query-bearing, fragmented,
+  malformed, or control-character Torii/notary endpoint URLs, cannot leak
+  bearer-token file paths in either separated or `--bearer-token-file=<path>`
+  form, cannot smuggle local-only flags as `--flag=value`, and cannot add
+  unsupported child command flags outside the expected rail/notary/receipt
+  verifier CLI surfaces. The diagnostic insecure-HTTP allowance does not permit
+  query or credential smuggling.
+- The readiness gate exits `0` only for fully production-ready evidence, exits
+  `1` with a digest-bound blocker report when inputs are valid but not ready,
+  and exits `2` for malformed or digest-tampered summaries. A diagnostic
+  `--allow-reviewed-xsd-gaps` flag downgrades currently reviewed XSD fixture
+  gaps to warnings for local audits, and `--allow-canary-stage-receipts-only`
+  allows local audits without final receipt archive verification, but
+  production release evidence should omit both. Legacy `colr.007` diagnostics
+  are similarly surfaced through `allow_legacy_colr007` and block production
+  readiness.
+- Added dependency-free unittest coverage for strict positive readiness,
+  checked-in XSD gap blockers, diagnostic XSD warnings, XSD/evidence digest
+  tampering, non-production evidence policies, provider/environment mismatch,
+  missing canary stages, missing receipt kinds, non-`require-verified` trust
+  policy, zero trust pins, missing receipt archive verification, diagnostic
+  canary-stage-only receipt mode, partial archive receipt kinds, tampered nested
+  receipt summaries, weak archive receipt policy, missing per-receipt digest
+  binding, direct receipt-archive subprocess verification, malformed ISO
+  message ids, schema path containment attempts, and adversarial trust-source
+  provenance URLs, direct-adapter endpoint smuggling, forged receipt endpoint
+  URLs, forged trust-summary source URLs, forged canary command endpoint URLs,
+  rail message path escapes, endpoint-smuggling runbooks, relative-path escapes,
+  control-character runbook strings, malformed trust-source URLs,
+  non-timezone/future trust-source retrieval timestamps, duplicate DER labels,
+  current/legacy pin alias conflicts, wrong DER material classes, `colr.012`
+  rail-adapter endpoint routing, and the default collateral profile fixture
+  moving off the legacy `colr.007` placeholder. Legacy `colr.007` negative
+  coverage now spans rail submission, receipt source-file verification,
+  canary-stage evidence summaries, direct archived receipt re-verification, and
+  readiness blocker reporting. Evidence-gate trust-source coverage now also
+  rechecks digest-correct archived summary mutations of `source.retrieved_at`,
+  equal-form local-only child flags, equal-form bearer-token leakage, and
+  unsupported child command flags in executed and plan-only canary summaries.
+- Updated the TradFi ISO audit note, engineering backlog, and roadmap so the
+  aggregate readiness gate is the final offline release artifact, the operator
+  URL policy is explicit, `colr.012.001.05` is the active collateral
+  substitution confirmation family, and the `colr.007` compatibility override
+  is local-only.
+- Validation passed:
+  - `cargo fmt --all`
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test` (18 tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test` (28 tests)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (42 tests)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (87 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p ivm colr012 --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_core default_catalog_exposes_inbound_lifecycle_messages --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_torii checked_in_colr012_fixture_records_collateral_context --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib -- --nocapture`
+  - `python3 scripts/iso_audit_notary_adapter.py --help`
+  - `python3 scripts/iso_rail_gateway_adapter.py --help`
+  - `python3 scripts/iso_operator_receipt_verify.py --help`
+  - `python3 scripts/iso_operator_canary.py --help`
+  - `python3 scripts/iso_trust_bundle_verify.py --help`
+  - `python3 scripts/iso_operator_evidence_verify.py --help`
+  - `python3 scripts/iso_xsd_fixture_verify.py --help`
+  - `python3 scripts/iso_production_readiness.py --help`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --summary-out /tmp/iroha-iso-xsd-fixture-summary.json`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-fixture-for-schema`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-schema-backed-fixtures` failed as expected on the reviewed `pacs.004.001.09` missing-XSD gap.
+  - `git diff --check -- ...` across the focused ISO scripts/tests, Rust
+    `colr.012` parser/profile/API changes, XSD/trust/canary fixtures, updated
+    finance docs, roadmap, and status files.
+  - Direct trailing-whitespace scan returned no matches across the expanded
+    touched file set, covering untracked new files.
+  - Conflict-marker scan returned no matches across the expanded touched file
+    set.
+- Validation blocked:
+  - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - ISO XSD Fixture Manifest Gate
+
+- Added `fixtures/iso20022/xsd/fixture_manifest.json` and
+  `scripts/iso_xsd_fixture_verify.py` as an offline structural preflight for
+  checked-in ISO 20022 XSD/XML fixture wiring. The verifier checks schema
+  target namespaces, `elementFormDefault`, `Document` payload roots, XML
+  fixture namespaces and payload roots, duplicate manifest entries, path escape
+  attempts, and digest-bound summaries without fetching remote schemas.
+- The manifest makes current reviewed gaps explicit: five standalone XML
+  fixtures are not yet backed by checked-in official XSD packages
+  (`pacs.004.001.09`, `sese.023.001.11`, `sese.024.001.10`,
+  `sese.025.001.11`, and `colr.012.001.05`). Every checked-in XSD has a
+  standalone XML fixture, so `--require-fixture-for-schema` passes; the
+  schema-backed strict release flag intentionally rejects the remaining missing
+  official packages until they are checked in.
+- Added dependency-free unittest coverage for valid checked-in manifest
+  verification, strict-flag rejection of reviewed gaps, strict passing for a
+  fully schema-backed mini manifest, schema target-namespace/payload-root/form
+  drift, fixture namespace/payload/root drift, unknown keys, duplicate entries,
+  path escapes, missing schema declarations, conflicting schema/missing-schema
+  declarations, and unknown schema references.
+- Updated the XSD fixture README, TradFi ISO audit note, engineering backlog,
+  and roadmap so strict schema-backed/fixture-backed XSD closure is explicit.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test` (6 tests)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test` (51 tests)
+  - `python3 scripts/iso_audit_notary_adapter.py --help`
+  - `python3 scripts/iso_rail_gateway_adapter.py --help`
+  - `python3 scripts/iso_operator_receipt_verify.py --help`
+  - `python3 scripts/iso_operator_canary.py --help`
+  - `python3 scripts/iso_trust_bundle_verify.py --help`
+  - `python3 scripts/iso_operator_evidence_verify.py --help`
+  - `python3 scripts/iso_xsd_fixture_verify.py --help`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --summary-out /tmp/iroha-iso-xsd-fixture-summary.json`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-schema-backed-fixtures` failed as expected on the reviewed `pacs.004.001.09` missing-XSD gap.
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-fixture-for-schema` failed as expected on the reviewed `pacs.008.001.08` schema-only gap.
+  - `git diff --check -- scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json fixtures/iso20022/trust_bundles/README.md fixtures/iso20022/trust_bundles/fedwire_funds.preprod.example.json fixtures/iso20022/trust_bundles/securities_csd.preprod.example.json fixtures/iso20022/trust_bundles/sepa_sct_inst.preprod.example.json fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json fixtures/iso20022/xsd/README.md fixtures/iso20022/xsd/fixture_manifest.json docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker scan returned no matches across the same touched file set.
+- Validation blocked:
+  - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - ISO Operator Evidence Gate
+
+- Added `scripts/iso_operator_evidence_verify.py`, an offline production gate
+  for archived ISO 20022 canary and trust-bundle evidence. It recomputes
+  summary digests, requires successful rail/notary/verify canary stages by
+  default, requires the verify stage to carry digest-bound receipt-verifier JSON
+  with positive rail/notary receipt evidence and per-receipt digests, rejects
+  plan-only or dry-run canaries, insecure HTTP evidence, default-profile
+  fallbacks, failed-receipt overrides, missing receipt source-file verification,
+  unredacted bearer-token paths, secret-looking child output, synthetic trust
+  DER, record-only trust policy, insecure trust provenance overrides, and
+  missing trust provenance before accepting evidence.
+- Canonicalized canary and trust summary digests with sorted JSON keys so
+  pretty-printed archived summaries can be reloaded and verified offline
+  without depending on insertion order.
+- Added dependency-free unittest coverage for valid evidence summaries,
+  digest-tampered canaries, plan-only summaries, dry-run child commands,
+  insecure HTTP/default-profile flags, unredacted bearer-token file paths,
+  secret-looking child output, failed or skipped stages, missing or weak verify
+  stages, empty or incomplete receipt-verifier output, expected
+  provider/environment mismatches, trust-summary digest tampering, synthetic
+  trust summaries, record-only trust policy, missing trust provenance, and
+  insecure trust provenance summaries.
+- Updated the TradFi ISO audit note, engineering backlog, and roadmap so
+  provider production canaries must pass the evidence gate before archival.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test` (45 tests)
+  - `python3 scripts/iso_audit_notary_adapter.py --help`
+  - `python3 scripts/iso_rail_gateway_adapter.py --help`
+  - `python3 scripts/iso_operator_receipt_verify.py --help`
+  - `python3 scripts/iso_operator_canary.py --help`
+  - `python3 scripts/iso_trust_bundle_verify.py --help`
+  - `python3 scripts/iso_operator_evidence_verify.py --help`
+  - `git diff --check -- scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json fixtures/iso20022/trust_bundles/README.md fixtures/iso20022/trust_bundles/fedwire_funds.preprod.example.json fixtures/iso20022/trust_bundles/securities_csd.preprod.example.json fixtures/iso20022/trust_bundles/sepa_sct_inst.preprod.example.json fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker scan returned no matches across the same touched file set.
+- Validation blocked:
+  - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - Privacy Backend Family Edge Grammar Gate
+
+- Tightened public JS/Python catalog backend-family validators and all native
+  privacy FFI `vk_ref` backend validators so backend labels must start and end
+  with lowercase ASCII alphanumeric characters. Interior characters remain
+  lowercase ASCII alphanumerics plus `-`, `_`, and `.`.
+- Added adversarial public catalog coverage for leading and trailing `.`, `-`,
+  and `_` backend-family labels, native catalog invariant coverage for leading
+  and trailing separator backend families, and malformed `vk_ref` no-reflection
+  coverage for leading/trailing separator backends across the C bridge, JS NAPI
+  host, and Python PyO3 host.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "privacy algorithm catalogs stay fail-closed and in parity across JS and Python" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI hosts reject verifier-key backend drift before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "unportable_backend_families"` (11 tests)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (422 tests)
+
+## 2026-06-04 - Privacy Backend Family Lowercase Gate
+
+- Tightened JS, Python, and native privacy backend-family validators so
+  `vk_ref` backend components are non-empty lowercase ASCII labels using only
+  alphanumerics plus `-`, `_`, and `.`. This keeps catalog backend families
+  aligned with checked-in canonical wire labels and prevents uppercase aliases
+  from reaching backend/name binding.
+- Added adversarial coverage for uppercase backend families in the public
+  Python catalog, JS parity assertions, native catalog invariants, and
+  malformed `vk_ref` no-reflection tests across the C bridge, JS NAPI host, and
+  Python PyO3 host.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "privacy algorithm catalogs stay fail-closed and in parity across JS and Python" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI hosts reject verifier-key backend drift before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "unportable_backend_families"` (5 tests)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (416 tests)
+
+## 2026-06-04 - Native Privacy FFI VkRef Name Grammar Gate
+
+- Added a dedicated native `vk_ref` verifier-key name validator in the C
+  bridge, JS NAPI host, and Python PyO3 host. Request `vk_ref` names must now
+  be lowercase underscore verifier-key labels before backend/name binding, and
+  registered native verifier-key mappings must satisfy the same grammar.
+- Removed the stale generic non-empty portable-identifier helper after
+  backend, proof-family, algorithm-id, SDK-entrypoint, and verifier-key-name
+  validators became field-specific.
+- Moved uppercase, dotted, dashed, and leading-underscore `vk_ref` names into
+  malformed no-reflection coverage while keeping valid lowercase wrong names
+  on the explicit algorithm verifier-key-name mismatch path.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI hosts reject verifier-key backend drift before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI hosts reject verifier-key name drift before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - Native Privacy FFI VkRef Validation Order Gate
+
+- Moved native `vk_ref` non-empty and shape validation ahead of privacy catalog
+  lookup and SDK entrypoint binding in the C bridge, JS NAPI host, and Python
+  PyO3 host. Malformed verifier-key references now fail without request
+  reflection even when the same request also carries an unsupported algorithm,
+  planned entrypoint, unregistered entrypoint, or supported non-proof helper.
+- Added validation-order regression coverage with a stable
+  `vk-ref-order-never-echo` marker across all three native hosts, and updated
+  JS FFI contract parity checks to pin `vk_ref` shape validation before
+  `privacy_algorithm_entry` lookup.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI hosts reject verifier-key backend drift before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - Privacy SDK Entrypoint Dollar Grammar Gate
+
+- Tightened the public JS and Python privacy catalog SDK entrypoint grammar so
+  JavaScript-only `$` identifier characters are rejected for both current and
+  planned production privacy entrypoints. Existing catalog rows were already
+  dollar-free, so this closes an adversarial descriptor gap without changing
+  advertised APIs.
+- Added hostile public catalog loader coverage for `build$Proof` and
+  `buildFuture$Proof`, native catalog invariant coverage for
+  `build$AlphaProof`, and JS FFI contract assertions that every native privacy
+  host rejects `$` in SDK entrypoints.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "malformed_metadata_shapes"` (63 tests)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (415 tests)
+
+## 2026-06-04 - Native Privacy FFI Proof-Family Grammar Gate
+
+- Replaced the native privacy FFI `proof_family` invariant with a dedicated
+  public-catalog-compatible grammar: non-empty lowercase alphanumeric tokens
+  separated only by `-` or `/`.
+- Removed the stale broad catalog-label helper from the C bridge, JS NAPI host,
+  and Python PyO3 host after field-specific validators covered algorithm IDs,
+  proof families, backend families, SDK entrypoints, and verifier-key names.
+- Added adversarial native catalog and capability coverage for uppercase proof
+  families, colon-delimited proof families, and empty proof-family segments
+  such as `halo2//ipa`.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_capabilit --lib -- --test-threads=1`
+
+## 2026-06-04 - Native Privacy FFI VkRef Shape Gate
+
+- Added a pre-binding `vk_ref` shape check in the C bridge, JS NAPI host, and
+  Python PyO3 host so malformed verifier-key references must use exact
+  `backend:name` form with portable backend and verifier-key name components
+  before backend/name binding is attempted.
+- Split malformed `vk_ref` coverage from wrong-backend coverage: malformed
+  references such as missing separators, empty names, extra separators, and
+  colon-delimited backends now fail without reflecting request fields, while
+  validly shaped wrong-backend references keep the existing backend-family
+  diagnostic.
+- Updated JS FFI contract parity tests to require the new shape helper,
+  unreflected malformed-reference failure, and the narrowed wrong-backend test
+  across all native hosts.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_proof_ffi_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_proof_ffi_rejects --lib -- --test-threads=1`
+
+## 2026-06-04 - Privacy Algorithm Id Edge Grammar Gate
+
+- Tightened the Python public privacy catalog and all three native privacy FFI
+  hosts so `algorithm_id` values must start with lowercase ASCII alphanumeric
+  characters before using the existing lowercase URL-safe body alphabet.
+- Added adversarial public and native coverage for leading `_` and `-`
+  algorithm IDs, including request-level no-reflection checks for malformed
+  algorithm IDs before catalog lookup.
+- Updated JS FFI contract parity tests to require the native first-character
+  rule and the new leading-separator catalog/request negative cases.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (413 tests)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+
+## 2026-06-04 - Native Privacy FFI Catalog Identifier Shape Gate
+
+- Added native privacy FFI helpers for catalog-shaped `algorithm_id` values and
+  dot-separated SDK entrypoint names, separate from the generic request
+  text-field alphabet and `vk_ref` backend/name grammar.
+- Applied the helpers to native catalog invariants, emitted capability
+  invariants, and request pre-dispatch validation in the C bridge, JS NAPI host,
+  and Python PyO3 host so colon/dot/uppercase algorithm IDs and
+  colon/hyphen entrypoints fail before catalog lookup and are not reflected in
+  failure payloads.
+- Added adversarial native coverage for delimited/uppercase algorithm IDs,
+  delimited/hyphenated entrypoints, and invalid request catalog shapes, and
+  updated JS FFI contract parity tests to pin the stricter grammar across all
+  three native hosts.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_request_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_request_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_request_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_capabilit --lib -- --test-threads=1`
+
+## 2026-06-04 - Public Privacy Backend-Family VkRef Component Gate
+
+- Tightened the JS and Python public privacy catalogs so registered
+  `backend_family` labels must be non-empty verifier-key backend components:
+  ASCII alphanumeric plus `-`, `_`, and `.`, with `/`, `:`, whitespace, empty
+  strings, and non-portable labels rejected before descriptor normalization.
+- Tightened the C bridge, JS NAPI host, and Python PyO3 native FFI catalog and
+  capability invariants to use a dedicated `vk_ref` backend-component helper,
+  preventing backend families that capabilities could advertise but
+  `backend:name` request parsing could never bind.
+- Added negative coverage for slash-bearing and colon-delimited backend
+  families, plus JS/Python/native parity assertions that keep proof-family
+  names independent from stricter verifier-key backend component labels.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (409 tests)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_capabilit --lib -- --test-threads=1`
+
+## 2026-06-04 - ISO Trust Bundle Preflight
+
+- Added `scripts/iso_trust_bundle_verify.py`, an offline XMLDSig/XAdES
+  trust-bundle verifier for operator rail PKI packages. It checks canonical
+  lowercase nonzero SHA-256 pins, digest-bound base64 DER envelopes with
+  lightweight semantic shape checks for X.509 certificates, X.509 CRLs, and
+  OCSPResponse wrappers, duplicate DER material, contradictory
+  trust/revocation pins, required CRL/OCSP material, clean HTTPS provenance
+  URLs, timezone-aware non-future retrieval timestamps, unique DER labels, and
+  secret-looking fields before emitting Torii profile trust override JSON.
+- Added checked-in synthetic trust-bundle templates under
+  `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
+  Inst, and securities CSD profile families. These validate schema only,
+  require `--allow-synthetic-der`, cannot emit profile override JSON, and
+  production still requires replacing them with current rail PKI trust, CRL, and
+  OCSP packages.
+- Added dependency-free unittest coverage for valid summary/profile emission,
+  digest mismatch, noncanonical/all-zero pins, duplicate DER material,
+  duplicate DER labels, current/legacy pin alias conflicts,
+  trust-anchor/revocation conflicts, missing required CRL/OCSP material, secret
+  material, insecure or malformed provenance URLs, invalid/future retrieval
+  timestamps, malformed DER envelopes, wrong DER material classes, semantic
+  DER-shape rejection for synthetic placeholders without the explicit template
+  flag, rejection of profile override emission when synthetic DER is enabled,
+  record-only policy override requirements, and all checked-in trust-bundle
+  templates.
+- Updated the TradFi ISO audit note, engineering backlog, and roadmap so the
+  trust-bundle preflight is implemented while the remaining trust gap is real
+  rail PKI packages, semantic runtime fixture coverage, and archived live
+  provenance evidence.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `python3 scripts/iso_trust_bundle_verify.py --help`
+  - `python3 scripts/iso_audit_notary_adapter.py --help && python3 scripts/iso_rail_gateway_adapter.py --help && python3 scripts/iso_operator_receipt_verify.py --help && python3 scripts/iso_operator_canary.py --help`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test` (35 tests)
+  - `git diff --check -- scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json fixtures/iso20022/trust_bundles/README.md fixtures/iso20022/trust_bundles/fedwire_funds.preprod.example.json fixtures/iso20022/trust_bundles/securities_csd.preprod.example.json fixtures/iso20022/trust_bundles/sepa_sct_inst.preprod.example.json fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker scan returned no matches across the same touched file set.
+- Validation blocked:
+  - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - Native Privacy FFI Backend-Family Request Portability Gate
+
+- Tightened the C bridge, JS NAPI host, and Python PyO3 privacy FFI catalog and
+  capability invariants so `backend_family` values must use the same non-empty
+  portable identifier alphabet accepted by `vk_ref` request backends.
+- Added adversarial native catalog coverage for slash-bearing backend families
+  such as `halo2/ipa/pasta`, preventing rows that could be advertised in
+  capabilities but rejected before verifier-key backend binding.
+- Updated JS FFI contract parity tests to require the stricter backend-family
+  invariant and the new negative catalog case across all three Rust hosts.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI capabilities keep production gates fail-closed" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_capabilit --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_capabilit --lib -- --test-threads=1`
+
+## 2026-06-04 - ISO Operator Canary Runner
+
+- Added `scripts/iso_operator_canary.py`, a strict JSON-runbook runner for ISO
+  20022 operator canaries. It requires provider/environment labels, executes the
+  rail file-drop adapter, audit notary adapter, and receipt verifier as
+  subprocesses, rejects unknown runbook keys, verifies generated receipts by
+  default with source-file cross-checks, redacts bearer-token file arguments in
+  its summary, and writes a bounded JSON evidence summary. `--plan-only`
+  validates the runbook and prints redacted child commands without contacting
+  Torii or notary endpoints.
+- Added checked-in ISO operator canary templates under
+  `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds, SEPA SCT
+  Inst, and securities CSD profile families.
+- Added dependency-free unittest coverage for successful rail/notary/verify
+  orchestration, unknown-key rejection, rail sidecar failure before network
+  delivery, verifier failure propagation on tampered source XML, rejecting a
+  runbook without rail or notary stages, redacted plan-only output, and
+  plan-only validation of every checked-in profile template.
+- Updated the TradFi ISO audit note, engineering backlog, and roadmap so the
+  generic runner and profile-family templates are treated as implemented while
+  the remaining gap is real provider endpoint canaries and archived vendor/rail
+  evidence.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py`
+  - `python3 scripts/iso_audit_notary_adapter.py --help`
+  - `python3 scripts/iso_rail_gateway_adapter.py --help`
+  - `python3 scripts/iso_operator_receipt_verify.py --help`
+  - `python3 scripts/iso_operator_canary.py --help`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test` (22 tests)
+  - `git diff --check -- scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker scan returned no matches with `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`.
+- Validation blocked:
+  - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - Cross-SDK Planned Entrypoint Source Declaration Gate
+
+- Extended the JS privacy catalog parity gate to recursively scan JS source/dist,
+  Python, Swift, Kotlin, Java, and C# SDK source roots for public declarations of
+  every planned privacy SDK entrypoint name variant.
+- Added Python catalog coverage that rejects planned privacy entrypoints
+  introduced as top-level public Python functions or aliases in `iroha_python`
+  modules before the production gate passes.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --test --test-name-pattern "planned privacy SDK entrypoints remain unexported until production gates pass" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "planned_privacy_sdk_entrypoints"`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+
+## 2026-06-04 - ZK-ACE Required Proof Builder Gate
+
+- Added `zk-ace-pq-authorization-v0` to the required production privacy plan
+  inventory across JS source/dist, Python public catalog, and native C/JS/PyO3
+  privacy catalogs.
+- Moved `buildZkAceAuthorizationProofV1` out of executable SDK entrypoints and
+  into planned entrypoints so the ZK-ACE proof builder stays behind the same
+  production/audit gate as other required privacy rows.
+- Removed the planned ZK-ACE proof builder from JS public package exports,
+  instruction-builder exports, and TypeScript declarations while retaining
+  internal use by the authorized-transfer builder.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --check javascript/iroha_js/src/index.js && node --check javascript/iroha_js/dist/index.js && node --check javascript/iroha_js/src/instructionBuilders.js && node --check javascript/iroha_js/dist/instructionBuilders.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern "privacy algorithm catalogs require proof builders on required production plan rows|native privacy FFI catalogs pin required production plan rows|native privacy FFI catalog rows match public SDK catalogs" javascript/iroha_js/test/privacyCatalogParity.test.js javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "required_production_privacy_plan or execution_and_metadata_invariants"`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+
+## 2026-06-04 - Research Target Executable Fail-Closed Gate
+
+- Tightened JS source/dist, Python public catalog, and native C/JS/PyO3 privacy
+  catalog mirrors so `research-target-as-of-2026-05` rows cannot advertise any
+  executable SDK entrypoints before their production stage advances.
+- Moved `pq-masp-stark-v0` off reused executable asset-hidden instruction
+  builders and kept its chain-mutating actions as PQ-specific planned
+  entrypoints:
+  `buildPqMaspStarkRegisterPoolInstruction` and
+  `buildPqMaspStarkTransferInstruction`.
+- Added JS/Python hostile descriptor coverage for research rows that try to
+  expose verifier, proof-builder, proof-helper, or instruction-builder
+  executable entrypoints, plus native invariants that keep the six research rows
+  executable-empty and planned-nonempty.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py`
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "privacy algorithm catalogs require proof builders on required production plan rows|privacy algorithm JS validators reject hostile catalog descriptor shapes|planned privacy SDK entrypoints remain unexported until production gates pass" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "research_target or post_quantum or production_proof_builder"`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog --lib -- --test-threads=1`
+
+## 2026-06-04 - Privacy Proof Helper Builder Gate
+
+- Tightened the native C bridge, JS NAPI host, Python PyO3 host, JS
+  source/dist catalog, and Python public privacy catalog so planned proof helper
+  APIs such as `ProofEnvelope`, `ProofWitness`, `ProofPublicInputs`,
+  `ProofRequest`, and `ProofCommitment` cannot satisfy production proof-builder
+  gates.
+- Added native required-row and DevFixture pairing regressions for
+  proof-helper-only planned entrypoints, keeping wrapper/helper APIs out of the
+  production proof-builder path.
+- Added JS hostile descriptor coverage and Python catalog predicate/descriptor
+  regressions for proof-helper-only planned rows across required-row and
+  DevFixture gates.
+- Validation passed:
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep dev fixtures explicit and non-production|native privacy FFI catalogs pin required production plan rows" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "privacy algorithm catalogs require proof builders on required production plan rows|privacy algorithm JS validators reject hostile catalog descriptor shapes" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "production_proof_builder or required_production_privacy_plan"`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+
+## 2026-06-04 - Public Privacy Proof Builder Ledger-Mutation Gate
+
+- Aligned the JS source/dist and Python public privacy catalog production
+  proof-builder predicates with the native FFI hosts by rejecting proof-shaped
+  ledger-mutation entrypoints such as `...ProofTransaction` and
+  `buildSubmit...Proof`.
+- Strengthened JS catalog parity source audits so JS and Python validators must
+  exclude ledger mutations before a planned entrypoint can satisfy required-row
+  or DevFixture production proof-builder gates.
+- Added JS hostile descriptor cases and Python predicate/catalog regressions for
+  instruction-only, transaction-only, submit-only, helper-only, fixture-only,
+  and empty planned required rows.
+- Validation passed:
+  - `node --test --test-name-pattern "privacy algorithm catalogs require proof builders on required production plan rows|privacy algorithm JS validators reject hostile catalog descriptor shapes" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "production_proof_builder or required_production_privacy_plan"`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+
+## 2026-06-04 - Public Privacy Required Row Builder Gate
+
+- Tightened the JS source/dist privacy catalog and Python public privacy
+  catalog so required production plan rows must retain a planned production
+  proof builder, matching the native C/JS/Python FFI catalog gate instead of
+  accepting helper-only, instruction-only, fixture-only, or empty planned rows.
+- Updated JS/Python catalog parity assertions so the checked-in required rows
+  are verified by proof-builder semantics, not by a merely non-empty planned
+  entrypoint list.
+- Added Python catalog regressions for required rows with no planned entrypoint,
+  `deriveOrchardWitness`, instruction-only, and DevFixture-only planned
+  entrypoints.
+- Validation passed:
+  - `node --test --test-name-pattern "privacy algorithm catalogs require proof builders on required production plan rows|privacy algorithm catalogs stay fail-closed and in parity across JS and Python" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "required_production_privacy_plan"`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py`
+
+## 2026-06-04 - Privacy Local Verifier Alias Gate
+
+- Broadened local-only verifier classification across the C bridge, JS NAPI
+  host, Python PyO3 host, JS public catalog source/dist, and Python public
+  privacy catalog so `verify...Local`, `verify...LocalVerifier`, and
+  `verify...LocalOnly` aliases are treated like existing `verify...Locally`
+  local verifier entrypoints.
+- Added adversarial native catalog tests for planned and executable SDK
+  local-verifier aliases so helper-only local verification APIs cannot be
+  advertised as ordinary SDK-builder or planned production entrypoints.
+- Added JS and Python public catalog negative cases for planned, SDK-builder,
+  chain-executable, research-target, and production-hardened local-verifier
+  alias rows.
+- Validation passed:
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep dev fixtures explicit and non-production" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "privacy algorithm catalog rejects invalid descriptor rows" javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 bash ci/check_privacy_python_sdk.sh` (773 tests)
+
+## 2026-06-04 - Native Privacy Required Row Builder Gate
+
+- Tightened the C bridge and Python PyO3 required production privacy plan-row
+  guard so each pinned required row must retain a planned production proof
+  builder, matching the JS NAPI host instead of accepting any non-empty planned
+  helper entrypoint list.
+- Added helper-only planned-entrypoint regressions to the C bridge and Python
+  PyO3 native catalog tests so rows such as `deriveOrchardWitness` cannot
+  satisfy the production builder gate.
+- Strengthened the JS privacy FFI contract test so C, JS, and Python native
+  hosts must all use the production-proof-builder predicate and cover missing,
+  proof-drifted, backend-drifted, unplanned, and helper-only required rows.
+- Validation passed:
+  - `node --test --test-name-pattern "native privacy FFI catalogs pin required production plan rows" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows --lib -- --test-threads=1`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - Native Privacy Catalog Nonempty Identifier Gate
+
+- Tightened the C bridge and Python PyO3 privacy FFI hosts so catalog
+  algorithm IDs, SDK entrypoints, planned entrypoints, and emitted capability
+  entrypoint metadata must use non-empty portable identifiers instead of relying
+  on the empty-permissive portable-character predicate.
+- Added empty SDK entrypoint and empty planned entrypoint regressions to the C
+  bridge and Python PyO3 native catalog invariant tests, matching the JS NAPI
+  host coverage.
+- Extended the JS privacy FFI contract test so all native privacy hosts must
+  define and apply the non-empty identifier helper in catalog and capability
+  invariants.
+- Validation passed:
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable|native privacy FFI capabilities keep production gates fail-closed" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `cargo test -p connect_norito_bridge privacy_capability_invariants_reject_forged_production_readiness --lib -- --test-threads=1`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_capability_invariants_reject_forged_production_readiness --lib -- --test-threads=1`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - Privacy SDK Verifier Backend And Probe Parity
+
+- Added cross-SDK negative coverage so malformed production verifier backend
+  labels with internal spaces, `+` separators, or fixture suffixes stay rejected
+  in Python, Kotlin/JVM, Android Java, Swift, and C# classifier tests.
+- Aligned the JS NAPI privacy catalog verifier-key mapping guard with the C
+  bridge and Python PyO3 hosts by requiring explicit non-`unknown` portable
+  verifier-key names in catalog admission.
+- Normalized JS source and package-dist privacy native availability probes to
+  the shared 40-byte header-only Norito request archive used by Python, Swift,
+  JVM/Android, and C#, with zeroing tests for success and native-failure paths.
+- Validation passed:
+  - `node --test --test-name-pattern "native privacy FFI catalogs require explicit verifier-key name maps" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "JS and Python privacy availability probes clear request copies after failures" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "privacy native availability probes build and verify with Norito request archives|privacy native availability probes clear request copies after native failures" javascript/iroha_js/test/privacyNative.test.js`
+  - `node --test --test-name-pattern "package dist privacy native availability clears request copies after failures" javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "Swift privacy native availability requires valid Norito proof probes|privacy native availability proof probes use shared Norito request archives" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_swift_sdk.sh`
+  - `PRIVACY_JVM_SDK_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_privacy_jvm_sdk.sh`
+  - `bash ci/check_privacy_sdk_guard.sh` (privacy contract JS checks, package/browser checks, Python native build, and 759 Python SDK tests)
+- Validation blocked:
+  - `bash ci/check_privacy_csharp_sdk.sh` could not run because `dotnet` is not installed in this shell.
+
+## 2026-06-04 - ISO Securities Ledger Crosswalk Gate
+
+- Added ISO reference-data snapshots for CSD venue, securities
+  settlement-account, and securities cash-leg crosswalks, including sample
+  schemas under `fixtures/iso_bridge/`.
+- Live `securities-csd` `sese.023` admission now fails closed unless the loaded
+  snapshots map the settlement instrument to an on-ledger asset, the settlement
+  MIC to a CSD ledger domain, both delivering and receiving settlement accounts
+  to ledger accounts with matching party BICs, and the cash leg to an asset
+  definition.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core securities_ledger_crosswalk --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_config iso_bridge --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii sese023_ledger_crosswalk --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_securities_fixtures_validate_and_link_through_torii_profile --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii securities_profile_rejects_unknown_reference_crosswalk_values --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii official_mdr_xsd_fixtures_cover_live_rail_profiles --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii securities_ --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_config minimal_config_snapshot --test fixtures -- --nocapture`
+
+## 2026-06-04 - ISO External Audit Export Spool
+
+- Added `iso_bridge.audit_export_dir` as a config-backed external audit spool for
+  durable ISO state.
+- Each audit-index regeneration now mirrors `messages.index.json` into the
+  export directory and writes both `latest.notary.json` and
+  `anchors/{index_sha256}.notary.json`, with an `anchor_sha256` over the
+  embedded audit manifest, `index_sha256`, source `store_dir`, and record count.
+- Added `scripts/iso_audit_notary_adapter.py` to verify exported preimages and
+  publish them to operator-configured archival/notary HTTPS endpoints outside
+  Torii consensus paths. The adapter fails closed on tampered anchor/index
+  digests, mismatched digest-addressed filenames, mismatched local
+  `messages.index.json`, inconsistent record counts, insecure HTTP endpoints by
+  default, and non-successful remote responses while writing bounded local
+  receipts for publication attempts.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_config iso_bridge --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_exports_external_audit_notary_spool --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_config minimal_config_snapshot --test fixtures -- --nocapture`
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+
+## 2026-06-04 - ISO Operator Gateway Adapters
+
+- Added `scripts/iso_rail_gateway_adapter.py` for operator-side live rail
+  file-drop ingress. XML payloads require sibling sidecars that pin
+  `message_type`, explicit `profile` by default, and `payload_sha256`; the
+  adapter verifies those values before posting to the matching Torii ISO
+  endpoint.
+- The adapter rejects plaintext HTTP Torii URLs unless explicitly enabled for
+  local tests, keeps bearer tokens runtime-only, and writes bounded local
+  receipts for successful and failed submissions without mutating or deleting
+  gateway input files.
+- Added `scripts/iso_operator_receipt_verify.py` as a read-only canary gate for
+  rail/notary adapter receipts. It recomputes receipt digests, requires
+  successful 2xx receipts by default, rejects insecure HTTP evidence by default,
+  rejects leaked authorization/token material, and can cross-check referenced
+  source XML or notary-anchor files.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+  - `python3 scripts/iso_audit_notary_adapter.py --help`
+  - `python3 scripts/iso_rail_gateway_adapter.py --help`
+  - `python3 scripts/iso_operator_receipt_verify.py --help`
+
+## 2026-06-04 - ISO Sese024 Lifecycle Fixture Coverage
+
+- Added a checked-in `fixtures/iso20022/sese024_fixture.xml` securities
+  status-advice fixture and pinned it at the IVM parser layer.
+- Extended the live securities Torii fixture corridor so BAH-wrapped
+  `sese.023`, `sese.024`, and `sese.025` messages validate through the
+  profile, link to durable settlement records, and apply pending/settled
+  lifecycle updates.
+- Added Torii adversarial coverage for `sese.024` known-original pending
+  updates, unknown-original recording without synthetic original creation,
+  wrong-family originals, and conflicting settlement references.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p ivm sese024 --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii lifecycle_sese024 --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_securities_fixtures_validate_and_link_through_torii_profile --lib -- --nocapture`
+  - `rustfmt --edition 2024 --check ...`
+  - `git diff --check -- ...`
+  - conflict-marker scan over the touched ISO files and docs
+
+## 2026-06-04 - ISO Payment Return Cancellation Fixture Coverage
+
+- Added checked-in `fixtures/iso20022/pacs004_fixture.xml` and
+  `fixtures/iso20022/camt056_fixture.xml` lifecycle XML fixtures.
+- Pinned parser extraction for returned amount/currency/reason fields and
+  cancellation assignment/original/reason/detail fields.
+- Added Torii lifecycle coverage proving the `pacs.004` fixture marks a known
+  original payment as rejected and the `camt.056` fixture puts a known original
+  on hold with the cancellation reason.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p ivm fixture_parses --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_pacs004_fixture_marks_original_returned --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_camt056_fixture_marks_original_pending_cancellation --lib -- --nocapture`
+
+## 2026-06-04 - ISO Pacs002 Lifecycle Fixture Coverage
+
+- Added checked-in `fixtures/iso20022/pacs002_fixture.xml` for payment status
+  reports.
+- Pinned parser extraction for status message id, original message id,
+  transaction status, and additional-info fields.
+- Added Torii lifecycle coverage proving the fixture settles a known original
+  payment and records the status report as an accepted lifecycle message.
+- Added an adversarial Torii regression proving `TxInfAndSts/StsId` cannot
+  shadow `GrpHdr/MsgId`: durable lifecycle ids and audit business-message ids
+  remain anchored to the status report group header.
+- Added full Standards Editor XSD fixtures for `pacs.002.001.10`,
+  `pacs.004.001.10`, and `camt.056.001.08`, mirrored from the Apache-2.0 Moov
+  schema source, and extended the live MDR/XSD matrix so BAH status, return,
+  and cancellation reports validate under rail-specific version and
+  business-service checks wherever the default profiles allow those exact
+  versions.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p ivm fixture_parses --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p ivm pacs002 --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_pacs002_fixture_settles_known_original --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii lifecycle_pacs002 --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii lifecycle_pacs002_uses_group_header_msgid_not_transaction_status_id --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii official_mdr_xsd_fixtures_cover_live_rail_profiles --lib -- --nocapture`
+
+## 2026-06-04 - Python Privacy Backend Classifier Parity Coverage
+
+- Added explicit Python SDK coverage for the production verifier backend
+  classifier, mirroring the native allowlist and fail-closed SDK cases already
+  covered in Rust, JS, JVM, Swift, and C#.
+- The new adversarial cases cover whitespace, non-ASCII confusables, null bytes,
+  path traversal-shaped labels, pending protocol aliases, trusted-setup labels,
+  production/mainnet/audit claims, developer fixtures, internal spaces, and `+`
+  separators.
+- Validation passed:
+  - `PYTHONPATH=python/iroha_python/src python3 -m py_compile python/iroha_python/tests/client_ledger_helpers_test.py`
+  - Direct dependency-free import smoke of `python/iroha_python/src/iroha_python/_privacy_backends.py` covering the new supported/unsupported classifier matrix.
+- Validation note: `pytest` is not installed in this shell (`pytest` and
+  `python3 -m pytest` both unavailable), so the focused pytest test could not be
+  run here without adding dependencies.
+
+## 2026-06-04 - Direct OpenVerify Consumer Backend Binding
+
+- Hardened direct OpenVerify consumers that sit outside generic `VerifyProof`
+  so backend labels, registered verifier tags, verifier-key references, and
+  envelope `BackendTag`s must agree before public-input parsing or verifier
+  dispatch.
+- Added adversarial coverage for anonymous escrow verifier-key backend drift,
+  RAM-LFE production-claim and STARK/Halo2 metadata drift, Kaigi privacy
+  config/record tag drift, and IVM host envelope/backend tag mismatch.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core anonymous_escrow_close_proof_rejects_noncanonical_envelope_before_public_input_trust --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core identifier_verify_execution_proof_rejects_noncanonical_envelope_metadata --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core privacy_proof_envelope_metadata_rejects_zero_verifier_hash --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core enforce_zk_envelope_rejects_vk_metadata_mismatch --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core enforce_zk_envelope --lib -- --test-threads=1`
+
+## 2026-06-04 - IVM Proved Backend Tag Guard
+
+- Hardened `Executable::IvmProved` overlay admission so proof attachments must
+  keep `backend`, `proof.backend`, and `vk_ref.backend` aligned before verifier
+  lookup.
+- Added verifier-record backend tag matching through the shared production
+  verifier classifier, closing a corrupted-WSV path where a record could carry
+  the wrong `BackendTag` while its key bytes and proof envelope still matched
+  the attachment label.
+- Added focused overlay coverage for mismatched verifier-key references and
+  corrupted verifier record tags before proof verification.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core overlay_rejects_ivm_proved_backend_tag_mismatches_before_verify --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core overlay_accepts_ivm_proved_with_execution_circuit --lib -- --test-threads=1`
+
+## 2026-06-04 - ProofId Backend Delimiter Guard
+
+- Fixed `ProofId::from_str` to split the display form on the last `:` instead
+  of the first, preserving backend labels that legally contain colons such as
+  Halo2 IPA circuit aliases.
+- Added a focused roundtrip test for a colon-bearing `halo2/ipa:*` backend
+  label so stable proof IDs keep parsing as production backend names expand.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_data_model proof_id_parse --lib -- --test-threads=1`
+
+## 2026-06-04 - Offline Privacy Backend Claim Guard
+
+- Hardened offline recursive proof verifier resolution so production-claim
+  backend labels are rejected before verifier-key registry lookup, matching the
+  chain VerifyProof and executor preverify admission policy.
+- Updated the offline transparent verifier guard to derive the expected backend
+  tag from the shared production verifier classifier instead of duplicating a
+  local Halo2/STARK tag split.
+- Added adversarial offline resolver coverage for `production-ready`,
+  `mainnet-ready`, audit-signoff, and spliced security-review labels.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core offline_note_rejects_production_claim_backend_labels_before_registry_lookup --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core offline_note_rejects_pending_production_backend_labels_before_registry_lookup --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core offline_note_rejects_transparent_backend_tag_mismatch --lib -- --test-threads=1`
+
+## 2026-06-04 - JS Privacy Backend Portability Guard
+
+- Tightened the JS instruction-builder verifier backend portability predicate to
+  match the Rust, Torii, Python, and JVM allowlists: backend labels now admit
+  only ASCII alphanumerics plus `/`, `_`, `.`, `:`, and `-` before alias
+  compaction.
+- Added adversarial proof-envelope cases for internal spaces and plus signs,
+  covering malformed STARK and Halo2-shaped labels that previously reached tag
+  normalization instead of failing as non-portable.
+- Extended the cross-SDK privacy contract test so source and dist JS builders
+  and Torii clients must keep the same portable-label regex.
+- Validation passed:
+  - `node --test --test-name-pattern "privacy proof envelope builder rejects malformed and oversized inputs" javascript/iroha_js/test/instructionBuilders.test.js`
+  - `node --test --test-name-pattern "native chain proof admission uses explicit production verifier backend allowlist" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - OfflineNoteV2 Swift Bridge Closeout
+
+- Materialized the local Swift bridge with `scripts/build_norito_xcframework.sh`;
+  `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` were
+  generated successfully and remain untracked generated artifacts.
+- Fixed the Swift native-bridge availability probe archive initializer so it
+  does not reference covariant `Self` from a stored static property
+  initializer.
+- Closed the earlier same-day Swift validation blocker for OfflineNoteV2: the
+  focused Swift suite now builds against the generated bridge and passes.
+- Validation passed:
+  - `bash scripts/build_norito_xcframework.sh`
+  - From `IrohaSwift`: `swift test --filter OfflineNoteV2Tests`
+  - From `IrohaSwift`: `swift test --filter VerifyingKeyBackendTagTests`
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `bash ci/check_no_tracked_python_bytecode.sh`
+  - `git status --short Cargo.lock`
+  - `git status --short dist`
+
+## 2026-06-04 - ISO 20022 Durable Store Retention
+
+- Added `iso_bridge.store_retention_secs` and
+  `iso_bridge.store_max_records` config knobs, both defaulting to `0` so
+  existing operators retain all durable ISO records unless they opt into
+  compaction.
+- Separated durable-store retention from the in-memory dedupe TTL: with
+  `store_dir` configured, dedupe expiry no longer deletes persisted audit
+  records. Configured compaction removes expired or oldest overflow records,
+  clears replay indexes, deletes corresponding message JSON files, and
+  regenerates the audit manifest from survivors.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_config iso_bridge --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+
+## 2026-06-04 - ISO 20022 Audit Manifest Endpoint
+
+- Exposed the durable ISO audit manifest through Torii at
+  `GET /v1/iso20022/audit/messages`, using the same deterministic
+  `index_sha256` manifest builder as the persisted
+  `store_dir/audit/messages.index.json` file.
+- Added focused runtime and handler coverage for manifest export, digest-bound
+  tamper detection, and disabled-bridge rejection.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii audit --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_torii iso_audit_messages_endpoint --lib -- --nocapture`
+
+## 2026-06-04 - WSV Privacy VK Record Backend Guard
+
+- Hardened OpenVerify metadata validation so a registered verifier record's
+  backend tag must match the production verifier backend label used by the proof
+  attachment.
+- Closed a corrupted-WSV fast-path gap where non-admitted record tags such as
+  `Unsupported`, BN254, Groth16, or a Stark tag paired with Halo2 key bytes could
+  otherwise reach preverified proof-cache success.
+- Added metadata-level and execution-path adversarial tests proving bad record
+  tags fail before the preverified cache can mark the proof verified.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core validate_open_verify_envelope_metadata_checks_circuit_and_commitment --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core verify_proof_preverified_cache_does_not_bypass_non_admitted_record_tags --lib -- --test-threads=1`
+
+## 2026-06-04 - IVM Privacy VK Snapshot Backend Guard
+
+- Hardened IVM host verifying-key snapshot admission so backend labels must map
+  through the production verifier allowlist and match the stored backend tag.
+- Reused the same guard during verifier-key lookup, so corrupted in-memory host
+  snapshots with production-claim, developer-only, or unsupported Halo2-shaped
+  labels fail before proof dispatch.
+- Added adversarial host tests for production-claim and unsupported snapshot
+  labels at `set_verifying_keys`, plus direct corrupted-snapshot lookup through
+  the generic verify-proof syscall.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core set_verifying_keys_rejects_production_claim_and_unsupported_backend_labels --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot --lib -- --test-threads=1`
+
+## 2026-06-04 - Kagemusha Reserved-Lineage Profile Split
+
+- Split Reserved-lineage recursive spend proofs into distinct one-hop and
+  append circuit profiles while retaining the legacy lineage id as a compatible
+  family selector.
+- Hardened verifier-record selection so record circuit ids must match the
+  bundled proof verifier-key id, and append output selection cannot use a
+  one-hop profile as the next spendable output.
+- Mirrored the one-hop/append profile constants, helpers, backend allowlists,
+  and adversarial policy coverage across Rust, Swift, JVM/Android, JavaScript,
+  Python, and C# SDK surfaces.
+- Added CI policy coverage and negative controls for the profile split and
+  record-backed multi-hop redeem success path.
+- Tightened the payload benchmark to emit the actual split Reserved-lineage
+  profile ids (`kagemusha-recursive-spend-lineage-onehop-v1` for hop 1 and
+  `kagemusha-recursive-spend-lineage-append-v1` after that), clear only its own
+  Criterion groups before fresh runs, and pin the measured split-profile D2D
+  payload at a constant `3847` bytes through 64 hops.
+- Validation passed:
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output --lib --no-run`
+  - `cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-validation-target cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib -- --test-threads=1`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-multi-hop-redeem-success`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-source`
+  - `bash ci/check_kagemusha_recursive_spend_payload_bench.sh --self-test`
+  - `KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_ARTIFACTS_DIR=/tmp/iroha-kagemusha-payload-artifacts bash ci/check_kagemusha_recursive_spend_payload_bench.sh`
+  - `bash ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-payload-growth`
+  - `bash ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-payload-size`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `PYTHONPATH=python/iroha_python/src /tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-pytest-venv bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_payload_bench.sh`
+  - `cargo fmt -p iroha_data_model --check`
+  - `git diff --check`
+- Local C# SDK execution is still environment-blocked here because neither
+  `dotnet` nor `/tmp/iroha-dotnet/sdk/dotnet` is installed.
+- The long-running real ignored Reserved-lineage proof test and bridge redeem
+  test are still active from earlier sessions and were not interrupted.
+
+## 2026-06-04 - Privacy Gas Backend Class Guard
+
+- Hardened confidential gas metering so Halo2 public-input metadata is decoded
+  only for backend labels admitted by production verifier dispatch.
+- Extended adversarial gas coverage to pending-production, production-claim,
+  trusted-setup, developer-only, and unsupported Halo2-shaped backend labels,
+  proving they do not receive production public-input metering.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core state_configured_gas_schedule_updates_metering --lib -- --test-threads=1`
+
+## 2026-06-04 - Executor Attachment Backend Class Guard
+
+- Hardened transaction attachment preverify so non-production proof backend
+  classes fail before verifier-key lookup, matching generic `VerifyProof`
+  admission behavior.
+- Added explicit early rejection for production-claim, trusted-setup,
+  developer-only, and unsupported attachment backend labels in addition to the
+  existing pending-production guard.
+- Added an adversarial executor test proving those backend classes do not fall
+  through to `referenced verifying key missing` when the VK ref is absent.
+- Fixed an existing `zk-preverify` test compile blocker by cloning a reused
+  Kagemusha Pallas open-envelope fixture before archive encoding.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core preverify_attachments_reject_non_production_backend_labels_before_vk_lookup --lib --features zk-preverify -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_core preverify_and_dedup_across_transactions_in_block --lib --features zk-preverify -- --test-threads=1`
+
+## 2026-06-04 - ISO 20022 Securities Reference Gate
+
+- Hardened live securities profile admission for `sese.023`/`sese.025` so
+  settlement instrument references must resolve through the loaded ISIN/CUSIP
+  snapshot, place-of-settlement MICs must be active in the MIC directory, and
+  delivering/receiving party BICs must resolve through the BIC/LEI snapshot.
+- Added adversarial coverage using syntactically valid but unmapped ISIN, MIC,
+  and BIC values, proving those profile submissions fail before durable
+  settlement lifecycle records are created.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii securities_ --lib -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+
+## 2026-06-04 - ISO 20022 Durable Audit Index
+
+- Added `store_dir/audit/messages.index.json` as a deterministic local audit
+  manifest for durable ISO bridge records.
+- The index is sorted by message id, carries an `index_sha256` digest, and links
+  each entry to the message file name plus its `record_sha256`.
+- Reload now regenerates the audit index from only digest-valid records, so
+  forged persisted files are excluded instead of being preserved in a stale
+  manifest.
+- Added adversarial coverage for audit-index digest tampering, tampered-record
+  exclusion on reload, and tampered-only stores regenerating an empty valid
+  index.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+
+## 2026-06-04 - Native Privacy Catalog Proof-Builder Gate
+
+- Hardened the native privacy capability catalog so algorithm IDs, SDK
+  entrypoints, planned entrypoints, and verifier-key names must be non-empty
+  portable identifiers, closing blank-label admission paths.
+- Tightened required production-plan row admission so each mandated privacy row
+  must retain a planned production proof-builder entrypoint rather than any
+  helper-only placeholder.
+- Added adversarial catalog tests for empty SDK/planned entrypoints and a
+  helper-only required Orchard plan row.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_js_host privacy_algorithm_catalog --lib -- --test-threads=1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-privacy-catalog-target cargo test -p iroha_js_host privacy_capabilit --lib -- --test-threads=1`
+
+## 2026-06-04 - ISO 20022 Durable Record Digest Guard
+
+- Added a versioned deterministic `record_sha256` digest to ISO bridge
+  `store_dir/messages/*.json` records, computed over the persisted record body
+  without the digest field.
+- Hardened ISO durable-store reload so records with missing, malformed, or
+  mismatched digests are ignored and cannot silently rebuild message status or
+  replay indexes.
+- Added adversarial durable-store coverage for body tampering, stripped legacy
+  digest fields, malformed digest values, and the existing positive reload path.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+
+## 2026-06-04 - Python VeRange OpenVerify Limit Guard
+
+- Hardened VeRange payload-limit handling so `maxPayloadBytes` aliases are
+  read before payload-source branching and fail closed when supplied without a
+  payload or supplied through duplicate aliases.
+- Normalized VeRange proof-envelope and dev-fixture `aux` bytes under the
+  caller-specific context before delegating to the generic OpenVerify builder,
+  preserving `veRangeProofEnvelope` and `veRangeDevProofFixture` error paths.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - `PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/python -m pytest -q python/iroha_python/tests/verange_test.py`
+
+## 2026-06-04 - Python Jindo SIS Unsupported Dev Fixture Guard
+
+- Kept Python's public OpenVerify builder and decoder fail-closed for the
+  explicit `Unsupported` backend tag, while adding private internal encode and
+  decode paths for explicit dev-fixture helpers.
+- Wired only the Python Jindo lattice PCS and SIS-with-hints helpers to those
+  private paths, preserving their prepared-envelope and local-verifier flows
+  without allowing generic public construction or decoding of tag `4` frames.
+- Updated Jindo and SIS tests so public decoding of those dev envelopes is
+  asserted to fail, and intentional tamper fixtures use the private test-only
+  path instead of the public generic builder.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/src/iroha_python/jindo.py python/iroha_python/src/iroha_python/sis_hints.py python/iroha_python/tests/jindo_test.py python/iroha_python/tests/sis_hints_test.py`
+  - `PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/python -m pytest -q python/iroha_python/tests/jindo_test.py python/iroha_python/tests/sis_hints_test.py`
+  - direct Python 3.11 probe covering public generic `unsupported` rejection,
+    public tag-`4` decode rejection, private tag-`4` roundtrip, and successful
+    Jindo/SIS explicit dev-fixture verification
+
+## 2026-06-04 - JS OpenVerify Unsupported Backend Guard
+
+- Hardened the public JS `buildPrivacyProofEnvelope` path so exact
+  `unsupported`/`Unsupported` backend aliases fail closed instead of minting a
+  generic OpenVerify envelope with backend tag `Unsupported`.
+- Kept the explicit Jindo lattice and SIS-with-hints dev-fixture builders on a
+  private internal path that can still produce `Unsupported` envelopes until
+  their production lattice backends are registered.
+- Updated tamper tests to forge raw Norito envelopes directly instead of using
+  the public builder for `Unsupported` frames, and mirrored the behavior in the
+  checked-in JS `dist` bundle.
+- Validation passed:
+  - `node --test --test-name-pattern "privacy proof envelopes|Jindo lattice|SIS-with-hints|package dist privacy proof envelopes" javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "native chain proof admission uses explicit production verifier backend allowlist|developer-only privacy backend labels stay rejected before production allowlists|adversarial pending privacy backend aliases stay covered across SDK tests" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - direct Node ESM probe covering public exact-`unsupported` rejection and
+    successful Jindo/SIS explicit dev-fixture envelope construction
+
+## 2026-06-04 - OfflineNoteV2 SDK Adversarial Parity Closeout
+
+- Removed the isolated Rust `OfflineNote*V2` model duplicate that carried stale
+  `iroha:offline-note-v2:*:v1` domains. The V2 instruction/readiness aliases
+  now continue to resolve to the canonical Offline Note wire model and schema
+  hash used by `fixtures/offline/interop_contract_v2.json`.
+- Hardened Kotlin/JVM and Java Android OfflineNoteV2 SDK admission so
+  verifier/proof labels are stored trimmed, verifier-key backend/name labels
+  reject `:` separators, and audit bundles reject output claims that are not
+  listed in `output_commitments` at construction time.
+- Added Kotlin/JVM and Java Android adversarial coverage for blank proof
+  backends, empty proof bytes, short and noncanonical public-input hashes,
+  malformed verifier IDs, bad certificate versions, non-one-use certificates,
+  short note keys and issuer signatures, negative assertion usage limits, empty
+  or mismatched audit shapes, uncommitted audit outputs, malformed issue/redeem
+  hashes, bad account/asset/numeric inputs, over-limit audit outputs, and
+  non-conserved audit amounts.
+- Validation passed:
+  - stale OfflineNoteV2 domain/schema/type-string scan over Rust, SDKs, tests,
+    and fixture returned no matches
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-target cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-target cargo test -p iroha_data_model offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash -- --nocapture`
+  - From `kotlin`: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `cargo fmt --all`
+  - `git diff --check --` the touched OfflineNoteV2 Rust, Swift, Kotlin/JVM,
+    Java Android, fixture, and status files
+  - `bash ci/check_no_tracked_python_bytecode.sh`
+  - `git status --short Cargo.lock` showed no lockfile drift
+- Swift XCTest validation remains blocked in this checkout because
+  `dist/NoritoBridge.xcframework` is not materialized.
+
+## 2026-06-04 - Python Swift CSharp Privacy Backend Alias Splice Guard
+
+- Hardened the remaining SDK privacy verifier backend classifiers in Python,
+  Swift, and C# so pending backend families are recognized by exact compact
+  aliases rather than substring matches.
+- Preserved exact catalog aliases such as `halo2/ipa/penumbra`,
+  `halo2/ipa/masp`, `halo2/ipa/monero`, and `halo2/ipa/curve-tree`, while
+  rejecting spliced `dev-fixture`, `claimed-production`, traversal, and
+  audit-claim labels as unsupported.
+- Added Python classifier coverage for exact pending aliases versus adversarial
+  splices, and updated Swift/C# backend-tag tests to keep the same fail-closed
+  semantics.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/_privacy_backends.py python/iroha_python/tests/client_ledger_helpers_test.py`
+  - direct Python 3.11 `_privacy_backends.py` probe loaded by file path,
+    covering exact alias acceptance and spliced-label rejection
+  - `swiftc -parse IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift`
+  - `node --test --test-name-pattern "native chain proof admission uses explicit production verifier backend allowlist|developer-only privacy backend labels stay rejected before production allowlists|adversarial pending privacy backend aliases stay covered across SDK tests" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+- `swift test --filter VerifyingKeyBackendTagTests` remains blocked because
+  `dist/NoritoBridge.xcframework` is not materialized in this checkout.
+- `dotnet test --filter VerifyingKeyBackendTagTests` remains blocked because
+  `dotnet` is not installed in this environment.
+
+## 2026-06-04 - JS Privacy Verifier Backend Alias Splice Guard
+
+- Hardened JS Torii and instruction-builder production verifier backend
+  classifiers so pending privacy backend families are recognized only through
+  exact compact aliases, not arbitrary substring matches.
+- Kept proof-envelope pending backend vectors intact while ensuring
+  verifier-key registration/update paths reject spliced `dev-fixture`,
+  `claimed-production`, traversal, and audit-claim backend labels before
+  request dispatch.
+- Updated the JS dist mirrors and cross-SDK parity guard to treat those
+  spliced labels as unsupported rather than pending-production aliases.
+- Validation passed:
+  - `node --test --test-name-pattern "verifying key|VerifyingKey|production verifier|unsupported production verifier|registerVerifyingKey|updateVerifyingKey" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/instructionBuilders.test.js`
+  - `node --test --test-name-pattern "native chain proof admission uses explicit production verifier backend allowlist|developer-only privacy backend labels stay rejected before production allowlists|adversarial pending privacy backend aliases stay covered across SDK tests" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+
+## 2026-06-04 - Kotlin Java Privacy Backend Alias Splice Guard
+
+- Hardened Kotlin and Java Android privacy verifier backend classification so
+  catalog labels are resolved by exact compact aliases rather than substring
+  matching.
+- Preserved the cataloged pending-backend aliases for Orchard, Penumbra/MASP,
+  FCMP++, Jindo/SIS, Miden, Aztec, PQ MASP, Anonymous PGC, VeRange, zkAt,
+  ZK-AMS, Vega, silent-threshold anoncreds, ZK-X.509, and SIS-with-hints.
+- Reclassified adversarial `dev-fixture`, `claimed-production`, traversal, and
+  audit-claim suffixes as `UNSUPPORTED` so they no longer count as pending
+  production backend labels in Kotlin or Java.
+- Validation passed:
+  - From `kotlin`: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest --console=plain`
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+
+## 2026-06-04 - Python OpenVerify Unsupported Backend Guard
+
+- Hardened Python OpenVerify envelope construction and decoding so the explicit
+  `Unsupported` backend tag fails closed instead of being accepted as a pending
+  production backend.
+- Preserved the cataloged production backend identifiers used by parity vector
+  builders while rejecting the placeholder `unsupported` alias and forged
+  backend tag `4` frames.
+- Added adversarial coverage for both public builder input and handcrafted
+  Norito frame decoding.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - direct Python 3.11 `verange.py` probe loaded by file path with
+    `PYTHONPATH=python/norito_py/src`, covering exact `unsupported` builder
+    rejection, forged backend tag `4` decoder rejection, and a
+    `Halo2IpaOrchard` pending-backend roundtrip control
+  - `git diff --check -- python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py status.md`
+  - `bash ci/check_no_tracked_python_bytecode.sh`
+- `/opt/homebrew/bin/python3.11 -m pytest -q python/iroha_python/tests/verange_test.py`
+  remains unavailable in this environment because Homebrew Python 3.11 does not
+  have `pytest` installed.
+
+## 2026-06-03 - ISO 20022 collateral lifecycle endpoint
+
+- Added a collateral substitution lifecycle path to the ISO bridge profile
+  catalog and Torii submission routing. This was originally prototyped under the
+  local `colr.007` placeholder and was corrected on 2026-06-04 to the ISO
+  `colr.012` family for default production profile and fixture surfaces.
+- Added status JSON fields for collateral substitution context: obligation id,
+  original/substitute collateral amounts, currencies, instruments, effective
+  date, substitution type, haircut, and reason code.
+- Extended lifecycle persistence so checked-in collateral substitution messages
+  are durably keyed by `<message-type>:<TxId>` and recorded without generating
+  ledger instructions.
+- Updated the ISO docs, TradFi audit, engineering backlog, and roadmap to keep
+  remaining work focused on official XMLDSig/XAdES trust-anchor/canonical XML
+  packs, official MDR/XSD lifecycle fixtures, and live-rail gateway adapters.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-colr-target cargo test -p iroha_core default_catalog_exposes_inbound_lifecycle_messages --lib -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii checked_in_colr012_fixture_records_collateral_context --lib -- --nocapture`
+- The first Torii rerun against the isolated target failed because the temp
+  volume was full (`No space left on device`). The run-local
+  `/tmp/iroha-iso-colr-target` cache was removed, then the same focused Torii
+  test passed against the workspace target cache.
+
+## 2026-06-03 - Kagemusha Record-Backed Multi-Hop Redeem Success
+
+- Added a real two-hop recursive Kagemusha redeem fixture that builds
+  confidential-transfer-v2 hop proofs, derives Pallas opening envelopes from the
+  checked hop metadata, replays the record-backed lineage witness, and redeems
+  the final spendable note online.
+- The new core test asserts public minting, final-note/top-up nullifier
+  consumption, and duplicate-nullifier replay rejection after the first redeem
+  is applied.
+- Guarded the coverage in `ci/check_kagemusha_recursive_spend_policy.sh` and
+  wired its dedicated negative control into
+  `.github/workflows/pr_kagemusha_payload_bench.yml`.
+- Validation passed:
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay --lib -- --test-threads=1`
+  - `cargo fmt -p iroha_core --check`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-multi-hop-redeem-success`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/offline.rs ci/check_kagemusha_recursive_spend_policy.sh .github/workflows/pr_kagemusha_payload_bench.yml status.md`
+
+## 2026-06-03 - Python OpenVerify Decoder Size Cap Guard
+
+- Hardened Python OpenVerify envelope decoding so forged Norito frames cannot
+  bypass SDK byte limits for public inputs, proof bytes, or auxiliary bytes.
+- Added decoder-side size checks against
+  `DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES`,
+  `DEFAULT_PRIVACY_MAX_PROOF_BYTES`, and `DEFAULT_PRIVACY_MAX_AUX_BYTES`, while
+  preserving valid empty aux decoding.
+- Added adversarial decoder coverage that monkeypatches small limits and proves
+  oversized public-input, proof, and aux nested fields fail closed, with an
+  at-limit valid control.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - direct Python 3.11 `verange.py` probe loaded by file path with
+    `PYTHONPATH=python/norito_py/src`, covering oversized nested
+    public-input/proof/aux fields and an at-limit valid decode control
+  - `git diff --check -- python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+
+## 2026-06-03 - Python OpenVerify Decoder Nested-Field Guard
+
+- Hardened Python OpenVerify envelope decoding so malicious Norito frames with
+  empty or dirty circuit IDs, invalid UTF-8 circuit IDs, zero verifier-key
+  hashes, empty public-input payloads, empty proof payloads, or trailing nested
+  field bytes fail closed during SDK decode.
+- Kept `aux` optional and allowed to decode as empty when the nested aux field
+  is explicitly empty, but rejected malformed nested aux framing with trailing
+  bytes.
+- Added adversarial decoder coverage for bool-array archive inputs, wide
+  memoryview archive inputs, empty/dirty/invalid circuit IDs, trailing nested
+  fields, zero VK hashes, empty public inputs, and empty proof bytes.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - direct Python 3.11 `verange.py` probe loaded by file path with
+    `PYTHONPATH=python/norito_py/src`, covering malformed nested OpenVerify
+    fields and a valid empty-aux decode control
+  - `git diff --check -- python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py status.md`
+
+## 2026-06-03 - OfflineNoteV2 Fixture Parity Closeout
+
+- Rechecked the Rust `offline_v2_vectors` generator against
+  `fixtures/offline/interop_contract_v2.json`; the fixture is valid JSON and
+  no longer contains the stale OfflineNoteV2 domain, recursive schema, or
+  private Norito type-name strings that caused the earlier SDK vector drift.
+- Fixed the Kotlin/JVM and Java Android `OfflineNoteV2` account-id Norito
+  encoders so single-key and multisig controller public keys are written
+  through the canonical compact public-key payload path used by Rust.
+- Validation passed:
+  - `python3 -m json.tool fixtures/offline/interop_contract_v2.json`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-target cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - From `kotlin`: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+- Swift OfflineNoteV2 validation remains blocked in this checkout because
+  `dist/NoritoBridge.xcframework` is not materialized.
+
+## 2026-06-03 - Python VeRange Explicit Aux Null Guard
+
+- Hardened Python privacy proof envelope builders so omitted `aux` still
+  defaults to empty bytes, but explicit `aux=None` fails closed instead of
+  being silently interpreted as empty auxiliary data.
+- Applied the guard to the generic OpenVerify envelope builder plus VeRange
+  prepared proof and dev-fixture builders, preserving caller-specific error
+  contexts.
+- Added adversarial Python coverage for explicit null auxiliary data in
+  generic privacy proof envelopes, prepared VeRange proof envelopes, and
+  VeRange dev fixtures.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - direct Python 3.11 `verange.py` probe loaded by file path with
+    `PYTHONPATH=python/norito_py/src`, covering explicit null `aux` rejection
+    and omitted `aux` empty-byte defaults for generic, prepared, and dev-fixture
+    builders
+  - `git diff --check -- python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+
+## 2026-06-03 - Python VeRange Byte-Shape Limit Guard
+
+- Hardened Python VeRange byte normalization so bool arrays and non-unsigned
+  byte memoryviews are rejected instead of being silently coerced by
+  `bytes(...)` for commitments, payloads, proof bytes, and auxiliary bytes.
+- Replaced VeRange wrapper `dict.get` limit defaults with single-alias parsing
+  for `maxPayloadBytes`/`max_payload_bytes`,
+  `maxProofBytes`/`max_proof_bytes`, and
+  `maxPublicInputBytes`/`max_public_input_bytes`, so explicit nullish limits
+  and alias collisions fail closed before envelope assembly.
+- Added adversarial Python VeRange coverage for bool numeric arrays, wide
+  memoryviews, payload byte-shape failures without an explicit digest, and
+  camel/snake max-limit alias collisions in commitment, prepared proof
+  envelope, and dev-fixture builders.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - direct Python 3.11 `verange.py` probe loaded by file path with
+    `PYTHONPATH=python/norito_py/src`, covering bool arrays, wide memoryviews,
+    max-payload alias collisions, max-proof alias collisions, max-public-input
+    alias collisions, and dev-fixture limit collisions
+  - `git diff --check -- python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - `bash ci/check_no_tracked_python_bytecode.sh`
+- `/opt/homebrew/bin/python3.11 -m pytest -q python/iroha_python/tests/verange_test.py`
+  is not available in this environment because Homebrew Python 3.11 does not
+  have `pytest` installed.
+
+## 2026-06-03 - Privacy Native Dedicated Suite Hardening
+
+- Aligned `javascript/iroha_js/test/privacyNative.test.js` with the hardened
+  non-empty availability probe contract: build/verify probes now expect the
+  exact no-padding Norito V1 privacy request frame and zeroing checks use the
+  correct probe length.
+- Updated the dedicated native wrapper assertions to the strict byte-container
+  contract introduced at the privacy FFI boundary.
+- Added focused adversarial coverage in the dedicated privacy native suite for
+  signed typed-array outputs, wide typed-array outputs, signed/wide typed-array
+  requests that must not reach native dispatch, and SharedArrayBuffer-backed
+  request/result archives.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/privacyNative.test.js`
+  - `node --test javascript/iroha_js/test/privacyNative.test.js`
+  - direct JS dist privacy FFI byte-view probe covering signed typed-array
+    outputs, wide typed-array outputs, signed/wide typed-array requests, and
+    shared-memory requests/results
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/privacyNative.test.js javascript/iroha_js/test/instructionBuilders.test.js`
+
+## 2026-06-03 - Privacy FFI Byte-View Guard
+
+- Hardened JavaScript privacy native FFI wrappers so request archives and
+  native result archives accept only Buffer, Uint8Array, DataView, or
+  ArrayBuffer byte containers, rejecting signed/wide typed arrays at the
+  privacy boundary.
+- Rejected SharedArrayBuffer-backed Uint8Array/DataView inputs so privacy FFI
+  validation and native dispatch do not operate on shared mutable archive
+  memory.
+- Regenerated `javascript/iroha_js/dist/crypto.js` with `npm run build:dist`
+  so source and dist remain identical.
+- Added adversarial FFI wrapper coverage for signed typed-array result frames,
+  wide typed-array result frames, signed/wide typed-array request frames, and
+  shared-memory request/result frames.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/instructionBuilders.test.js`
+  - direct JS source privacy FFI byte-view probe covering signed typed-array
+    outputs, signed typed-array requests, and shared-memory requests/results
+  - direct JS dist privacy FFI byte-view probe covering signed typed-array
+    outputs, signed typed-array requests, and shared-memory requests/results
+  - `/opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py`
+  - `IROHA_JS_NATIVE_DIR=/tmp/iroha-js-native-existing-11840 node --test javascript/iroha_js/test/instructionBuilders.test.js`
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/instructionBuilders.test.js python/iroha_python/src/iroha_python/verange.py python/iroha_python/tests/verange_test.py status.md`
+  - `bash ci/check_no_tracked_python_bytecode.sh`
+- The repository native checksum manifest is currently dirty and mismatched
+  with the existing native binary, so the full JS test was run with a temporary
+  `IROHA_JS_NATIVE_DIR` containing the existing binary and a matching checksum
+  manifest; no cargo-backed native rebuild was started.
+- Python pytest remains blocked in the available BOI venv because that venv
+  runs Python 3.14 while the local `_crypto.abi3.so` is built for Python 3.11.
+- Cargo validation remains deferred because the pre-existing
+  `cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge --lib -- --test-threads=1`
+  process is still active as PIDs `88983`/`91987` and was not interrupted.
 
 ## 2026-06-03 - Privacy FFI Empty-Payload Guard
 
@@ -126,7 +1706,7 @@ Last updated: 2026-06-03
   constants.
 - Re-ran the payload benchmark guard: recursive D2D payload bytes stayed
   constant at 1751 bytes across hops 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64;
-  Reserved-lineage payload bytes stayed constant at 3833 bytes across the same
+  Reserved-lineage payload bytes stayed constant at 3847 bytes across the same
   hop set.
 - Validation passed:
   - `ci/check_kagemusha_recursive_spend_policy.sh`
@@ -167,7 +1747,8 @@ Last updated: 2026-06-03
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-bridge-target cargo test -p iroha_core kagemusha_recursive_spend_lineage_append_availability_enforces_hop_cap --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-bridge-target cargo test -p iroha_core kagemusha_recursive_spend_append_rejects_lineage_output_at_cap_before_inputs --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-bridge-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge --lib -- --test-threads=1 --nocapture`
-    passed with 4 tests run, 2 intentionally ignored, and a 2.15s test body.
+    passed with 4 tests run, 2 intentionally ignored, and a 2.26s test body on
+    the latest rerun after 5m 34s of compilation.
 
 ## 2026-06-03 - Privacy Payload Nullish Max-Limit Guard
 
@@ -1091,11 +2672,11 @@ Last updated: 2026-06-03
 - Updated the payload benchmark guard and in-crate fixture budgets to the
   measured constant-size outputs: semantic D2D bundles stay at `1751` bytes,
   semantic append transition profiles at `2094` bytes, Reserved-lineage D2D
-  bundles at `3833` bytes, and Reserved-lineage append transition profiles at
+  bundles at `3847` bytes, and Reserved-lineage append transition profiles at
   `2817` bytes through 64 hops.
 - Closed the public documentation/policy drift around those measured budgets:
   offline docs now pin the `1751` byte fixed-proof bundle, `2048` byte
-  material-growth ceiling, `2094` byte semantic append profile, `3833` byte
+  material-growth ceiling, `2094` byte semantic append profile, `3847` byte
   Reserved-lineage D2D bundle, `2817` byte Reserved-lineage append profile,
   and the stable `kagemusha_reserved_lineage_transition_profile_bytes`
   Criterion group.
@@ -14454,7 +16035,5265 @@ Last updated: 2026-06-03
   - Focused `iroha_data_model` Cargo test rerun is deferred because unrelated
     Cargo/rustc jobs are still active in this worktree; no unrelated build
     processes were killed or interrupted.
+## 2026-06-03 Ethereum SCCP source-event context binding
 
+- Hardened `scripts/sccp_evm_receipt_proof_evidence.py` so SCCP source-event
+  logs must include `transactionHash`, `blockHash`, and `blockNumber`, and each
+  field must match the enclosing receipt/block context. This aligns the Python
+  evidence collection path with the SDK fail-closed source-event validators.
+- Added adversarial coverage for missing source-event log context fields and
+  release-bundle/readiness inventory guards so the Python evidence path cannot
+  drift back to optional log-context matching.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`15` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_collect_receipt_proof_rejects_source_event_missing_context_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_event_context_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_source_event_context_tests`
+    (`3` passed)
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - Release inventory smoke for receipt RLP zero-topic, receipt RLP
+    zero-address, and source-event context markers returned
+    `ethereum receipt context inventories ok`.
+
+## 2026-06-03 Ethereum SCCP receipt RLP zero-address parity
+
+- Loosened generic Ethereum receipt RLP reconstruction in JavaScript source/dist,
+  Swift, Kotlin/JVM, Java Android, .NET, and the Python receipt-proof evidence
+  script so ordinary log addresses may be `0x0000000000000000000000000000000000000000`.
+  SCCP source-event validation still compares against the configured non-zero
+  source bridge address and keeps the source event digest non-zero.
+- Added regressions proving receipt-trie proof construction and evidence
+  collection accept non-target receipts with zero log addresses while preserving
+  the selected target receipt RLP.
+- Extended strict release-bundle/readiness inventories so published Ethereum
+  SDK/evidence-script sources must retain the zero-address receipt RLP
+  acceptance markers.
+- Validation:
+  - `node --test --test-name-pattern "Ethereum receipt trie helper uses RLP transaction-index keys" javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`1` passed)
+  - `node --test --test-name-pattern "package dist" javascript/iroha_js/test/package_dist.test.js`
+    (`35` passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --disable-sandbox`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_collect_receipt_proof_accepts_zero_log_address_in_receipt_rlp pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_address_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_receipt_rlp_zero_address_tests`
+    (`3` passed)
+  - Release inventory smoke for receipt-root zero, receipt RLP zero-topic, and
+    receipt RLP zero-address markers returned `ethereum receipt inventories ok`.
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --console=plain`
+    (not run: no Java runtime in this environment)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.sccp.EvmSccpProverTests --console=plain`
+    (not run: no Java runtime in this environment)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter ReceiptTrieProofBuilderUsesRlpTransactionIndexKeys`
+    (not run: `dotnet` is not installed)
+
+## 2026-06-03 Ethereum SCCP receipt RLP zero-topic parity
+
+- Loosened generic Ethereum receipt RLP reconstruction in Swift, Kotlin/JVM,
+  Java Android, .NET, and the Python receipt-proof evidence script so log topics
+  may be all-zero bytes32 values, matching Ethereum receipt validity and the
+  existing JavaScript behavior. SCCP source-event validation remains strict about
+  event shape and non-zero source event digest.
+- Added regressions proving receipt-trie proof construction and evidence
+  collection accept non-target receipts with zero log topics while preserving the
+  selected target receipt RLP.
+- Extended strict release-bundle/readiness inventories so published Ethereum
+  SDK/evidence-script sources must retain the zero-topic receipt RLP acceptance
+  markers.
+- Validation:
+  - `node --test --test-name-pattern "Ethereum receipt trie helper uses RLP transaction-index keys" javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`1` passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --disable-sandbox`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_collect_receipt_proof_accepts_zero_log_topic_in_receipt_rlp pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_topic_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_receipt_rlp_zero_topic_tests`
+    (`3` passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --console=plain`
+    (not run: no Java runtime in this environment)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.sccp.EvmSccpProverTests --console=plain`
+    (not run: no Java runtime in this environment)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests.ReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --no-restore`
+    (not run: `dotnet` is not installed)
+
+## 2026-06-03 SDK Ethereum SCCP receipt-root zero rejection
+
+- Aligned the JavaScript source/dist, Swift, Kotlin/JVM, Java Android, and .NET
+  EVM receipt-root/proof-root helper paths with the Rust verifier by rejecting
+  all-zero receipt roots before encoding the typed
+  `sccp:evm:receipt-root-value:v1` envelope or C# receipt-proof transcript.
+- Added SDK regressions beside the existing EVM/TRON receipt-root vectors so
+  zero EVM receipt roots fail in browser package tests and native source-proof
+  hash suites.
+- Extended the strict release-bundle verifier and readiness tests so published
+  Ethereum SDK evidence must retain the source/dist implementation guards and
+  regression markers for zero receipt-root/proof-root rejection across browser
+  and native/.NET SDKs.
+- Validation:
+  - `node --test --test-name-pattern "derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness material" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`1` passed)
+  - `node --test --test-name-pattern "package dist entrypoint exports TRON receipt-state transcript helpers" javascript/iroha_js/test/package_dist.test.js`
+    (`1` passed)
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial --disable-sandbox`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_receipt_root_zero_sdk_tests`
+    (`2` passed)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests.ReceiptProofTranscriptMatchesSharedEthereumVector --no-restore`
+    (not run: `dotnet` is not installed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest --console=plain`
+    (not run: no Java runtime in this environment)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.sccp.SourceSccpProofsTests --console=plain`
+    (not run: no Java runtime in this environment)
+
+## 2026-06-03 Ethereum SCCP receipt-root fail-closed hardening
+
+- Tightened the EVM-family SCCP receipt-root MPT value helper so all-zero
+  receipt roots are rejected when constructing or decoding typed receipt-root
+  values, matching the existing TRON receipt-root fail-closed behavior.
+- Added focused Rust assertions that zero EVM receipt roots cannot be encoded or
+  parsed through the lower-level MPT value helpers.
+- Added an Ethereum configured-material adversarial regression proving a
+  deployment-tagged legacy receipt-root-only fixture still fails the
+  source-proof engine, so production admission cannot rely on the placeholder
+  receipt-root fallback instead of the governed source-bridge log.
+- Validation:
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp source_adapter_engine_readiness_with_deployment_opens_source_adapter --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-03 SDK Ethereum SCCP outbound prover preflight
+
+- Added browser, Kotlin/JVM, Java Android, and C# regressions proving
+  `EthereumMainnetSccp.proveOutboundToEthereum` rejects BSC-targeted outbound
+  requests before invoking the app-owned outbound prover callback.
+- Extended the release verifier/readiness inventory so published Ethereum
+  mainnet SDK evidence must keep the JavaScript, Swift, Kotlin/JVM, Java
+  Android, and C# outbound pre-callback regressions present.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`18` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests`
+    (`2` passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (not run: no Java runtime in this environment)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (not run: no Java runtime in this environment)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --no-restore`
+    (not run: `dotnet` is not installed)
+
+## 2026-06-03 Optional crypto feature validation
+
+- Reran the non-default `gost`, `sm`, `sm-neon-force`, `sm-ffi-openssl`,
+  `rayon`, `secp256k1-msm-batch`, `bls-multi-pairing`, `ffi_export`, and
+  `crypto-parity-tests` crypto feature corridors through strict `iroha_crypto
+  --all-targets` clippy and focused library tests.
+- Stabilized the SM acceleration tests by serializing test-only global
+  intrinsic policy and acceleration-disable state, then forcing NEON-dependent
+  parity/runtime-disable tests back to the `Auto` policy for the guarded test
+  lifetime. Production SM dispatch remains unchanged.
+- Removed the unused infallible SM2 signing-key rebuild helper and serialized
+  the OpenSSL SM preview smoke/provider tests around their global preview flag
+  so the feature-gated provider tests are warning-clean and scheduling-stable.
+- Marked `Algorithm` opaque for the FFI derive under `ffi_export`, preserving
+  its explicit stable Rust/Norito discriminants while satisfying the FFI macro's
+  transparent-enum restrictions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-all cargo clippy -p iroha_crypto --features gost --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-all cargo test -p iroha_crypto --features gost gost --lib -- --nocapture`
+    (`20` passed, `1` ignored, `447` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-all cargo test -p iroha_crypto --features sm neon_sm3_digest_respects_runtime_disable --lib -- --nocapture`
+    (`1` passed, `487` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-all cargo test -p iroha_crypto --features sm sm --lib -- --nocapture`
+    (`65` passed, `423` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-all cargo clippy -p iroha_crypto --features sm --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-neon-force cargo clippy -p iroha_crypto --features sm-neon-force --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-neon-force cargo test -p iroha_crypto --features sm-neon-force neon --lib -- --nocapture`
+    (`8` passed, `487` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-openssl cargo clippy -p iroha_crypto --features sm,sm-ffi-openssl --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-openssl cargo test -p iroha_crypto --features sm,sm-ffi-openssl openssl_provider --lib -- --nocapture`
+    (`2` passed, `490` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-openssl cargo test -p iroha_crypto --features sm,sm-ffi-openssl --test sm_openssl_smoke -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-rayon cargo clippy -p iroha_crypto --features rayon --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-rayon cargo test -p iroha_crypto --features rayon merkle --lib -- --nocapture`
+    (`45` passed, `408` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp-msm cargo clippy -p iroha_crypto --features secp256k1-msm-batch --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp-msm cargo test -p iroha_crypto --features secp256k1-msm-batch secp256k1 --lib -- --nocapture`
+    (`8` passed, `441` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-multi cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-multi cargo test -p iroha_crypto --features bls,bls-multi-pairing aggregate_multi_message --lib -- --nocapture`
+    (`5` passed, `501` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-multi cargo test -p iroha_crypto --features bls,bls-multi-pairing --test bls_batch multi_message -- --nocapture`
+    (`6` passed, `10` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-ffi-export cargo clippy -p iroha_crypto --features ffi_export --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-ffi-export cargo test -p iroha_crypto --features ffi_export algorithm --lib -- --nocapture`
+    (`4` passed, `445` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-parity cargo clippy -p iroha_crypto --features crypto-parity-tests --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-parity cargo test -p iroha_crypto --features crypto-parity-tests ed25519 --lib -- --nocapture`
+    (`45` passed, `407` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-parity cargo test -p iroha_crypto --features crypto-parity-tests secp256k1 --lib -- --nocapture`
+    (`11` passed, `441` filtered out)
+
+## 2026-06-03 Sumeragi live NewView handoff proof
+
+- Added `LiveNewViewVotesStayInHandoff` to the top-level Sumeragi model so
+  live NewView vote counters are confined to the NewView collection phase or
+  the immediate proposal handoff with quorum evidence.
+- Added `LiveNewViewVotesNeverLeakPastHandoff` and wired it through the fast,
+  deep, and TLC-fast formal configs, the Sumeragi README property inventory,
+  and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.27s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total `0.604 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` generated states, `2338` distinct states, `13` temporal branches,
+    no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length `10`, `EXITCODE: OK`, total
+    `6170.253 sec`)
+
+## 2026-06-03 Swift Ethereum SCCP outbound prover preflight
+
+- Tightened the Swift `EthereumMainnetSccp.proveOutboundToEthereum` facade so
+  it now builds and validates the Ethereum-mainnet-only outbound proof request
+  before invoking the app-owned Groth16 prover callback. BSC-targeted or
+  non-SORA-source requests therefore fail at the facade boundary instead of
+  reaching local prover code and being rejected only after proof wrapping.
+- Added a Swift regression proving a BSC outbound request through the Ethereum
+  facade does not call the configured prover closure, and added release
+  verifier/readiness inventory guards so that pre-callback regression remains
+  part of the published SDK evidence set.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnet --disable-sandbox`
+    (`7` passed)
+  - `cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests`
+    (`4` passed)
+
+## 2026-06-03 Merkle leaf iterator fail-closed hardening
+
+- Changed Merkle leaf iteration to stop cleanly on an unexpected missing leaf
+  instead of relying on panic-only internal layout assertions. Valid decoded
+  trees keep the same layout validation and iteration semantics.
+- Added malformed internal-layout regressions for both forward and reverse leaf
+  iteration, covering missing front and back leaf slots without panics.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-merkle cargo test -p iroha_crypto merkle --lib -- --nocapture`
+    (`41` passed, `408` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-merkle cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 X25519 HKDF expansion fail-closed hardening
+
+- Changed X25519 shared-secret derivation to propagate HKDF expansion failures
+  through the existing `Result<SessionKey, Error>` path instead of relying on a
+  panic-only `expect` after the all-zero shared-secret check.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-hkdf cargo test -p iroha_crypto x25519 --lib -- --nocapture`
+    (`5` passed, `444` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-hkdf cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 ML-DSA seeded keygen HKDF fail-closed hardening
+
+- Changed ML-DSA-65 seeded key generation so seed-material HKDF expansion
+  returns `Error::KeyGen` through the existing `keypair_from_seed` `Result`
+  instead of relying on a panic-only `expect`.
+- Updated the seed-material regression to exercise the fallible helper while
+  preserving deterministic domain-separated output for valid seed inputs.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed cargo test -p iroha_crypto mldsa --lib -- --nocapture`
+    (`13` passed, `436` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SM2 checked signing path hardening
+
+- Added checked SM2 private-key rebuild, public-key derivation, and signing
+  helpers so SM2 signing failures can be represented as `Error::Signing` or
+  `ParseError` instead of relying on panic-only validated-secret assumptions.
+- Routed the top-level `Signature::try_new` SM2 branch through `try_sign`,
+  while preserving the existing infallible `sign` and `public_key`
+  compatibility wrappers for already-validated key material.
+- Added direct SM2 `try_sign` verification coverage plus a top-level
+  `Signature::try_new` SM2 regression.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-checked cargo test -p iroha_crypto --features sm sm2 --lib -- --nocapture`
+    (`24` passed, `466` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-checked cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 BLS VRF proof construction fail-closed hardening
+
+- Changed BLS VRF proof construction to return `Result` so malformed stored
+  BLS secret bytes, zero scalars, or out-of-range scalar encodings fail as
+  `VrfProofError::InvalidSecretKey` before hash-to-curve signing.
+- Replaced VRF compressed G1/G2 proof decoding `CtOption::unwrap` assumptions
+  with `into_option()?`, preserving canonical re-encoding and identity
+  rejection while making malformed proof encodings fail closed.
+- Updated governance VRF callers to handle proof-construction errors directly:
+  the CLI candidate generator now retries on `Result::Err` instead of wrapping
+  proof construction in `catch_unwind`, while tests assert valid deterministic
+  proof material explicitly.
+- Extended the default-backend corrupted-secret regression so both Normal and
+  Small VRF proof constructors reject invalid stored scalar bytes without
+  panicking.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-w3f cargo test -p iroha_crypto --features bls vrf --lib -- --nocapture`
+    (`14` passed, `490` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs vrf --lib -- --nocapture`
+    (`13` passed, `496` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-w3f cargo clippy -p iroha_crypto --features bls --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-callers cargo test -p iroha_cli gov_council_gen_vrf_outputs_expected_candidate --test cli_smoke -- --nocapture`
+    (`1` passed, `60` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-callers cargo test -p iroha_core --features bls --test gov_draw -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-callers cargo test -p iroha_core --features bls --test gov_draw_selector -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo test -p iroha_crypto --features bls vrf --lib -- --nocapture`
+    (`14` passed, `490` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo test -p iroha_core --test gov_draw -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo test -p iroha_core --test gov_draw_selector -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo test -p iroha_cli --test cli_smoke gov_council_gen_vrf_outputs_expected_candidate -- --nocapture`
+    (`1` passed, `60` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo clippy -p iroha_crypto --features bls --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo clippy -p iroha_core --test gov_draw --test gov_draw_selector --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-proof cargo clippy -p iroha_cli --test cli_smoke --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-callers cargo test -p iroha_torii --test gov_council_vrf -- --nocapture`
+    (compiled; `0` active tests under current feature set)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-callers cargo test -p iroha_torii --test gov_council_persist_integration -- --nocapture`
+    (compiled; `0` active tests under current feature set)
+
+## 2026-06-03 BLS fallible secret reload/signing hardening
+
+- Added fallible secret reload, signing, and public-key derivation helpers for
+  the default w3f BLS backend; the existing infallible compatibility methods now
+  delegate to those checked paths instead of decoding secret material inline.
+- Routed `Signature::try_new`, BLS proof-of-possession proving, and
+  `PublicKey::from_private_key` through the checked BLS helpers so corrupted
+  stored BLS secret bytes become `Error::Signing`/`Error::KeyGen` instead of
+  hidden panic-only assumptions on the `Result`-returning paths.
+- Added matching `try_sign`/`derive_public_key` wrappers for the blstrs backend
+  so both BLS backends expose the same checked API surface, and added default
+  backend regression coverage for corrupted stored secret bytes in both normal
+  and small suites.
+- Added the missing `# Errors` documentation on the fallible BLS VRF proof
+  helpers so the focused strict clippy corridor stays green with the existing
+  dirty VRF proof hardening.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f cargo test -p iroha_crypto --features bls fallible_paths_reject_corrupted_stored_secret --lib -- --nocapture`
+    (`2` passed, `500` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f cargo test -p iroha_crypto --features bls bls --lib -- --nocapture`
+    (`47` passed, `455` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs bls --lib -- --nocapture`
+    (`53` passed, `455` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f cargo test -p iroha_crypto --features bls vrf --lib -- --nocapture`
+    (`14` passed, `490` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f cargo clippy -p iroha_crypto --features bls --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/signature/bls/implementation.rs crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs crates/iroha_crypto/src/signature/bls/tests.rs crates/iroha_crypto/src/signature/mod.rs crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/vrf.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+
+## 2026-06-03 BLS blstrs compressed-point parser and all-targets hardening
+
+- Replaced panic-only `CtOption::unwrap` decompression assumptions in the
+  feature-gated blstrs BLS backend with explicit `into_option()?` handling for
+  both G1 and G2 compressed public-key parsing.
+- Kept identity and canonical re-encoding checks intact and added regression
+  coverage for malformed compressed G1/G2 encodings through the cache-backed
+  public-key parser helpers.
+- Cleared the feature-gated `iroha_crypto --all-targets` strict clippy corridor
+  by removing BLS test-target warning blockers in the cancellation and batch
+  suites without changing accepted signature behavior.
+- Cleared the default w3f `bls` feature all-targets corridor by removing an
+  unused panic-only `ManagedSecretKey::load_secret` wrapper and cfg-gating the
+  batch-test serialization trait import to the backend that needs it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f-all cargo clippy -p iroha_crypto --features bls --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f-all cargo test -p iroha_crypto --features bls --test bls_batch -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-w3f-lib cargo test -p iroha_crypto --features bls bls_ --lib -- --nocapture`
+    (`16` passed, `486` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-all cargo clippy -p iroha_crypto --features bls-backend-blstrs --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-all cargo test -p iroha_crypto --features bls-backend-blstrs compressed_point_decoders_reject_invalid_encodings --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-tests cargo test -p iroha_crypto --features bls-backend-blstrs --test bls_batch -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-lib cargo test -p iroha_crypto --features bls-backend-blstrs bls_ --lib -- --nocapture`
+    (`16` passed, `492` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs compressed_point_decoders_reject_invalid_encodings --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs bls --lib -- --nocapture`
+    (`53` passed, `455` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet relay scheduler dequeue fail-closed hardening
+
+- Removed panic-only `pop_front().expect(...)` assumptions from the SoraNet
+  constant-rate cell scheduler dequeue path; unexpected empty queues now reset
+  their deficit and continue toward the normal dummy-cell fallback.
+- Added regression coverage for the positive-deficit dequeue path draining a
+  queue and clearing stale deficit state on the following empty tick.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-scheduler-dequeue cargo test -p soranet-relay scheduler -- --nocapture`
+    (`12` scheduler unit tests passed plus
+    `scheduler_applies_pacing_without_cover`; relay test targets filtered as
+    expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-scheduler-dequeue cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Iroha crypto all-targets clippy cleanup
+
+- Cleared the stronger `iroha_crypto --all-targets` strict clippy gate by fixing
+  test-only warning blockers in SoraNet token/handshake and RAM-LFE coverage.
+- Replaced manual SoraNet capability header byte splitting with `to_be_bytes`,
+  updated oversized capability construction to use the checked-conversion
+  pattern clippy expects, made the admission-token invalid-key seed readable,
+  and marked the long RAM-LFE adversarial matrix test explicitly.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`66` passed, `381` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto verifier_new_with_invalid_public_key_fails_closed_during_verify --lib -- --nocapture`
+    (`1` passed, `446` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto programmed_public_parameters_reject_profile_and_verifier_metadata_abuse --lib -- --nocapture`
+    (`1` passed, `446` filtered out)
+
+## 2026-06-03 Iroha CLI all-targets clippy cleanup
+
+- Cleared the `iroha_cli --all-targets` strict clippy gate by fixing helper
+  binaries and tests that were still tripping warning-as-error checks.
+- Hardened `gov_instruction` IVM helper encoding so TLV payload lengths and
+  literal-table lengths are narrowed with checked conversions before writing
+  `u32` wire fields, and immediate chunk arithmetic now uses explicit checked
+  conversion/lossless widening instead of lossy casts.
+- Updated `ivm_contract_deploy` and the Taikai CLI policy test to use clippy-clean
+  option mapping, collapsed alias cleanup branching, and saturating timeout
+  arithmetic.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo clippy -p iroha_cli --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_cli --bin gov_instruction -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_cli --bin ivm_contract_deploy -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_cli --test taikai_policy -- --nocapture`
+    (`1` passed)
+
+## 2026-06-03 Ethereum SCCP source-adapter shape hardening
+
+- Tightened the Ethereum beacon receipt source-adapter preflight so malformed
+  proofs with empty execution headers, empty sync committee rosters, or
+  mismatched sync committee roster/weight/PoP vectors are rejected by the shape
+  gate before admission or cryptographic verification. The same gate now also
+  rejects zero total/signed committee weights, zero per-validator weights, and
+  all-zero signer bitmaps; it also rejects impossible `signed_weight >
+  total_weight` claims and signer bitmaps with bits outside the advertised
+  roster. Zero sync-committee message hashes are rejected at the same preflight
+  boundary.
+- Extended the EVM source-adapter preflight regression to cover those malformed
+  Ethereum shapes alongside the existing oversized receipt proof, committee,
+  and transition cases.
+- Tightened Ethereum sync-committee transition preflight as well: transition
+  records now need version/domain consistency, adjacent sync periods, a
+  period-matching nonzero transition slot, nonzero roots/hashes, bounded next
+  committee payloads, and a well-formed signing committee before the transition
+  chain reaches cryptographic verification.
+- Added top-level Ethereum beacon-receipt adapter preflight checks for
+  version/domain consistency and nonzero finality, execution, sync-committee,
+  and receipt-proof hashes so incomplete source-proof envelopes fail before
+  admission binding.
+- Validation:
+  - `cargo fmt --all` (passed)
+  - `cargo test -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp eth_source_adapter_verifies_beacon_sync_committee_certificate -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp eth_source_adapter_verifies_sync_committee_transition_chain -- --nocapture`
+    (`1` passed)
+
+## 2026-06-03 Ethereum SCCP SDK adversarial test inventory guard
+
+- Added a release-readiness source guard requiring the JavaScript/browser,
+  Swift, Kotlin/JVM, Java Android, and .NET Ethereum mainnet SDK tests to keep
+  adversarial inbound evidence coverage for failed receipts, receipt-root and
+  finality binding drift, wrong source-event topics, and duplicate source
+  bridge logs.
+- This keeps the production corridor tied to the negative cases required for
+  user-owned Ethereum mainnet evidence collection instead of only checking that
+  broad SDK phase commands ran.
+- Mirrored the same source-test inventory guard in the strict release-bundle
+  verifier so published bundle verification fails if those adversarial SDK
+  markers disappear from the checked-out browser/native test sources.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`41` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`328` passed)
+
+## 2026-06-03 Ethereum SCCP release evidence chain-id binding
+
+- Threaded EVM live-read RPC chain IDs into the all-lanes summary and
+  release-readiness cryptographic evidence rows so Ethereum launch evidence
+  publicly carries both `eth_chainId == 1` and `finalized` block-tag metadata.
+- Tightened the strict release-bundle verifier to reject missing, non-string,
+  non-canonical, wrong-chain, or non-EVM chain-id metadata in both embedded
+  all-lanes evidence and rendered cryptographic evidence.
+- Added regressions for Ethereum RPC chain-id drift and updated the public
+  Markdown inventory to show source/destination EVM chain IDs next to the block
+  tags.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`328` passed)
+
+## 2026-06-03 SoraNet relay handshake frame length-prefix hardening
+
+- Routed relay handshake frame length-prefix construction through an explicit
+  checked helper and compile-time `u16` maximum-frame assertion instead of
+  relying on a narrowing `expect` after the size preflight.
+- Kept oversized inbound/outbound handshake frames mapped to
+  `HandshakeError::FrameTooLarge` and added regressions for the exact boundary
+  and oversized rejection paths.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-frame cargo test -p soranet-relay handshake_frame_len_prefix -- --nocapture`
+    (`2` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-frame cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP core active launch lane
+
+- Switched the SCCP production launch default and core admission corridor to
+  the Ethereum mainnet lane (`EthereumMainnetLane`, domain `1`, chain `eth`).
+- Updated release-readiness and release-bundle active-lane constants plus
+  guards to advertise Ethereum mainnet while leaving BSC as an explicit
+  non-active supported lane.
+- Updated configured bridge-proof admission so configured ETH source proofs are
+  admitted under the active lane, BSC source proofs stop at the Ethereum launch
+  gate, and mismatched ETH governed material fails at proof/material binding
+  after the lane gate opens.
+- Validation:
+  - `cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_eth_source_adapter_is_accepted_for_ethereum_lane_launch -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test bridge_proofs submit_configured_bsc_source_adapter_proof_waits_for_ethereum_lane_launch -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_rejects_replayed_source_material_after_ethereum_lane_launch -- --nocapture`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_ethereum_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_ethereum_mainnet`
+    (`2` passed)
+
+## 2026-06-03 SoraNet relay capability TLV length hardening
+
+- Routed relay capability advertisement and runtime GREASE TLV append through
+  checked `u16` length narrowing so oversized payloads return
+  `CapabilityError::CapabilityValueTooLarge` instead of silently truncating the
+  wire length.
+- Hardened relay handshake configuration validation and `grease_entries()` so
+  configured GREASE payloads that cannot fit the two-byte TLV length field fail
+  during config load before handshake runtime.
+- Added regressions for oversized capability-advertisement GREASE, runtime
+  GREASE append, and configured GREASE values.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cap-tlv cargo test -p soranet-relay oversized -- --nocapture`
+    (`3` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cap-tlv cargo test -p soranet-relay capability -- --nocapture`
+    (`12` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cap-tlv cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Confidential key hierarchy HKDF fallible derivation
+
+- Changed confidential key hierarchy derivation so `derive_keyset` and
+  `generate_keyset` return `Result` and route each domain-separated HKDF
+  expansion through `ConfidentialKeyError::HkdfExpand` instead of panic-only
+  `expect` assertions.
+- Kept `derive_keyset_from_slice` as the length-checking wallet/FFI entry point
+  and made it propagate HKDF expansion failures directly.
+- Changed the confidential CLI `create-keys` command to propagate derivation
+  failures through its normal `eyre` error path instead of using a panic-only
+  post-length-validation `expect`.
+- Updated confidential keyset fixture tests to assert successful derivation
+  explicitly and added CLI coverage for invalid seed input returning an error
+  without emitting key material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto confidential --lib -- --nocapture`
+    (`4` passed, `1` ignored, `442` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto --test confidential_keyset_vectors -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_crypto --test confidential_vectors -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_cli confidential -- --nocapture`
+    (`21` passed across the filtered CLI test targets)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo clippy -p iroha_cli --bin iroha --bin iroha3 --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Sumeragi live commit-vote prepare-quorum proof
+
+- Added `LiveCommitVotesRequirePrepareQuorum` to the top-level Sumeragi model
+  so any live commit-vote counter or signed-stake evidence must be in
+  commit-vote/committed phase and backed by prepare quorum.
+- Added `LiveCommitVotesNeverBypassPrepareQuorum` and wired it through the
+  fast, deep, and TLC-fast formal configs, the Sumeragi README property
+  inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.30s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual
+    mode, `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total `0.598 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, `13` temporal
+    branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, computation length `10`, `32` temporal properties,
+    `EXITCODE: OK`, total `5254.763 sec`)
+
+## 2026-06-03 SoraNet PoW/puzzle constructor fail-closed hardening
+
+- Changed the compatibility `pow::Parameters::new` and
+  `puzzle::Parameters::new` constructors so invalid timing bounds no longer
+  panic; they now return a private fail-closed policy that rejects both minting
+  and verification.
+- Kept `try_new` as the strict configuration-loader route so invalid zero TTL or
+  inverted future-skew bounds still surface as explicit errors.
+- Added regressions proving invalid compatibility constructors reject PoW and
+  Argon2 puzzle mint/verify paths without unwinding.
+- Validation:
+  - `cargo test -p iroha_crypto parameters_new_invalid_bounds_fail_closed_without_panic --lib -- --nocapture`
+    (`2` passed, `444` filtered out)
+  - `cargo test -p iroha_crypto soranet::pow --lib -- --nocapture` (`43`
+    passed, `403` filtered out)
+  - `cargo test -p iroha_crypto soranet::puzzle --lib -- --nocapture` (`10`
+    passed, `436` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet handshake signature-rendering hardening
+
+- Routed deterministic SoraNet handshake fixture and telemetry signature witness
+  rendering through checked `base64` length calculation and fallible slice
+  encoding instead of manual capacity arithmetic and panic-only assertions.
+- Added a `HarnessError::SignatureEncoding` path so impossible encoding failures
+  are reported to callers without unwinding while preserving the existing
+  `prefix:base64` signature format.
+- Added regression coverage for the prefixed base64 signature helper.
+- Validation:
+  - `cargo test -p iroha_crypto encode_signature_returns_prefixed_base64 --lib -- --nocapture`
+    (`1` passed, `443` filtered out)
+  - `cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`66` passed, `378` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraFS proof-token base64 helper hardening
+
+- Routed `ProofToken` header base64 encoding/decoding through the workspace
+  `base64` crate's no-alloc slice helpers with crate-provided checked length
+  estimates instead of manual capacity arithmetic and panic-only buffer
+  assertions.
+- Kept `encode_base64()` fail-closed for impossible direct token state and kept
+  `decode_base64()` mapping malformed text to `DecodeError::Base64` before
+  structurally invalid frames reach the normal token decoder.
+- Added regression coverage for malformed base64 text and valid base64 that
+  decodes to a truncated token frame.
+- Validation:
+  - `cargo test -p iroha_crypto sorafs::proof_token --lib -- --nocapture`
+    (`13` passed, `430` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet admission-token verifier constructor fail-closed hardening
+
+- Hardened the compatibility `AdmissionTokenVerifier::new` constructor so
+  malformed issuer public keys no longer panic during construction.
+- `try_new` remains the strict configuration-load path; `new` now retains the
+  malformed key as verifier state and verification rejects it during ML-DSA
+  public-key preflight before backend signature work or replay-store mutation.
+- Added regression coverage for invalid issuer-key construction via `new`,
+  verification failure, and unchanged replay-store state.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::token --lib -- --nocapture` (`27`
+    passed, `414` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet admission-token checked encode hardening
+
+- Added `AdmissionToken::try_encode()` and `EncodeError` so directly constructed
+  admission tokens with unencodable ML-DSA signature lengths return explicit
+  errors instead of reaching `u16` narrowing panics.
+- Kept compatibility `encode()` fail-closed by emitting a malformed frame for
+  impossible direct token state that cannot fit the v1 signature-length prefix.
+- Added regression coverage for oversized direct signatures and verified the
+  resulting compatibility frame is rejected as truncated.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::token --lib -- --nocapture` (`26`
+    passed, `414` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet admission-token timestamp range hardening
+
+- Hardened admission-token decode so structurally valid frames whose
+  `issued_at` or `expires_at` UNIX seconds cannot be represented as
+  `SystemTime` fail closed at the crypto boundary.
+- Added checked admission-token timestamp accessors and changed relay token
+  inspection metadata construction to use them instead of unchecked
+  `UNIX_EPOCH + Duration::from_secs(...)` arithmetic.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-time cargo test -p iroha_crypto soranet::token --lib -- --nocapture`
+    (`28` passed, `415` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-time cargo test -p soranet-relay token_tool -- --nocapture`
+    (`5` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-time cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-time cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraFS proof-token checked body encoding hardening
+
+- Added `ProofToken::try_encode()` and `EncodeError` so directly constructed
+  proof-token bodies with unencodable entry counts or entry lengths return
+  explicit errors instead of reaching `u16` narrowing panics.
+- Routed minting, signature verification, and blinded-digest verification through
+  checked body/digest construction; compatibility `encode()` now fails closed to
+  a malformed frame when impossible direct token state cannot be represented.
+- Added regressions for oversized direct entry counts and entry lengths,
+  including decode and verification fail-closed behavior.
+- Validation:
+  - `cargo test -p iroha_crypto sorafs::proof_token --lib -- --nocapture`
+    (`12` passed, `427` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 Iroha core Kagemusha/Sumeragi regression fixes
+
+- Reordered recursive Kagemusha redemption admission so the final redeem proof
+  public-input binding is checked before reserved lineage profile gating.
+- Tightened Sumeragi pacemaker stale-owner handling so unsuperseded local
+  commit votes and first-pass nonleader frontier recovery do not advance or
+  discard repairable same-height owners prematurely.
+- Updated recursive lineage admission fixtures to use strict ZK1 Pasta instance
+  envelopes for the reserved lineage profile.
+- Validation:
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_pacemaker_attempt -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_keeps_hard_stale_local_commit_owner_without_new_view_qc -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_defers_reproposal_after_missing_qc_view_advance_with_vote_locked_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_assembly_can_bypass_stale_local_commit_after_missing_qc_repair_window_but_precommit_cannot -- --nocapture`
+  - `cargo test -p iroha_core --lib kagemusha_recursive_spend_chain_admission_rejects_unwired_lineage_profile -- --nocapture`
+  - `cargo test -p iroha_core --lib kagemusha_recursive_redeem_reserved_lineage_checks_final_proof_before_gate -- --nocapture`
+  - `cargo test -p iroha_core --lib kagemusha_recursive_redeem_reserved_lineage_profile_fails_closed_before_mint -- --nocapture`
+
+## 2026-06-03 SoraNet relay incentive accumulator overflow hardening
+
+- Hardened relay epoch incentive accounting so uptime, scheduled uptime, and
+  verified bandwidth counters saturate instead of panicking on overflowing
+  extreme telemetry or proof totals.
+- Added regressions for uptime/scheduled-uptime and verified-bandwidth overflow
+  saturation during epoch finalization.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-incentives cargo test -p soranet-relay incentives -- --nocapture`
+    (`6` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-incentives cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet adaptive DoS difficulty overflow hardening
+
+- Hardened relay adaptive PoW difficulty accounting so success/failure window
+  counters saturate instead of panicking at `u32::MAX`.
+- Difficulty increase/decrease steps now saturate before clamping to configured
+  min/max bounds, so oversized config steps cannot overflow the `u8` difficulty
+  while adapting.
+- Added regressions for saturated counters and overlarge increase/decrease
+  steps.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dos-adaptive cargo test -p soranet-relay adaptive_difficulty -- --nocapture`
+    (`5` passed across relay unit/integration targets; remaining relay test
+    targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dos-adaptive cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet SRCv2 certificate validity duration hardening
+
+- Added a checked SRCv2 certificate validity-duration accessor that returns
+  `None` for inverted or unrepresentable timestamp windows.
+- Kept the compatibility `validity_duration()` API fail-closed by returning
+  `Duration::ZERO` instead of reaching unchecked signed timestamp subtraction.
+- Added regression coverage for normal, inverted, and extreme direct certificate
+  validity windows.
+- Validation:
+  - `cargo test -p iroha_crypto validity_duration --lib -- --nocapture` (`1`
+    passed, `436` filtered out)
+  - `cargo test -p iroha_crypto parse_certificate_payload --lib -- --nocapture`
+    (`17` passed, `420` filtered out)
+  - `cargo test -p iroha_crypto soranet::certificate --lib -- --nocapture`
+    (`35` passed, `402` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 BSC SCCP release-readiness active lane
+
+- Switched the public SCCP release-readiness renderer and strict release-bundle
+  verifier back to the BSC mainnet active launch lane (`domain 2`, `bsc`,
+  `BscMainnetLane`, display `BSC mainnet`) so BSC readiness can pass without
+  requiring Ethereum, TRON, or other future lanes.
+- Updated the active-launch policy regression to assert the BSC constants across
+  both scripts and reran the active-lane-only evidence path.
+- Validation:
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_bsc_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_bsc_mainnet pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift`
+    (`5` passed)
+
+## 2026-06-03 Ethereum SCCP Beacon REST transport caps
+
+- Hardened the JS/browser Ethereum mainnet Beacon REST fetch adapter to prefer
+  bounded `ReadableStream` reads for real `fetch` responses, enforce the 1 MiB
+  UTF-8 response cap before `JSON.parse`, and keep object-root JSON validation
+  while retaining size-checked `text()` and lightweight `json()` fallbacks.
+- Replaced unbounded default Beacon REST transport reads in Kotlin/JVM, Java
+  Android, C#, and Swift with bounded streaming reads; Swift URLSession
+  transport also rejects oversized declared `Content-Length` values before
+  reading evidence for the provider-level JSON parser.
+- Added direct oversized transport regressions for Kotlin/JVM, Java Android,
+  C#, and Swift, plus browser stream/text-response coverage for the JS
+  provider.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` (`17` passed)
+  - `node --test test/sccpPackageExports.test.js test/package_dist.test.js`
+    (`56` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed; existing deprecation note in `EthereumMainnetSccp.java`)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests`
+    (`11` passed)
+  - `swift test --filter 'IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetBeaconRest'`
+    (`4` passed)
+
+## 2026-06-03 SoraFS proof-token timestamp overflow hardening
+
+- Hardened SoraFS proof-token decode so unrepresentable `issued_at` or
+  `expires_at` UNIX-second fields return `DecodeError::TimestampOutOfRange`
+  instead of being admitted for later infallible `SystemTime` conversion.
+- Added checked timestamp accessors for issued/expiry times; the existing
+  accessors now fail closed to `UNIX_EPOCH` when directly constructed fixtures
+  carry unrepresentable timestamps.
+- Added regressions for out-of-range issued/expiry decode and fail-closed
+  accessor behavior.
+- Validation:
+  - `cargo test -p iroha_crypto sorafs::proof_token --lib -- --nocapture`
+    (`10` passed, `426` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 Ethereum SCCP native Beacon REST response-size caps
+
+- Added 1 MiB response-body caps to the Swift, Kotlin/JVM, Java Android, and
+  C# Ethereum mainnet Beacon REST finality collectors before JSON parsing.
+- Extended the native Beacon REST unsafe-finality regressions to reject
+  oversized finalized-header responses before optimistic/finality field checks
+  or JSON parsing can run.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests`
+    (`10` passed)
+  - `swift test --filter 'IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProvider'`
+    (`2` passed)
+
+## 2026-06-03 SoraNet PoW and puzzle expiry timestamp overflow hardening
+
+- Hardened PoW ticket expiry conversion so unrepresentable UNIX-second
+  expiries use checked `SystemTime` conversion before revocation-store
+  insertion.
+- Direct revocation insertion for signed tickets, raw tickets, and ticket
+  payloads now returns `TicketRevocationStoreError::ExpiryTimestampOverflow`
+  instead of reaching infallible time arithmetic; compatibility expiry accessors
+  fail closed to `UNIX_EPOCH`.
+- PoW and Argon2 puzzle `mint_ticket` now reject TTLs that cannot be
+  represented as a `SystemTime` expiry through
+  `MintError::ExpiryTimestampOverflow`.
+- Added regressions for overflowing mint TTLs, fail-closed expiry accessors,
+  Argon2 puzzle TTL overflow, and revocation-store insertion of unrepresentable
+  ticket expiries.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::pow --lib -- --nocapture` (`42`
+    passed, `391` filtered out)
+  - `cargo test -p iroha_crypto soranet::puzzle --lib -- --nocapture` (`9`
+    passed, `425` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet admission-token signature span hardening
+
+- Hardened admission-token decode so the trailing ML-DSA signature vector is
+  read through a checked span helper instead of `cursor + sig_len` arithmetic
+  and a tail slice.
+- Preserved the public `DecodeError::SignatureLength` surface for declared
+  signature lengths that do not exactly match the remaining frame bytes, and
+  kept helper cursors unchanged on mismatch or overflow.
+- Added focused coverage for valid signature-tail reads, extra/truncated tail
+  bytes, and overflowed signature cursors.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::token --lib -- --nocapture` (`25`
+    passed, `405` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet replay-filter bit-count overflow hardening
+
+- Hardened relay replay-filter defaults so `replay_filter.bits` is checked
+  against the configured maximum before power-of-two rounding, preventing
+  oversized values such as `u32::MAX` from reaching overflow-prone rounding.
+- Made the direct relay `ReplayFilter` constructor fallible on the same
+  `ConfigError::ReplayFilter` surface and changed `DoSControls::new` plus relay
+  runtime startup to propagate that config error instead of assuming the filter
+  allocation shape is valid.
+- Extended the replay-filter config regression to cover both just-over-limit
+  and overflowing bit counts, and added a direct constructor regression for
+  `usize::MAX`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-replay-filter-dos cargo test -p soranet-relay replay_filter -- --nocapture`
+    (`6` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-replay-filter-dos cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet handshake message cursor hardening
+
+- Hardened `MessageCursor::read_exact` so length-prefixed handshake frames use
+  checked cursor arithmetic and range lookups before extracting fields.
+- `remaining_slice` now fails closed to an empty slice if a caller ever holds an
+  invalid cursor position, avoiding panic-only recovery paths.
+- Added regressions for normal length-prefixed reads, truncated reads that do
+  not advance, and overflowed cursor positions.
+- Validation:
+  - `cargo test -p iroha_crypto message_cursor --lib -- --nocapture` (`2`
+    passed, `427` filtered out)
+  - `cargo test -p iroha_crypto parse_client_hello --lib -- --nocapture` (`4`
+    passed, `425` filtered out)
+  - `cargo test -p iroha_crypto parse_relay_response --lib -- --nocapture`
+    (`1` passed, `428` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 Ethereum SCCP Beacon REST boolean hardening
+
+- Hardened Ethereum mainnet Beacon REST finality providers across
+  JS/browser, Swift, Kotlin/JVM, Java Android, and C# so present
+  `execution_optimistic`, `executionOptimistic`, `finalized`, and
+  finalized-header `canonical` fields must be JSON booleans before local SDKs
+  accept finalized Beacon evidence.
+- Tightened the dynamic JS/browser `verifyFinalityCheckpoint` option and
+  per-call override aliases so checkpoint verification can only be disabled
+  with an explicit boolean `false`, not with numeric or string coercion.
+- Hardened the JS/browser Beacon REST fetch response gate so malformed
+  Response-like `ok`/`status` fields and status-only non-2xx responses are
+  rejected before any JSON payload can be treated as finalized evidence.
+- Hardened the C# Beacon REST parser to reject non-object JSON roots immediately
+  with the provider's normal argument-validation error instead of surfacing a
+  lower-level `JsonElement` property-access failure.
+- Aligned Swift Beacon REST URL construction with JS, Kotlin, Java Android, and
+  C# by preserving endpoint query strings when appending finalized-header and
+  checkpoint paths, covering provider URLs that carry query-scoped API tokens.
+- Added mirrored negative coverage in all five SDKs for malformed optimistic,
+  finalized, and canonical fields while preserving the existing rejection paths
+  for optimistic, unfinalized, non-canonical, checkpoint-mismatched, and missing
+  sync-committee evidence.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` (`17` passed)
+  - `node --test test/sccpPackageExports.test.js test/package_dist.test.js`
+    (`56` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests`
+    (`10` passed)
+  - `swift test --filter IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality`
+    (`1` passed)
+  - `swift test --filter 'IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProvider'`
+    (`2` passed)
+
+## 2026-06-03 SoraNet VPN pre-epoch time hardening
+
+- Hardened relay VPN timestamp conversion so settlement artifacts,
+  helper-ticket admission, and VPN accounting use a shared saturating
+  UNIX-millisecond helper instead of panicking when a host clock reports a
+  pre-epoch time.
+- Added focused regressions for the VPN overlay and relay runtime helpers to
+  prove pre-epoch inputs clamp to `0` while normal post-epoch times are
+  preserved.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-time-config cargo test -p soranet-relay unix_time_ms_saturates_pre_epoch_clock -- --nocapture`
+    (`2` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-time-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet SRCv2 CBOR reader cursor hardening
+
+- Hardened the SRCv2 certificate CBOR decoder so byte strings, text strings,
+  and fixed-width CBOR payload reads use a shared checked slice helper instead
+  of direct `pos + len` arithmetic and raw ranges.
+- Preserved existing parser error messages for truncated byte strings, text
+  strings, and fixed-width CBOR payloads, and kept cursor positions unchanged
+  on failed slice reads.
+- Added regressions for valid byte/text/exact reads, truncated reads, and
+  overflowed decoder cursors.
+- Validation:
+  - `cargo test -p iroha_crypto cbor_decoder --lib -- --nocapture` (`3`
+    passed, `424` filtered out)
+  - `cargo test -p iroha_crypto parse_certificate_payload --lib -- --nocapture`
+    (`17` passed, `410` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet PoW ticket parser cursor hardening
+
+- Hardened `Ticket::parse` so the fixed PoW ticket fields are read through
+  checked cursor helpers instead of relying on raw fixed slices after the
+  length preflight.
+- Preserved the existing public error contract: non-`TICKET_LEN` payloads still
+  return `Error::Malformed`, unsupported full-length versions still return
+  `Error::UnsupportedVersion`, and helper cursor overflow does not advance.
+- Added regressions for every truncated ticket prefix, the existing bad-length
+  path, and overflowed helper offsets.
+- Validation:
+  - `cargo test -p iroha_crypto ticket_parse --lib -- --nocapture` (`1`
+    passed, `423` filtered out)
+  - `cargo test -p iroha_crypto ticket_field_readers --lib -- --nocapture`
+    (`1` passed, `423` filtered out)
+  - `cargo test -p iroha_crypto rejects_bad_length --lib -- --nocapture` (`1`
+    passed, `423` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 Sumeragi finality certificate-stack exactness proof
+
+- Added `FinalityCertificateStackPresent` as the named complete finality
+  certificate-stack predicate and kept `FinalityCertificateStackComplete` as the
+  existing one-way finalized-state completeness obligation.
+- Added `FinalityCertificateStackMatchesFinality` to prove that a complete
+  certificate stack exists if and only if the abstract finality latch is set,
+  ruling out latent full certificate evidence before finality.
+- Wired `FinalityCertificateStackAlwaysMatchesFinality` through the fast, deep,
+  and TLC-fast formal configs, the Sumeragi README property inventory, and the
+  roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.32s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (consistent:
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` (`EXITCODE: OK`,
+    total `0.593 sec`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast` (`7799` states generated,
+    `2338` distinct states found, `13` temporal branches, no errors)
+  - `bash scripts/formal/sumeragi_apalache.sh fast` (`31` temporal properties,
+    `NoError` up to computation length `10`, `EXITCODE: OK`, total
+    `5471.214 sec`)
+
+## 2026-06-03 SoraNet guard-directory expected-hash config hardening
+
+- Added `GuardDirectoryConfig::try_expected_directory_hash` so malformed
+  `expected_directory_hash_hex` can fail closed without relying on a prior
+  validation pass.
+- `load_guard_entry` now uses the fallible accessor and reports
+  `GuardDirectoryError::InvalidExpectedDirectoryHash` before comparing the
+  snapshot hash.
+- Added a regression that mutates a valid guard snapshot fixture to carry
+  invalid expected-hash hex and proves the loader returns a guard error instead
+  of panicking.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-guard-config cargo test -p soranet-relay load_guard_entry_rejects_invalid_expected_hash_without_panic -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-guard-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP readiness report block-tag hardening
+
+- Added `evm_source_block_tag` and `evm_destination_block_tag` to the
+  release-readiness cryptographic-evidence rows so the public JSON and Markdown
+  report expose the same EVM live-read pins as the all-lanes summary.
+- Tightened release-bundle verification so Ethereum cryptographic evidence must
+  advertise `finalized`/`finalized`, BSC rows with governed EVM evidence must
+  carry explicit block tags, and non-EVM lanes must leave those fields empty.
+- Updated the bridge-proof docs and roadmap to describe the readiness-report
+  block-tag surface.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`40` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`151` passed)
+
+## 2026-06-03 SoraNet capability TLV cursor hardening
+
+- Hardened SoraNet handshake capability TLV parsing so headers and value spans
+  are read through checked cursor helpers instead of direct `offset + len`
+  arithmetic and indexed header bytes.
+- Truncated TLV headers remain on `HarnessError::TlvTruncated`, overlong values
+  remain on `HarnessError::TlvLengthExceeded`, and overflowed helper cursors do
+  not advance before failing.
+- Added regressions for truncated TLV header prefixes, overlong values, and
+  helper cursor overflow.
+- Validation:
+  - `cargo test -p iroha_crypto parse_capabilities --lib -- --nocapture`
+    (`5` passed, `417` filtered out)
+  - `cargo test -p iroha_crypto capability_tlv_readers --lib -- --nocapture`
+    (`1` passed, `421` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 Norito streaming SIMD bundle header hardening
+
+- Added a checked lane-length reader for Norito streaming bundled rANS SIMD
+  streams so lane length prefixes are decoded without direct `cursor + 4`
+  arithmetic or indexed slices.
+- The SIMD bundle decoder now keeps truncated or overflowed lane-length
+  metadata on `BundleDecodeError::InvalidSimdHeader` before advancing the
+  cursor.
+- Added regression coverage for valid lane lengths, every truncated prefix
+  length, cursor no-advance behavior, and cursor overflow.
+- Validation:
+  - `cargo test -p norito simd_bundle_lane_len_reader --lib -- --nocapture`
+    (`1` passed, `271` filtered out)
+  - `cargo test -p norito decode_bundle_stream_simd_rejects_length_mismatch --lib -- --nocapture`
+    (`1` passed, `271` filtered out)
+  - `cargo clippy -p norito --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet relay token-policy builder missing-issuer hardening
+
+- Hardened `TokenConfig::build_policy` so enabling admission tokens without
+  `pow.token.issuer_public_key_hex` returns `ConfigError::Token` even when the
+  builder is reached directly without a prior validation pass.
+- Kept the existing invalid decoded issuer-key path on the same fail-closed
+  config error surface through `AdmissionTokenVerifier::try_new`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo test -p soranet-relay token_policy_rejects_missing_issuer_key_without_panic -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP public block-tag summary hardening
+
+- Added `evm_live_metadata` to each all-lanes lane summary so public readiness
+  JSON exposes the EVM source and destination block tags used for live evidence.
+- Tightened release-bundle summary verification to require strict
+  `evm_live_metadata` shape, reject hidden non-finalized Ethereum block tags,
+  and keep non-EVM lanes empty for that metadata.
+- Updated Ethereum SCCP docs and roadmap notes to describe the public summary
+  field and release-bundle guard.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`134` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`40` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`151` passed)
+
+## 2026-06-03 Norito streaming frame metadata decode hardening
+
+- Added checked frame-header readers for Norito streaming baseline chunks so
+  frame index, PTS, and block-count metadata are decoded without fixed-slice
+  `expect` assumptions.
+- Added checked chroma-length metadata reads so truncated or overflowed chroma
+  metadata returns `CodecError::ChromaPayloadTruncated` before payload slicing.
+- Added focused regressions for valid metadata, truncated metadata, and
+  overflowed offsets on both frame-header and chroma-length readers.
+- Validation:
+  - `cargo test -p norito frame_header_readers --lib -- --nocapture`
+    (`1` passed, `270` filtered out)
+  - `cargo test -p norito chroma_len_reader --lib -- --nocapture`
+    (`1` passed, `270` filtered out)
+  - `cargo test -p norito decode_block_rle --lib -- --nocapture` (`3` passed,
+    `268` filtered out)
+  - `cargo clippy -p norito --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet relay PoW timing config fail-closed follow-through
+
+- Added `PowConfig::parameters` for relay PoW verifier construction through
+  `pow::Parameters::try_new`, and made `PowConfig::apply_defaults` reject
+  inverted `max_future_skew_secs` / `min_ticket_ttl_secs` bounds before runtime
+  startup.
+- Switched relay Argon2 puzzle parameter construction to
+  `puzzle::Parameters::try_new` and changed `RelayRuntime::new` to consume the
+  fallible `PowConfig` builder instead of the panic-only compatibility
+  constructor.
+- Added a regression proving inverted relay PoW timing config returns
+  `ConfigError::Puzzle` without panicking.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo test -p soranet-relay pow_config_parameters_reject_inverted_ticket_timing_without_panic -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Norito streaming RLE block decode hardening
+
+- Added checked fixed-width readers for Norito streaming baseline RLE block
+  decode so DC differences and AC records are read without indexed slice
+  conversions or cursor arithmetic overflow.
+- `decode_block_rle` now maps truncated or overflowed cursor state to
+  `CodecError::TruncatedBlock` before advancing offsets.
+- Added regression coverage for overflowed decode offsets and the helper
+  readers' no-advance behavior.
+- Validation:
+  - `cargo test -p norito decode_block_rle --lib -- --nocapture` (`3` passed,
+    `266` filtered out)
+  - `cargo test -p norito rle_block_readers --lib -- --nocapture` (`1` passed,
+    `268` filtered out)
+  - `cargo clippy -p norito --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet VPN overlay config fail-closed construction
+
+- Added fallible VPN config accessors for the billing meter hash,
+  helper-ticket secret, backend endpoint, and TCP backend bootstrap secret so
+  derived runtime fields can be checked without relying on post-validation
+  `expect` calls.
+- Added `VpnOverlay::try_from_config`, which validates and normalizes its owned
+  `VpnConfig` before committing overlay state; `RelayRuntime::new` now uses the
+  fallible constructor so malformed VPN config exits through
+  `ConfigError::Vpn`.
+- Kept the existing infallible `VpnOverlay::from_config` wrapper as a
+  compatibility convenience for already-validated callers.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo test -p soranet-relay vpn_fallible_accessors_decode_valid_normalized_values -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo test -p soranet-relay vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP all-lanes block-tag metadata hardening
+
+- Added explicit EVM source and destination block-tag metadata comments to the
+  live and direct ETH/BSC evidence renderers.
+- Tightened all-lanes preflight so Ethereum source and destination live
+  evidence must carry `finalized` block-tag metadata before the ETH lane can be
+  production-ready, while BSC remains on its explicit `latest` path.
+- Added direct-renderer and all-lanes regressions covering accepted finalized
+  ETH metadata, direct and imported non-finalized ETH rejection, and explicit
+  BSC metadata.
+- Added a release-readiness source tripwire so the EVM evidence tools and tests
+  must keep the block-tag comments and Ethereum finalized guards.
+- Updated `docs/source/bridge_proofs.md` with the all-lanes block-tag metadata
+  requirement.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`134` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py`
+    (`64` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`81` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`40` passed)
+
+## 2026-06-03 Norito columnar row-count prefix hardening
+
+- Added a shared checked reader for NCB `u32` row-count prefixes in the Norito
+  columnar decoder.
+- Replaced the repeated fixed-slice row-count conversions in the columnar
+  `u64` combo views so malformed prefixes stay on `Error::LengthMismatch`
+  instead of relying on manual slice invariants.
+- Added regressions covering every truncated row-count prefix length and the
+  modified NCB views' truncated-header behavior.
+- Validation:
+  - `cargo test -p norito ncb_row_count --lib -- --nocapture` (`2` passed,
+    `266` filtered out)
+  - `cargo clippy -p norito --lib --no-deps -- -D warnings` (passed)
+
+## 2026-06-03 SoraNet relay admission-token config fail-closed follow-through
+
+- Verified the relay runtime token-policy loader now constructs
+  `AdmissionTokenVerifier` through the fallible `try_new` path, so malformed
+  ML-DSA issuer verifier keys fail as `ConfigError::Token` before issuer
+  fingerprint derivation instead of using the compatibility constructor.
+- Added/validated the decoded-but-invalid issuer-key regression
+  `token_config_rejects_invalid_issuer_key_without_panic` on the relay config
+  path.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-config cargo test -p soranet-relay token_config_rejects_invalid_issuer_key_without_panic -- --nocapture`
+    (`1` passed, relay test targets filtered as expected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-config cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraFS proof-token decode cursor hardening
+
+- Hardened `ProofToken::decode` so fixed-width proof-token fields are read
+  through checked cursor helpers instead of slice conversions followed by
+  `unwrap`.
+- The frame reader now uses checked cursor arithmetic before slicing, keeping
+  malformed moderation-token prefixes on the normal `DecodeError::Truncated`
+  path.
+- Added a regression that decodes every truncated prefix of a valid signed
+  proof token and proves each prefix fails closed without panicking.
+- Validation:
+  - `cargo test -p iroha_crypto sorafs::proof_token --lib -- --nocapture`
+    (`8` passed, `411` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP live evidence finalized TOML gate
+
+- Tightened Ethereum EVM-family live evidence tooling so governed source and
+  destination TOML output requires summaries collected with
+  `--block-tag finalized`.
+- Kept BSC live evidence on its existing `latest` TOML path while preserving
+  Ethereum `latest`/`safe` JSON collection for developer inspection.
+- Added source and destination regressions proving Ethereum non-finalized live
+  summaries stay JSON-only and cannot render production TOML.
+- Updated `docs/source/bridge_proofs.md` with the finalized-TOML rule and the
+  SDK outbound submitter chain-id guard.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py -k 'finalized_block_tag or bsc_source_live_evidence_uses_canonical_bsc_profile or cli_defaults_eth_to_finalized'`
+    (`3` passed, `23` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'finalized_block_tag or cli_defaults_eth_to_finalized or collects_destination'`
+    (`3` passed, `25` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`26` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`28` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`80` passed)
+
+## 2026-06-03 SoraNet guard-directory issuer fingerprint length admission
+
+- Added a fallible SRC v2 issuer-fingerprint helper so the ML-DSA public-key
+  length is checked before it is encoded into the fingerprint's fixed `u32`
+  length field.
+- Guard-directory snapshot validation now uses the fallible helper, keeping
+  decoded issuer material on the normal `norito::Error` path instead of
+  relying on the infallible compatibility helper.
+- Added regressions proving the fallible helper matches the existing canonical
+  fingerprint for normal issuer keys and rejects an oversized length boundary
+  without allocating oversized key material.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::directory --lib -- --nocapture`
+    (`25` passed, `393` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP outbound submitter mainnet guard
+
+- Hardened the Ethereum mainnet SCCP SDK facades so outbound submitter paths
+  validate a configured execution provider with `eth_chainId == 1` before
+  handing calldata to the app-owned submitter.
+- Applied the guard across browser JS, Swift, Kotlin, Java Android, and C#,
+  while preserving submitter-only apps that do not configure an execution
+  provider.
+- Added SDK regressions and a release-readiness source tripwire covering the
+  cross-SDK guard and JS dist artifact.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'provider_before_outbound_submitter'`
+    (`1` passed, `38` deselected)
+  - `node --test test/sccpEthereumMainnet.test.js`
+    (`17` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget' --console=plain`
+    (passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseEthereumMainnetBinding`
+    (`1` passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    (`1` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`39` passed)
+  - `node --test test/package_dist.test.js`
+    (`49` passed)
+
+## 2026-06-03 SoraNet admission-token decode cursor hardening
+
+- Replaced panic-only fixed-width field reads in `AdmissionToken::decode` with
+  checked cursor reads that return `DecodeError::Truncated` on malformed token
+  prefixes.
+- Added a regression that decodes every truncated prefix of a valid ML-DSA
+  admission token and proves each prefix fails closed instead of panicking.
+- Validation:
+  - `cargo test -p iroha_crypto soranet::token --lib -- --nocapture`
+    (`24` passed, `392` filtered out)
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 P2P QUIC happy-eyeballs dial error admission
+
+- Removed panic-only option readbacks from the QUIC/TCP happy-eyeballs dial
+  race in `Connecting::connect_to`.
+- The first failed branch now records its error, and when the second branch
+  fails, the just-observed error is returned directly instead of unwrapping a
+  previously recorded branch error.
+- Added a regression proving the raced dial-error state returns the second
+  branch failure without panicking.
+- Validation:
+  - `cargo test -p iroha_p2p --no-run connect --lib`
+    (passed)
+  - `cargo test -p iroha_p2p dial_policy_tests --lib -- --nocapture`
+    (`3` passed, `175` filtered out)
+  - `cargo clippy -p iroha_p2p --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo clippy -p iroha_p2p --lib --no-deps --features quic -- -D warnings`
+    (passed)
+
+## 2026-06-03 Workspace build unblock sweep
+
+- Fixed workspace build regressions found during a full isolated
+  `cargo build --workspace` pass:
+  - SoraNet relay now classifies invalid token temporal bounds and malformed
+    PoW bindings without non-exhaustive matches.
+  - `iroha_executor` now grants/revokes and associates
+    `CanManageZkAceIdentityForAccount` consistently with its account and asset
+    definition scope.
+  - Mochi mock Torii telemetry now fills the current `Status` queue/timing and
+    dataspace fields.
+  - `soracloud_request_signer` now targets the production V1 SoraFS-backed
+    uploaded-model register/finalize flow instead of removed chunk/private-run
+    APIs.
+  - `soranet-handshake-harness` now propagates fallible transcript hash
+    calculation before hex encoding.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo build -p soranet-relay -p iroha_executor`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo build -p mochi-integration`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo test -p connect_norito_bridge --bin soracloud_request_signer -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo build -p connect_norito_bridge --bin soracloud_request_signer`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo build -p soranet-handshake-harness`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo build --workspace`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo clippy -p connect_norito_bridge --bin soracloud_request_signer --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo clippy -p soranet-handshake-harness --bin soranet-handshake-harness --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo clippy -p soranet-relay --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo clippy -p iroha_executor --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-current cargo clippy -p mochi-integration --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP evidence-script transcript gate
+
+- Tightened SCCP release-readiness and release-bundle verification so the
+  `evidence-scripts` corridor artifact must prove the full evidence pytest
+  inventory ran, including Ethereum/BSC source bridge, destination, live RPC,
+  receipt-proof, and source-live EVM suites.
+- Added readiness-report and release-bundle regressions that reject otherwise
+  valid phase logs when the Ethereum live evidence suite is omitted.
+- Added runner-inventory drift checks so the report and verifier transcript
+  gates keep covering every pytest file listed by the production corridor's
+  evidence phase.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`38` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`151` passed)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`12` passed)
+
+## 2026-06-03 Norito streaming key-update transport return hardening
+
+- Removed the last panic-only readback from
+  `StreamingSession::process_remote_key_update`; the successful remote
+  key-update path now returns the transport keys inserted into session state
+  directly instead of re-reading the option with `expect`.
+- Existing X25519 and Kyber remote key-update coverage was rerun to prove the
+  returned reference still matches accepted key-update state and rejection paths
+  remain unchanged.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-keyupdate-return cargo test -p iroha_crypto --test streaming_handshake process_remote_key_update -- --nocapture`
+    (`9` passed, `50` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-keyupdate-return cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP destination evidence finalized default
+
+- Aligned the destination live-evidence helper with the Ethereum source
+  evidence path: omitted `--block-tag` now defaults to `finalized` for
+  Ethereum mainnet while BSC keeps `latest` for compatibility.
+- Kept explicit `--block-tag` overrides available for diagnostics and
+  canonical block-number checks.
+- Added a CLI-parser regression proving ETH defaults to finalized state reads
+  and BSC keeps the prior latest-state behavior.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`78` passed)
+
+## 2026-06-03 SoraNet guard-directory issuer key-shape admission
+
+- Reordered guard-directory issuer validation so Ed25519 key parsing and
+  ML-DSA-65 public-key length/phase checks run before issuer fingerprint
+  derivation and comparison.
+- Malformed non-empty ML-DSA-65 issuer keys now fail on the key-shape boundary
+  even when the advertised issuer fingerprint is also wrong.
+- Added a regression proving invalid ML-DSA-65 key length is reported before
+  fingerprint mismatch for decoded guard-directory snapshots.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-directory-admission cargo test -p iroha_crypto soranet::directory --lib -- --nocapture`
+    (`23` passed, `392` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-directory-admission cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP SDK receipt-guard release tripwire
+
+- Added release-readiness coverage that checks every primary Ethereum mainnet
+  SDK receipt-proof builder keeps the `eth_getBlockReceipts` target receipt
+  transaction hash, block hash, block number, and canonical receipt RLP drift
+  checks.
+- The guard also checks typed EIP-2718 receipt admission in each SDK surface:
+  JS source/dist and C# keep the direct error marker, while Swift, Kotlin, and
+  Java Android are checked through their shared source-proof receipt encoders.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`35` passed)
+
+## 2026-06-03 SoraNet transcript capability length admission
+
+- Made SoraNet transcript hashing fallible so capability vectors whose length
+  cannot fit the transcript's fixed `u32` length field return
+  `HarnessError::Validation` instead of panicking.
+- Routed deterministic simulation, runtime client finish, NK3 transcript
+  verification, and relay response construction through the fallible transcript
+  hash path.
+- Added a regression for the `u32::MAX` overflow boundary without constructing
+  an impossible multi-gigabyte capability slice.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-transcript-len cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`60` passed, `354` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-transcript-len cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet capability TLV encode admission
+
+- Hardened SoraNet capability TLV re-encoding so capability values whose
+  encoded length would exceed `u16::MAX` return `HarnessError::Validation`
+  instead of panicking.
+- `update_suite_list` now propagates the same validation boundary for oversized
+  negotiated suite lists before encoded capability vectors are emitted.
+- Added a regression that builds a suite list larger than a single TLV field
+  and proves the fallible helper rejects it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-capability-encode cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`59` passed, `354` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-capability-encode cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SoraNet handshake length-prefix admission
+
+- Hardened SoraNet NK2/NK3 handshake serialization so length-prefixed fields
+  return `HarnessError::Validation` when their payload would exceed
+  `u16::MAX` instead of panicking during frame construction.
+- Added runtime parameter preflight for client and relay capability vector
+  sizes, rejecting oversized vectors before client RNG, Noise key generation,
+  ML-KEM key generation, or transcript construction.
+- Added a regression that builds a structurally valid but oversized duplicate
+  `pqsig` capability stream and proves `build_client_hello` rejects it before
+  consuming the panic-on-use RNG.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-len cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`58` passed, `354` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-len cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP typed receipt admission hardening
+
+- Hardened Ethereum-family SCCP receipt parsing and proof builders so typed
+  EIP-2718 receipts are only admitted for the current mainnet receipt layouts
+  `0x01`, `0x02`, `0x03`, and `0x04`; unknown typed receipt prefixes now fail
+  instead of being parsed under today’s receipt tuple.
+- Mirrored the rule across Rust core verification, the Python evidence script,
+  JS source and dist SDKs, Swift, Kotlin, Java Android, and C# Ethereum
+  mainnet receipt proof builders.
+- Added focused regressions for unsupported `0x7f` typed receipts while keeping
+  legacy JSON-RPC `type = 0x0` receipts untyped.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root -- --nocapture`
+    (`1` passed, `241` filtered out)
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`12` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`853` passed)
+  - `node --test test/sccpEthereumMainnet.test.js`
+    (`17` passed)
+  - `node --input-type=module -e "<dist typed-receipt rejection smoke>"`
+    (passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys`
+    (`1` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --console=plain`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter ReceiptTrieProofBuilderUsesRlpTransactionIndexKeys`
+    (`1` passed)
+  - `git diff --check`
+    (passed)
+
+## 2026-06-03 SoraNet PoW runtime configuration fail-closed admission
+
+- Changed p2p SoraNet handshake runtime construction to use the fallible
+  `PowParameters::try_new` and `puzzle::Parameters::try_new` constructors for
+  config-derived PoW and Argon2 puzzle bounds.
+- Invalid SoraNet PoW settings such as inverted `max_future_skew` /
+  `min_ticket_ttl` now return `Error::HandshakeSoranet` during runtime config
+  construction instead of unwinding through the panic-only compatibility
+  constructors.
+- Added a p2p runtime regression for invalid PoW bounds alongside the existing
+  puzzle preservation and revocation-limit tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pow-runtime cargo test -p iroha_p2p runtime_from_handshake --lib -- --nocapture`
+    (`5` passed, `172` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pow-runtime cargo clippy -p iroha_p2p --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 BFV programmed public-parameter constructor admission
+
+- Added fallible `try_bfv_programmed_public_parameters` and
+  `try_bfv_programmed_public_parameters_with_program` constructors so
+  programmed RAM-LFE BFV public-parameter bundles reject unregistered BFV
+  identifier profiles, invalid hidden programs, invalid proof-verifier
+  metadata, and evaluation-key shape violations without relying on compatibility
+  wrapper panics.
+- Kept the existing infallible constructor wrappers for current fixture callers,
+  but documented their panic boundary and routed them through the same fallible
+  validation path.
+- Updated the RAM-LFE affine fixture to use the registered RAM-LFE BFV
+  production profile, aligning it with the identifier public-parameter
+  validation boundary.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_crypto ram_lfe --lib -- --nocapture`
+    (`20` passed, `391` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`19` passed, `392` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP receipt proof metadata drift hardening
+
+- Hardened `scripts/sccp_evm_receipt_proof_evidence.py` so the target receipt
+  returned by `eth_getBlockReceipts` must carry the same `blockHash` and
+  `blockNumber` metadata as the direct `eth_getTransactionReceipt` result.
+  These fields are outside the receipt RLP, so they now get explicit drift
+  checks before source proof evidence is emitted.
+- Added adversarial tests for block-receipt `blockHash` and `blockNumber`
+  drift while the proven receipt body and transaction hash remain unchanged.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py && python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`11` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`852` passed)
+
+## 2026-06-03 Ethereum SCCP SDK receipt metadata drift hardening
+
+- Hardened Ethereum mainnet inbound evidence collection in the browser/native
+  SDKs so the target receipt returned by `eth_getBlockReceipts` must match the
+  direct receipt's `blockHash` and `blockNumber` metadata before SDKs build an
+  SCCP receipt proof. The check is mirrored in JS source/dist, Swift, Kotlin,
+  Java Android, and C#.
+- Kept the existing transaction-hash and canonical receipt-RLP equality gates,
+  and brought `javascript/iroha_js/dist/sccp.js` back in line with the source
+  RLP check while adding the metadata checks.
+- Added adversarial SDK regressions where the indexed block receipt keeps the
+  same transaction hash and receipt RLP but drifts top-level `blockHash` or
+  `blockNumber` metadata.
+- Added a release-readiness guard requiring both JS source and packaged
+  `dist/sccp.js` to retain the transaction-hash, block-hash, block-number,
+  receipt-RLP, and typed-receipt admission checks.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js`
+    (`17` passed)
+  - `node --input-type=module <<'EOF' ...dist block-receipt metadata smoke... EOF`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_js_dist_keeps_receipt_admission_guards`
+    (`1` passed, `33` deselected)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumInboundCollectionBuildsReceiptProofFromBlockReceipts --console=plain`
+    (passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1` passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter InboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`2` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (passed)
+  - `git diff --check`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' <touched SDK files> status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no output)
+
+## 2026-06-03 BFV identifier registered-profile admission
+
+- Hardened `BfvIdentifierPublicParameters::validate` so identifier-envelope
+  public parameters must use the registered RAM-LFE BFV production profile
+  before public-key admission or envelope capacity checks run.
+- Identifier key derivation, encryption, and decryption paths now reject
+  structurally valid but unregistered BFV parameter sets at the crypto boundary,
+  keeping Torii and core RAM-LFE consumers from accepting local-only test
+  profiles.
+- Added a crypto regression that proves the old sample BFV profile remains
+  structurally valid but is rejected for identifier public-parameter validation
+  and identifier encryption.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_crypto identifier_ --lib -- --nocapture`
+    (`3` passed, `407` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`19` passed, `391` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_torii identifier_resolution --lib --features app_api -- --nocapture`
+    (`16` passed, `2196` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo test -p iroha_core identifier_verify_execution_proof_rejects_noncanonical_envelope_metadata --lib -- --nocapture`
+    (`1` passed, `6804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP live route-canary side-event hardening
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so a route-canary transaction
+  receipt that contains any additional `MessageProofAccepted` log from the
+  configured SCCP bridge now fails closed, even when the extra event is at a
+  different log index than the supplied canary index. This keeps live canary
+  evidence singular and bound to the direct `submitSccpMessageProof` call.
+- Added a regression in `pytests/scripts/sccp_evm_live_evidence_test.py` for a
+  second bridge `MessageProofAccepted` log at another index.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py && python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`26` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`852` passed)
+
+## 2026-06-03 Crypto admission and BFV/hybrid rerun
+
+- Revalidated the current crypto-admission tranche across ML-DSA secret-key
+  consistency, confidential encrypted payload preflight, Connect negative
+  sequence/X25519 admission, and Kotlin/Java offline-note canonical public-key
+  encoding.
+- Confirmed the Rust bridge/CLI admission surfaces reject low-order X25519
+  ephemeral keys and empty confidential ciphertext before emitting Norito bytes
+  or signed shield transactions.
+- Revalidated BFV identifier public-parameter admission against the registered
+  RAM-LFE profile and hybrid X25519+ML-KEM key decoding against noncanonical
+  ML-KEM coefficient encodings.
+- Repaired the RAM-LFE debug proof-backend regression fixture so the fallible
+  constructor rejects debug metadata directly while the untrusted decode path is
+  still covered by mutating an otherwise valid programmed-parameter payload.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p soranet_pq mldsa::tests:: --lib -- --nocapture`
+    (`29` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_crypto hybrid::tests:: --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_crypto fhe_bfv::tests:: --lib -- --nocapture`
+    (`19` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_crypto ram_lfe::tests::bfv_programmed_public_parameters_reject_debug_proof_backends --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_crypto --lib --quiet`
+    (`410` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p connect_norito_bridge confidential_payload --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p connect_norito_bridge shield_encoder --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_core shield_rejects_invalid_confidential_payload_before_state_change --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_data_model encrypted_payload_validation --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo test -p iroha_cli encrypted_payload -- --nocapture`
+    (`3` matching tests passed in both `src/bin/iroha.rs` and `src/main.rs`)
+  - From `IrohaSwift`: `swift test --filter ConfidentialEncryptedPayloadTests --disable-swift-testing`
+    (`9` passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.connect.*' --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --rerun-tasks`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS='org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest,org.hyperledger.iroha.android.connect.ConnectQueueJournalTests,org.hyperledger.iroha.android.offline.OfflineNoteV2Test' ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo clippy -p connect_norito_bridge --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-current cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (failed on pre-existing unrelated lints in `crates/iroha_data_model/src/isi/zk.rs`
+    and `crates/iroha_data_model/src/offline/mod.rs`)
+  - `git diff --check -- status.md crates/iroha_core/tests/bridge_proofs.rs crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs crates/soranet_pq/src/ffi.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mldsa_backend.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/src/ram_lfe.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_cli/src/zk.rs crates/iroha_core/src/smartcontracts/isi/world.rs IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodec.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectCrypto.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodec.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java`
+    (passed)
+  - Targeted conflict-marker scan across the same files
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP source-event ABI-shape hardening
+
+- Hardened the JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet SCCP receipt validators so a log from the expected source bridge with
+  the `SccpSourceEvent(bytes32)` topic must have exactly two topics, empty
+  `0x` data, and a non-zero event digest. Malformed candidate logs now fail
+  closed instead of being ignored as non-matching logs.
+- Added SDK regressions for extra source-event topics, non-empty event data,
+  and zero source-event digest across the existing Ethereum inbound evidence
+  test surfaces.
+- Validation:
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`17` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --disable-swift-testing`
+    (`1` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --filter InboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`2` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk,dotnet-sdk,swift-sdk`
+    (`js-sdk`: `188` passed; `swift-sdk`: `82` SCCP tests plus `1` Torii
+    bridge-proof test passed; `dotnet-sdk`: `15` passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest' --rerun-tasks`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS='org.hyperledger.iroha.android.sccp.EvmSccpProverTests' ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+    (passed)
+
+## 2026-06-03 SCCP EVM receipt evidence drift hardening
+
+- Hardened `scripts/sccp_evm_receipt_proof_evidence.py` so the receipt RLP
+  proven from `eth_getBlockReceipts` must exactly match the direct
+  `eth_getTransactionReceipt` payload before the helper emits proof evidence.
+  This prevents an RPC response split where the trie proof belongs to one
+  receipt body while the source event is read from another.
+- Tightened SCCP source-event validation for the EVM-family receipt collector:
+  a source-bridge log with the `SccpSourceEvent(bytes32)` topic must have
+  exactly two topics and empty `0x` data.
+- Added adversarial tests for direct/proven receipt RLP drift, extra source
+  event topics, and non-empty source event data.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py && python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`10` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`851` passed)
+
+## 2026-06-03 SoraNet PQ ML-KEM canonical key admission
+
+- Hardened `soranet_pq` ML-KEM key validation so exact-length public keys and
+  secret-key private components are decoded as 12-bit polynomial coefficients
+  and rejected when any coefficient is outside the FIPS 203 field range
+  `q = 3329`.
+- `validate_secret_key`, `public_key_from_secret_key`, and `decapsulate_mlkem`
+  now apply canonical checks to both the private decapsulation-key component and
+  the embedded public key before verifying the embedded `H(ek)` hash or invoking
+  backend decapsulation.
+- The C FFI maps noncanonical ML-KEM public or secret-key material to
+  `ERR_ENCODING`, and streaming Kyber key admission treats the new ML-KEM error
+  shape as invalid key material before snapshot or HPKE state can be installed.
+  Streaming regressions now cover noncanonical Kyber public keys and local
+  secrets at both key-material and session admission boundaries.
+- Hybrid KEM decode regressions now cover the same noncanonical Kyber public and
+  secret-key component failures before SoraFS envelope material can be accepted.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p soranet_pq noncanonical --lib -- --nocapture`
+    (`6` passed, `109` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p soranet_pq -- --nocapture`
+    (`115` lib tests, `2` `kat_vectors` tests, `2` `pq_kat` tests, and `1`
+    doctest passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p iroha_crypto --test streaming_handshake noncanonical -- --nocapture`
+    (`4` passed, `55` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`59` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p iroha_crypto noncanonical_kyber --lib -- --nocapture`
+    (`2` passed, `407` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo test -p iroha_crypto hybrid --lib -- --nocapture`
+    (`9` passed, `400` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo clippy -p soranet_pq --all-targets -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-canonical cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/ffi.rs crates/soranet_pq/README.md crates/iroha_crypto/src/hybrid.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/ffi.rs crates/soranet_pq/README.md crates/iroha_crypto/src/hybrid.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP JS outbound request binding
+
+- Hardened the JS `EthereumMainnetSccp.proveOutboundToEthereum` facade so
+  custom local outbound provers receive the canonical immutable Ethereum
+  proof request and any returned proof result is normalized against that exact
+  request before calldata/submission construction.
+- Applied the same request-binding guard to the BSC facade path to keep the
+  generic EVM-family custom prover boundary consistent.
+- Added browser-SDK regression tests proving that custom Ethereum and BSC
+  outbound provers cannot return wrapped proof results for different request
+  hashes.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js`
+    (`17` passed)
+  - `node --test test/sccpBscMainnet.test.js`
+    (`15` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`188` passed)
+
+## 2026-06-03 SoraNet PQ ML-DSA secret-key consistency
+
+- Hardened `soranet_pq` ML-DSA secret-key validation so length-valid secrets
+  are unpacked, re-derived as `t = A*s1 + s2`, checked against the embedded
+  `t0`, reconstructed into a public key, checked against embedded
+  `tr = H(pk)`, and re-packed to reject noncanonical encodings.
+- `sign_mldsa` and `sign_mldsa_from_os` now run the same consistency check
+  before signing randomness is consumed or backend signing starts, and
+  `mldsa_public_key_from_secret_key` exposes fallible public-key reconstruction
+  for callers that need the committed verifier material.
+- The C FFI maps the new ML-DSA secret-key consistency failure to
+  `ERR_ENCODING`, preserving the existing malformed-input boundary contract.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-secret cargo test -p soranet_pq secret_key_ --lib -- --nocapture`
+    (`9` passed, `100` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-secret cargo test -p soranet_pq mldsa --lib -- --nocapture`
+    (`44` passed, `65` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-secret cargo test -p soranet_pq map_mldsa_error_maps_variants --lib -- --nocapture`
+    (`1` passed, `108` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-secret cargo test -p soranet_pq -- --nocapture`
+    (`109` lib tests, `2` `kat_vectors` tests, `2` `pq_kat` tests, and `1`
+    doctest passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-secret cargo clippy -p soranet_pq --all-targets -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mldsa_backend.rs crates/soranet_pq/src/lib.rs crates/soranet_pq/src/ffi.rs crates/soranet_pq/README.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mldsa_backend.rs crates/soranet_pq/src/lib.rs crates/soranet_pq/src/ffi.rs crates/soranet_pq/README.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 BSC SCCP active launch policy
+
+- Restored the SCCP production launch default to the BSC mainnet lane. The
+  default policy now admits configured BSC source proofs independently while
+  Ethereum, Solana, TON, and TRON remain behind their future lane launch gates.
+- Updated release-readiness and release-bundle tooling constants so the active
+  launch corridor is domain `2`, chain `bsc`, policy `BscMainnetLane`, and
+  display label `BSC mainnet`.
+- Retargeted core admission, core helper, and Torii routing tests to assert the
+  BSC-mainnet policy while retaining explicit Ethereum and TRON branch labels
+  for supported non-active lanes.
+- Fixed local ML-KEM compile blockers exposed by the focused Rust runs:
+  pure length helpers are now `const fn`, `MlKemError` is exported at the
+  `soranet_pq` root, and the new ML-KEM key-pair mismatch error shape satisfies
+  the workspace `variant-size-differences` lint.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+    (passed)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_bsc_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_bsc_mainnet pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift`
+    (`5` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core --test bridge_proofs lane_launch -- --nocapture`
+    (`10` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core configured_sccp_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_torii configured_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core --test bridge_proofs replayed_source_material -- --nocapture`
+    (`2` passed)
+  - `cargo test -p soranet_pq key_pair --lib -- --nocapture`
+    (`1` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core --test bridge_proofs -- --nocapture`
+    (`39` passed)
+
+## 2026-06-03 SCCP corridor core-admission replay fixture
+
+- Fixed the core bridge-proofs replay-material fixture so alternate governed
+  ETH source-bridge material is built through the production constructor. This
+  keeps the bound source-bridge config hash coherent when the emitter changes,
+  so the negative test reaches admission and rejects the replayed proof instead
+  of panicking during fixture setup.
+- Re-ran the SCCP corridor phases covering evidence tooling, browser/Python
+  SDKs, mobile SDKs, contract smoke, Rust verifier coverage, and core
+  admission.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py && python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`7` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`848` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`186` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`87` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`15` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (passed: `82` `SccpSolanaProverTests` plus `1` Torii bridge-proof submit
+    payload test)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.*' --rerun-tasks`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS='org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests' ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests --rerun-tasks`
+    (passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`242` passed)
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_rejects_replayed_source_material -- --nocapture`
+    (`1` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`38` passed)
+
+## 2026-06-03 Ethereum SCCP receipt-trie SDK adversarial hardening
+
+- Added browser/native SDK regression coverage for Ethereum receipt-trie proof
+  builders rejecting noncanonical receipt keys and malformed block-receipt
+  material: noncanonical JSON-RPC quantities, wrong receipt order,
+  out-of-range targets, empty/oversized `eth_getBlockReceipts` responses,
+  uppercase receipt hex, invalid typed receipt markers, removed logs, and logs
+  with too many topics.
+- Updated the JS browser, Swift, Kotlin/JVM, Java Android, and C# SCCP test
+  surfaces so the local Ethereum mainnet receipt-proof path stays aligned
+  across app-owned execution RPC providers.
+- Hardened `EthereumMainnetSccp.collectInboundEvidenceFromReceipt` in JS,
+  Swift, Kotlin/JVM, Java Android, and C# so auto-built receipt proofs also
+  require the canonical RLP of the caller's source-event receipt to match the
+  indexed `eth_getBlockReceipts` receipt. A same-transaction-hash block receipt
+  with different logs no longer produces a valid `receiptProofHash`.
+- Validation:
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`16` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`186` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys --disable-swift-testing`
+    (`1` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --disable-swift-testing`
+    (`1` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --filter ReceiptTrieProofBuilderUsesRlpTransactionIndexKeys`
+    (`1` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --filter InboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`2` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (passed: `82` `SccpSolanaProverTests` plus `1` Torii bridge-proof submit
+    payload test)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `15` SCCP Ethereum/BSC tests)
+  - Kotlin/JVM and Java Android focused Gradle runs are blocked in this
+    environment because no Java runtime is installed (`java -version` fails
+    with "Unable to locate a Java Runtime").
+
+## 2026-06-03 Streaming ML-KEM local key-pair binding
+
+- Added an `soranet_pq` ML-KEM key-pair validation helper that extracts the
+  public key and `H(ek)` hash embedded in the FIPS 203 decapsulation key and
+  rejects length-valid public/secret material that is not one internally
+  consistent key pair.
+- `StreamingKeyMaterial::set_kyber_keys` and
+  `StreamingSession::set_kyber_local_key_pair` now reject mismatched local Kyber
+  key pairs or `H(ek)`-corrupted secret keys at admission instead of allowing
+  implicit-rejection decapsulation to surface later as a transport-key mismatch.
+- `MlKemSuite::validate_secret_key`, standalone local Kyber secret installs, and
+  `decapsulate_mlkem` now also reject secret keys whose embedded `H(ek)` hash
+  does not match the embedded public key.
+- `StreamingSession::restore_from_snapshot` now requires persisted local Kyber
+  metadata to match an already-installed local decapsulation secret before any
+  live session state is replaced.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-current cargo test -p soranet_pq -- --nocapture`
+    (`105` lib tests, `2` `kat_vectors` tests, `2` `pq_kat` tests, and `1`
+    doctest passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-current cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`55` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-current cargo clippy -p soranet_pq --all-targets -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-current cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs crates/soranet_pq/src/ffi.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs crates/soranet_pq/src/ffi.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming Kyber local snapshot binding
+
+- Extended `StreamingSession` snapshots with optional local Kyber public-key
+  metadata so outbound Kyber snapshots can restore when the suite fingerprint is
+  the sender's local fingerprint rather than the peer's remote fingerprint.
+- `StreamingKeyMaterial::install_into_session` now installs the local Kyber
+  public fingerprint together with the local decapsulation secret, while
+  secret-only installs clear local public metadata to prevent stale outbound
+  suite bindings.
+- Restore validation still stages Kyber public-key/fingerprint checks before
+  replacing live state, but a Kyber768 suite may now bind to either validated
+  remote metadata for inbound state or validated local metadata for outbound
+  state.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kyber-local-snapshot cargo test -p iroha_crypto kyber_outbound_snapshot_restores_with_local_fingerprint_metadata --test streaming_handshake -- --nocapture`
+    (`1` passed, `52` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kyber-local-snapshot cargo test -p iroha_crypto set_kyber_local_secret_clears_local_snapshot_metadata --test streaming_handshake -- --nocapture`
+    (`1` passed, `52` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kyber-local-snapshot cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`53` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kyber-local-snapshot cargo test -p iroha_core snapshot_decode_tolerates_misaligned_plaintext --lib -- --nocapture`
+    (`1` passed, `6804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kyber-local-snapshot cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 C# Ethereum SCCP receipt-trie proof builder
+
+- Extended the C# Ethereum mainnet SCCP path with typed receipt RLP/MPT
+  receipt-trie proof coverage, `blockReceipts`/`inclusionBranch` evidence
+  fields, and local `eth_getBlockReceipts` auto-build validation before
+  deriving `receiptProofHash`.
+- Updated the C# SDK README plus SCCP roadmap/docs to include .NET in the
+  app-owned receipt-trie reconstruction path.
+- Validation:
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --no-restore`
+    (`10` passed)
+  - `PATH=/tmp/iroha-dotnet/sdk:$PATH bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`15` passed)
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (`166` passed)
+
+## 2026-06-03 Streaming X25519 local ephemeral admission
+
+- Changed inbound X25519 `KeyUpdate` processing to require prepared local
+  ephemeral material instead of generating it during receive-side admission,
+  preventing accepted signed frames from deriving transport keys the sender
+  could not match.
+- Added a regression proving the missing-local-ephemeral path leaves negotiated
+  suite, STS root, transport keys, and snapshot state unset.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-local cargo test -p iroha_crypto x25519_process_remote_key_update_requires_local_ephemeral_without_state_change --test streaming_handshake -- --nocapture`
+    (`1` passed, `50` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-local cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`51` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-local cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming local ephemeral precommit hardening
+
+- Changed `StreamingSession::local_ephemeral_public` so Kyber payload
+  precomputation only returns the encapsulation ciphertext and no longer commits
+  negotiated suite, STS root, transport keys, or snapshot-visible state before a
+  signed `KeyUpdate` is built or accepted.
+- Added a regression proving a direct Kyber ephemeral helper call cannot enable
+  content-key rotation APIs or produce a session snapshot without a real
+  key-update exchange.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-local-ephemeral cargo test -p iroha_crypto kyber_local_ephemeral_public_does_not_commit_transport_state --test streaming_handshake -- --nocapture`
+    (`1` passed, `49` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-local-ephemeral cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`50` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-local-ephemeral cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming session ML-KEM suite switch hygiene
+
+- Aligned `StreamingSession::set_kem_suite` with `StreamingKeyMaterial` so
+  changing the ML-KEM profile clears configured Kyber remote public keys,
+  fingerprints, and local decapsulation secrets before any later HPKE use.
+- Added a session-level regression proving a suite switch away from ML-KEM-768
+  and back leaves restored/default sessions without stale remote metadata or
+  local Kyber secret material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-session-kem-suite cargo test -p iroha_crypto session_kem_suite_change_clears_configured_kyber_material --test streaming_handshake -- --nocapture`
+    (`1` passed, `48` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-session-kem-suite cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`49` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-session-kem-suite cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Swift and C# Ethereum SCCP receipt-trie proof builders
+
+- Extended Swift and C# `EthereumMainnetInboundEvidence` with ordered
+  `blockReceipts` and Beacon inclusion-branch material so native callers can
+  keep receipt inclusion proving local to app-owned JSON-RPC/Beacon REST
+  providers.
+- Swift and C# now expose native typed-receipt RLP, raw RLP transaction-index
+  receipt-trie key, and receipt-trie proof builders. Their
+  `EthereumMainnetSccp.collectInboundEvidenceFromReceipt` paths build an
+  `EthereumMainnetReceiptProof` from `eth_getBlockReceipts` when receipt,
+  block, finalized Beacon evidence, source-event digest, and inclusion branch
+  are present. The computed receipt trie root must match the execution
+  block/finality receipts root before the SDK derives `receiptProofHash`.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (passed: `82` `SccpSolanaProverTests` plus `1` Torii bridge-proof submit
+    payload test)
+  - From `IrohaSwift`: `swift test` built successfully and
+    `SccpSolanaProverTests` passed (`82` tests), but the full package run
+    exited with unrelated `OfflineNoteTests` failures (`1034` tests,
+    `104` skipped, `6` failures / `2` unexpected).
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --filter SccpEthereumMainnetTests`
+    (passed: `10` tests)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `15` SCCP Ethereum/BSC tests)
+
+## 2026-06-03 Streaming remote key-update admission ordering
+
+- Reordered signed remote `KeyUpdate` processing so, after signature
+  verification, the staged key-counter/suite/ephemeral-shape admission runs on a
+  local copy before X25519 shared-secret derivation, ML-KEM decapsulation,
+  transport-key derivation, reset, or live session mutation.
+- Preserved the public truncated-ephemeral error shape while making authenticated
+  Kyber replay and suite-drift frames fail at admission even after snapshot
+  restore when the local decapsulation secret is absent.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keyupdate-order cargo test -p iroha_crypto kyber_ --test streaming_handshake -- --nocapture`
+    (`16` passed, `32` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keyupdate-order cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`48` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keyupdate-order cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming feedback stream-id binding
+
+- Hardened streaming feedback admission so the first accepted `FeedbackHint` or
+  `ReceiverReport` binds session feedback state to that `stream_id`.
+- Later feedback frames with a different stream id now return
+  `HandshakeError::FeedbackStreamMismatch` before counters, EWMA loss, parity,
+  or snapshot-visible fields are updated. Core control-frame handling propagates
+  the error, and the QUIC feedback roundtrip asserts matching stream ids.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo test -p iroha_crypto stream_id_switch --test streaming_handshake -- --nocapture`
+    (`2` passed, `44` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`46` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo test -p iroha_core feedback_frames_update_handle_parity --lib -- --nocapture`
+    (`1` passed, `6804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo test -p iroha_p2p --features quic feedback_frames_roundtrip_over_quic --lib -- --nocapture`
+    (`1` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-feedback-stream cargo clippy -p iroha_p2p --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Sumeragi live commit-gate RBC evidence binding proof
+
+- Added `LiveCommitGateRbcEvidenceMatches` to prove that the live commit gate
+  is equivalent to vote quorum, stake quorum, delivered RBC state, READY quorum,
+  chunk coverage, header evidence, and digest evidence.
+- Wired `LiveCommitGateRbcEvidenceAlwaysMatches` through the fast, deep, and
+  TLC-fast formal configs, the Sumeragi README property inventory, and the
+  roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.31s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual
+    mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total `0.645 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (passed: 7799 states generated, 2338 distinct states found, 13 temporal
+    branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length 10 with 30 temporal properties,
+    `EXITCODE: OK`, total `4705.533 sec`)
+
+## 2026-06-03 Sumeragi live commit-gate finality equivalence proof
+
+- Added `LiveCommitGateMatchesFinality` to prove that the abstract finality
+  latch is equivalent to the live `CanCommit(...)` predicate over commit votes,
+  signed stake, and RBC delivery evidence.
+- Wired `LiveCommitGateAlwaysMatchesFinality` through the fast, deep, and
+  TLC-fast formal configs, the Sumeragi README property inventory, and the
+  roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total `0.673 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, `13` temporal
+    branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length `10`, `29` temporal properties, total
+    `4676.826 sec`, `EXITCODE: OK`)
+
+## 2026-06-03 Sumeragi commit-certificate finality equivalence proof
+
+- Added `CommitCertificateMatchesFinality` to prove that quorum-weighted
+  commit-certificate evidence exists exactly when the abstract finality latch is
+  set.
+- Wired `CommitCertificateAlwaysMatchesFinality` through the fast, deep, and
+  TLC-fast formal configs, the Sumeragi README property inventory, and the
+  roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total `0.662 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, `13` temporal
+    branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `28` temporal properties,
+    total `4310.249 sec`, `EXITCODE: OK`)
+
+## 2026-06-03 Kotlin/Java Ethereum SCCP receipt-trie proof builders
+
+- Added native Kotlin/JVM and Java Android helpers for Ethereum receipt proof
+  collection: canonical legacy/EIP-2718 receipt RLP, raw RLP
+  transaction-index trie keys, bounded MPT proof-node construction from
+  `eth_getBlockReceipts`, and receipts-root verification. This mirrors the
+  browser/Python receipt path without WASM or remote prover dependencies.
+- `EthereumMainnetSccp.collectInboundEvidenceFromReceipt` in both SDKs can now
+  auto-build `receiptProof` when the app supplies receipt/block/finality data,
+  a validated SCCP source event, and the Beacon inclusion branch. If the block
+  receipt list is absent, the SDK fetches `eth_getBlockReceipts` from the
+  app-owned execution provider and checks the computed root plus target
+  transaction hash before deriving `receiptProofHash`.
+- Validation:
+  - From `kotlin`: `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (passed)
+
+## 2026-06-03 Sumeragi finality latch/phase equivalence proof
+
+- Added `CommittedPhaseAlwaysMatchesFinality` to the top-level Sumeragi formal
+  model so the temporal corridor proves that the terminal `Committed` phase and
+  the abstract finality latch are equivalent in every reachable state.
+- Wired the new obligation through the fast, deep, and TLC-fast formal configs,
+  the Sumeragi README temporal-property inventory, and the roadmap proof
+  corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed: `115` tests)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (passed: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes,
+    `9788` TLC mutation modes)
+  - `APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (passed: `EXITCODE: OK`, total `0.621 sec`)
+  - `APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (passed: `7799` states generated, `2338` distinct states, `13` temporal
+    branches, no errors)
+  - `APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (passed: `NoError` through computation length `10`, `27` temporal
+    properties, total `4078.739 sec`, `EXITCODE: OK`)
+
+## 2026-06-03 SCCP evidence-scripts corridor rerun
+
+- Re-ran the SCCP production-corridor `evidence-scripts` phase after the
+  current all-lanes, Ethereum source-bridge, and EVM receipt-trie proof
+  evidence script updates. This keeps release bundle, readiness report,
+  all-lanes evidence, and per-lane live/source/receipt evidence renderers
+  covered together instead of only by focused tests.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (passed: `848` tests)
+
+## 2026-06-03 SCCP EVM receipt-trie evidence tooling
+
+- Added `scripts/sccp_evm_receipt_proof_evidence.py` for read-only ETH/BSC
+  source receipt proof collection from app/operator JSON-RPC. The helper
+  enforces canonical mainnet `eth_chainId`, fetches the transaction receipt,
+  receipt block, and block receipt list, reconstructs the EIP-2718-aware
+  receipt trie with typed receipt RLP and the raw RLP transaction-index key,
+  verifies the computed root against the block `receiptsRoot`, and emits
+  receipt RLP, trie key, proof nodes, and the verified root pair for SDK/local
+  prover submission.
+- When a source bridge address is supplied, the helper also requires exactly
+  one canonical SCCP `SccpSourceEvent(bytes32)` log in the successful receipt
+  and rejects duplicate, removed, mismatched-block, or mismatched-transaction
+  event evidence.
+- Wired the new focused tests into the SCCP production corridor
+  `evidence-scripts` phase.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_receipt_proof_evidence.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_receipt_proof_evidence_test.py`
+    (`7` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`848` passed)
+
+## 2026-06-03 JS Ethereum SCCP receipt-trie proof builder
+
+- Added pure JavaScript/browser helpers for Ethereum receipt proof collection:
+  `canonicalEvmReceiptRlp`, `evmReceiptTrieKey`, and
+  `buildEvmReceiptTrieProofFromReceipts`. They encode legacy and EIP-2718 typed
+  receipts, derive the spec-compatible RLP transaction-index trie key, build
+  bounded modified-Merkle-Patricia proof nodes from `eth_getBlockReceipts`
+  material, and verify the computed receipts root before the facade uses the
+  proof.
+- `EthereumMainnetSccp.collectInboundEvidenceFromReceipt` can now auto-build a
+  full `receiptProof` when the app supplies or fetches the receipt/block/finality
+  data, has a validated SCCP source event, and supplies the SCCP
+  `inclusionBranch`. The SDK fetches `eth_getBlockReceipts` from the
+  app-supplied execution provider when the block receipt list is not already in
+  the input; no WASM or remote prover dependency is introduced.
+- Exported the helpers through the SCCP subpath, package root, TypeScript
+  declarations, and rebuilt the packaged JS `dist` artifacts.
+- Validation:
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`16` passed)
+  - From `javascript/iroha_js`: `npm run build:dist`
+    (passed)
+  - From `javascript/iroha_js`: `node --test test/package_dist.test.js`
+    (`49` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (passed: `186` tests)
+
+## 2026-06-03 Ethereum SCCP browser/native Beacon REST providers
+
+- Added the pure-JS `EthereumMainnetBeaconRestConsensusProvider` for browser
+  and app SDK flows that use an app-supplied Ethereum Beacon REST endpoint. It
+  fetches finalized header and finality-checkpoint data, rejects
+  execution-optimistic, unfinalized, non-canonical, or checkpoint-mismatched
+  responses, binds the evidence to the locally collected execution block
+  number/hash/receipts root, and requires local `syncCommitteeRoot` or
+  `syncCommitteePayload` material instead of any Torii proxy or remote prover
+  fallback.
+- Added matching Swift, Kotlin/JVM, Java Android, and C# Beacon REST consensus
+  providers with native default HTTP transports and injectable transports for
+  app-owned networking and tests. They enforce the same finalized-header,
+  finality-checkpoint, execution block, and sync-committee material checks
+  while staying free of WASM and remote prover dependencies. The C# provider
+  now also derives and verifies the sync-committee root from local
+  `syncCommitteePayload` bytes, matching the JS/browser, Swift, Kotlin/JVM, and
+  Java Android paths.
+- Exported the provider through the JS root entrypoint and TypeScript
+  declarations so browser apps can plug it directly into `EthereumMainnetSccp`
+  as a consensus provider while keeping proving local and WASM-free.
+- Validation:
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`16` passed)
+  - From `javascript/iroha_js`: `npm run build:dist`
+    (passed)
+  - From `javascript/iroha_js`: `node --test test/package_dist.test.js`
+    (`49` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (passed: `186` SCCP/package export tests)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --filter SccpEthereumMainnetTests`
+    (`9` passed, rerun after the C# sync-committee payload-root parity update)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: .NET Ethereum/BSC SCCP `14` tests)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedEvidence --filter SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality`
+    (`2` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk,dotnet-sdk`
+    (passed: Swift SCCP `81` tests plus Torii SCCP submit payload test; .NET
+    Ethereum/BSC SCCP `14` tests)
+  - `git diff --check --` the touched SCCP SDK/test files and docs
+    (passed)
+
+## 2026-06-03 C# SCCP/.NET SDK validation unblocked
+
+- Used the local .NET 8 SDK at `/tmp/iroha-dotnet/sdk` to close the C# SDK
+  validation gap for the current SCCP release slice.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `12` SCCP Ethereum/BSC mainnet tests)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo`
+    (passed: `163` tests)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --nologo`
+    (passed: `163` unit tests and `2` opt-in integration-project tests)
+
+## 2026-06-03 Offline Note V2 JVM account-id Norito parity
+
+- Fixed the Kotlin/JVM and Java Android `OfflineNoteV2` account-id Norito
+  encoder so single-key and multisig controller public keys use the canonical
+  compact public-key payload already used by Rust and Offline Note V1, instead
+  of a multihash string. This restores V2 key-certificate payload bytes,
+  certificate hashes, note model encodings, and recursive public-input hashes to
+  the checked-in Rust interop vectors.
+- Validation:
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+
+## 2026-06-03 Ethereum SCCP beacon-finality slot binding
+
+- Hardened the JS/browser, Swift, Kotlin, Java Android, and C# Ethereum
+  mainnet SCCP inbound SDK facades so Beacon finality evidence canonicalizes
+  the finalized beacon slot as `beaconSlot`, accepts common `finalizedSlot` and
+  `slot` aliases, and rejects receipt proofs whose hashed `beaconSlot` drifts
+  from the app-supplied Beacon finality evidence. Local proving now requires
+  `beaconFinality.beaconSlot` alongside the finalized-header and
+  sync-committee roots before any app-owned prover callback can run.
+- Aligned JS/browser and Swift standalone receipt-proof collection with the
+  native JVM/Android/.NET behavior by rejecting caller-supplied source-event
+  material unless receipt logs are present for local source-bridge event
+  validation.
+- Exposed `beaconSlot` and its aliases on the public JS TypeScript finality
+  evidence declarations so browser apps can pass Beacon REST slot material
+  without casts.
+- Added mirrored Ethereum mainnet SDK regressions for normalized slot
+  preservation, missing-slot rejection, drifted receipt-proof slot rejection,
+  and JS/Swift no-receipt source-event rejection across the native/browser
+  facades.
+- Validation:
+  - From `javascript/iroha_js`: `npm run build:dist`
+    (passed)
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`12` passed)
+  - From `javascript/iroha_js`: `node --test test/package_dist.test.js`
+    (`49` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+  - From `csharp`: `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `12` SCCP Ethereum/BSC mainnet tests)
+  - From `csharp`: `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en /tmp/iroha-dotnet/sdk/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --nologo`
+    (passed: `163` unit tests and `2` opt-in integration-project tests)
+  - `git diff --check --` the touched SCCP SDK/test files and docs
+    (passed)
+
+## 2026-06-03 Ethereum SCCP beacon-finality root binding
+
+- Hardened the JS/browser, Swift, Kotlin, Java Android, and C# Ethereum
+  mainnet SCCP inbound SDK facades so app-supplied beacon finality evidence
+  canonicalizes optional finalized-header and sync-committee roots, then
+  rejects any receipt proof whose `beaconFinalizedRoot` or `syncCommitteeRoot`
+  drifts from that finality evidence. Local proving now also requires both
+  roots to be present, so the native/browser prover callback cannot run with a
+  receipt proof whose consensus roots were never tied to Beacon finality
+  evidence.
+- Exposed `finalizedHeaderRoot` and `syncCommitteeRoot` on the public JS
+  TypeScript finality evidence declarations so browser apps can use the
+  fail-closed path without casts.
+- Added mirrored Ethereum mainnet SDK regressions for successful finalized-root
+  and sync-committee-root preservation plus missing-root and drift adversarial
+  cases.
+- Validation:
+  - From `javascript/iroha_js`: `npm run build:dist`
+    (passed)
+  - From `javascript/iroha_js`: `node --test test/sccpEthereumMainnet.test.js`
+    (`12` passed)
+  - From `javascript/iroha_js`: `node --test test/package_dist.test.js`
+    (`49` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    (passed)
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (passed)
+  - From `csharp`: `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `12` SCCP Ethereum/BSC mainnet tests)
+  - `git diff --check --` the touched SCCP SDK/test files
+    (passed)
+
+## 2026-06-03 Kotlin Connect approve-preimage canonical account binding
+
+- Hardened Kotlin Connect approve-preimage construction so `accountId` is
+  normalized through the shared canonical I105 account literal helper before it
+  is bound into the wallet approval preimage, matching the Java Android path.
+  Domain-qualified aliases and non-canonical account literals now fail with
+  `ConnectProtocolException` instead of being signed into authorization bytes.
+- Added Kotlin regression coverage that verifies canonical account ids are
+  preserved in the tagged preimage and domain-suffixed aliases are rejected.
+- Validation:
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.connect.ConnectCryptoTest' --tests 'org.hyperledger.iroha.sdk.connect.ConnectSequenceTest' --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain`
+    (passed)
+
+## 2026-06-03 Connect sequence/nonce admission hardening
+
+- Hardened Kotlin and Java Android Connect crypto, frame/envelope codec, and
+  queue-journal paths so signed host-language sequence values must be
+  non-negative before nonce/AAD construction, frame/envelope encoding, frame
+  and envelope decoding, or journal persistence. High-bit `uint64` frame and
+  envelope sequence values now fail closed instead of flowing through the SDK as
+  negative `Long` values.
+- Fixed the Kotlin/Java Connect frame field encoder to request the canonical
+  Connect zero-flag Norito layout explicitly, restoring ciphertext-frame
+  encoding instead of rejecting adaptive compact-length field payloads before
+  sequence validation.
+- Added mirrored Kotlin and Java regressions for negative nonce/encrypt/decrypt
+  sequences, envelope and frame encoding, high-bit envelope/frame decode, and
+  queue journal append rejection.
+- Validation:
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.connect.ConnectCryptoTest' --tests 'org.hyperledger.iroha.sdk.connect.ConnectSequenceTest' --console=plain`
+    (passed)
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest,org.hyperledger.iroha.android.connect.ConnectQueueJournalTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed; rerun after the SCCP source-material fixture update)
+
+## 2026-06-03 Ethereum SCCP SDK source-material bridge binding
+
+- Hardened JS/browser, Swift, Kotlin, Java Android, and C# SCCP source-material
+  helpers so Ethereum mainnet source verifier records require the Ethereum
+  mainnet network id, reject or omit source-bridge owner addresses, and validate
+  the source bridge config hash against the bridge address, SORA target domain,
+  and deployed bridge code hash before emitting material or deployment hashes.
+- Updated cross-SDK fixture vectors for the ETH source verifier material hash
+  and source adapter deployment hash, with negative coverage for wrong chain
+  id, owner-address misuse, and mismatched config hash.
+- Validation:
+  - From `javascript/iroha_js`: `npm run build:dist && node --test test/sccpSolanaProver.test.js test/package_dist.test.js`
+    (`149` passed)
+  - From `IrohaSwift`: `swift test --filter SccpSolanaProverTests/testDerivesSourceMaterialAndDeploymentRecordHashesForUiTooling`
+    (passed)
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest --console=plain`
+    (passed)
+  - From `java/iroha_android`: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+  - From `csharp`: `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_UI_LANGUAGE=en bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (passed: `12` SCCP Ethereum/BSC mainnet tests)
+
+## 2026-06-03 Sumeragi prepare-quorum phase-gating proof
+
+- Added `CommitPhasesNeverBypassPrepareQuorum` to the top-level Sumeragi formal
+  model so the temporal corridor proves that commit-vote and committed phases
+  are never reachable without prepare-quorum evidence, including after
+  view-change resets.
+- Wired the new obligation through the fast, deep, and TLC-fast formal configs,
+  the Sumeragi README temporal-property inventory, and the roadmap proof
+  corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed: `115` tests)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (passed:
+    `504 PR modes`, `9788 expected-failure modes`, `1 scheduled/manual modes`,
+    `10293 documented modes`, `499 TLC fast modes`, `9788 TLC mutation modes`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (passed: `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (passed: `7799` states generated, `2338` distinct states found, `13`
+    temporal-property branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (passed: loaded `CommitPhasesNeverBypassPrepareQuorum`, found `26`
+    temporal properties, `NoError` up to computation length `10`, total
+    `5019.654 sec`, `EXITCODE: OK`)
+  - `git diff --check` (passed)
+  - Targeted conflict-marker, trailing-whitespace, and Apalache-artifact scans
+    over the touched Sumeragi formal/docs/config files, `roadmap.md`, and
+    `status.md` (no matches)
+
+## 2026-06-03 Kotlin/Java Connect X25519 agreement failure preflight
+
+- Hardened Kotlin and Java Android Connect X25519 direction-key derivation so
+  provider-level agreement failures, including low-order peer public keys that
+  Bouncy Castle rejects before writing an all-zero shared secret, are normalized
+  into `ConnectProtocolException` after zeroing the scratch shared-secret
+  buffer. Added native bridge coverage proving the Rust Connect derivation FFI
+  rejects the same low-order peer key without touching output key buffers.
+- Added mirrored Kotlin and Java regressions proving an all-zero low-order peer
+  public key fails through the Connect protocol error path instead of leaking a
+  provider `IllegalStateException`.
+- Validation:
+  - From `kotlin`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.connect.ConnectCryptoTest --console=plain`
+    (passed)
+  - From `java/iroha_android`: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo test -p connect_norito_bridge connect_derive_keys_rejects_low_order_peer_public_key --lib -- --nocapture`
+    (`1` passed, `109` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo clippy -p connect_norito_bridge --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Confidential payload client preflight
+
+- Hardened CLI confidential payload construction so `zk envelope` and `zk
+  shield` validate `ConfidentialEncryptedPayload` through the data-model policy
+  after inline argument decoding or encoded-envelope file decoding. Empty
+  ciphertexts and low-order X25519 ephemeral public keys now fail before shield
+  instruction construction.
+- Hardened `connect_norito_bridge` raw confidential-payload encoding and shield
+  signed-transaction encoders, including the algorithm-selecting variant, so
+  FFI-provided confidential payloads pass the same validation before raw byte
+  emission or transaction signing. The algorithm-selecting path now also uses
+  the shared byte-slice reader for consistent zero-length/null ciphertext
+  handling before validation rejects empty ciphertexts.
+- Hardened `IrohaSwift` confidential payload construction and decoding with the
+  same non-empty ciphertext requirement and a CryptoKit X25519 low-order probe
+  using the Rust policy's `[1; 32]` private scalar, so Swift fallback
+  serialization cannot emit malformed confidential payloads when the native
+  bridge is unavailable.
+- Added CLI and bridge regressions for valid payloads, unchanged raw payload
+  layout, empty ciphertexts, and low-order X25519 ephemeral public keys, plus
+  Swift constructor and decode regressions for empty ciphertext and low-order
+  ephemeral keys.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo test -p iroha_cli encode_encrypted_payload --bins -- --nocapture`
+    (`3` matching tests passed in each CLI bin target containing `zk`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo test -p connect_norito_bridge shield_encoder_ --lib -- --nocapture`
+    (`3` passed, `103` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo test -p connect_norito_bridge confidential_payload_encoder_ --lib -- --nocapture`
+    (`3` passed, `106` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo clippy -p iroha_cli --bin iroha --bin iroha3 --bin iroha_cli --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-client-preflight cargo clippy -p connect_norito_bridge --lib --no-deps -- -D warnings`
+    (passed)
+  - From `IrohaSwift`: `swift test --filter ConfidentialEncryptedPayloadTests`
+    (`9` passed; emitted unrelated existing `ToriiClientTests` warnings)
+  - `rustfmt --edition 2024 --check crates/iroha_cli/src/zk.rs crates/connect_norito_bridge/src/lib.rs`
+    (passed)
+  - Broader `iroha_cli --bins` and `connect_norito_bridge --lib --tests`
+    clippy runs still hit unrelated pre-existing lint/API drift in other bin or
+    test targets.
+
+## 2026-06-03 Streaming key-update ephemeral shape admission
+
+- Hardened direct Norito `KeyUpdateState::record` admission so key updates must
+  carry the suite-specific ephemeral payload length before replay counters or
+  negotiated suite state are updated: 32-byte X25519 public keys for the
+  ChaCha20-Poly1305 suite and 1088-byte Kyber768 ciphertexts for the XChaCha20
+  suite.
+- Added Norito unit coverage proving malformed X25519 and Kyber key-update
+  payloads leave the previous counter/suite state unchanged.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-keyupdate-shape cargo test -p norito key_update_state --lib -- --nocapture`
+    (`3` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-keyupdate-shape cargo test -p norito --lib --quiet`
+    (`261` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-keyupdate-shape cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`33` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-keyupdate-shape cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-keyupdate-shape cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/norito/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+
+## 2026-06-03 Streaming snapshot Kyber suite binding
+
+- Hardened `StreamingSession::restore_from_snapshot` so a persisted Kyber768
+  suite must restore with ML-KEM-768 metadata and a validated remote Kyber
+  fingerprint matching the suite fingerprint before live session state is
+  replaced.
+- Added streaming handshake regressions proving supported-but-wrong KEM suite
+  metadata and suite/remote fingerprint drift both fail without resetting the
+  previous session snapshot.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-suite-bind cargo test -p iroha_crypto restore_from_snapshot_rejects_kyber_suite --test streaming_handshake -- --nocapture`
+    (`2` passed, `33` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-suite-bind cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`35` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-suite-bind cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-suite-bind cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+
+## 2026-06-03 Streaming feedback bound admission
+
+- Hardened streaming feedback admission so inbound
+  `FeedbackHintFrame.parity_chunks`, receiver `parity_applied`, and receiver
+  `fec_budget` are clamped to the same 6-chunk FEC ceiling before feedback
+  snapshots or outbound hints can reuse them.
+- Capped inbound feedback loss samples at Q16.16 100% before EWMA updates, so
+  malformed viewer hints or receiver reports cannot persist impossible loss
+  values.
+- Added streaming handshake regressions proving oversized feedback hints and
+  receiver reports snapshot only bounded parity and loss values.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-feedback-bounds cargo test -p iroha_crypto feedback_samples_are_clamped_to_documented_bounds --test streaming_handshake -- --nocapture`
+    (`1` passed, `36` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-feedback-bounds cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`37` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-feedback-bounds cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-feedback-bounds cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+
+## 2026-06-03 Streaming transport capability admission
+
+- Hardened `StreamingSession::record_transport_capabilities` and
+  `StreamingSession::restore_from_snapshot` so live and persisted transport
+  capability resolutions must preserve the normal negotiated shape before live
+  state or capability hashes are replaced: DATAGRAM-enabled state requires a
+  nonzero DATAGRAM size, and fallback stream state must carry zero DATAGRAM
+  size.
+- Added streaming handshake and `StreamingHandle` regressions proving malformed
+  transport shapes fail without resetting the previous session snapshot or
+  overwriting a previously recorded transport capability hash.
+- Mapped malformed QUIC datagram inner-frame parser errors to the crate-level
+  `Error::Format`, restoring `iroha_p2p` `quic` feature test compilation while
+  preserving fail-closed datagram decoding.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`39` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo test -p iroha_core rejects_invalid_transport_capabilities_without_overwriting_hash --lib -- --nocapture`
+    (`1` passed, `6804` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo test -p iroha_p2p --features quic feedback_frames_roundtrip_over_quic --lib -- --nocapture`
+    (`1` passed, `183` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-transport-record cargo clippy -p iroha_p2p --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/peer.rs crates/iroha_p2p/src/streaming/quic.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/peer.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/peer.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming key-counter zero admission
+
+- Hardened Norito `KeyUpdateState`, outbound `StreamingSession::build_key_update`,
+  inbound signed key-update processing, and streaming snapshot restore so
+  `KeyUpdate.key_counter` is one-based. Zero counters now fail before suite
+  state, transport keys, snapshots, or outbound session state can be updated.
+- Added Norito and streaming handshake regressions proving zero counters are
+  rejected without latching suite/counter state, without committing outbound or
+  inbound session state, and without replacing an existing restored session.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo test -p norito key_update_state --lib -- --nocapture`
+    (`4` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo test -p norito --lib --quiet`
+    (`262` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`42` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-counter-zero cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming key-update restore zero-counter admission
+
+- Hardened direct Norito `KeyUpdateState::restore` and `from_snapshot`
+  rehydration so persisted key-update state cannot install counter `0` after
+  live `KeyUpdate` admission has rejected the same value.
+- Added a Norito regression proving zero-counter restore and snapshot rehydrate
+  fail without replacing a previously accepted suite/counter pair.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-restore cargo test -p norito key_update_state_restore_rejects_zero_counter_without_state_change --lib -- --nocapture`
+    (`1` passed, `264` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-restore cargo test -p norito key_update_state --lib -- --nocapture`
+    (`6` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-restore cargo test -p norito --lib --quiet`
+    (`264` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-restore cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/norito/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/norito/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming content-key restore partial-state admission
+
+- Hardened direct Norito `ContentKeyState::restore` and `from_snapshot`
+  rehydration so content-key replay metadata must restore `content_key_id` and
+  `valid_from_segment` together before replacing existing state.
+- Propagated the now-fallible restore result through `StreamingSession`
+  snapshot restore while preserving valid Kyber bidirectional key-update suite
+  behavior.
+- Added a Norito regression proving partial content-key restore fails without
+  replacing the previously accepted content-key id or valid-from segment.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo test -p norito state_restore --lib -- --nocapture`
+    (`2` passed, `264` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo test -p norito key_update_state --lib -- --nocapture`
+    (`6` passed, `260` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo test -p norito content_key_state --lib -- --nocapture`
+    (`2` passed, `264` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo test -p norito --lib --quiet`
+    (`265` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`44` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-content-restore cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming protocol-version zero admission
+
+- Hardened Norito `KeyUpdateState`, outbound and inbound streaming key updates,
+  core capability ACK construction, and QUIC capability negotiation so protocol
+  version `0` fails closed while existing nonzero versions remain valid.
+- Added Norito, streaming handshake, core ACK, and p2p regressions proving zero
+  protocol versions are rejected before suite, counter, transport-key, or ACK
+  state can be committed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p norito key_update_state_rejects_zero_protocol_version_without_state_change --lib -- --nocapture`
+    (`1` passed, `263` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_crypto zero_protocol_version --test streaming_handshake -- --nocapture`
+    (`2` passed, `42` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_core --features quic zero_capability_report_protocol_version_rejected --lib -- --nocapture`
+    (`1` passed, `6810` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic capability_report_zero_protocol_version_rejected --lib -- --nocapture`
+    (`1` passed, `184` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p norito key_update_state --lib -- --nocapture`
+    (`5` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p norito --lib --quiet`
+    (`263` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`44` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic feedback_frames_roundtrip_over_quic --lib -- --nocapture`
+    (`1` passed, `184` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_core --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_p2p --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs`
+    (passed after applying rustfmt to the same files)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming capability ACK binding admission
+
+- Hardened the QUIC viewer handshake so `CapabilityAck` must echo the viewer's
+  `stream_id`, accepted protocol version, negotiated DATAGRAM size, and DPLPMTUD
+  flag before transport state is applied or the negotiation record callback
+  runs.
+- Added p2p regressions proving mismatched ACK stream/version/MTU/DPLPMTUD
+  fields fail closed while the existing DATAGRAM negotiation roundtrip still
+  succeeds.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic capability_ack_binding_rejects_mismatched_report_echo --lib -- --nocapture`
+    (`1` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic capability_negotiation_and_datagram_roundtrip --lib -- --nocapture`
+    (`1` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_p2p --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_p2p/src/streaming/quic.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Streaming capability report role admission
+
+- Hardened p2p capability negotiation and core capability ACK construction so
+  `CapabilityReport.endpoint_role` must be `Viewer` before the transport
+  resolution is applied, negotiation callbacks run, or ACK state is built.
+- Added core and p2p regressions proving role-confused capability reports are
+  rejected before negotiation state can advance.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_core --features quic non_viewer_capability_report_role_rejected --lib -- --nocapture`
+    (`1` passed, `6811` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic capability_report_non_viewer_role_rejected --lib -- --nocapture`
+    (`1` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_core --features quic zero_capability_report_protocol_version_rejected --lib -- --nocapture`
+    (`1` passed, `6811` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo test -p iroha_p2p --features quic capability_report_zero_protocol_version_rejected --lib -- --nocapture`
+    (`1` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_core --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-protocol-version cargo clippy -p iroha_p2p --features quic --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/streaming.rs crates/iroha_p2p/src/streaming/quic.rs docs/source/norito_streaming.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (passed)
+
+## 2026-06-03 Sumeragi roster-budget temporal proof
+
+- Added `CommitEvidenceNeverExceedsRosterBudget` and
+  `VoteCountersNeverExceedRosterBudgets` to the top-level Sumeragi formal model
+  so the temporal corridor proves that latched commit-certificate evidence and
+  live vote counters never exceed validator/fault/stake roster budgets.
+- Wired the new obligations through the fast, deep, and TLC-fast formal
+  configs, the Sumeragi README temporal-property inventory, and the roadmap
+  proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, `13` temporal
+    branches, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length `10`, `EXITCODE: OK`,
+    total time `3642.951 sec`)
+  - `git diff --check`
+    (passed)
+  - Targeted conflict-marker and trailing-whitespace scans across the Sumeragi
+    formal files, README, `roadmap.md`, and `status.md`
+    (no matches)
+
+## 2026-06-03 SCCP Ethereum source bridge config binding
+
+- Switched the SCCP active production release policy back to the Ethereum
+  mainnet lane: `EthereumMainnetLane`/domain `1`/`eth` is the launch-gated
+  release path, while future lanes remain diagnostic until their policies open.
+- Added an Ethereum mainnet source bridge config hash to `iroha_sccp` that
+  binds EIP-155 chain id `1`, ETH -> SORA domains, the governed source bridge
+  address, and the bridge runtime code hash. Production ETH source verifier
+  material, verifier evidence, and source-adapter deployment records now carry
+  and recompute that network/config binding.
+- Extended the Ethereum source evidence renderer and all-lanes evidence
+  validator to emit, parse, and recompute the same network/config binding from
+  audited source bridge deployment material.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp source_bridge_config_hash --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp evm_family_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
+    (`1` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp evm_source_material_and_deployment_hashes_match_helper_vectors --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py`
+    (`25` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`133` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`33` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`148` passed)
+  - `python3 -m py_compile scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+  - `cargo fmt -p iroha_sccp --check`
+    (passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_eth_source_bridge_evidence.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py docs/source/bridge_proofs.md status.md roadmap.md`
+    (passed)
+
+## 2026-06-03 Streaming STS shared-secret admission
+
+- Hardened Norito streaming STS derivation so `derive_sts_root` and
+  `derive_transport_keys_for_role` reject non-32-byte handshake shared secrets
+  before HKDF expansion. This keeps direct callers aligned with the X25519 and
+  ML-KEM shared-secret size used by the runtime handshake.
+- Added Norito unit coverage proving short shared secrets fail at both direct
+  STS-root derivation and role-specific transport-key derivation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-sts-secret cargo test -p norito transport_ --lib -- --nocapture`
+    (`2` passed, `258` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-sts-secret cargo test -p norito --lib --quiet`
+    (`259` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-sts-secret cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+
+## 2026-06-03 Sumeragi finality certificate-stack proof
+
+- Added `FinalityCertificateStackComplete` and
+  `FinalityCertificateStackNeverIncomplete` to prove that every finalized
+  top-level Sumeragi state carries the full certificate stack: terminal phase,
+  prepare quorum, live and latched commit vote/stake evidence, honest support,
+  RBC delivery evidence, and required view-change witness.
+- Wired the obligation through the fast, deep, and TLC-fast formal configs, the
+  Sumeragi README invariant/temporal-property inventories, and the roadmap proof
+  corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, `13` temporal
+    branches, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length `10`, `EXITCODE: OK`, `57 min 18 sec`,
+    total time `3438.838 sec`)
+
+## 2026-06-03 Streaming GCK length admission
+
+- Hardened Norito streaming content-key admission and the direct
+  `norito::streaming::crypto::{wrap_gck, unwrap_gck}` helpers so inbound
+  unwrapped GCKs, outbound plaintext GCKs, and restored snapshot GCKs must be
+  exactly 32 bytes before content-key state or live session state is updated.
+- Added X25519 regressions for authenticated-but-short inbound GCKs, short
+  outbound GCK construction, and short persisted snapshot GCKs, each proving the
+  previous session snapshot remains active or unmodified, plus Norito unit
+  coverage for direct wrap/unwrap rejection.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo test -p norito gck_ --lib -- --nocapture`
+    (`3` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo test -p iroha_crypto invalid_gck_length --test streaming_handshake -- --nocapture`
+    (`3` passed, `30` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`33` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo test -p norito --lib --quiet`
+    (`258` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo clippy -p norito --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-gck-length cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/norito/src/streaming.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+
+## 2026-06-03 SCCP BSC active launch policy restore
+
+- Restored the SCCP default launch mode to `BscMainnetLane` in
+  `SccpLaunchModeV1` and `SccpProductionPolicyV1`, making BSC mainnet the
+  active production launch lane while keeping Ethereum and TRON as first-class
+  supported SCCP SDK/prover/evidence lanes.
+- Re-pinned the release-readiness renderer and strict release-bundle verifier
+  active launch constants to BSC mainnet (`domain 2`, `bsc`,
+  `BscMainnetLane`) so public release evidence cannot silently advertise a
+  different active lane.
+- Repaired the .NET Ethereum adversarial fixture so the drifted log
+  transaction hash no longer equals the valid receipt transaction hash, keeping
+  the ETH/BSC native facade corridor meaningful while BSC is the active launch
+  lane.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`3` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core --test bridge_proofs lane_launch -- --nocapture`
+    (`10` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_core configured_sccp_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-coherent cargo test -p iroha_torii configured_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`841` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk,python-sdk,swift-sdk,kotlin-sdk,java-android,dotnet-sdk`
+    (JS `182` passed, Python `87` passed, Swift `80` passed, Kotlin/JVM passed,
+    Java Android passed; .NET failed before the adversarial fixture repair)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`11` passed)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_bsc_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_bsc_mainnet`
+    (`2` passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+    (passed)
+
+## 2026-06-03 Streaming snapshot Kyber metadata validation
+
+- Hardened Norito streaming snapshot restore so persisted Kyber remote public-key
+  metadata must be all present or all absent. When present, the restored public
+  key length, suite-specific key bytes, and stored fingerprint must all validate
+  before live session state is replaced.
+- Added X25519 regressions for partial Kyber remote metadata and fingerprint
+  drift, both proving the previous session snapshot remains active.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-kyber-shape cargo test -p iroha_crypto restore_from_snapshot_rejects_partial_kyber_remote_metadata --test streaming_handshake -- --nocapture`
+    (`1` passed, `29` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-kyber-shape cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`30` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-kyber-shape cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-kyber-shape cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/tests/streaming_handshake.rs`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum native source bridge configuration
+
+- Added native Ethereum-mainnet source-bridge emitter configuration to the
+  Swift, Kotlin/JVM, Java Android, and .NET SCCP inbound facades. The configured
+  address is now used to derive receipt source-event digests without requiring
+  every evidence object to repeat the bridge address, while per-evidence
+  addresses still work and must match the configured value when both are
+  supplied.
+- Added focused adversarial coverage proving configured/per-evidence bridge
+  address drift fails before inbound source proving can run.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`33` passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py`
+    (passed)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+    (passed)
+  - Kotlin/JVM and Java Android focused Gradle runs are blocked in this
+    environment because no Java runtime is installed.
+  - .NET focused validation is blocked in this environment because `dotnet` is
+    not installed.
+
+## 2026-06-03 Confidential encrypted payload admission preflight
+
+- Added `ConfidentialEncryptedPayload::validate()` so shielded-note encrypted
+  payloads must use the supported version, carry non-empty ciphertext, and pass
+  the shared X25519 low-order public-key decoder before execution accepts them.
+- Wired `Shield` execution to validate the encrypted payload before burning
+  public balance or appending note commitments, while keeping raw
+  constructors/defaults available for decoding and fixture construction.
+- Added data-model validation regressions for valid, empty-ciphertext, and
+  all-zero low-order ephemeral payloads plus a core execution regression that
+  proves invalid payloads leave balances and commitment counts unchanged.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_data_model encrypted_payload_validation --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_core shield_rejects_invalid_confidential_payload_before_state_change --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_core shield_restricted_asset --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_core shield_global_asset_still_uses_global_bucket_on_universal_route --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    still requires allowing the same pre-existing unrelated lint classes from
+    `offline`/`zk`; the narrowed rerun passed after the confidential changes.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Streaming snapshot content-key shape validation
+
+- Hardened Norito streaming snapshot restore so `latest_gck`,
+  `last_content_key_id`, and `last_content_key_valid_from` must be all present
+  or all absent before persisted state is admitted. Partial content-key
+  snapshots now fail before the live session is reset or replaced.
+- Added an X25519 regression that attempts to restore a snapshot with only a
+  content-key id and proves the previous session snapshot remains active.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-content-shape cargo test -p iroha_crypto restore_from_snapshot_rejects_partial_content_key_metadata --test streaming_handshake -- --nocapture`
+    (`1` passed, `27` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-content-shape cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-content-shape cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-content-shape cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Streaming snapshot restore staged validation
+
+- Hardened Norito streaming snapshot restore so role, KEM-suite id,
+  transport-key derivation, and transport-capability hash derivation all pass
+  before the live session is reset or replaced. Malformed persisted snapshots
+  now fail without clearing an established session.
+- Added an X25519 regression that attempts to restore a snapshot with an
+  unsupported KEM-suite id and proves the previous session snapshot remains
+  active.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-stage cargo test -p iroha_crypto restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session --test streaming_handshake -- --nocapture`
+    (`1` passed, `26` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-stage cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-stage cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-restore-stage cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Streaming outbound content-key preflight
+
+- Hardened Norito streaming outbound content-key update construction so
+  content-key id and `valid_from` progression are checked before nonce
+  generation or AEAD wrapping. Regressed outbound rotations now fail without
+  replacing the latest accepted GCK or changing the persisted session snapshot.
+- Added an X25519 regression that builds an outbound content-key update, then
+  attempts to reuse the same content-key id and proves the previous GCK and
+  snapshot remain intact.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-build-preflight cargo test -p iroha_crypto outbound_content_key_update_rejects_regression_before_state_change --test streaming_handshake -- --nocapture`
+    (`1` passed, `25` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-build-preflight cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`26` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-build-preflight cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-build-preflight cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Soracloud uploaded-model X25519 admission preflight
+
+- Hardened Soracloud uploaded-model bundle validation so `X25519HkdfSha256`
+  upload-recipient public keys and wrapped-key ephemeral public keys must be
+  exactly 32 bytes and must decode through the shared X25519 low-order
+  rejection path before bundle admission.
+- Added data-model regressions for recipient and ephemeral length drift plus
+  all-zero low-order public keys, and extended the core uploaded-model
+  registration malformed-key-material test so those bundles are rejected before
+  world state is updated.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_data_model uploaded_model_recipient_validation_rejects_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_data_model uploaded_model_wrapped_key_validation_rejects_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_data_model uploaded_model_bundle_validation --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo test -p iroha_core soracloud_uploaded_model_register_rejects_malformed_key_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-upload-x25519 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    currently fails on pre-existing unrelated lint debt in `offline`/`zk`.
+  - Re-running the same clippy target with only those unrelated lint classes
+    allowed passed, so the Soracloud validator changes are lint-clean under
+    the remaining `-D warnings` surface.
+
+## 2026-06-03 Streaming outbound key-counter regression preflight
+
+- Hardened Norito streaming outbound key-update construction so same-session
+  key counters must strictly increase before local X25519/Kyber ephemeral
+  generation, ML-KEM encapsulation, transcript serialization, or signing.
+  Regressed outbound counters now fail without changing the persisted session
+  snapshot.
+- Added a Kyber regression that builds an outbound key update, attempts to
+  reuse the same counter in the same session, and proves the previous snapshot
+  remains intact.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-counter cargo test -p iroha_crypto outbound_key_update_rejects_key_counter_regression --test streaming_handshake -- --nocapture`
+    (`1` passed, `24` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-counter cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`25` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-counter cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-counter cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum source deployment transaction readback
+
+- Hardened EVM source live-evidence collection so a governed deployment
+  transaction hash now also reads `eth_getTransactionByHash` and requires the
+  transaction hash, block hash, block number, null contract-creation `to`, and
+  non-empty deployment input to match the verified deployment receipt.
+- Production TOML readiness now requires that transaction readback verification,
+  and rendered evidence comments include the deployment transaction block hash,
+  block number, and input SHA-256.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`25` passed)
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum all-lanes source deployment readback preservation
+
+- Hardened all-lanes evidence ingestion so EVM source deployment transaction
+  readback comments are preserved and validated instead of being dropped:
+  transaction block hash/number must match the deployment receipt block, and
+  deployment input SHA-256 must be a non-zero 32-byte value.
+- Updated direct ETH and BSC source bridge evidence renderers to require and
+  emit the same transaction readback metadata for production TOML, keeping
+  direct operator evidence aligned with RPC-collected source live evidence.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`132` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py`
+    (`24` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_bsc_source_bridge_evidence_test.py`
+    (`23` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`25` passed)
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum route-canary readback preservation
+
+- Extended EVM destination route-canary production TOML so the
+  `eth_getTransactionByHash` block number/hash readback is emitted as
+  first-class route-canary metadata and as verifier comments. Direct TOML
+  generation now requires those transaction readback fields to match the
+  canary receipt block.
+- Hardened all-lanes route-canary ingestion so the transaction readback block
+  metadata is preserved, comment-matched, rejected on non-EVM lanes, and
+  fail-closed on drift from the receipt block.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`14` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`26` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`133` passed)
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_evm_destination_evidence.py scripts/sccp_evm_live_evidence.py scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (passed)
+
+## 2026-06-03 Streaming outbound key-update staged commit hardening
+
+- Hardened Norito streaming outbound key-update construction so ephemeral
+  material generation, Kyber transport material derivation, transcript
+  serialization, and signing all complete before session ids, key counters,
+  negotiated suites, or transport keys are committed. Failed Kyber builds can
+  no longer reset an established session or clear the latest accepted GCK.
+- Added a regression that establishes an X25519 session, accepts a content key,
+  attempts to build a Kyber key update without a configured remote Kyber public
+  key, and proves the prior snapshot, transport keys, and `latest_gck` remain
+  intact.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-stage cargo test -p iroha_crypto outbound_key_update_failure_preserves_existing_session --test streaming_handshake -- --nocapture`
+    (`1` passed, `23` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-stage cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`24` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-stage cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-outbound-stage cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum route-canary transaction readback binding
+
+- Hardened the EVM destination route-canary live-evidence collector so
+  `eth_getTransactionByHash` must return `blockHash` and `blockNumber` metadata
+  matching the already verified receipt block before the canary transaction
+  evidence hash is accepted.
+- Added adversarial regressions for transaction readback block-hash and
+  block-number drift, alongside the existing receipt/log metadata checks.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata or route_canary_transaction_evidence'`
+    (`1` passed, `25` deselected)
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum source live evidence finalized default
+
+- Changed the EVM source live-evidence CLI default so Ethereum mainnet source
+  bridge bytecode sampling uses the `finalized` execution block tag unless an
+  operator explicitly supplies `--block-tag`. BSC keeps the previous `latest`
+  default for compatibility with its JSON-RPC surface.
+- Added parser-to-collector coverage proving the ETH CLI default is
+  `finalized`, the BSC default remains `latest`, and unstable/noncanonical
+  block tags still fail before JSON-RPC.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py -k 'block_tag or cli_defaults_eth'`
+    (`3` passed, `21` deselected)
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (passed)
+
+## 2026-06-03 Streaming key-update staged commit hardening
+
+- Hardened Norito streaming remote key-update processing so signed updates
+  stage key-counter checks, shared-secret derivation, STS-root derivation, and
+  transport-key derivation before resetting an established session or
+  committing new key state. Authenticated but malformed restarts now fail
+  without clearing negotiated transport keys or the latest accepted GCK.
+- Added an X25519 regression that establishes a session, accepts a content key,
+  sends a signed restart with a low-order ephemeral key, and proves the
+  original transport keys, negotiated suite, and `latest_gck` remain intact.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-key-update-stage cargo test -p iroha_crypto x25519_key_update_rejects_malformed_restart_without_resetting_session --test streaming_handshake -- --nocapture`
+    (`1` passed, `22` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-key-update-stage cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`23` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-key-update-stage cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-key-update-stage cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum SDK source-log metadata binding
+
+- Hardened Ethereum-mainnet inbound receipt source-event validation across
+  JavaScript/browser, Python, Swift, Kotlin/JVM, Java Android, and .NET so the
+  matching SCCP source bridge log must carry `transactionHash`, `blockHash`,
+  and `blockNumber` metadata matching the normalized receipt.
+- Added adversarial source-event regressions for log transaction-hash,
+  block-hash, and block-number drift while preserving unrelated receipt-log
+  tolerance.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12` passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs or ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`2` passed, `85` deselected)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+    (passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (passed)
+  - Kotlin/JVM and Java Android Gradle validation could not start because this
+    host cannot locate a Java runtime; .NET validation could not start because
+    `dotnet` is not installed.
+
+## 2026-06-03 Streaming content-key unwrap-before-state hardening
+
+- Hardened Norito streaming content-key update processing so incoming wrapped
+  GCK payloads pass monotonicity preflight, AEAD authentication, and unwrap
+  before the accepted content-key rotation state is recorded. Tampered wrapped
+  keys can no longer poison replay windows or block a later valid update with
+  the same content-key id.
+- Added an X25519 regression that tampers the wrapped GCK, proves the failure
+  leaves `latest_gck` unset, and then accepts the original valid update with
+  the same rotation metadata.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-auth cargo test -p iroha_crypto x25519_content_key_update_authenticates_before_recording_state --test streaming_handshake -- --nocapture`
+    (`1` passed, `21` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-auth cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`22` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-auth cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-content-auth cargo clippy -p iroha_crypto --lib --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 Sumeragi pre-finality commit artifact proof
+
+- Added `PreFinalityCommitArtifactsNeverAppear` to prove that
+  commit-certificate votes/stake and the commit-view witness remain absent
+  until finality is reached.
+- Wired the property through the fast, deep, and TLC-fast formal configs, the
+  Sumeragi README temporal-property inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` up to computation length `10`, `EXITCODE: OK`, `48 min 47 sec`,
+    total time `2927.563 sec`)
+
+## 2026-06-03 SCCP Ethereum route-canary log metadata binding
+
+- Hardened the EVM destination route-canary evidence collector so the matching
+  `MessageProofAccepted` log must carry `transactionHash`, `blockHash`, and
+  `blockNumber` metadata matching the verified receipt and receipt block.
+  Drifted log metadata now fails before the canary evidence hash is accepted.
+- Added adversarial live-evidence regressions for forged log transaction hash,
+  block hash, and block number metadata.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata or route_canary_transaction_evidence'`
+    (`1` passed, `25` deselected)
+
+## 2026-06-03 Streaming X25519 low-order preflight
+
+- Hardened Norito streaming X25519 key-update processing so 32-byte low-order
+  remote ephemeral public keys are rejected before key-counter recording, suite
+  negotiation, shared transport-key installation, or content-key processing.
+  X25519 shared-secret derivation also fail-closes on all-zero DH output as a
+  defense-in-depth fallback.
+- Added a regression that re-signs an adversarial key update carrying the
+  all-zero X25519 ephemeral and proves the viewer rejects it without
+  negotiating transport keys.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-x25519-low-order cargo test -p iroha_crypto --test streaming_handshake -- --nocapture`
+    (`21` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-x25519-low-order cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-x25519-low-order cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-x25519-low-order cargo clippy -p iroha_crypto --test streaming_handshake --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum route-canary route-hash binding regression
+
+- Added a focused `iroha_sccp` regression proving that an Ethereum EVM
+  `MessageProofAccepted` route-canary evidence record accepted for one governed
+  route is rejected if the expected source/deployment-bound route allowlist hash
+  is changed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-route-hash cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay --lib -- --nocapture`
+    (`1` passed)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum SDK malformed receipt-log regressions
+
+- Added cross-SDK adversarial coverage for Ethereum-mainnet receipt evidence
+  whose `logs` array contains non-object entries, pinning the existing
+  fail-closed parser behavior in JavaScript/browser, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12` passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs or ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`2` passed, `85` deselected)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (passed)
+  - Kotlin/JVM and Java Android Gradle validation were not run because this
+    host cannot locate a Java runtime; .NET validation was not run because
+    `dotnet` is not installed.
+
+## 2026-06-03 Ed25519 two-way exact verify cache
+
+- Hardened the thread-local Ed25519 exact verify-ok cache from direct-mapped
+  single-entry slots to two-entry slots, so two valid 32-byte message/signature
+  tuples that map to the same exact-cache index do not evict each other
+  immediately on hot validation paths.
+- Added a deterministic collision regression that finds two valid Ed25519
+  verify tuples for the same exact-cache slot, seeds both cache entries, and
+  proves the colliding all-cached batch skips signature parsing and backend
+  verifier setup.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-two-way cargo test -p iroha_crypto ed25519_exact_verify_cache_keeps_two_colliding_entries --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-two-way cargo test -p iroha_crypto ed25519_batch_ --lib -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-two-way cargo test -p iroha_crypto --lib --quiet`
+    (`401` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-two-way cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/signature/ed25519.rs`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum native prover guard hardening
+
+- Tightened the JavaScript package and release-readiness no-WASM/native-prover
+  guards so Ethereum/BSC SDK artifacts also reject common remote-prover aliases:
+  `remote_prover`, `remote-prover`, `proverURL`, `prover_url`, and
+  `prover_endpoint`.
+- Added regressions proving the browser package guard and shared
+  release-readiness source scanner catch those identifier variants before a
+  release can advertise browser/native SCCP proving as local-only.
+- Validation:
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`49` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_local_prover or browser_no_wasm_marker'`
+    (`6` passed, `27` deselected)
+
+## 2026-06-03 Ed25519 direct batch verify-cache miss filtering
+
+- Hardened the direct/preparsed Ed25519 batch verification API so exact
+  verify-cache hits are filtered before signature parsing and backend verifier
+  setup. All-cached direct byte-key batches now return without reparsing
+  signatures, while mixed batches parse only cache misses and verify those
+  misses in one backend pass.
+- Removed now-unused all-signature preparse helpers so strict clippy keeps this
+  hot path honest.
+- Added focused Ed25519 regressions for mixed-cache direct batches and raw
+  all-cached batches.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-direct-cache cargo test -p iroha_crypto ed25519_batch_ --lib -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-direct-cache cargo test -p iroha_crypto --lib --quiet`
+    (`400` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-direct-cache cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/signature/ed25519.rs`
+    (passed)
+
+## 2026-06-03 SCCP Ethereum route-canary receipt log hardening
+
+- Hardened the EVM destination route-canary evidence collector so transaction
+  receipts fail closed when their `logs` array contains non-object entries or
+  `removed` logs instead of silently skipping malformed RPC data while looking
+  for `MessageProofAccepted`.
+- Added adversarial route-canary regressions for removed logs and non-object
+  log entries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py::test_live_evm_route_canary_rejects_unverified_transaction_metadata`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`26` passed)
+
+## 2026-06-02 SCCP Ethereum SDK receipt source-event proof gate
+
+- Hardened the Ethereum-mainnet inbound SDK facades so receipt-backed
+  `proveInboundToSora` calls require a locally validated SCCP source bridge log
+  before app-owned prover callbacks can run. The guard is present in
+  JavaScript/browser, Python, Swift, Kotlin/JVM, Java Android, and .NET, while
+  proof-only evidence remains available for callers that already assembled a
+  source-proof package out of band.
+- Updated the SDK facade regressions so successful Ethereum receipt proving
+  carries a source bridge emitter address, derives the receipt source event
+  digest from the matching log, and rejects unanchored receipt proofs before
+  native/local prover callbacks are invoked. Matching SCCP source bridge logs
+  must now also carry an explicit empty `data: "0x"` field; omitted `data` is
+  treated as malformed RPC evidence instead of as an empty event payload.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12` passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs or ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`2` passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+    (passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (passed)
+  - Kotlin/JVM and Java Android Gradle tests were not run because this host's
+    Java launcher cannot locate a runtime; .NET tests were not run because
+    `dotnet` is not installed.
+
+## 2026-06-02 SCCP Ethereum live evidence chain-id preflight
+
+- Hardened the EVM destination and source live-evidence collectors so
+  `eth_chainId` must match the canonical mainnet chain id for the selected lane
+  before any `eth_getCode`, receipt, block, or contract-state evidence is
+  sampled. Explicit noncanonical `--expected-rpc-chain-id` values now fail
+  before opening the RPC connection.
+- Added regressions that wrong Ethereum-mainnet RPC endpoints perform exactly
+  one `eth_chainId` call and that explicit BSC chain-id pins for an Ethereum
+  lane do not make any RPC call.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py::test_live_evm_evidence_rejects_rpc_chain_id_drift pytests/scripts/sccp_evm_live_evidence_test.py::test_live_evm_evidence_rejects_noncanonical_expected_rpc_chain_id pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_rejects_noncanonical_expected_rpc_chain_id_before_rpc`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`49` passed)
+  - `git diff --check -- scripts/sccp_evm_live_evidence.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py status.md roadmap.md`
+    (passed)
+
+## 2026-06-02 Sumeragi pre-prepare stale vote reset proof
+
+- Added `PrePreparePhasesHaveNoPrepareVotes` and
+  `PrePrepareVotesNeverCarryAcrossViews` to prove that `NewView` and
+  `Propose` cannot carry stale prepare-vote counters from an earlier view into
+  a later prepare or commit path.
+- Wired the obligation through the fast, deep, and TLC fast Sumeragi configs,
+  documented it in the formal README inventory, and added it to the outstanding
+  Sumeragi proof corridor in `roadmap.md`.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes, and
+    `9788` TLC mutation modes; wiring consistent)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`; `EXITCODE: OK`; 49 min 12 sec)
+
+## 2026-06-02 SCCP Ethereum mainnet active-lane restore
+
+- Restored the SCCP first-release active launch lane to Ethereum mainnet
+  (`domain 1`, `EthereumMainnetLane`) in the release-readiness report,
+  release-bundle verifier, and `SccpLaunchModeV1`/`SccpProductionPolicyV1`
+  defaults while keeping `BscMainnetLane` as an explicit future lane mode.
+- Updated Core and Torii configured-launch regressions so complete ETH
+  governed material opens the active lane without requiring all lanes, while
+  BSC remains blocked behind its own lane policy. The Core bridge-proof
+  integration path now mirrors that policy: configured ETH source-adapter
+  proofs are accepted, and configured BSC proofs stop at the Ethereum
+  launch-lane gate.
+- Kept the Ethereum outbound SDK easy path pinned to SORA -> ETH by requiring
+  request/source binding domain `SORA` before mainnet verifier calldata.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_ethereum_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_ethereum_mainnet`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs ethereum_lane_launch -- --nocapture`
+    (`2` passed)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs crates/iroha_core/tests/bridge_proofs.rs`
+    (passed)
+  - `git diff --check`
+    (passed)
+
+## 2026-06-02 ML-DSA private-key consistency hardening
+
+- Hardened ML-DSA public-key recovery from private-key material so the
+  reconstructed public key must also match the secret key's embedded public
+  hash (`tr = H(pk)`), not only the recomputed low public-key component.
+- Hardened `PrivateKey::from_bytes(Algorithm::MlDsa, ...)` so length-valid but
+  internally inconsistent ML-DSA secret encodings are rejected during import
+  before they can reach signing or pair construction.
+- Hardened `Signature::try_new` to use a fallible ML-DSA signing path that
+  rechecks private-key consistency before producing a signature, while
+  preserving `Signature::new` as the infallible convenience wrapper for valid
+  keys.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-tr cargo test -p iroha_crypto public_key_from_secret_rejects_tampered_public_hash --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-import cargo test -p iroha_crypto --test mldsa_keypair private_key_import_rejects_inconsistent_private_key -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-tr cargo test -p iroha_crypto --lib --quiet`
+    (`390` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-import cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+    (`19` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-tr cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/mldsa_seed.rs crates/iroha_crypto/src/signature/mod.rs crates/iroha_crypto/tests/mldsa_keypair.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/mldsa_seed.rs crates/iroha_crypto/src/signature/mod.rs crates/iroha_crypto/tests/mldsa_keypair.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-02 SoraNet admission-token verifier config hardening
+
+- Added `AdmissionTokenVerifier::try_new` so runtime configuration loaders can
+  reject malformed issuer ML-DSA public keys before computing issuer
+  fingerprints or admitting verifier state.
+- Kept `AdmissionTokenVerifier::new` as the existing convenience constructor,
+  delegating through the validated path and panicking only for invalid static
+  key material.
+- Updated the invalid verifier public-key regression to assert construction-time
+  rejection instead of deferred verification-time failure.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-verifier cargo test -p iroha_crypto soranet::token::tests::verifier_try_new_rejects_invalid_public_key_before_fingerprint --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-tr cargo test -p iroha_crypto --lib --quiet`
+    (`391` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-tr cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/mldsa_seed.rs crates/iroha_crypto/src/signature/mod.rs crates/iroha_crypto/src/soranet/token.rs crates/iroha_crypto/tests/mldsa_keypair.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/mldsa_seed.rs crates/iroha_crypto/src/signature/mod.rs crates/iroha_crypto/src/soranet/token.rs crates/iroha_crypto/tests/mldsa_keypair.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-02 SoraNet admission-token temporal-bound hardening
+
+- Hardened `AdmissionTokenVerifier::verify` so zero-length or inverted token
+  validity windows fail closed even for in-memory token values that bypass the
+  decode/mint constructors.
+- Added a regression that corrupts a valid token's `expires_at` and signature,
+  proving the verifier rejects `expires_at <= issued_at` before signature
+  length checks, backend ML-DSA verification, or replay-store mutation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-temporal cargo test -p iroha_crypto soranet::token::tests::verify_rejects_invalid_temporal_bounds_before_signature_preflight --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-temporal cargo test -p iroha_crypto soranet::token::tests:: --lib -- --nocapture`
+    (`23` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-temporal cargo test -p iroha_crypto --lib --quiet`
+    (`393` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-temporal cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/token.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/token.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-02 SoraNet signed-ticket binding-order hardening
+
+- Reordered `verify_signed_ticket_at` so malformed binding fields, relay ID
+  mismatch, and transcript mismatch are rejected before ML-DSA signature length,
+  public-key, or backend verification work.
+- Added regressions proving wrong-relay and wrong-transcript signed tickets
+  fail on binding mismatch even when their signature vector and verifier public
+  key are malformed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-binding-first cargo test -p iroha_crypto signed_ticket_verifier_rejects_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-binding-first cargo test -p iroha_crypto soranet::pow::tests:: --lib -- --nocapture`
+    (`34` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-binding-first cargo test -p iroha_crypto --lib --quiet`
+    (`395` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-binding-first cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/pow.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/pow.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-03 SoraNet signed-ticket policy-order hardening
+
+- Split PoW ticket policy validation from solution verification so signed
+  tickets reject unsupported versions, difficulty mismatches, expiry, and TTL
+  window failures before ML-DSA signature/public-key verification.
+- Hardened direct `SignedTicket::verify` so in-memory signed tickets with an
+  unsupported embedded ticket version fail before signature-length or public-key
+  checks.
+- Added regressions that use empty signature and verifier-key vectors to prove
+  unsupported-version, difficulty-mismatch, and expired signed tickets fail at
+  the cheap policy gates before signature preflight.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-policy-first cargo test -p iroha_crypto signature_preflight --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-policy-first cargo test -p iroha_crypto soranet::pow::tests:: --lib -- --nocapture`
+    (`37` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-policy-first cargo test -p iroha_crypto --lib --quiet`
+    (`400` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pow-policy-first cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/pow.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/pow.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-03 SoraNet handshake client KEM preflight hardening
+
+- Hardened `process_client_hello` so NK2/NK3 client ML-KEM public keys are
+  validated immediately after suite selection, before capability telemetry
+  handling, relay Noise key generation, OS-backed ML-KEM key generation, or
+  encapsulation.
+- Added panic-RNG regressions proving malformed NK2 primary and NK3 forward
+  client KEM public-key payloads fail without consuming relay-side randomness.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-kem-preflight cargo test -p iroha_crypto process_client_hello_rejects_malformed_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-kem-preflight cargo test -p iroha_crypto soranet::handshake::tests:: --lib -- --nocapture`
+    (`54` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-kem-preflight cargo test -p iroha_crypto --lib --quiet`
+    (`403` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-kem-preflight cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/handshake.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/handshake.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-03 SoraNet runtime transcript-parameter hardening
+
+- Added runtime handshake parameter validation so descriptor commitments and
+  resume hashes must be 32-byte transcript-binding fields at every public
+  runtime handshake entry point.
+- The runtime client, relay, and client-response paths now reject malformed
+  descriptor/resume inputs before client RNG, relay RNG, transcript hashing,
+  KEM key generation, or encapsulation work.
+- Added panic-RNG regressions proving short descriptor and resume-hash inputs
+  fail before client or relay randomness is consumed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-runtime-param cargo test -p iroha_crypto short_ --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-runtime-param cargo test -p iroha_crypto soranet::handshake::tests:: --lib -- --nocapture`
+    (`57` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-runtime-param cargo test -p iroha_crypto --lib --quiet`
+    (`406` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-runtime-param cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/handshake.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/handshake.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-02 SoraNet SRCv2 verify admission hardening
+
+- Hardened `RelayCertificateBundleV2::verify` so in-memory relay certificate
+  bundles re-run canonical certificate-payload admission before Ed25519 or
+  ML-DSA signature verification.
+- Added a regression that mutates a valid issued bundle into an invalid
+  zero-endpoint certificate and proves verification rejects it at the
+  `certificate.endpoints` admission gate before signature math.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-src-verify-admission cargo test -p iroha_crypto soranet::certificate::tests::verification_rejects_invalid_certificate_payload_before_signature_math --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-src-verify-admission cargo test -p iroha_crypto soranet::certificate::tests:: --lib -- --nocapture`
+    (`31` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-src-verify-admission cargo test -p iroha_crypto --lib --quiet`
+    (`392` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-src-verify-admission cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/soranet/certificate.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/soranet/certificate.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock`
+    (no changes)
+
+## 2026-06-02 Sumeragi pre-commit stale vote reset proof
+
+- Added `PreCommitPhasesHaveNoCommitVotes` and
+  `PreCommitVotesNeverCarryAcrossViews` to prove that `NewView`, `Propose`,
+  and `Prepare` cannot carry live commit-vote counters or signed stake from an
+  earlier view into a later pre-commit path.
+- Wired the obligation through the fast, deep, and TLC fast Sumeragi configs,
+  documented it in the formal README inventory, and added it to the outstanding
+  Sumeragi proof corridor in `roadmap.md`.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes, and
+    `9788` TLC mutation modes; wiring consistent)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`; `EXITCODE: OK`; 49 min 35 sec)
+
+## 2026-06-02 BLS aggregate verification hardening
+
+- Hardened BLS same-message aggregate and preaggregated verification so
+  duplicate public keys and public-key aggregates that cancel to the identity
+  fail closed before pairing verification.
+- Hardened BLS distinct-message aggregate verification so duplicate messages
+  and aggregate signatures that cancel to the identity fail closed before batch
+  verification.
+- Hardened the public BLS same-message aggregate wrappers so valid
+  Proof-of-Possession entries no longer allow per-signature fallback to bypass
+  aggregate identity/public-key cancellation checks.
+- Aligned the `bls-backend-blstrs` verifier with the w3f signing/message
+  semantics used by key generation and signing, preserving canonical
+  signature/public-key encoding and identity rejection for normal, small,
+  same-message, preaggregated, and distinct-message aggregate paths.
+- Fixed the blstrs backend random key-generation RNG compatibility and
+  constant-time choice handling so the feature-specific backend builds cleanly
+  under strict clippy.
+- Added regressions proving canceling public-key pairs are rejected even when
+  the supplied aggregate signature is non-identity.
+- Extended public BLS multi-message wrapper regressions so duplicate messages
+  are rejected for both normal and small signatures across the non-multi,
+  multi-pairing, and blstrs feature configurations.
+- Moved duplicate signer-key rejection ahead of PoP verification/cache work in
+  the public BLS same-message helper corridor, with normal, small, fast, and
+  preaggregated wrapper regressions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls,bls-multi-pairing signature::bls::tests:: --lib -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs signature::bls::tests:: --lib -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls multi_message_duplicates_are_rejected --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls,bls-multi-pairing multi_message_duplicates_are_rejected --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs multi_message_duplicates_are_rejected --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls same_message_wrappers_reject_duplicate_public_keys --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls,bls-multi-pairing same_message_wrappers_reject_duplicate_public_keys --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs same_message_wrappers_reject_duplicate_public_keys --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --features bls canceling_key_aggregate_with_valid_pops --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-w3f cargo test -p iroha_crypto --features bls signature::bls::tests:: --lib -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs signature::bls::tests:: --lib -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-w3f cargo test -p iroha_crypto --features bls same_message_rejects_canceling_key_aggregate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs same_message_rejects_canceling_key_aggregate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-w3f cargo test -p iroha_crypto --features bls --lib --quiet`
+    (`437` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs --lib --quiet`
+    (`444` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-multipair cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib --quiet`
+    (`436` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-w3f cargo test -p iroha_crypto --features bls --lib --quiet`
+    (`442` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-blstrs cargo test -p iroha_crypto --features bls-backend-blstrs --lib --quiet`
+    (`449` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-multipair cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib --quiet`
+    (`442` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --lib --quiet`
+    (`389` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-w3f cargo clippy -p iroha_crypto --features bls --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-agg-identity-multipair cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-w3f cargo clippy -p iroha_crypto --features bls --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-blstrs cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-wrapper-cancel-multipair cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-02 SoraNet PQ entropy preflight hardening
+
+- Moved ML-KEM encapsulation public-key length validation ahead of direct,
+  deterministic-seed, and OS-seeded randomness paths so malformed public keys
+  fail before encapsulation coins or OS entropy are requested.
+- Moved ML-DSA signing context-length and secret-key length validation ahead
+  of direct and OS-seeded signing randomness paths so malformed signing inputs
+  fail before signing coins or OS entropy are requested.
+- Added focused regressions for ML-KEM direct/seeded/OS encapsulation preflight
+  and ML-DSA direct/OS signing preflight.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-preflight cargo test -p soranet_pq before_entropy --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-preflight cargo test -p soranet_pq mlkem::tests:: --lib -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-preflight cargo test -p soranet_pq mldsa::tests:: --lib -- --nocapture`
+    (`25` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-preflight cargo clippy -p soranet_pq --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-02 ML-DSA key derivation fail-closed path
+
+- Added a fallible `PublicKey::from_private_key(&PrivateKey)` helper and
+  routed `KeyPair::from_private_key` through it, so length-valid but
+  internally inconsistent ML-DSA secret keys return `Error::KeyGen` instead of
+  panicking while reconstructing the public key.
+- Added fallible seeded and random key generation with `KeyPair::try_from_seed`,
+  `KeyPair::try_random`, and `KeyPair::try_random_with_algorithm`, so ML-DSA,
+  GOST, SM2, and BLS key-derivation/key-consistency errors can propagate
+  instead of relying on the compatibility panic paths in `KeyPair::from_seed`
+  and `KeyPair::random_with_algorithm`.
+- Hardened ML-DSA private-key import and signing as well: imported secret-key
+  bytes must reconstruct their embedded public key, and `Signature::try_new`
+  now exposes fallible signing while rechecking ML-DSA secret consistency before
+  producing a signature.
+- Added fallible typed-signature constructors,
+  `SignatureOf::try_from_hash` and `SignatureOf::try_new`, so callers that sign
+  prehashed or Norito-encoded typed payloads can propagate signing failures
+  without relying on the compatibility panic path.
+- Added fallible multihash formatters for `PublicKey` and
+  `ExposedPrivateKey` (`try_to_multihash_string`, `try_to_prefixed_string`) so
+  callers can propagate key-formatting failures instead of relying on the
+  display/prefixed compatibility panic paths.
+- Kept the existing `From<PrivateKey>` compatibility path, but made it
+  delegate to the fallible helper so all public-key derivation logic uses the
+  same consistency checks.
+- Added ML-DSA regressions covering tampered secret-key component material,
+  private-key import rejection, keypair reconstruction, fallible seeded
+  keypair construction, fallible random keypair construction, fallible signing,
+  typed fallible signing, and fallible public/private multihash formatting.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-format-fallible cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+    (`23` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-format-fallible cargo test -p iroha_crypto --lib --quiet`
+    (`393` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-format-fallible cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-format-fallible-features cargo clippy -p iroha_crypto --features bls,gost,sm --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+    (`22` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible cargo test -p iroha_crypto --lib --quiet`
+    (`392` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible-gost cargo clippy -p iroha_crypto --features gost --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible-sm cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-random-fallible-bls cargo clippy -p iroha_crypto --features bls --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-seed-fallible cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+    (`21` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-seed-fallible cargo test -p iroha_crypto --lib --quiet`
+    (`391` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-seed-fallible cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-seed-fallible-gost cargo clippy -p iroha_crypto --features gost --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-seed-fallible-sm cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+    (`20` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo test -p iroha_crypto --test keypair_from_private -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo test -p iroha_crypto --features bls --test keypair_from_private -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo test -p iroha_crypto --lib --quiet`
+    (`390` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-key-derive cargo clippy -p iroha_crypto --features bls --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-02 SoraNet PoW/puzzle/token preflight hardening
+
+- Hardened `SignedTicket::sign` so malformed ML-DSA-44 secret keys are
+  rejected before payload signing or OS-backed signing entropy is requested.
+- Hardened `SignedTicket::verify` so verifier public-key length is checked
+  before the signed payload is built and before backend ML-DSA verification is
+  entered; signature-length preflight remains the first verification gate.
+- Hardened `AdmissionToken::mint` so malformed issuer ML-DSA secret keys are
+  rejected before nonce generation, token-body construction, or backend
+  signing.
+- Hardened PoW ticket verification, signed-ticket verification, ticket minting,
+  and Argon2 puzzle verification/minting so malformed descriptor, relay-id, or
+  transcript binding field lengths are rejected before challenge derivation,
+  solution search, Argon2 work, or public-key validation.
+- Added fallible PoW and Argon2 puzzle parameter constructors so runtime policy
+  loaders can reject zero minimum TTLs and inverted `max_future_skew`/minimum
+  TTL bounds without unwinding; the existing `new` constructors keep their
+  panic-preserving behavior for test/static call sites.
+- Hardened guard-directory snapshot decode so empty issuer sets and empty relay
+  sets are rejected before trust-map construction or relay certificate
+  verification.
+- Hardened CID blinding key derivation so all-zero epoch salts or all-zero
+  circuit secrets are rejected before HKDF.
+- Added focused regressions for invalid signed-ticket secret-key and
+  public-key lengths, invalid admission-token issuer secret-key length,
+  malformed PoW and Argon2 puzzle binding lengths, invalid runtime parameter
+  bounds, empty guard-directory issuer/relay sets, all-zero blinding inputs,
+  and the existing signature-length preflight tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-weak-input cargo test -p iroha_crypto soranet::blinding::tests:: --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parameters_try_new_rejects_invalid_runtime_bounds --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-nonempty cargo test -p iroha_crypto soranet::directory::tests:: --lib -- --nocapture`
+    (`22` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-nonempty cargo test -p iroha_crypto soranet::token::tests:: --lib -- --nocapture`
+    (`21` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-nonempty cargo test -p iroha_crypto soranet::puzzle::tests:: --lib -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-nonempty cargo test -p iroha_crypto soranet::pow::tests:: --lib -- --nocapture`
+    (`32` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-nonempty cargo test -p iroha_crypto signed_ticket_ --lib -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-weak-input cargo test -p iroha_crypto --lib --quiet`
+    (`389` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-weak-input cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-02 SCCP BSC mainnet launch policy hardening
+
+- Switched the SCCP production launch default and release-readiness/bundle
+  verifier active lane from Ethereum mainnet to BSC mainnet, while keeping the
+  existing Ethereum lane helpers available as non-active EVM-family surfaces.
+- Updated Core and Torii configured-launch tests so BSC source proofs are
+  accepted under `BscMainnetLane` and Ethereum/Solana/TON/TRON source proofs
+  fail closed at BSC launch gating before route, canary, or rollout drift checks.
+- Aligned the all-lanes EVM live evidence regression helper with canonical
+  ETH/BSC EIP-155 network-id binding instead of placeholder network ids, so the
+  stricter destination evidence verifier is exercised through the full corridor.
+- Kept native SDK-facing BSC smoke coverage green for JavaScript and Python
+  local-prover surfaces; no WASM path was added.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-resume2 cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`3` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-resume2 cargo test -p iroha_core --test bridge_proofs lane_launch -- --nocapture`
+    (`10` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-resume2 cargo test -p iroha_core configured_sccp_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-resume2 cargo test -p iroha_torii configured_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`2` passed)
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`14` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk,python-sdk`
+    (`177` JavaScript tests and `87` Python tests passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`79` Swift SCCP prover tests and `1` Swift Torii SCCP submission test passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`:core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.*` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`:core:test` SCCP harness and Solana SCCP prover tests passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`11` .NET Ethereum/BSC SCCP tests passed)
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_local_admission_submission_wraps_native_output or bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target'`
+    (`2` passed)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or launch or bsc'`
+    (`9` passed)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent or launch or bsc'`
+    (`18` passed)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_accepts_verified_evm_live_toml`
+    (`1` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`831` passed)
+
+## 2026-06-02 SoraNet handshake capability/signature parser hardening
+
+- Hardened SoraNet NK2/NK3 runtime handshake admission so the selected
+  `kem_id` and `sig_id` must be advertised by both client and relay capability
+  TLVs before a session is accepted, including the relay capability vector
+  echoed in `RelayHello`. Unsupported KEM ids still fail at the KEM profile
+  gate before capability downgrade telemetry is built.
+- Tightened `ClientHello` and `RelayHello` parsing so Dilithium3 and Ed25519
+  signature fields must match the handshake wire-format lengths and frames
+  must be 1024-byte aligned with zero-filled padding instead of accepting
+  arbitrary trailing bytes.
+- Added focused regressions for unadvertised selected KEM/signature ids,
+  unadvertised selected relay KEM ids in `RelayHello`, malformed client
+  Dilithium signature lengths, malformed relay Ed25519 signature lengths,
+  malformed client padding, and the ML-KEM-1024 happy path with explicit
+  capability advertisement.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto client_handle_relay_hello_rejects_unadvertised_selected_relay_kem_id --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto soranet::handshake::tests:: --lib -- --nocapture`
+    (`52` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto build_client_hello_rejects_unknown_kem --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto runtime_handshake_roundtrip_supports_mlkem1024 --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --lib --quiet`
+    (`376` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/handshake.rs crates/iroha_crypto/src/soranet/certificate.rs crates/iroha_crypto/src/soranet/directory.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    anchored conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet guard-directory relay certificate binding
+
+- Hardened `GuardDirectorySnapshotV2::from_bytes` so relay entries must decode
+  as structurally valid `RelayCertificateBundleV2` payloads, reference an
+  issuer fingerprint present in the same snapshot, bind to the snapshot
+  `directory_hash`, avoid duplicate relay IDs, and verify the relay certificate
+  signatures against the embedded issuer keys under the snapshot validation
+  phase. Snapshot validity windows now fail closed when zero-length or
+  inverted, and relay certificate validity must cover the full snapshot window
+  without being published after the snapshot. Phase 2 snapshot admission now
+  matches the documented rollout semantics by accepting Ed25519-only relay
+  certificates while still requiring an ML-DSA issuer key; Phase 3 remains the
+  strict dual-signature gate.
+- Tightened SRCv2 certificate payload admission to validate Ed25519 identity
+  keys with the repository's canonical, non-weak Ed25519 parser instead of the
+  looser `ed25519_dalek` compressed-point check.
+- Added focused regressions for malformed relay certificate bundles, unknown
+  relay issuers, relay directory-hash mismatch, duplicate relay IDs, and
+  weak/malformed Ed25519 identity public keys, invalid issuer Ed25519 public
+  keys, bad Ed25519/ML-DSA relay certificate signatures, and relay certificate
+  validity windows that do not cover the snapshot.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-relay-hardening cargo test -p iroha_crypto parse_certificate_payload_rejects_malformed_ed25519_identity_key --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parse_certificate_payload_rejects_weak_ed25519_identity_key --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto directory --lib -- --nocapture`
+    (`20` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-signature-hardening cargo test -p iroha_crypto directory --lib -- --nocapture`
+    (`18` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-signature-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`363` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/certificate.rs crates/iroha_crypto/src/soranet/directory.rs crates/iroha_crypto/src/soranet/token.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/lib.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    anchored conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet admission-token verifier preflight hardening
+
+- Added public ML-DSA length validators on `MlDsaSuite`, mirroring the ML-KEM
+  suite validation surface, so callers can fail closed on malformed public
+  keys, secret keys, and detached signatures before entering backend
+  operations.
+- Hardened `AdmissionTokenVerifier::verify` so verifier public keys and token
+  signatures are length-checked against the configured ML-DSA suite before the
+  token body is allocated for backend verification or replay-store state can be
+  mutated. The verifier now also uses saturating clock-skew arithmetic and
+  checked replay-store expiry timestamp construction.
+- Added focused regressions for invalid verifier public-key length and invalid
+  token signature length, including the replay-store no-poisoning case.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-validators cargo test -p soranet_pq suite_validation_helpers_reject_wrong_lengths --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-preflight cargo test -p iroha_crypto verifier_rejects --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-validators cargo test -p soranet_pq mldsa --lib -- --nocapture`
+    (`39` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-preflight cargo test -p iroha_crypto token --lib -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-validators cargo test -p soranet_pq --lib --quiet`
+    (`98` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-preflight cargo test -p iroha_crypto --lib --quiet`
+    (`351` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/lib.rs crates/iroha_crypto/src/soranet/token.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    anchored conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet certificate key-material parser hardening
+
+- Hardened `RelayCertificateBundleV2::from_cbor` / certificate payload decode
+  so SRCv2 certificates reject unknown ML-KEM preferred/fallback suite ids,
+  reject ML-DSA-65 identity public keys whose byte length does not match the
+  suite metadata, and reject ML-KEM public keys whose byte length does not
+  match the advertised preferred suite. Ed25519 identity public keys now use
+  the repository's canonical parser and reject weak/small-order encodings. The
+  same parser now also rejects trailing CBOR bytes at the certificate-payload
+  and bundle boundaries and rejects non-shortest CBOR integer/length encodings,
+  plus ML-DSA-65 detached signatures whose length does not match the suite
+  metadata. Nested bundle,
+  signature, endpoint, and KEM-policy maps now reject duplicate fields instead
+  of allowing later values to overwrite earlier ones, and certificate decode
+  rejects semantically inconsistent KEM policies, including static policies
+  with fallback/rotation/grace metadata, staged policies without a fallback,
+  rolling policies without a cadence, and preferred/fallback suite equality.
+  Certificate decode also rejects unsupported role/capability bitmasks instead
+  of normalizing them away. Validity windows now fail closed when
+  `valid_until <= valid_after` or when `published_at` is after expiry, and
+  handshake-suite preference lists
+  must be non-empty and duplicate-free. Endpoint lists must also be non-empty
+  and duplicate-free by endpoint URL, and individual endpoint URLs must be
+  non-empty and free of whitespace/control characters. Endpoint tag values are
+  optional, but present tags must be non-empty, whitespace/control-free, and
+  duplicate-free within an endpoint.
+- `RelayCertificateBundleV2::verify` now rejects weak/small-order Ed25519
+  verifier keys and preflights supplied ML-DSA-65 issuer public-key bytes plus
+  in-memory detached signature bytes against suite metadata before entering
+  backend verification, covering callers that bypass bundle CBOR decode.
+  `Phase2PreferDual` now follows its rollout contract by accepting
+  Ed25519-only bundles while `Phase3RequireDual` still rejects missing ML-DSA
+  signatures.
+- `RelayCertificateV2::issue` now runs the canonical certificate payload
+  admission path and ML-DSA-65 issuer secret-key length preflight before
+  producing Ed25519 or ML-DSA signatures, so invalid in-memory certificates or
+  malformed issuer signing keys cannot be signed into SRCv2 bundles locally.
+- Added focused parser regressions for unknown preferred/fallback KEM suites,
+  invalid ML-DSA-65 identity public-key length, and invalid ML-KEM public-key
+  length while preserving existing missing-field diagnostic order. Added
+  canonical-CBOR regressions for trailing payload/bundle bytes and
+  non-shortest map-length / field-key encodings, plus malformed ML-DSA-65
+  signature length during bundle decode and duplicate nested
+  bundle/signature/endpoint/KEM-policy fields. Added unsupported
+  role/capability bitmask coverage, validity-window regressions, and
+  empty/duplicate handshake-suite and endpoint-list coverage, plus weak
+  Ed25519 identity public-key rejection and invalid endpoint URL value
+  coverage, invalid endpoint tag coverage, KEM policy semantic coverage, and
+  direct verifier Ed25519/ML-DSA material coverage, plus invalid local
+  issuance and malformed issuer secret-key coverage.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parse_certificate_payload_rejects --lib -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto soranet::certificate::tests:: --lib -- --nocapture`
+    (`30` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --lib --quiet`
+    (`370` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/certificate.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/certificate.rs crates/iroha_crypto/src/soranet/directory.rs crates/iroha_crypto/src/soranet/pow.rs crates/iroha_crypto/src/soranet/token.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 RAM-LFE programmed metadata admission hardening
+
+- Hardened `BfvProgrammedPublicParameters` admission so hidden-program digests
+  must be non-zero and first-release programmed policies admit only
+  relinearization-key material. Rotation and bootstrap refresh keys remain
+  valid in BFV evaluation-key bundles for Soracloud FHE execution policies, but
+  are now rejected when smuggled into identifier-program public metadata.
+- Tightened proof-carrying programmed metadata so all-zero verifier-key byte
+  strings fail closed before proof policies are admitted.
+- Added focused regressions for zero hidden-program digests, all-zero proof
+  verifier bytes, and digest-consistent rotation/bootstrap refresh-key abuse in
+  programmed public parameters.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto programmed_public_parameters --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto ram_lfe::tests:: --lib -- --nocapture`
+    (`18` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parse_certificate_payload_rejects --lib -- --nocapture`
+    (`6` passed)
+  - `cargo fmt --all`
+    (passed)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/ram_lfe.rs crates/iroha_crypto/src/soranet/certificate.rs docs/source/engineering_backlog.md docs/source/universal_accounts_guide.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-02 SoraNet admission-token replay-store load hardening
+
+- Hardened `PersistentTokenStore::load` for SoraNet admission tokens so
+  persisted Norito snapshots reject duplicate token IDs and expiry timestamps
+  that overflow `SystemTime` instead of silently overwriting entries or using
+  unchecked timestamp construction.
+- Added focused regressions for duplicate token IDs and overflowing expiry
+  seconds in persisted replay-store snapshots.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-store-hardening cargo test -p iroha_crypto persistent_store --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-store-hardening cargo test -p iroha_crypto token --lib -- --nocapture`
+    (`25` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-store-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`340` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/directory.rs crates/iroha_crypto/src/soranet/pow.rs crates/iroha_crypto/src/soranet/token.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet guard-directory issuer parser hardening
+
+- Hardened `GuardDirectorySnapshotV2::from_bytes` so decoded issuer records
+  reject duplicate fingerprints, reject advertised fingerprints that do not
+  match the Ed25519/ML-DSA key material, require ML-DSA-65 issuer keys after
+  Phase 1, and validate any present ML-DSA-65 public key against the suite byte
+  length before the snapshot is accepted.
+- Added focused regressions for issuer fingerprint mismatch, duplicate issuer
+  fingerprints, invalid ML-DSA-65 public-key length, Phase 2 missing ML-DSA key
+  rejection, and the Phase 1 empty-key exception.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-hardening cargo test -p iroha_crypto directory --lib -- --nocapture`
+    (`11` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`338` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/directory.rs crates/iroha_crypto/src/soranet/pow.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet revocation snapshot load hardening
+
+- Hardened `TicketRevocationStore::load` so persisted Norito snapshots reject
+  duplicate revocation fingerprints, reject expiry timestamps that overflow
+  `SystemTime`, and immediately enforce the configured active-entry capacity by
+  evicting the oldest loaded records. This keeps replay protection state
+  bounded and canonical after process restart or operator limit changes.
+- Added focused regressions for over-capacity snapshot load, duplicate
+  fingerprints, and overflowing expiry timestamps.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-revocation-load-hardening cargo test -p iroha_crypto revocation_store_load --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-revocation-load-hardening cargo test -p iroha_crypto soranet::pow --lib -- --nocapture`
+    (`27` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-revocation-load-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`333` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/pow.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 Sumeragi NewView quorum handoff proof
+
+- Added `NewViewPhaseBelowQuorum` / `NewViewQuorumHandoffNeverStalls`,
+  proving that a quorum-satisfied `NewView` phase immediately hands off to
+  proposal-ready state instead of stalling with enough view-change votes.
+- Added `ViewEvidenceIsCompleteOrEmpty` / `ViewEvidenceNeverPartial`, proving
+  the latched view-change witness is either absent or quorum-complete, never a
+  partial vote count.
+- Wired the obligations through the fast/deep/fast-TLC configs, refreshed the
+  formal README property inventory, and updated the roadmap Sumeragi corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, no errors)
+  - `bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `38 min 36 sec`)
+
+## 2026-06-02 SoraNet signed-ticket signature-length hardening
+
+- Hardened SoraNet `SignedTicket` admission so decoded Norito tickets and
+  direct verification both reject ML-DSA-44 signatures whose byte length differs
+  from the suite metadata before accepting the decoded token or entering the
+  PQ verifier backend. Unsupported ticket-version rejection still takes
+  precedence during decode.
+- Added focused regressions for oversized signature vectors at decode time and
+  truncated signature vectors during direct verification, confirming malformed
+  tickets fail closed before key validation or backend verification work.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signed-ticket-siglen cargo test -p iroha_crypto signed_ticket --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signed-ticket-siglen cargo test -p iroha_crypto soranet::pow --lib -- --nocapture`
+    (`24` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signed-ticket-siglen cargo test -p iroha_crypto --lib --quiet`
+    (`330` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/pow.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 SoraNet Noise public-key parser hardening
+
+- Hardened SoraNet NK2/NK3 handshake message parsing so decoded Noise/X25519
+  client and relay static/ephemeral public keys reject low-order encodings
+  before the parsed handshake state is accepted. This aligns the runtime
+  handshake parser with the standalone X25519 and hybrid KEM public-key
+  admission checks while keeping generated key material unchanged.
+- Added focused regressions for NK2 client ephemeral keys, NK3 client static
+  keys, NK2 relay ephemeral keys, and NK3 relay static keys by mutating real
+  serialized handshake frames to all-zero low-order X25519 public keys.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-noise-hardening cargo test -p iroha_crypto low_order --lib -- --nocapture`
+    (`11` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-noise-hardening cargo test -p iroha_crypto soranet::handshake --lib -- --nocapture`
+    (`47` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-noise-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`328` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/hybrid.rs crates/iroha_crypto/src/kex/x25519.rs crates/iroha_crypto/src/soranet/handshake.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 X25519 parse-time low-order rejection
+
+- Hardened X25519 public-key decoding so long-term hybrid KEM public keys,
+  hybrid KEM ephemeral ciphertext keys, and the standalone `X25519Sha256`
+  key-exchange decoder reject low-order public-key encodings before callers can
+  reach ECDH. The existing all-zero shared-secret checks remain in
+  encapsulation, decapsulation, and raw key exchange as defense in depth for
+  any manually constructed keys.
+- Added focused regressions for hybrid public-key parsing, hybrid ciphertext
+  parsing, standalone X25519 key decoding, and the decapsulation fallback that
+  still rejects low-order ephemeral keys if parser preflight is bypassed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-parse-hardening cargo test -p iroha_crypto x25519 --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-parse-hardening cargo test -p iroha_crypto hybrid --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-parse-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`324` passed, `1` ignored)
+  - `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/hybrid.rs crates/iroha_crypto/src/kex/x25519.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 Ed25519 batch strict-R validation
+
+- Hardened Ed25519 batch verification input parsing so uncached batch
+  signatures reject malformed, non-canonical, or small-order `R` encodings
+  before entering dalek's batch backend. This keeps the default `ecc-batch`
+  path aligned with the stricter single-signature verifier and avoids accepting
+  batch-only malleable representations.
+- Added focused regressions for canonical small-order `R`, non-canonical
+  small-order `R`, and a batch preflight path that confirms strict `R`
+  validation runs before the backend verifier.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-batch-strict cargo test -p iroha_crypto small_order_r --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-batch-strict cargo test -p iroha_crypto ed25519 --lib -- --nocapture`
+    (`37` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-batch-strict cargo test -p iroha_crypto --lib -- --nocapture`
+    (`322` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 secp256k1 recoverable-signature canonicality
+
+- Hardened `EcdsaSecp256k1Sha256::sign_prehash_recoverable` and
+  `recover_public_key_from_prehash` so recoverable signatures use the same
+  low-S canonicality policy as ordinary secp256k1 verification. Signing now
+  normalizes high-S outputs and adjusts the recovery id; recovery rejects
+  high-S malleable encodings before deriving a public key or EVM address.
+- Added a focused regression that mutates a valid recoverable signature into
+  the equivalent high-S form with the flipped recovery id and verifies recovery
+  fails closed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signature-hardening cargo test -p iroha_crypto recoverable_prehash --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signature-hardening cargo test -p iroha_crypto secp256k1 --lib -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signature-hardening cargo test -p iroha_crypto --lib -- --nocapture`
+    (`320` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/signature/secp256k1.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    conflict-marker scan, and Cargo.lock diff check
+    (passed)
+
+## 2026-06-02 Sumeragi view-change quorum evidence proof
+
+- Strengthened the top-level Sumeragi model with a latched
+  `viewEvidenceVotes` witness and tightened `HonestPropose` so nonzero active
+  views are reached through the `NewView` quorum path instead of proposing
+  directly from `NewView`.
+- Added `ViewEvidenceMatchesActiveView`,
+  `CommitImpliesViewQuorumEvidence`, `ViewQuorumEvidenceNeverDiverges`, and
+  `CommitViewQuorumEvidenceNeverLost`, proving proposals, vote phases, and
+  finality in nonzero views remain backed by view-change quorum evidence and
+  finalized nonzero views retain that witness.
+- Wired the obligations through the fast, deep, and TLC fast Sumeragi configs,
+  and documented the proof in the formal README and roadmap corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.27s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`13` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `33 min 9 sec`)
+
+## 2026-06-02 RAM-LFE proof-verifier pre-parse coverage
+
+- Extended the generic RAM-LFE and identifier receipt proof-verifier tests so
+  proof envelopes with public-input schema drift or a non-zero mismatched
+  verifier-key hash are rejected before Halo2 proof parsing. This complements
+  the existing backend-tag, auxiliary-byte, and zero verifier-key hash
+  pre-parse regressions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-proof-metadata cargo test -p iroha_core verify_execution_proof_rejects_noncanonical_envelope_metadata_before_proof_decode --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-proof-metadata cargo test -p iroha_core identifier_verify_execution_proof_rejects_noncanonical_envelope_metadata --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-proof-metadata cargo check -p iroha_core`
+    (passed)
+  - `cargo fmt --all --check` and
+    `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/ram_lfe.rs crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs crates/iroha_core/src/smartcontracts/isi/identifier.rs docs/source/engineering_backlog.md roadmap.md status.md crates/iroha_torii/src/iso20022_bridge.rs`
+    (passed)
+
+## 2026-06-02 BFV evaluation-key metadata hardening
+
+- Hardened BFV evaluation-key bundle validation so rotation-key bundles are
+  capped at the first-release profile width and bootstrap key ids must be
+  canonical printable ASCII strings within a fixed byte cap. The same
+  bootstrap-id rule is now used by `bootstrap_key_from_seed`,
+  `BfvEvaluationKeyBundle::validate`/`digest`, and `bootstrap_ciphertext`.
+- Extended the adversarial BFV key-metadata regression for padded bootstrap key
+  ids, embedded control bytes, oversized bootstrap ids, and oversized
+  rotation-key bundles, while keeping duplicate/zero-step/malformed refresh
+  checks intact.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-metadata cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_key_metadata --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-metadata cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`18` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-metadata cargo test -p iroha_crypto ram_lfe --lib -- --nocapture`
+    (`18` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-metadata cargo test -p iroha_crypto --lib -- --nocapture`
+    (`319` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`, and
+    `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/ram_lfe.rs docs/source/engineering_backlog.md roadmap.md status.md crates/iroha_torii/src/iso20022_bridge.rs`
+    (passed)
+
+## 2026-06-02 RAM-LFE proof-verifier metadata hardening
+
+- Hardened programmed BFV public-parameter decoding for proof-carrying RAM-LFE
+  policies. Proof verifier backend and circuit ids must now be canonical
+  printable ASCII strings within fixed byte caps, the public-input schema hash
+  must be non-zero, and verifier-key bytes must be non-empty and bounded before
+  the policy metadata is admitted.
+- Extended the adversarial crypto regression matrix for padded verifier backend
+  ids, embedded control bytes in circuit ids, zero schema hashes, and oversized
+  verifier keys. Signed policies still reject proof-verifier metadata, proof
+  policies still require it, and debug proof backends continue to fail closed.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-proof-metadata cargo test -p iroha_crypto programmed_public_parameters_reject_profile_and_verifier_metadata_abuse --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-proof-metadata cargo test -p iroha_crypto ram_lfe --lib -- --nocapture`
+    (`18` passed)
+  - `cargo fmt --all` and `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/ram_lfe.rs docs/source/engineering_backlog.md roadmap.md status.md crates/iroha_torii/src/iso20022_bridge.rs`
+    (passed)
+
+## 2026-06-02 Sumeragi commit-view causality proof
+
+- Added `CommitViewDoesNotLeadCurrentView` and
+  `CommitViewNeverLeadsCurrentView`, proving the latched `commitView` witness
+  never points ahead of the current view while preserving the existing
+  committed-view stability and finality-witness obligations.
+- Wired the new invariant and temporal property through the fast, deep, and TLC
+  fast Sumeragi configs, and documented the obligation in the formal README and
+  roadmap corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 1.31s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `27 min 21 sec`)
+
+## 2026-06-02 ISO XMLDSig terminal-anchor and revocation coverage
+
+- Tightened ISO `require-verified` X.509 XMLDSig profile admission so
+  certificate trust pins authorize only the terminal certificate in the verified
+  chain, and Torii rejects that terminal trust anchor unless it is a CA. Leaf
+  certificates can still be authorized by matching public-key pins, but a
+  pinned non-CA leaf DER digest no longer acts as an X.509 trust anchor.
+  X.509 trust-anchor pins now require a linked issuer certificate beyond the
+  leaf; legacy certificate pins follow the same linked terminal-anchor rule.
+  Torii and the shared profile JSON parser also reject noncanonical SHA-256
+  trust and revocation pins instead of trimming or lowercasing them during
+  config load.
+- Bound X.509 CRL/OCSP freshness and delegated OCSP responder certificate
+  validity to the deterministic XML signature evaluation time derived from
+  verified XAdES `SigningTime` or the Business Application Header `CreDt`,
+  rather than the validator machine's wall clock.
+- Updated the shared X.509 XMLDSig fixture builder to sign XAdES
+  `SignedProperties` with `SigningCertificateV2`, so revocation and
+  certificate-policy tests exercise the intended verifier gates instead of
+  failing earlier for missing certificate evaluation time.
+- Added required certificate-policy path continuity for X.509 trust-anchor
+  chains: when a profile configures required policy OIDs, each intermediate CA
+  below the pinned terminal anchor must carry all required policies or
+  `anyPolicy`; generated three-certificate regressions cover matching,
+  `anyPolicy`, missing, and unrelated intermediate policy extensions. Policy
+  mappings, policy constraints, and inhibit-any-policy extensions now fail
+  closed until full RFC 5280 policy-tree processing is implemented.
+- Added positive and negative CRL/OCSP coverage for configured and embedded
+  revocation material, including issuer-signed OCSP, delegated OCSP responders,
+  missing required material, revoked status, and delegated responses without a
+  responder certificate. Added adversarial placement coverage proving embedded
+  CRL/OCSP material outside signed `KeyInfo/X509Data` fails closed.
+- Tightened the supported canonical XML subset so raw CDEnd (`]]>`) tokens and
+  uppercase `#X` numeric character references fail closed instead of being
+  normalized as ordinary character data.
+- Tightened the custom OCSP DER reader used by ISO XMLDSig/XAdES revocation
+  checks so non-shortest long-form lengths and non-minimal positive integer
+  encodings fail closed before OCSP status, responder, or signature validation.
+- Tightened the supported OCSP parser subset so `ResponseData` and
+  `SingleResponse` extensions fail closed instead of being skipped as ignored
+  optional material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_core xml_signature_key_pins --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core xml_signature_sha256_pin_parsers_require_canonical_lowercase --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core xml_signature_key_pins --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii x509_certificate_policy --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii x509_policy --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii inhibit_any_policy --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`132` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii ocsp --lib -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii der_reader_rejects_noncanonical_lengths_and_integers --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii ocsp_parser_rejects_unsupported_extensions --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii crl --lib -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`17` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_reference --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii xml_signature --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_core -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check`
+    (passed)
+
+## 2026-06-02 Offline V2 recursive schema hash export
+
+- Restored the V2-named Offline recursive public-input schema hash export in
+  `iroha_data_model::offline` as an alias of the canonical recursive note
+  schema hash, keeping Torii Offline V2 readiness smoke tests source-compatible
+  without changing the on-wire verifier schema hash.
+- Added a unit test proving the V2 alias matches the canonical Offline
+  recursive schema hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke --no-run`
+    (test binary compiled)
+
+## 2026-06-02 Sumeragi RBC progress-state evidence proof
+
+- Added top-level Sumeragi RBC progress-state evidence obligations:
+  `RbcProgressEvidenceMatchesState` proves initialized RBC states carry
+  validated header/digest evidence, chunk-covered states carry full chunk
+  coverage, and ready/delivered states carry ready quorum evidence.
+  `RbcProgressEvidenceNeverDiverges` preserves those state/evidence links
+  across every checked execution.
+- Wired the invariant and temporal property through the fast, deep, and TLC fast
+  Sumeragi configs, and documented the obligation alongside the existing
+  finality, RBC-delivery, vote/stake, and commit-certificate proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.28s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `25 min 15 sec`)
+
+## 2026-06-02 SCCP Ethereum mainnet SDK release-surface hardening
+
+- Reconfirmed the release-readiness renderer and strict release-bundle verifier
+  use Ethereum mainnet as the active launch lane (`domain 1`,
+  `EthereumMainnetLane`) instead of stale BSC launch constants.
+- Tightened the browser TypeScript declaration surface for
+  `EthereumMainnetSccp`: the inbound prover hook now returns `BinaryLike`, the
+  facade returns `Promise<Uint8Array>` from `proveInboundToSora`, and
+  `submitInboundToIroha` takes local proof bytes rather than an untyped
+  payload. The package-dist test and release phase evidence now assert the
+  full Ethereum facade method list stays declared.
+- Expanded the release-readiness and bundle-verifier SDK helper inventories so
+  Swift, Kotlin/JVM, and Java Android must advertise the full native Ethereum
+  outbound facade (`buildOutboundProofRequest`, `proveOutboundToEthereum`,
+  `buildEthereumCalldata`, and `submitOutboundToEthereum`) alongside the
+  inbound/local-admission methods.
+- Added a release-readiness guard over the Ethereum mainnet evidence-collection
+  methods in JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET:
+  the guarded regions must keep using app-owned execution and consensus
+  providers (`eth_chainId`, receipt/block RPC calls, and Beacon finality hooks)
+  and must not introduce Torii, proxy, or embedded HTTP-client fallback paths.
+- Hardened native Ethereum inbound proving in Swift, Kotlin/JVM, and Java
+  Android so app-owned prover callbacks must return non-empty, non-zero proof
+  bytes and the facades return copied proof bytes, matching the JS/Python/.NET
+  behavior before Iroha submission.
+- Tightened the Ethereum mainnet outbound easy path in JavaScript, Swift,
+  Kotlin/JVM, and Java Android so proof requests/results/calldata must keep
+  both the request source domain and destination binding source domain pinned to
+  SORA before emitting Ethereum mainnet verifier calldata.
+- Validation:
+  - `node --test --test-name-pattern "package declarations expose Ethereum mainnet SCCP facade methods|browser Ethereum mainnet SCCP artifacts stay JS-only" javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy or ethereum_facade_declaration_marker"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy or ethereum_facade_declaration_marker"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_are_unique pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_data_collection"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_data_collection or ethereum_sdk_sources_are_native"`
+  - `swift test --filter IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (from `kotlin/`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    (from `kotlin/`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+    (from `java/iroha_android/`)
+  - `npm test -- --test-name-pattern "EthereumMainnetSccp keeps the easy outbound path Ethereum-only" test/sccpEthereumMainnet.test.js`
+    (from `javascript/iroha_js/`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_are_unique pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_data_collection_has_no_proxy_fallback`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_required_helper_inventory_matches_report pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_helper_inventory_is_independent pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_ethereum_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_ethereum_facade_declaration_marker`
+  - `git diff --check`
+
+## 2026-06-02 Ethereum SCCP evidence input hardening
+
+- Tightened EVM-family live evidence tooling so `--block-tag` and direct
+  collector calls only accept `latest`, `safe`, `finalized`, or positive
+  canonical lowercase hex block numbers. Noncanonical or unstable tags such as
+  `pending`, `earliest`, uppercase hex, padded hex, decimal strings, zero, or
+  whitespace-padded values now fail before JSON-RPC calls.
+- Tightened the JavaScript Ethereum/BSC SCCP provider chain-id parser so
+  `eth_chainId` values must be canonical, with no trimming or uppercase hex
+  acceptance, before the provider is treated as mainnet.
+- Split SDK provider-response validation from public numeric helper parsing:
+  JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET Ethereum/BSC
+  facades now require `eth_chainId` returned by app-supplied execution
+  providers to be a canonical JSON-RPC quantity (`0x1` or `0x38`), so decimal
+  strings such as `"1"`/`"56"` and decoded numeric values such as `1`/`56`
+  fail before receipt collection or proof callbacks run.
+- Re-aligned the active SCCP production launch policy and release bundle
+  verifier with the Ethereum mainnet lane, and added symmetric JS phase
+  evidence checks so dropping the browser Ethereum no-WASM/local-prover marker
+  fails both readiness reporting and strict bundle verification.
+- Added a live EVM route-canary regression so a canary receipt whose
+  `eth_getBlockByNumber` response reports a different block number is rejected
+  before route evidence is accepted.
+- Made the Rust EVM route-canary builder and runtime binding check explicitly
+  reject wrong target domains, non-v1 proof metadata, non-SORA proof sources,
+  and canaries that did not consume `usedMessageProofs(messageId)` before the
+  Ethereum mainnet lane can be marked route-allowlisted.
+- Re-aligned Core, Torii, and bridge-proof configured-launch regressions with
+  the Ethereum mainnet active policy: a complete ETH configured lane can open
+  without all other lanes, while BSC/Solana/TON/TRON material stays rejected
+  under the ETH-only launch gate until those lane policies are selected.
+- Added a dev-only SCCP Ethereum fixture surface for sync-committee-bound
+  Ethereum mainnet -> SORA local-admission artifacts, and covered Core
+  `SubmitBridgeProof` with a positive configured ETH source-adapter proof that
+  records a verified bridge proof only after the Ethereum lane's source
+  material, deployment, destination rollout, route allowlist, and canary
+  evidence all line up.
+- Extended Core's Ethereum mainnet admission regressions with replayed
+  governed-material failures: a proof built under one ETH sync committee root
+  or source-bridge emitter now fails when submitted while config points at a
+  different, internally ready ETH material/deployment profile.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py scripts/sccp_evm_live_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js javascript/iroha_js/test/sccpBscMainnet.test.js`
+  - `npm run build:dist`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js javascript/iroha_js/test/sccpBscMainnet.test.js javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target or ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence or bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target or bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "no_wasm_marker or native_local_prover_only"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "no_wasm_marker"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy or launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy or launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "launch_policy or helper_inventory"`
+  - `cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch -- --nocapture`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    from `IrohaSwift`
+  - `git diff --check`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --logger "console;verbosity=minimal"`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k "route_canary_rejects_unverified_transaction_metadata or route_canary"`
+  - `cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay -- --nocapture`
+  - `cargo test -p iroha_sccp lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles -- --nocapture`
+  - `cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api configured_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api destination_binding_query_respects_ethereum_lane_launch_policy --lib -- --nocapture`
+  - `cargo fmt -p iroha_sccp -p iroha_core`
+  - `cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_launch -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_rejects_replayed_source_material -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs ethereum_mainnet -- --nocapture`
+  - `cargo test -p iroha_sccp eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethereum_lane_launch -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs waits_for_lane_launch -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs before_ -- --nocapture`
+
+## 2026-06-02 Sumeragi live stake-accounting proof
+
+- Added top-level Sumeragi proof obligations tying live signed-stake accounting
+  to the commit-vote counters: `StakeSignedMatchesVoteCounters` proves
+  `stakeSigned` always equals `(commitVotesHonest * StakePerHonestVote) +
+  (commitVotesByz * StakePerByzVote)`, and `StakeAccountingNeverDiverges`
+  preserves that equality across every checked execution.
+- Wired the invariant and temporal property through the fast, deep, and TLC fast
+  Sumeragi configs, and documented the new obligation alongside the existing
+  quorum, RBC, progress-quiescence, honest-support, and commit-certificate
+  traceability corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.26s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `18 min 9 sec`)
 ## 2026-06-01 Kagemusha lineage previous-proof validation
 
 - Tightened record-backed recursive-spend lineage witness validation so every
@@ -15985,6 +22824,1851 @@ Last updated: 2026-06-03
     (`15 passed, 129 deselected`)
   - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py status.md roadmap.md`
 
+## 2026-06-02 Ethereum mainnet SCCP SDK receipt-proof hardening
+
+- Tightened Ethereum mainnet inbound SCCP proof paths across JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and C# so `proveInboundToSora`
+  requires app-collected `receiptProof` material, not only a
+  `receiptProofHash`, before invoking local/native prover callbacks.
+- Added receipt-proof transcript alignment checks against collected
+  receipt/block/beacon-finality evidence: execution block number, execution
+  block hash, execution receipts root, and the optional SCCP source-event
+  digest now fail closed on drift before the prover callback can run.
+- Python inbound evidence collection now preserves copied `receipt_proof`
+  material alongside its computed hash for native prover callbacks.
+- Added adversarial SDK coverage for hash-only inbound evidence, drifted
+  receipt-proof transcripts, and callback-not-invoked behavior across the
+  touched SDK tests.
+- Validation:
+  - `npm run build:dist`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k ethereum_mainnet_sccp_facade`
+    (`3 passed, 84 deselected`)
+  - `swift test --filter SccpSolanaProverTests.testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `git diff --check -- <touched SCCP SDK files>`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" <touched SCCP SDK files>`
+    (no conflict markers)
+- Local validation blockers:
+  - Kotlin/JVM and Java Android Gradle tests could not start because no Java
+    runtime is available (`java -version` reports unable to locate a runtime).
+  - C# tests could not run because `dotnet` is not installed.
+
+## 2026-06-02 ISO XMLDSig certificate SPKI point-format hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every supplied
+  `KeyInfo/X509Data` certificate must expose an uncompressed 65-byte P-256 SEC1
+  subject public key that parses through the P-256 verifier, in addition to the
+  existing ECDSA-with-SHA256 and id-ecPublicKey/secp256r1 OID checks.
+- Added correctly signed compressed-SPKI certificate fixtures for both the
+  XMLDSig leaf and issuer positions, proving compressed certificate public-key
+  encodings fail closed without relying on broken certificate signatures.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii compressed_ --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`20 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig legal XML namespace canonicalization
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` canonical namespace
+  handling so an explicit `xmlns:xml="http://www.w3.org/XML/1998/namespace"`
+  declaration is accepted as the fixed XML namespace binding but omitted from
+  canonical output. Wrong `xml` rebindings and attempts to bind the XML/XMLNS
+  namespace names to default or non-`xml` prefixes still fail closed.
+- Added canonicalizer regressions proving legal local and inherited
+  `xmlns:xml` declarations do not serialize while `xml:*` attributes remain
+  sorted and emitted, and kept the signed `require-verified` XMLDSig/XAdES
+  fixture matrix green.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`17 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig malformed QName hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig/XAdES
+  structural helpers validate selected element QNames with the supported XML
+  name policy before namespace, child-shape, digest, or signature handling
+  continues. Malformed local-name matches such as `ds::Reference`,
+  `ds::Transform`, or `ds::DigestMethod` now fail closed instead of being
+  accepted through prefix-only namespace resolution.
+- Added focused XMLDSig Reference regressions covering malformed root,
+  direct-child, and namespace-bound digest-method QNames while keeping the
+  canonicalizer and full `require-verified` fixture matrix green.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_reference_rejects_malformed_qnames --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_reference --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig/XAdES default namespace hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so unprefixed XMLDSig
+  and XAdES structural elements still support legacy unqualified fixtures, but
+  now reject explicit default namespaces that conflict with the supported
+  XMLDSig or XAdES namespace.
+- Added re-signed end-to-end fixtures for wrong default XMLDSig and XAdES
+  namespaces, plus direct XAdES shape coverage for unprefixed
+  `QualifyingProperties` with a conflicting default namespace.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii wrong_default_namespace --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_torii namespace --lib -- --nocapture`
+    (`18 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo test -p iroha_torii supported_xml_xades_qualifying_properties_requires_direct_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig same-document Reference coverage hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so non-empty XMLDSig
+  payload `Reference URI="#..."` targets must strictly enclose the verified
+  signature carrier. Empty-URI references still sign the whole payload, and
+  valid same-document `Document` or message-body targets still pass, but a
+  header-only subtree can no longer authenticate unsigned settlement fields.
+- Added a signed `GrpHdr`-only same-document regression that previously had
+  valid digest/signature bytes while leaving the payment body outside the
+  payload Reference coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_reference_outside_signature_carrier --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_reference --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_id --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi honest commit-support proof
+
+- Added top-level Sumeragi obligations proving that committed states retain
+  enough honest commit-vote support after discounting the Byzantine vote budget:
+  `CommitImpliesHonestSupport` and `CommitHonestSupportNeverLost`.
+- Wired the new invariant and temporal property through the fast, deep, and TLC
+  fast model-checker configs, and documented the proof surface in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.27s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig Sgntr wrapper verification
+
+- Extended `crates/iroha_torii/src/iso20022_bridge.rs` so `require-verified`
+  ISO XMLDSig payloads support the normal ISO `Sgntr` carrier shape: exactly
+  one `Sgntr` wrapper containing exactly one direct XMLDSig `Signature` child.
+  The verifier threads wrapper namespace declarations into the nested XMLDSig
+  tree while the enveloped-signature digest still removes only the `Signature`
+  element, leaving the signed wrapper bytes intact.
+- Kept multiplicity fail-closed semantics: extra `Signature` or `Sgntr`
+  carriers outside the selected bare `Signature` or `Sgntr` wrapper still
+  reject before digest or trust-pin evaluation.
+- Added an end-to-end signed fixture whose `ds` namespace is inherited from the
+  `Sgntr` wrapper, proving the wrapped carrier verifies through the full
+  `require-verified` profile path.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii sgntr_wrapped --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii extra_sgntr --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`95 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig raw public-key SEC1 hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so raw
+  `KeyValue/ECKeyValue/PublicKey` material must decode to an uncompressed
+  65-byte P-256 SEC1 point and parse through the P-256 verifier before
+  trust-pin matching or signature verification continues.
+- Added helper-level malformed/short/compressed point coverage and an
+  end-to-end `require-verified` regression that pins compressed bytes for the
+  same signing key, proving compressed raw key material still fails closed.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_key_material_enforces_key_info_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii compressed_public_key --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii public_key --lib -- --nocapture`
+    (`11 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`95 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig certificate algorithm corridor hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every certificate in
+  XMLDSig `KeyInfo/X509Data` must use ECDSA-with-SHA256 and
+  id-ecPublicKey/secp256r1 before extension, chain, or trust-pin evaluation
+  continues.
+- Added a generated chain fixture with a P-384/SHA-384 issuer signing an
+  otherwise valid P-256 XMLDSig leaf, proving unsupported certificate algorithms
+  fail closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii unsupported_certificate_algorithm --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`18 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi post-finality quiescence proof
+
+- Added top-level Sumeragi obligations proving that once a block is committed,
+  proposal, prepare/commit/new-view voting, timeout view-change, RBC progress,
+  Byzantine fault injection, and aggregate `PostGstProgressEnabled` actions
+  are disabled.
+- Wired `CommitDisablesProgressActions` as a state invariant and
+  `CommitProgressActionsNeverReenabled` as a temporal property in the fast,
+  deep, and TLC fast model-checker configs, and documented the new proof
+  surface in the Sumeragi formal README and roadmap.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.29s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`11` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum mainnet EVM network-id pinning
+
+- Tightened EVM-family destination rollout construction and production
+  readiness so ETH must use the canonical Ethereum mainnet EIP-155 network id
+  word (`0x...01`) and BSC must use the canonical BSC mainnet word (`0x...38`).
+  An internally consistent destination binding key/hash recomputed over the
+  wrong nonzero network id no longer opens the production lane.
+- Added the public Rust `sccp_eth_mainnet_network_id_word_v1()` helper and
+  moved Torii/Core configured-lane fixtures onto the shared ETH/BSC network-id
+  helpers.
+- Hardened `scripts/sccp_evm_destination_evidence.py` so `--network-id` is an
+  optional mainnet override: omitted values default to the selected domain's
+  canonical EIP-155 id, while mismatched overrides are rejected before JSON or
+  TOML evidence is rendered. Updated the ETH/BSC destination binding,
+  route-allowlist, route-canary, JSON, and TOML vectors to the canonical ids.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`13 passed`)
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp destination_rollout -- --nocapture`
+    (`6 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp lane_readiness -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp evm_destination_binding -- --nocapture`
+    (`3 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii --lib configured_ethereum_mainnet_lane_launch -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii --lib destination_binding_query_respects_ethereum_lane_launch_policy -- --nocapture`
+    (`1 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib configured_sccp_ethereum_mainnet_lane_launch -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch -- --nocapture`
+    previously did not reach the routing tests because unrelated
+    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` imported the
+    missing V2 Offline recursive schema hash helper; the later Offline V2
+    schema-hash export status entry records the fix.
+
+## 2026-06-02 SCCP EVM live evidence mainnet network-id default
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so live destination evidence now
+  defaults `--expected-network-id` to the selected domain's canonical EIP-155
+  mainnet bytes32 (`eth=1`, `bsc=56`) and rejects explicit or bridge-reported
+  noncanonical values before full offline TOML evidence can be rendered.
+- Updated the live evidence tests and fake EVM provider fixtures to prove the
+  defaulted ETH mainnet network id is recorded in summaries, full TOML no
+  longer requires a redundant network-id flag, and forged noncanonical bridge
+  views fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`24 passed`)
+
+## 2026-06-02 SCCP JS Ethereum outbound bridge-address binding
+
+- Tightened the browser-first `EthereumMainnetSccp.submitOutboundToEthereum`
+  provider path so the transaction `to` address is derived from the wrapped
+  proof result's Ethereum mainnet destination binding. Explicit `to` or
+  `bridgeAddress` overrides are accepted only when they canonicalize to that
+  same bound bridge address.
+- Updated the Ethereum mainnet JS tests to prove same-address overrides still
+  work while a different bridge address is rejected before `eth_sendTransaction`
+  is called.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12 passed`)
+
+## 2026-06-02 SCCP JS BSC outbound bridge-address binding
+
+- Mirrored the browser provider-path hardening in `BscMainnetSccp.submitOutboundToBsc`:
+  raw `to`/`bridgeAddress` overrides are accepted only when they canonicalize
+  to the wrapped proof result's BSC mainnet destination-binding bridge address.
+- Regenerated the JS package `dist` output and updated the BSC mainnet wrapper
+  test so mismatched explicit targets are rejected before `eth_sendTransaction`
+  is called.
+- Validation:
+  - `npm run build:dist`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`26 passed`)
+  - `node --test --test-name-pattern "browser Ethereum mainnet SCCP artifacts stay JS-only|browser BSC mainnet SCCP artifacts stay JS-only" javascript/iroha_js/test/package_dist.test.js`
+    (`2 passed`)
+
+## 2026-06-02 ISO XMLDSig signature-carrier multiplicity hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so `require-verified`
+  ISO XMLDSig payloads may contain only one supported signature carrier:
+  `Signature` or `Sgntr`. Any additional `Signature`/`Sgntr` element outside
+  the verified span now fails closed before digest or trust-pin evaluation.
+- Added a regression payload that is correctly signed while carrying an extra
+  ignored `Sgntr` block, proving the verifier rejects carrier multiplicity
+  rather than only detecting digest tampering.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii extra_sgntr --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig leaf KeyUsage criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so the XMLDSig
+  `KeyInfo/X509Data` leaf certificate must carry `digitalSignature` in a
+  critical `keyUsage` extension before the leaf public key can verify
+  `SignedInfo`.
+- Added a generated P-256 chain fixture whose leaf carries a valid non-critical
+  `keyUsage` with `digitalSignature`, proving the chain fails closed under
+  `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii noncritical_leaf_key_usage --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`17 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig issuer KeyUsage criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  certificate-chain issuers must carry `keyCertSign` in a critical `keyUsage`
+  extension, matching the already-enforced critical CA `basicConstraints`
+  policy before issuer/root DER SHA-256 pins can trust a chain.
+- Added a generated P-256 chain fixture whose issuer carries a valid
+  non-critical `keyUsage` with `digitalSignature` and `keyCertSign`, proving the
+  chain fails closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii noncritical_issuer_key_usage --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`92 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig critical X.509 extension whitelist hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so critical X.509
+  extensions are accepted only when they are in the XMLDSig verifier's enforced
+  subset: `basicConstraints` and `keyUsage`. Parsed-but-unenforced critical
+  extensions such as EKU now fail closed on both leaf and issuer certificates.
+- Added generated P-256 certificate-chain regressions with a valid critical
+  ExtendedKeyUsage extension on the leaf and issuer, proving recognized but
+  unsupported critical extension semantics cannot pass trust-pin matching.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unsupported_parsed_extension --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`16 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`92 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig leaf CA rejection
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so the XMLDSig
+  `KeyInfo/X509Data` leaf certificate must be an end-entity signing
+  certificate: `digitalSignature` remains required, and any CA
+  `basicConstraints` on the leaf now fails closed before profile trust pins are
+  considered.
+- Added a generated P-256 chain fixture whose leaf certificate asserts CA
+  `basicConstraints`, proving that an otherwise valid signed payload is rejected
+  under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii leaf_ca --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`15 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi RBC finality evidence proof
+
+- Added top-level Sumeragi obligations proving that finalized states are backed
+  by live RBC delivery evidence: `CommitImpliesRbcEvidence` requires committed
+  states to keep the delivered state, ready quorum, full chunk coverage, and
+  validated header/digest evidence, while `CommitRbcEvidenceNeverLost` preserves
+  that evidence after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.28s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`10` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig X509Data chain-bound hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  `KeyInfo/X509Data` material must contain a non-empty, duplicate-free chain of
+  at most eight DER certificates before certificate parsing, chain walking, or
+  profile trust-pin matching continues.
+- Added focused coverage for empty, duplicate, and overlong certificate vectors,
+  plus an end-to-end `require-verified` regression proving that a duplicate DER
+  certificate injected into unsigned `KeyInfo` fails closed.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii x509_certificate --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`14 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig issuer BasicConstraints criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  certificate-chain issuers must carry critical CA `basicConstraints` in
+  addition to `keyCertSign` before a profile certificate pin can trust the
+  linked chain.
+- Added a generated P-256 chain fixture whose issuer has `CA:TRUE`
+  `basicConstraints` encoded as non-critical, proving that otherwise valid
+  chains fail closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii noncritical_issuer_basic_constraints --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`15 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 SCCP Ethereum SDK sync-committee period parity
+
+- Mirrored the Ethereum mainnet sync-committee period rule into the public
+  Python, JS, and Swift SDK transcript helpers. SDK callers now reject ETH
+  sync-committee transition messages and signatures when `transitionSlot` is
+  zero, when `toSyncPeriod != fromSyncPeriod + 1`, or when the transition slot
+  does not belong to `fromSyncPeriod` under the mainnet `8192` slots-per-period
+  rule.
+- Exported the new period helpers/constants through Python package exports, JS
+  package declarations, and built JS dist entrypoints, and refreshed the
+  cross-SDK ETH transition transcript golden hashes for the period-consistent
+  `0 -> 1` transition at slot `19`.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'eth_sync_committee_transition_transcripts'`
+    (`1 passed, 86 deselected`)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test --test-name-pattern "derives ETH sync-committee transition transcript hashes" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `node --test --test-name-pattern "package SCCP entrypoint|ETH sync-committee payload" javascript/iroha_js/test/package_dist.test.js`
+    (`2 passed`)
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    (`1 passed`)
+  - `git diff --check -- ...` over the touched SDK files and tests
+
+## 2026-06-02 ISO XMLDSig critical X.509 extension hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every certificate
+  supplied in XMLDSig `KeyInfo/X509Data` rejects unknown, malformed, or
+  unparsed critical X.509 extensions before trust-pin matching can accept the
+  chain.
+- Added generated P-256 regressions with a critical private extension on the
+  leaf certificate and on the pinned issuer certificate, proving both fail
+  closed under `require-verified` profiles.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`88 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 Sumeragi live commit-quorum proof
+
+- Added top-level Sumeragi obligations proving that finalized states remain
+  backed by live quorum counters: `CommitImpliesLiveVoteQuorum` and
+  `CommitImpliesLiveStakeQuorum` require committed states to keep vote and
+  signed-stake counters above their finality thresholds, while
+  `LiveCommitQuorumNeverLost` preserves both live thresholds after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.26s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`9` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XAdES SigningCertificateV2 chain-prefix hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so certificate-backed
+  XAdES `SigningCertificateV2` digests must be a non-empty, duplicate-free
+  ordered prefix of the verified XMLDSig certificate chain, starting at the leaf
+  certificate. A digest list that skips the issuer, repeats the leaf, starts
+  with an issuer, or extends beyond the verified chain now fails closed.
+- Added focused regressions covering accepted leaf-only, leaf+issuer, and
+  full-chain prefixes plus unordered, duplicate, and overlong digest lists.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii signing_certificate_v2 --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`35 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`88 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 SCCP Ethereum sync-committee period binding hardening
+
+- Added `sccp_eth_mainnet_sync_committee_period_for_slot`, using the Ethereum
+  mainnet consensus rule `slot / (32 * 256)`, and wired it into the ETH source
+  proof verifier. Sync-committee transition proofs now have to be signed from
+  the period containing the transition slot, and the final transition in the
+  chain must land on the period containing the finalized beacon slot.
+- Updated the ETH transition-chain fixture to use period-consistent mainnet
+  slots and added an adversarial case where the transition signature and
+  payload hashes are internally valid but the transition slot belongs to the
+  wrong sync-committee period.
+- Validation:
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp eth_source_adapter -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp eth_sync_committee_transition -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO XMLDSig certificate pathLen hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  `KeyInfo/X509Data` issuer certificates now enforce
+  `basicConstraints.pathLenConstraint` against the supplied subordinate CA
+  chain before issuer/root DER SHA-256 trust pins can satisfy a
+  `require-verified` profile.
+- Refactored the generated certificate-chain fixture builder to emit arbitrary
+  chain lengths, then added three-certificate regressions proving
+  `pathLenConstraint = 1` accepts one subordinate intermediate CA while
+  `pathLenConstraint = 0` rejects the same otherwise valid chain.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii path_len --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`86 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 Sumeragi commit-certificate traceability proof
+
+- Added top-level Sumeragi obligations proving that finalized commit evidence
+  remains traceable to the live vote counters:
+  `CommitEvidenceMatchesVoteCounters` requires committed states to have
+  evidence votes equal to `commitVotesHonest + commitVotesByz` and evidence
+  stake equal to `stakeSigned`, while
+  `CommitEvidenceNeverDivergesFromVoteCounters` preserves that relationship
+  after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.28s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`8` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum SDK no-provider data collection hardening
+
+- Tightened the Ethereum-mainnet transaction-hash collection path across the
+  public SDK facades so receipt evidence collection fails explicitly when the
+  caller supplies only `transactionHash` without an app-owned execution
+  provider. This keeps the browser/mobile product path local-first and avoids
+  falling through to generic missing-receipt/proof errors or any implicit data
+  fallback.
+- Mirrored the regression coverage across JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and C# source tests. The Swift Ethereum facade now
+  matches the BSC behavior by raising the explicit `executionProvider` error
+  before attempting receipt normalization.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence or ethereum_mainnet_sccp_facade_collects_inbound_receipts'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`87 passed`)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin/` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    from `java/iroha_android/` (`BUILD SUCCESSFUL`)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    from `IrohaSwift/` (`1` test passed)
+  - `swift test --filter SccpSolanaProverTests`
+    from `IrohaSwift/` (`79` tests passed)
+  - `git diff --check -- ...` over the SCCP SDK/source files touched in this
+    slice
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ...` over the same files (no matches)
+- C# test execution is blocked in this local environment: neither `dotnet` nor
+  `$HOME/.dotnet/dotnet` is available (`dotnet missing`). The C# source and
+  regression test were updated alongside the other SDKs.
+
+## 2026-06-02 SCCP Python Ethereum finality fail-closed hardening
+
+- Tightened `python/iroha_torii_client/sccp.py` so an explicitly supplied empty
+  Ethereum `beacon_finality`/`beaconFinality` object is no longer silently
+  ignored by `EthereumMainnetSccp.collect_inbound_evidence_from_receipt`.
+  User-supplied finality evidence now always goes through the strict finalized
+  execution block number, block hash, and receipts-root normalization path.
+- Added a Python SDK adversarial inbound evidence regression proving empty
+  `beacon_finality` fails closed with the same `beaconFinality` field checks
+  used for malformed or drifted finality data.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence or ethereum_mainnet_sccp_facade_collects_inbound_receipts'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`87 passed`)
+
+## 2026-06-02 SCCP EVM route-canary receipt block hardening
+
+- Tightened `scripts/sccp_evm_live_evidence.py` so a live
+  MessageProofAccepted route-canary receipt with `blockNumber = 0x0` is
+  rejected at RPC-summary parsing time instead of reaching the downstream
+  evidence-hash guard. This keeps the live Ethereum/BSC collection path aligned
+  with the offline destination evidence helper and Rust readiness checks, both
+  of which require positive route-canary receipt block numbers.
+- Added an adversarial live-EVM evidence regression that forges a successful
+  route-canary transaction receipt at block zero and proves the collector fails
+  closed before rendering governed TOML.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata or expected_rpc_chain_id_parser_requires_canonical_decimal'`
+    (`2 passed, 20 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`22 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`35 passed`)
+
+## 2026-06-02 SCCP native SDK no-WASM release guard
+
+- Added a release-readiness test that scans the public SCCP SDK source artifacts
+  across JavaScript source/dist/declarations, Python package exports, Swift
+  SCCP sources, Kotlin/JVM SCCP helpers, Java Android SCCP helpers, and C# SCCP
+  sources for forbidden WASM, `snarkjs`, and remote-prover dependency markers.
+  This broadens the existing Ethereum/BSC facade spot checks into a release
+  gate over the user-facing native/local-prover SDK surface.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'all_public_sccp_sdk_sources_are_native_local_prover_only or ethereum_sdk_sources_are_native_local_prover_only or bsc_sdk_sources_are_native_local_prover_only'`
+    (`3 passed, 25 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`173 passed`)
+
+## 2026-06-02 Sumeragi prepare-quorum commit-gate proof
+
+- Added top-level Sumeragi obligations for the prepare certificate side of the
+  commit path: `CommitVotePhaseRequiresPrepareQuorum`,
+  `CommitImpliesPrepareQuorum`, and `PrepareQuorumNeverLostAfterCommit`.
+  These prove the model cannot enter commit-vote/finality states before a
+  prepare quorum and cannot lose that quorum after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.27s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig namespace binding hardening
+
+- Tightened Torii's supported XMLDSig verifier so prefixed XMLDSig structural
+  elements must resolve to the XMLDSig namespace in the inherited scope for
+  their subtree. The check covers `Signature`, direct `SignedInfo`/
+  `SignatureValue`/`KeyInfo`/`Object` children, `SignedInfo` method and
+  `Reference` children, `Reference`/`Transforms`/`Transform`/`DigestMethod`/
+  `DigestValue`, and public-key or X.509 `KeyInfo` material. Existing
+  unprefixed fixtures remain supported.
+- Added regressions for a cryptographically valid prefixed payload signed under
+  a wrong `ds` namespace URI, plus focused Reference/Digest and KeyInfo
+  namespace-confusion cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XML QName close-tag hardening
+
+- Tightened the supported XML element scanner so once an opening tag is selected
+  by local name, the matching closing tag must use the exact same qualified
+  name. This preserves local-name lookup for supported prefixed XMLDSig inputs
+  while rejecting malformed shapes such as `<ds:SignedInfo>...</bad:SignedInfo>`
+  before XMLDSig structure or cryptographic verification continues.
+- Added regressions for a mismatched prefixed root close and a mismatched
+  prefixed XMLDSig direct child close inside `Signature`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig exact attribute lookup hardening
+
+- Tightened XMLDSig attribute value extraction so cryptographic policy
+  attributes are read by exact XML attribute name only. This removes the
+  previous local-name fallback from the accessor and keeps namespace-qualified
+  spoof attributes such as `ds:Algorithm` or `ds:URI` rejected before method,
+  transform, digest, or Reference policy is evaluated.
+- Added regressions covering namespace-qualified `Reference` `URI`,
+  `Transform` `Algorithm`, and `DigestMethod` `Algorithm` attributes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XAdES namespace binding hardening
+
+- Tightened the supported XAdES signed-property subset so prefixed XAdES
+  structural elements must resolve to the ETSI XAdES v1.3.2 namespace
+  (`http://uri.etsi.org/01903/v1.3.2#`). The verifier now carries inherited
+  namespace scope for referenced `SignedProperties` targets and validates
+  prefixed `QualifyingProperties`, `SignedProperties`,
+  `SignedSignatureProperties`, `SigningTime`, `SigningCertificateV2`, `Cert`,
+  and `CertDigest` nodes while keeping existing unprefixed fixtures accepted.
+- Corrected the prefixed XMLDSig fixture so XAdES properties use an `xades:`
+  prefix instead of the XMLDSig `ds:` prefix, and added end-to-end regressions
+  for accepted prefixed XAdES plus a re-signed wrong-namespace XAdES payload.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`86 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig certificate-chain issuer binding
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so each XMLDSig
+  `KeyInfo/X509Data` certificate-chain link must bind the child certificate's
+  issuer distinguished name to the parent certificate's subject distinguished
+  name before the parent signature verification can expose issuer/root DER
+  SHA-256 trust pins to a `require-verified` profile.
+- Added a generated P-256 chain fixture where the same CA key signs the leaf
+  with a mismatched issuer DN while the pinned issuer certificate carries a
+  different subject DN. The new
+  `require_verified_profile_rejects_certificate_chain_with_issuer_name_mismatch`
+  regression proves signature verification alone is not sufficient for trust
+  exposure.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii issuer_name_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`10 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii high_s --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii signature_value --lib -- --nocapture`
+    (`5 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 SCCP release-evidence transcript hardening
+
+- Tightened `scripts/sccp_release_readiness_report.py` so passed corridor phase
+  evidence cannot borrow a completion sentinel from an unrelated partial
+  transcript. Single-phase logs must contain the completion sentinel in the
+  claimed phase block; full-corridor logs are still accepted for `all=...` only
+  when every known corridor phase marker is present and the completion sentinel
+  appears after the final phase marker.
+- Added a forged-log regression covering a partial multi-phase transcript that
+  includes the expected Rust command and success marker but omits the
+  `rust-sccp` phase-block completion sentinel.
+- Aligned the strict release-bundle verifier with the report builder so
+  `scripts/sccp_release_bundle.py --phase-evidence all=<full-run.log>` can
+  produce a self-verifying bundle from one complete corridor transcript, while
+  partial transcripts still fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'passes_for_complete_evidence_and_corridor or phase_log_without_phase_completion'`
+    (`2 passed, 25 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'hash_bound_full_corridor_log or completion_outside_claimed_phase_block'`
+    (`2 passed, 143 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`172 passed`)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py status.md`
+
+## 2026-06-02 Sumeragi committed-view witness proof
+
+- Added a latched `commitView` witness to `docs/formal/sumeragi/Sumeragi.tla`.
+  The top-level commit path now records the view that produced finality when an
+  honest commit vote, Byzantine commit vote, or RBC delivery transition first
+  makes `committed` true.
+- Added `CommitViewMatchesFinality`, `NoCommitViewBeforeCommit`, and
+  `CommitViewNeverChanges` to the top-level Apalache and TLC configs, proving
+  that no commit-view witness appears before finality and that the finality
+  witness remains tied to the active view after commit.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2338 distinct states`, `6` temporal-property branches, no errors)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 Sumeragi committed-phase terminality proof
+
+- Tightened `docs/formal/sumeragi/Sumeragi.tla` so the single-height
+  abstraction treats `"Committed"` as a terminal phase: committed states no
+  longer re-enter proposal or timeout-driven view-change transitions.
+- Added `CommittedPhaseMatchesFinality` and `CommittedPhaseNeverLeaves` to the
+  top-level Apalache and TLC configs, proving that the finality latch and
+  committed phase stay aligned and that committed phase cannot be left after
+  finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2338 distinct states`, `5` temporal-property branches, no errors)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum mainnet production corridor hardening
+
+- Fixed deployment-bound transparent proof verification so `LocalAdmission`
+  submission packages are accepted whenever the source proof is production-ready
+  against configured verifier material and source-adapter deployment evidence,
+  regardless of the counterparty verifier target. This closes the Solana/TON/
+  Substrate source-to-SORA verifier mismatch where the builder emitted
+  `LocalAdmission` but the verifier rebuilt a counterparty submission package.
+- The fix preserves the stricter production gate: local admission still requires
+  matching source verifier material, matching source-adapter deployment evidence,
+  and deployment-bound proof bytes. Replayed deployment receipts remain rejected.
+- Restored JVM/Android corridor compilation by exposing `getOfflineV2Readiness`
+  and the `/v1/offline/v2/readiness` parser in Kotlin/JVM and Java Android,
+  then removing duplicate Java Android `IrohaClient` default method definitions
+  that prevented the Android core test harness from compiling.
+- Validation:
+  - `cargo fmt --all`
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp deployment_bound_transparent_proof_requires_matching_source_deployment -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`241 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`36 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`SccpSolanaProverTests`: `79 passed`; `ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions`: `1 passed`; existing NoritoBridge ABI-mismatch warning was emitted)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`; existing unchecked-cast warnings in offline tests were
+    emitted during test compilation)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL` for both Gradle SCCP harness invocations; existing
+    deprecation notes were emitted during test compilation)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`11 passed`)
+  - `git diff --check --` over the SCCP verifier, status, Kotlin offline-v2
+    readiness, and Java Android offline-v2 readiness/client files.
+
+## 2026-06-02 Sumeragi top-level TLC fairness check
+
+- Added `docs/formal/sumeragi/Sumeragi_tlc_fast.cfg`, a TLC-routed
+  top-level Sumeragi commit-path check that mirrors the existing fast
+  parameters while using `SPECIFICATION Spec` so TLC checks the model with its
+  weak-fairness assumptions instead of only the Apalache `INIT`/`NEXT`
+  encoding.
+- Tightened `docs/formal/sumeragi/Sumeragi.tla` so committed finality now keeps
+  explicit latched quorum and stake evidence. This preserves the meaning of the
+  commit-safety invariants after `TimeoutTick` resets per-view live counters.
+- Added top-level commit-certificate stability obligations:
+  `CommitEvidenceIsBounded`, `NoCommitEvidenceBeforeCommit`,
+  `CommitNeverRevoked`, and `CommitEvidenceNeverLost`. These prove the model
+  cannot accumulate orphan certificate evidence before finality, cannot exceed
+  the configured voting/stake evidence envelope, and cannot lose finality or
+  threshold certificate evidence after commit.
+- Added `VoteCountersRespectRosterBudgets` and `RbcDeliveryNeverLost`, so the
+  top-level model now explicitly proves live prepare/commit/new-view counters
+  stay within the honest/fault roster split and that delivered RBC availability
+  is never rolled back by later view-change, vote, or fault transitions.
+- Wired `bash scripts/formal/sumeragi_tlc.sh fast` into the TLC runner and the
+  formal README command list. The coverage guard now reaches the new
+  top-level TLC config alongside the existing Apalache fast/deep commit-path
+  commands and the 499 documented TLC fast rows.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2914 distinct states`, `4` temporal-property branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+
+## 2026-06-02 SCCP Ethereum mainnet core launch readiness hardening
+
+- Added `iroha_core` bridge-proof regression coverage for complete Ethereum
+  mainnet lane material: governed ETH source verifier material, source-adapter
+  deployment evidence, EIP-155 chain-id `1` destination binding evidence, route
+  allowlist evidence, and route canary transcript fields now produce
+  production-ready lane readiness.
+- Added negative readiness checks for missing ETH route canary evidence and
+  replayed ETH source-adapter deployment receipts. The replayed deployment can
+  remain internally well-shaped, but the lane stays disabled because the
+  route-allowlist/canary evidence no longer binds the configured deployment
+  hash.
+- Updated non-ETH bridge-proof launch-policy tests to expect the default
+  Ethereum mainnet launch corridor instead of stale BSC launch wording.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --test bridge_proofs lane_launch -- --nocapture`
+    (`9 passed`)
+  - `cargo test -p iroha_sccp eth_source_adapter -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_sccp evm_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness -- --nocapture`
+    (`1 passed`)
+  - `git diff --check -- crates/iroha_core/tests/bridge_proofs.rs`
+
+## 2026-06-02 SCCP Ethereum mainnet JS/Python corridor validation
+
+- Ran the browser-oriented JavaScript SDK and Python SDK phases of the SCCP
+  production corridor after the Ethereum mainnet lane-readiness hardening. The
+  JavaScript phase covered the first-class `EthereumMainnetSccp` facade,
+  browser JS-only/local-prover ownership checks, user-supplied EIP-1193 +
+  Beacon REST collection, finalized evidence gating, source-bridge log
+  validation, and cross-SDK proof/calldata parity.
+- The Python SDK phase kept the matching local Ethereum mainnet evidence,
+  source-proof, destination-calldata, and submit-payload helpers green.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk,python-sdk`
+    (`js-sdk`: `169 passed`; `python-sdk`: `87 passed`)
+
+## 2026-06-02 SCCP Ethereum mainnet native receipt-proof release gates
+
+- Extended the SCCP release-readiness report and strict release-bundle verifier
+  inventories so Swift, Kotlin/JVM, Java Android, and .NET ETH/BSC SDK rows
+  must advertise typed Ethereum mainnet receipt-proof evidence helpers. The
+  verifier now fails weakened public release bundles that omit
+  `EthereumMainnetReceiptProof` or `EthereumMainnetSccp.ReceiptProof` from the
+  native Ethereum SDK helper surfaces.
+- Updated release-readiness tests to assert the new native helper symbols in
+  JSON output and to keep the canonical JavaScript helper row sourced from the
+  report module instead of a stale duplicate list.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols_exist_in_sdk_sources or ethereum_sdk_sources_are_native_local_prover_only or json_tracks_corridor_phase_results'`
+    (`3 passed, 23 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'verifier_helper_inventory_is_independent'`
+    (`1 passed, 143 deselected`)
+  - `git diff --check --` over the touched readiness/verifier scripts and tests
+
+## 2026-06-02 SCCP Ethereum mainnet native receipt-proof evidence parity
+
+- Added typed Ethereum mainnet receipt-proof evidence to Swift, Kotlin/JVM,
+  Java Android, and .NET inbound SDK facades. Native callers can now pass the
+  app-collected receipt-proof transcript directly; `collectInboundEvidenceFromReceipt`
+  derives the canonical `receiptProofHash`, retains the typed proof, and still
+  accepts the existing hash-only path.
+- Added fail-closed conflict checks across the native SDKs: a supplied
+  `receiptProofHash` must match the hash derived from `receiptProof`, and the
+  Ethereum mainnet facade rejects cross-lane receipt-proof transcripts whose
+  source domain is not ETH.
+- Hardened mutable native receipt-proof material in Kotlin/JVM and .NET:
+  inbound collection now deep-copies caller-owned proof nodes and inclusion
+  branches before deriving `receiptProofHash` and returning evidence to prover
+  callbacks, preventing post-validation caller mutation from changing the
+  validated transcript.
+- Extended native focused tests with the shared Ethereum receipt-proof vector
+  (`0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0`)
+  plus conflicting-hash, non-ETH source-domain, and post-validation mutation
+  negatives.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`; existing unrelated Torii deprecation/no-op-try warnings were
+    emitted during test target compilation)
+  - `git diff --check --` over the touched Swift/Kotlin/Java/C#/status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched native SDK
+    implementation files found no matches.
+  - `git diff --check --` over the Kotlin/.NET snapshot-hardening files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the Kotlin/.NET snapshot-hardening
+    implementation files found no matches.
+  - `java -version` reports no local Java runtime, so Kotlin/JVM and Java
+    Android test execution remains pending in this environment.
+  - `dotnet --info` is unavailable, so .NET test execution remains pending in
+    this environment.
+
+## 2026-06-02 SCCP Ethereum mainnet .NET receipt-proof helper parity
+
+- Added .NET `EthereumMainnetSccp.CanonicalEvmSccpReceiptProofBytes(...)` and
+  `EvmSccpReceiptProofHash(...)` helpers for the ETH source-adapter
+  receipt-proof transcript. The helper binds source domain, source-event
+  digest, beacon slot, execution block number/hash, receipts root, finalized
+  beacon root, sync committee root, receipt-root index, bounded MPT proof
+  nodes, and a non-empty inclusion branch before hashing with the canonical
+  `sccp:evm:receipt-proof:v1` Blake2b prefix.
+- Added a .NET shared-vector test whose transcript bytes/hash match the
+  existing Python implementation, plus negative checks for non-ETH source
+  domains, zero source-event digest, empty proof nodes, empty MPT nodes, empty
+  inclusion branches, and malformed branch siblings.
+- Validation:
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs status.md`
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched C# files found no
+    matches.
+  - `python3` regenerated the shared receipt-proof hash vector:
+    `0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0`
+  - `dotnet --info` is unavailable in this environment, so the C# test remains
+    pending runtime execution.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK source-event receipt validation
+
+- Added browser/JS, Python, and Swift SDK receipt-log validation for Ethereum
+  mainnet inbound evidence. When callers configure
+  `sourceBridgeEmitterAddress` or provide ETH source verifier material,
+  collected JSON-RPC receipts must contain exactly one non-removed
+  `SccpSourceEvent(bytes32)` log from that bridge; the SDK derives or checks
+  `sourceEventDigest` before proof callbacks run.
+- Added the same source-event receipt validation surface to Kotlin/JVM, Java
+  Android, and .NET native Ethereum mainnet SDK paths. Native callers can now
+  pass or derive `sourceEventDigest`, persist the normalized
+  `sourceBridgeEmitterAddress`, and get fail-closed local validation before
+  inbound proof callbacks run.
+- The SDK validators keep unrelated logs harmless, including logs with zero
+  topics or non-empty data, while the matching SCCP source event must still have
+  the exact two-topic, empty-data shape.
+- Exposed the EVM source-event topic helper as `evmSccpSourceEventTopic()` in
+  JS and Swift, `evm_sccp_source_event_topic()` in Python,
+  `SccpEthereumMainnet.sourceEventTopic()` in Kotlin,
+  `EthereumMainnetSccp.sourceEventTopic()` in Java Android, and
+  `EthereumMainnetSccp.SourceEventTopic` in .NET; added TypeScript declarations
+  for source bridge validation fields on the Ethereum facade.
+- Extended JS, Python, Swift, Kotlin/JVM, Java Android, and .NET Ethereum
+  mainnet facade tests for positive derived and explicit source-event evidence
+  plus missing emitter, wrong emitter, wrong event topic, duplicate event, and
+  removed-log rejection cases.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`11 passed`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs'`
+    (`1 passed, 86 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --check javascript/iroha_js/src/index.js`
+  - `node --check javascript/iroha_js/dist/index.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `git diff --check --` over the touched JS/Python/Swift/status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched JS/Python/Swift files
+    found no matches.
+  - `git diff --check --` over the touched Kotlin/Java/C# native SDK and
+    status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched Kotlin/Java/C# native
+    SDK files found no matches.
+  - Kotlin/JVM, Java Android, and .NET runtime test execution is pending in
+    this environment because the local Java and `dotnet` runtimes are
+    unavailable.
+
+## 2026-06-02 SCCP Ethereum mainnet receipt-proof hash conflict hardening
+
+- Tightened the JavaScript Ethereum mainnet inbound evidence collector so a
+  caller-supplied `receiptProofHash` must match the hash derived from the
+  supplied `receiptProof`; conflicting values now fail instead of being silently
+  replaced.
+- Added JS and Python tests that pin both the positive computed-hash path and
+  the negative mismatched-hash path for SDK-collected Ethereum receipt proof
+  evidence.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs'`
+    (`1 passed, 86 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `git diff --check --` over the touched JS/Python/status files
+  - Conflict-marker and `wasm|WebAssembly|snarkjs` scans over the touched
+    JS/Python files found no matches.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK zero-material admission hardening
+
+- Tightened Ethereum mainnet local-admission packaging in the JavaScript and
+  Python SDKs so `publicInputsBytes`, `statementHash`,
+  `sourceVerifierMaterialHash`, and `sourceAdapterEngineDeploymentHash` must be
+  non-zero before a native verifier output can be wrapped for `SubmitBridgeProof`.
+  This brings the web/Python helpers in line with Swift, Kotlin/JVM, Java
+  Android, and .NET fail-closed behavior.
+- Extended the Ethereum local-admission negative tests across JS, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET to cover all-zero public input bytes,
+  bundle bytes, envelope bytes, and zero statement/source-material/deployment
+  hashes.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_builds_local_admission_submission'`
+    (`1 passed, 86 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `git diff --check --` over the touched SDK files
+  - Conflict-marker and `wasm|WebAssembly|snarkjs` scans over the touched SDK
+    files found no matches.
+- Validation not run: Java/Gradle validation remains unavailable because this
+  machine has no installed Java runtime; .NET validation remains unavailable
+  because `dotnet` is not installed.
+
+## 2026-06-02 SCCP Ethereum mainnet receipt and Swift validation hardening
+
+- Tightened the EVM receipt/MPT regression so a status-0 receipt is rejected
+  even when it carries an otherwise valid SCCP source-event log from the
+  configured emitter. This keeps Ethereum mainnet source admission fail-closed
+  for failed transactions, not merely malformed logs.
+- Unblocked Swift SCCP focused validation by renaming the V2-only offline note
+  proof container to `OfflineNoteProofBoxV2`, avoiding the duplicate
+  `OfflineNoteProofBox` declaration while preserving the existing V1 type.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root --lib -- --nocapture`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter OfflineNoteV2Tests/testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues`
+    (`1 passed`)
+- Validation not run: Java/Gradle validation remains unavailable because this
+  machine has no installed Java runtime; .NET validation remains unavailable
+  because `dotnet` is not installed.
+
+## 2026-06-02 SCCP Ethereum mainnet native SDK local-admission parity
+
+- Added ETH -> SORA local-admission packaging helpers to the remaining native
+  SDK surfaces: Swift, Java Android, and .NET. Each surface now exposes a
+  first-class Ethereum mainnet input/package type and facade method, enforces
+  `sourceDomain == ETH` and `targetDomain == SORA`, validates canonical
+  `SubmitBridgeProof` local-admission metadata, normalizes the three binding
+  hashes, copies native verifier artifact bytes, and rejects empty/all-zero
+  artifacts before Torii/core submission packaging.
+- Release-readiness helper inventories now require the Ethereum local-admission
+  symbols for Swift, Java Android, and .NET as well as the earlier JS, Python,
+  and Kotlin/JVM symbols.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `rg -n 'wasm|WebAssembly|snarkjs' IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+    (no matches)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - Conflict-marker scan over the same touched files.
+- Validation not run: `dotnet` is not installed on this machine; Java/Gradle
+  validation remains unavailable because this machine has no installed Java
+  runtime.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK local-admission packaging
+
+- Added ETH -> SORA local-admission packaging helpers for the browser JS SDK,
+  Python SDK, and Kotlin/JVM SDK. The helpers package native verifier output
+  for `SubmitBridgeProof`, bind `sourceDomain == ETH` and `targetDomain ==
+  SORA`, validate the canonical local-admission metadata, copy byte buffers, and
+  reject empty/all-zero proof artifacts before submission.
+- The JS package root now re-exports the local-admission constants plus
+  `buildEthereumMainnetSccpLocalAdmissionSubmission` and
+  `buildBscMainnetSccpLocalAdmissionSubmission`; TypeScript declarations cover
+  both runtime exports and the `EthereumMainnetSccp.buildLocalAdmissionSubmission`
+  facade method.
+- Release-readiness helper inventories now require the new ETH local-admission
+  helper symbols for JS, Python, and Kotlin. Java Android, Swift, and .NET still
+  need the same ETH local-admission parity before the SDK layer can be called
+  complete.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`12 passed`)
+  - `npm run build:dist && node --test test/sccpPackageExports.test.js`
+    from `javascript/iroha_js` (`6 passed`)
+  - `node --test test/sccpEthereumMainnet.test.js test/sccpBscMainnet.test.js`
+    from `javascript/iroha_js` (`22 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_builds_local_admission_submission or bsc_mainnet_sccp_local_admission_submission'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `rg -n 'wasm|WebAssembly|snarkjs' javascript/iroha_js/src/sccp.js javascript/iroha_js/test/sccpEthereumMainnet.test.js python/iroha_torii_client/sccp.py kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt`
+    (no matches)
+- Validation not run: `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+  could not start because this machine has no installed Java runtime.
+
+## 2026-06-02 SCCP Ethereum mainnet source-admission helper facade
+
+- Added Ethereum-mainnet-specific Rust helpers for the governed
+  source-adapter path:
+  `build_sccp_eth_mainnet_source_adapter_deployment`,
+  `verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production`, and
+  `verify_sccp_eth_mainnet_source_chain_proof_envelope_production`.
+- The new regression proves the ETH -> SORA helper path rejects material-only
+  proofs, wrong source/target domains, replayed deployment receipts, and BSC
+  material while still producing a local-admission package with the expected
+  governed material/deployment hashes.
+- Reconfirmed the first-release active launch policy is Ethereum mainnet:
+  configured ETH material can open independently, while configured BSC source
+  evidence now stops at the Ethereum lane gate until the BSC lane policy opens.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_sccp eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_lane_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch --features app_api --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_torii destination_binding_query_respects_ethereum_lane_launch_policy --features app_api --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO XMLDSig same-document references, transforms, and SignedProperties
+
+- Extended the supported ISO XMLDSig Reference URI scope from only an empty URI
+  to either an empty URI or one unique same-document `#id` target. Target
+  selection accepts exact `Id`, `ID`, `id`, and `xml:id` attributes, rejects
+  remote/absolute references, empty fragments, duplicate IDs, and
+  namespace-qualified non-`xml` ID attributes, then canonicalizes only the
+  selected unsigned element before the SHA-256 digest check. Referenced elements
+  nested under ancestor namespace declarations carry that inherited namespace
+  context into root canonicalization.
+- Tightened Reference transform policy to require an enveloped-signature
+  transform first, with at most one final supported C14N transform. Explicit
+  Reference C14N transforms now drive payload digest canonicalization; legacy
+  references without that final transform retain the existing exclusive-C14N
+  default. Missing, reordered, extra, or unsupported transforms fail closed even
+  when `SignedInfo` is otherwise correctly re-signed.
+- Added narrow XAdES `SignedProperties` Reference support. The verifier now
+  allows one optional Reference with the XAdES `SignedProperties` Type URI, a
+  local `#id` target whose root is `SignedProperties`, exactly one supported C14N
+  transform, and a SHA-256 digest. The enclosing `QualifyingProperties` target
+  must bind to the enclosing `Signature` `Id`; certificate-backed XAdES
+  signatures must bind the first `SigningCertificateV2` SHA-256 digest to the
+  XMLDSig leaf certificate. The supported XAdES signed-property shape is direct
+  `Signature` -> `Object` -> `QualifyingProperties` -> `SignedProperties` ->
+  `SignedSignatureProperties` -> singleton text-only `SigningTime` and optional
+  `SigningCertificateV2`; `QualifyingProperties` accepts only `Target`, and
+  `SigningCertificateV2` accepts only attribute-free direct `Cert` children with
+  attribute-free direct `CertDigest` children, a `DigestMethod` carrying only
+  `Algorithm`, and a text-only `DigestValue`. Any `SignedProperties` element
+  under the signature must be the verified referenced direct target;
+  unreferenced, duplicate, misplaced, wrapped, unrelated, tampered,
+  target-drifted, wrapped certificate-digest, or certificate-digest-drifted
+  XAdES properties fail closed. X.509 validity
+  evaluation uses only a singleton attribute-free text-only `SigningTime` from
+  that verified `SignedProperties` target, falling back to BAH `CreDt` when no
+  signed time is present; unsigned signature-local `SigningTime` values are not
+  trusted.
+- Kept the supported XMLDSig method/transform subset parameter-free. `SignedInfo`
+  `CanonicalizationMethod`/`SignatureMethod`, Reference `DigestMethod`, payload
+  Reference transforms, and XAdES `SignedProperties` transforms now reject
+  non-whitespace child content such as `InclusiveNamespaces`, XPath, HMAC, or
+  digest parameters instead of silently ignoring unsupported semantics. Critical
+  XMLDSig method elements must appear exactly once. XMLDSig method/transform
+  elements accept only `Algorithm`, payload References accept only `URI`, XAdES
+  `SignedProperties` References accept only `URI`/`Type`, Reference transforms
+  must be enclosed in exactly one attribute-free `Transforms` wrapper, and extra
+  direct children under `Reference` or `Transforms` fail closed. Supported
+  References must keep direct children ordered as `Transforms`, `DigestMethod`,
+  then `DigestValue`.
+- Enforced singleton cryptographic value extraction for required XMLDSig base64
+  fields. `SignatureValue`, per-Reference `DigestValue`, and XAdES
+  `CertDigest` values now reject duplicates and must be attribute-free text
+  leaves without nested markup or comments; XAdES `CertDigest` wrappers may only
+  contain direct `DigestMethod`/`DigestValue` children. `PublicKey` must also be
+  singular, and both `PublicKey` and `X509Certificate` credential leaves must be
+  attribute-free text without nested markup or comments. Public-key material
+  cannot be mixed with `X509Certificate` material in the same `KeyInfo`. Key
+  material must appear inside exactly one `KeyInfo` using either
+  `KeyValue/ECKeyValue` with the P-256 `NamedCurve` URI or one `X509Data`
+  certificate-chain wrapper. The structured wrappers accept only implemented
+  direct children (`KeyInfo` -> `KeyValue` or `X509Data`, `KeyValue` ->
+  `ECKeyValue`, `ECKeyValue` -> `NamedCurve`/`PublicKey`, and `X509Data` ->
+  `X509Certificate`) and only namespace declaration attributes, except for the
+  required `NamedCurve URI`; unsupported child elements, unsupported ordinary
+  attributes, non-whitespace wrapper text, duplicate `KeyInfo` blocks, and
+  `PublicKey`/`X509Certificate` material outside that block fail closed.
+- Tightened top-level XMLDSig structure parsing so `Signature` accepts only the
+  implemented direct children (`SignedInfo`, singleton `SignatureValue`,
+  singleton `KeyInfo`, and at most one `Object`) and `SignedInfo` accepts only
+  direct `CanonicalizationMethod`, `SignatureMethod`, and `Reference` children
+  in that supported order.
+  The verifier now derives canonicalization, signature bytes, and key material
+  from those direct children, so wrapped `SignedInfo` or method nodes,
+  unsupported direct children, and duplicate singleton nodes fail before digest
+  or ECDSA verification.
+- Canonicalized the supported P-256 ECDSA signature policy. Both XMLDSig
+  fixed-width `r || s` and DER `SignatureValue` encodings are still accepted,
+  but non-canonical high-S signatures now fail closed before ECDSA verification;
+  generated XMLDSig fixtures normalize signatures to low-S before encoding.
+- Added direct reference-target coverage for valid `xml:id` resolution,
+  inherited namespace context, invalid URI/duplicate-ID rejection, exact
+  transform-set enforcement, and `SignedProperties` transform enforcement, plus
+  end-to-end require-verified `pacs.008` fixtures signed over
+  `Reference URI="#doc-001"`, an explicit inclusive Reference C14N transform, a
+  re-signed unsupported extra transform rejection, a valid two-Reference XAdES
+  `SignedProperties` payload, unreferenced and duplicate `SignedProperties`
+  elements, `SignedProperties` digest tampering, `QualifyingProperties` target
+  drift, a certificate-backed
+  `SigningCertificateV2` leaf digest accept/reject pair, direct
+  `SigningCertificateV2` `Cert`/`CertDigest` shape checks, and parameterized
+  C14N/Signature/Digest/Transform rejection, duplicate method rejection, and
+  transform-without-wrapper rejection. Added singleton regressions for duplicate
+  required base64 children, duplicate XAdES `CertDigest` methods, unsupported
+  XMLDSig method/Reference/Transforms/Transform/DigestMethod attributes,
+  reordered Reference children, ambiguous public-key inputs, required-base64
+  attributes/nested markup/comments, duplicate `SignatureValue`, duplicate
+  `DigestValue`, unsupported `SignatureValue` attributes, duplicate `PublicKey`,
+  nested/commented `PublicKey` and `X509Certificate` credential leaves, duplicate
+  `KeyInfo`, `PublicKey` outside `KeyInfo`, and mixed
+  `PublicKey`/`X509Certificate` material. Added KeyInfo-shape regressions for wrong `NamedCurve`, missing
+  `KeyValue/ECKeyValue` wrappers, certificate
+  material without `X509Data`, unsupported `KeyInfo`/`KeyValue`/`ECKeyValue`/
+  `X509Data` child elements, unsupported KeyInfo credential attributes, and
+  non-whitespace `KeyInfo` wrapper text. Added direct `Signature`/`SignedInfo`
+  shape regressions for wrapped `SignedInfo`, reordered or unsupported direct
+  `Signature`/`SignedInfo` children, duplicate singleton signature children, and
+  wrapped or duplicated method nodes. Added XAdES placement regressions for direct
+  `Object/QualifyingProperties/SignedProperties` shape, unsupported
+  `QualifyingProperties` attributes, wrapped `QualifyingProperties`, wrapped
+  `SignedProperties`, unsupported extra XAdES wrapper children, and reordered
+  Reference children. Added evaluation-time regressions for
+  signed-property `SigningTime`, duplicate signed times, unsupported signed
+  `SigningTime` attributes, the no-signed-time without-BAH path, and unsupported
+  `SignedSignatureProperties` placement, `SigningCertificateV2`/`Cert`/
+  `CertDigest`/XAdES `DigestMethod` attributes. Added P-256 malleability
+  regressions proving mathematically valid high-S fixed-width and DER
+  `SignatureValue` encodings fail closed while low-S encodings still pass.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii high_s --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`33 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii signature_value --lib -- --nocapture`
+    (`5 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`80 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig prefixed attribute canonicalization
+
+- Extended the supported XMLDSig canonicalizer from implicit `xml:` attributes to
+  declared non-`xml` prefixed attributes. Attribute sorting now resolves
+  namespace URI/local-name keys from local, ancestor, and inherited root
+  namespace bindings; duplicate expanded attribute names and unbound prefixes
+  fail closed.
+- Added end-to-end require-verified fixtures proving prefixed attributes
+  canonicalize inside the signed payload digest and inside exclusive-C14N
+  `SignedInfo` when the namespace is inherited from the enclosing `Signature`.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`31 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 ISO XMLDSig implicit XML namespace attributes
+
+- Extended the require-verified XMLDSig fixture coverage for implicit `xml:`
+  namespace attributes from payload digest canonicalization into `SignedInfo`
+  signature verification. The canonicalizer accepts `xml:*` attributes without
+  requiring an explicit `xmlns:xml` declaration, sorts them by the XML namespace
+  URI/local name, and still rejects explicit reserved namespace declarations plus
+  unbound prefixed attributes.
+- This narrows the remaining canonical XML gap to broader namespace-aware C14N
+  coverage, official rail trust/revocation fixture packages, and official
+  MDR/XSD fixtures.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`13 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_signed_info --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`28 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 ISO XMLDSig no-comments canonicalization
+
+- Extended the supported XML canonicalizer used by Torii ISO XMLDSig/XAdES
+  verification to omit valid XML comments for the supported no-comments C14N
+  algorithms. Malformed comment syntax still fails closed, and processing
+  instructions, CDATA, DTD/general/custom entity expansion, carriage returns,
+  unsupported attribute namespaces, and broader namespace context remain outside
+  the supported subset.
+- Added an end-to-end `require-verified` fixture where comments appear in both
+  the referenced `pacs.008` payload and `SignedInfo`; digest and signature
+  verification now prove comments are omitted before hashing/verifying.
+- Updated the ISO engineering backlog, settlement mapping, and TradFi interop
+  audit to describe no-comments C14N comment omission accurately.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`10 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile_accepts_comments_in_no_comments_c14n --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 profile mismatch and lifecycle transitions
+
+- Tightened Torii ISO profile admission so a selected rail profile with no
+  inbound message profile for the submitted endpoint family returns
+  `UnknownMessageType` instead of a generic validation failure. BAH `MsgDefIdr`
+  values outside the selected profile version set are now covered by a focused
+  regression as well.
+- Broadened lifecycle transition coverage for payment returns and cancellations:
+  known-original `pacs.004` returns now assert the original durable record is
+  rejected with the ISO reason/detail while the lifecycle message is accepted,
+  and known-original `camt.056` recalls now assert the original moves to pending
+  hold with `CANCELLATION_REQUESTED` recorded.
+- Updated the engineering backlog and TradFi interop audit so profile mismatch
+  and cancellation/return transition tests are no longer listed as open ISO
+  gaps.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii profile_validation_rejects_selected_profile_message_type_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii live_profile_rejects_app_header_message_definition_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii lifecycle_camt056_marks_known_original_pending_cancellation --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii lifecycle_pacs004_marks_original_returned --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 reference snapshot checksum metadata
+
+- Added focused Torii coverage proving profile admission metadata records the
+  exact `ReferenceDataSnapshots::snapshot_id()` checksum when reference data is
+  loaded. The regression loads a BIC/LEI snapshot, validates an inbound
+  `pacs.008`, and confirms the metadata checksum matches the runtime snapshot
+  id and differs from the all-missing default snapshot checksum.
+- The engineering backlog no longer lists reference snapshot checksum
+  expectations as an open Torii test gap.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii profile_validation_records_reference_snapshot_checksum --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 business-message idempotency
+
+- Extended Torii ISO bridge idempotency from payload hashes and normalized UETRs
+  to trimmed `BizMsgIdr`/BAH business-message identifiers. Distinct durable
+  records can no longer reuse the same business message id, and rejected-message
+  replacement keeps failing closed if the retry would claim another record's
+  business message id.
+- The business message id comparison trims transport whitespace but remains
+  case-sensitive; UETR normalization remains case-insensitive.
+- Updated the engineering backlog and finance mapping docs so replay by
+  business message id/UETR is no longer listed as outstanding.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii idempotency --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii retry_replacement --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii durable_store_reloads_message_status --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 TradFi XMLDSig supported canonicalization
+
+- Replaced literal-byte XMLDSig verification for the supported ISO bridge
+  subset with deterministic canonicalization before `SignedInfo` signature
+  verification and enveloped payload digest checks. The canonicalizer expands
+  empty elements, normalizes attribute quotes, sorts namespace declarations,
+  unprefixed attributes, declared prefixed attributes, and implicit `xml:`
+  namespace attributes, decodes
+  predefined and numeric XML character references, applies inherited root
+  namespace declarations from the enclosing `Signature` element according to the
+  declared C14N mode (all root declarations for inclusive C14N, visibly used
+  root declarations for exclusive C14N), and validates tag nesting before
+  hashing or verifying.
+- The verifier still fails closed for XML needing broader canonical XML
+  machinery: DTD/general/custom entity expansion, malformed comments, processing
+  instructions, CDATA, carriage returns, duplicate attributes, unbound prefixed
+  attributes, explicit reserved namespace declarations, inherited namespace
+  context beyond root namespace declarations, raw attribute whitespace rewrites,
+  and malformed tag structure remain rejected until complete namespace-aware C14N
+  coverage is implemented.
+- Added regressions proving self-closing `SignedInfo` methods pass only when
+  the signature is calculated over canonicalized bytes, and that a signature
+  calculated over raw self-closing XML is rejected. Added character-reference
+  regressions covering predefined/numeric decode, invalid reference rejection,
+  and an end-to-end XMLDSig payload digest over a message id containing
+  `&amp;`. Added a prefixed `ds:Signature` regression proving `SignedInfo`
+  verification uses namespace declarations inherited from the outer
+  `Signature` element, and added inclusive/exclusive C14N regressions proving
+  the declared canonicalization mode controls inherited namespace bytes before
+  signature verification. Added fixed-width P-256 ECDSA `SignatureValue`
+  coverage so XMLDSig signatures encoded as raw `r || s` bytes verify alongside
+  the existing DER fixtures. Added comment regressions proving no-comments C14N
+  omits XML comments from both referenced payload and `SignedInfo` bytes. Added
+  namespace-attribute and prefixed-attribute regressions covering canonical
+  expanded-name ordering, signed payload digests, `SignedInfo` signature
+  verification, reserved namespace declaration rejection, unbound prefixed
+  attribute rejection, and duplicate expanded-attribute rejection.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_character_references_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_signed_info --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_prefixed_signed_info_with_inherited_namespace --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_fixed_width_ecdsa_signature_value --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_rejects_exclusive_bytes_declared_as_inclusive_c14n --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_self_closing_signed_info_methods --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_rejects_raw_self_closing_signed_info_signature --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`31 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`9 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 TradFi XMLDSig certificate revocation pins
+
+- Added profile-level `revoked_certificate_sha256` for ISO XMLDSig/XAdES
+  verification. The field is parsed from user config, carried through actual
+  config into `TradfiRailProfile`, normalized with the same lowercase non-zero
+  SHA-256 validation as trust pins, and enforced before public-key or
+  certificate-chain trust pins can admit a signature.
+- Torii now rejects an otherwise valid `require-verified` P-256/SHA-256
+  XMLDSig chain when any verified leaf or issuer DER digest appears in the
+  selected profile's revocation deny list. A matching public-key pin does not
+  override an explicitly revoked certificate chain.
+- Added operator-facing configuration guidance for certificate-anchor rotation:
+  overlap current and next `trusted_certificate_sha256` pins during rail cutover,
+  then remove the retired digest; reserve `revoked_certificate_sha256` for
+  compromised leaf or anchor digests that must override otherwise trusted
+  material.
+- Remaining TradFi trust work is now external rail/profile trust-anchor
+  packages, complete canonical XML coverage, CRL/OCSP or rail revocation-feed
+  fixtures, and official MDR/XSD fixture coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core xml_signature_key_pins_accept_any_verified_certificate_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_config iso_bridge_json_deserializes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii xml_signature_revocation_pin --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`20 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`9 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`5 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet launch-policy focused rerun
+
+- Re-applied the Ethereum-mainnet first-lane SCCP policy after the merge
+  cleanup: `sccp_production_policy_v1()` now defaults to
+  `EthereumMainnetLane`, Core/Torii configured launch-policy tests accept
+  configured ETH material without requiring future lanes, and configured
+  non-ETH source-adapter material stays behind the Ethereum launch gate.
+- Re-aligned public SCCP release-readiness and strict release-bundle scripts so
+  the active launch lane is Ethereum mainnet (`chain_id == 1`) while future
+  EVM lanes remain blocked until their own evidence is complete.
+- Re-ran the focused policy and admission checks for the current Ethereum
+  first-lane state. The full multi-hour workspace test suite and full
+  core-admission corridor were not rerun in this pass.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/iso20022_bridge.rs`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_lane_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch --features app_api --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii destination_binding_query_respects_ethereum_lane_launch_policy --features app_api --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-01 TradFi XMLDSig certificate-chain pins
+
+- Extended ISO bridge XMLDSig trust matching from a single leaf certificate pin
+  to verified `KeyInfo/X509Data` chains. Torii now derives the signing key from
+  the leaf certificate, verifies each supplied leaf-to-issuer link, and exposes
+  only verified certificate DER SHA-256 digests to the selected profile's
+  `trusted_certificate_sha256` pins.
+- Hardened the chain policy deterministically: XML signing leaves must carry
+  `digitalSignature`, and every supplied issuer must be a CA certificate with
+  `keyCertSign` before its digest can satisfy a profile pin.
+- Added deterministic certificate validity checks for X.509 XMLDSig material:
+  leaf and issuer certificates are evaluated against verified signed XAdES
+  `SigningTime` when present, otherwise the Business Application Header `CreDt`;
+  no wall-clock validation is used in the verifier path. The timestamp parser
+  rejects malformed and non-ASCII date/time literals without panicking before
+  certificate-chain validation.
+- Added a deterministic supported XML canonicalization subset while the bridge
+  still rejects XML outside the implemented C14N surface. `require-verified`
+  signatures now canonicalize `SignedInfo` and referenced payload XML before
+  hashing or signature verification, including empty-element expansion,
+  attribute quote normalization, and namespace-declaration/unprefixed-attribute
+  sorting. Valid XML comments are now omitted for supported no-comments C14N,
+  while malformed comments, processing instructions, CDATA, DTD/general/custom
+  entity expansion, carriage returns, unsupported attribute namespaces, duplicate
+  attributes, and malformed tag structure fail closed.
+- Added generated P-256 X.509 fixtures covering a signed ISO payload accepted
+  by a pinned issuer digest and rejected when the same chain lacks any matching
+  profile trust pin, plus adversarial fixtures for non-CA issuers, issuers
+  without `keyCertSign`, leaves without `digitalSignature`, expired leaves,
+  not-yet-valid issuers, non-ASCII XAdES signing times, accepted self-closing
+  `SignedInfo` methods signed over canonicalized bytes, and rejected
+  self-closing `SignedInfo` signatures calculated over raw XML bytes. The
+  production dependency now enables x509-parser's signature-verification
+  support; `rcgen` is used only as a Torii test fixture generator.
+- Remaining TradFi trust work is official rail/profile trust-anchor packages,
+  complete canonical XML coverage, revocation policy fixtures, and official
+  MDR/XSD fixture coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core xml_signature_key_pins_accept_any_verified_certificate_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`8 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`18 passed`)
+  - `git diff --check -- crates/iroha_core/src/iso_bridge/profiles.rs crates/iroha_torii/Cargo.toml crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `bash -lc 'if rg -n "^(<<<<<<<|=======$|>>>>>>>)"; then exit 1; else exit 0; fi'`
+
+## 2026-06-01 SCCP BSC local-admission evidence
+
+- Kept BSC -> SORA inbound proof support on the explicit local-admission
+  submission package path, with the source proof bound to configured BSC
+  verifier material plus governed source-adapter deployment evidence instead
+  of outbound EVM Groth16 destination packaging.
+- The earlier BSC-active launch-policy validation for this path is superseded
+  by the Ethereum-mainnet first-lane gate described above: configured BSC
+  source proofs now remain blocked until the BSC lane policy opens.
+
 ## 2026-06-01 TradFi XMLDSig profile trust-pin aliases
 
 - Kept profile-level `trusted_public_key_sha256` and
@@ -16021,7 +24705,7 @@ Last updated: 2026-06-03
 - Tightened release-readiness and strict release-bundle inventories so the
   `dotnet-sdk` `eth,bsc` row now names the BSC outbound calldata/submit facade
   symbols, and made the active launch-lane fixture/verifier tests follow the
-  configured active BSC lane instead of hard-coding row positions.
+  configured active lane instead of hard-coding row positions.
 - Validation:
   - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
     (`4 passed`)
@@ -16030,29 +24714,14 @@ Last updated: 2026-06-03
   - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
     (`815 passed`)
 
-## 2026-06-01 SCCP BSC launch policy evidence alignment
+## 2026-06-01 SCCP launch policy evidence alignment
 
-- Re-audited the current SCCP launch policy against the release scripts and
-  core admission path: `sccp_production_policy_v1()` is `BscMainnetLane`, and
-  the public release-readiness scripts now use the same active BSC domain.
-- Verified the BSC -> SORA positive `SubmitBridgeProof` path uses the local
-  admission package with configured BSC source verifier material,
-  deployment-bound source-adapter evidence, BSC destination rollout, and BSC
-  route allowlist material.
-- Updated the public docs/roadmap wording that still described the older
-  Ethereum-active policy, so operator-facing release evidence matches the
-  runtime gate that is actually compiled.
-- Validation:
-  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
-    (`1 passed`)
-  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
-    (`35 passed`)
-  - `cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
-    (`1 passed`)
-  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_root_blockers`
-    (`3 passed`)
-  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
-  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs`
+- This earlier BSC-active policy note is superseded by the Ethereum-mainnet
+  launch-policy focused rerun above. The current runtime default, release
+  scripts, docs, and focused admission regressions use Ethereum mainnet as the
+  active first lane.
+- BSC source-proof material remains covered as future-lane evidence and must
+  wait for the BSC lane policy before `SubmitBridgeProof` can admit it.
 
 ## 2026-06-01 SCCP BSC source proof deployment binding
 
@@ -16207,25 +24876,58 @@ Last updated: 2026-06-03
 
 - Hardened `scripts/formal/check_sumeragi_formal_coverage.py` so referenced
   Sumeragi TLA modules now reject duplicate or non-leading `MODULE` headers,
-  missing or duplicate terminating `====` markers, trailing content after the
-  terminator,
+  malformed module identifiers, missing or duplicate terminating `====` markers,
+  trailing content after the terminator,
   duplicate constant declarations, duplicate top-level operator definitions, and
   repeated top-level `RECURSIVE` declarations before either Apalache or TLC is
-  invoked. The guard now also requires duplicate-free TLA variable declarations
-  to match exactly one static top-level `vars` tuple, and requires every
-  selected CFG filename to belong to the selected TLA module by exact stem or
-  module-stem prefix. Runner proof inputs now also have single-assignment
+  invoked. Referenced TLA modules must also stay free of top-level `ASSUME`,
+  `ASSUMPTION`, `AXIOM`, and theorem/proof directives such as `THEOREM`,
+  `PROOF`, or `QED`, so module assumptions or proof text cannot make a
+  checked model vacuous or uncheckable before invariants run. The guard now
+  also requires duplicate-free TLA variable declarations to match exactly one
+  static top-level `vars` tuple, and requires every selected CFG filename to
+  belong to the selected TLA module by exact stem or module-stem prefix. Runner
+  proof inputs now also have single-assignment
   checks, so duplicate `spec_file` or `cfg_file` assignments cannot be hidden by
-  Python dictionary conversion before static resolution, and resolved
+  Python dictionary conversion before static resolution, append-style
+  `spec_file`/`cfg_file` mutations fail closed, declaration-prefixed or
+  array-indexed proof-input assignments and mutating shell builtins are
+  rejected, and resolved
   `spec_file`/`cfg_file` inputs must remain flat direct children of the Sumeragi
   formal directory with the expected `.tla`/`.cfg` suffixes. TLC `module`
   assignments must now be TLA identifiers before the runner maps them to module
-  files.
+  files, and append-style, declaration-prefixed, or array-indexed assignments
+  plus shell-builtin mutations for `module`, `tlc_constraint`, or
+  `apalache_length` are rejected before model checking.
 - The TLA operator parser now distinguishes top-level module operators from
   scoped `LET` helpers, so CFG behavior/check references and TLC constraints
   cannot be satisfied by a helper that is not available as a module-level
-  proof target. The new `vars` parser handles both inline tuples and multiline
-  tuples with unindented closing delimiters.
+  proof target. Named `INSTANCE` declarations are now dependency declarations
+  only, so a module instance alias cannot be counted as an available CFG/TLC
+  proof target. Top-level operator definitions must now use non-reserved static
+  signatures, so reserved TLA keywords or malformed parameter lists cannot be
+  counted as available CFG targets, and CFG references to behavior, constraint,
+  invariant, and property operators must resolve to non-reserved zero-arity
+  definitions. The new `vars` parser handles both inline
+  tuples and multiline tuples with
+  unindented closing delimiters, and now requires the full body to be exactly
+  one static tuple.
+  Empty TLA `CONSTANT(S)` and `VARIABLE(S)` declaration blocks are rejected
+  before model checking, so declaration headers cannot masquerade as populated
+  model surfaces. TLA declaration lines must now be non-reserved static
+  identifier lists and cannot end the declaration block with a dangling comma,
+  so malformed or reserved `CONSTANT(S)`/`VARIABLE(S)` text cannot silently
+  shrink the model surface. The `vars` tuple must use the same non-reserved
+  static variable names.
+  TLA dependency declarations must now use non-reserved static module
+  identifiers in `EXTENDS` lists and `INSTANCE` statements plus non-reserved
+  static named-instance aliases, so malformed or reserved import text cannot be
+  partially scanned into a weaker dependency set.
+  TLA `RECURSIVE` declarations must now list static operator declarations, so
+  malformed recursive entries cannot be partially counted as available
+  top-level operators. Recursive declarations must also match actual top-level
+  definitions with the same arity, so declarations alone cannot satisfy CFG
+  proof-target reachability.
 - Added missing terminating `====` markers to the 127 Sumeragi TLA modules that
   previously had a module header but no explicit terminator, bringing the
   full 500-module formal corpus under the same terminator rule.
@@ -16246,20 +24948,59 @@ Last updated: 2026-06-03
   CFG shape validation now counts only top-level `SPECIFICATION`, `INIT`,
   `NEXT`, `INVARIANT(S)`, and `PROPERTY/PROPERTIES` directives when proving a
   config has behavior and semantic checks, so indented continuation entries
-  cannot masquerade as behavior or check directives.
+  cannot masquerade as behavior or check directives. Indented continuation
+  entries whose first token is a CFG directive are now rejected before model
+  checking, and empty multi-line `INVARIANTS`/`PROPERTIES` blocks are rejected
+  before they can masquerade as real check declarations.
+  Empty CFG `CONSTANT`/`CONSTANTS` blocks are now rejected before they can
+  masquerade as intentional constant binding sections. CFG constant-binding
+  lines must now bind exactly one static constant name, so assignment-looking
+  text inside a value cannot be miscounted as a separate bound constant.
+  Formal artifact inventory now scans recursively under `docs/formal/sumeragi`,
+  so nested `.tla`/`.cfg` files cannot hide from conflict-marker and
+  reachability checks.
+  CFG-referenced non-`TypeInvariant` semantic checks now also fail closed when
+  the selected TLA module defines them as top-level literal `TRUE` or `FALSE`
+  predicates, single-line or multi-line boolean-only `TRUE`/`FALSE` wrappers,
+  or simple alias chains resolving to `TRUE`, `FALSE`, or `TypeInvariant`,
+  preventing a vacuous invariant/property from satisfying coverage.
+  Static CFG constraints and TLC runner-injected constraints now fail closed
+  under the same zero-arity and trivial-chain checks, so a local bound cannot be
+  parameterized, a literal or single-line/multi-line boolean-only
+  `TRUE`/`FALSE` predicate, or an alias chain resolving to
+  `TRUE`/`FALSE`/`TypeInvariant`.
+  Static CFG `CONSTRAINT` directives are now singleton semantic filters, so
+  repeated constraints in one CFG fail before TLC can silently conjunct them and
+  narrow the checked state space.
+  Documented mutation modes must now resolve to Apalache/TLC CFG stems that
+  contain their normalized `-bug-` suffix, with the existing commit-root TLC
+  `_tlc_bug_` allowance preserved.
   The current 500-module formal corpus passes with single leading headers,
-  exactly one terminal `====` per module, no duplicate TLA declarations,
-  variable/`vars` drift, CFG/module ownership drift, duplicate runner
-  proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
-  module names, malformed runner case-block shape, unresolved formal wiring or
-  artifact merge markers, indented CFG continuation spoofing, or formal-path
-  containment violations.
+  exactly one terminal `====` per module, and without malformed or reserved
+  module identifiers, duplicate TLA declarations, malformed or reserved TLA
+  operator signatures, malformed or reserved TLA `RECURSIVE` declarations,
+  missing or arity-mismatched recursive definitions, top-level TLA
+  assumption/proof directives, malformed, reserved, or empty TLA
+  declaration blocks, malformed TLA dependency declarations, dynamic, reserved,
+  or wrapped `vars` tuple bodies,
+  variable/`vars` drift, parameterized CFG proof targets, CFG/module ownership
+  drift, named-instance proof targets, duplicate runner proof-input assignments,
+  flat-name drift, suffix drift, non-identifier TLC module names, malformed
+  runner case-block shape,
+  unresolved formal wiring or artifact merge markers,
+  indented CFG continuation spoofing, CFG `vars` tuple proof targets,
+  CFG-referenced literal or
+  single-line/multi-line boolean-wrapper/type-alias-chain semantic checks,
+  empty multi-line check blocks, malformed or empty CFG constant blocks, hidden
+  nested formal artifacts, reserved CFG constant bindings, duplicated, vacuous,
+  or parameterized static CFG constraints, vacuous or parameterized TLC runner
+  constraints, mutation CFG-name drift, or formal-path containment violations.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
     (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
   - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
-    (`79 passed`)
+    (`115 passed`)
   - TLA terminator audit across `docs/formal/sumeragi/*.tla`
     (`missing 0`, `multi 0`, `trailing_after_end 0`)
   - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
@@ -16334,7 +25075,7 @@ Last updated: 2026-06-03
 - Tightened the EVM-family source live collector's operator-supplied hash pins
   to require lowercase `0x` hex as well, keeping live source TOML generation
   aligned with the exact remote JSON-RPC and summary evidence checks.
-- Restored the release-bundle verifier's active BSC launch-lane boundary:
+- Restored the release-bundle verifier's active Ethereum launch-lane boundary:
   complete cryptographic-evidence row checks apply to the active lane, while
   future-lane rows remain diagnostic until their launch policies open.
 - Added all-lanes regressions for non-canonical EVM source bridge and
@@ -16608,7 +25349,7 @@ Last updated: 2026-06-03
 
 ## 2026-06-01 SCCP production corridor rerun with native .NET phase
 
-- Re-ran the SCCP production-readiness corridor on the current BSC-mainnet
+- Re-ran the SCCP production-readiness corridor on the then-current BSC-mainnet
   SDK/release-gate tree, including the newly added `dotnet-sdk` phase.
 - The first full logged run proved the Rust SCCP phase (`240` tests plus doc
   tests); the evidence helper inventory changed during the long run, so the
@@ -17665,13 +26406,14 @@ Last updated: 2026-06-03
   assignment must resolve to an existing `.tla` file with a matching module
   declaration. CFG
   `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
-  `PROPERTY/PROPERTIES` references must use static TLA operator-name syntax and
-  are now checked against the selected TLA module's operator definitions.
+  `PROPERTY/PROPERTIES` references must use non-reserved static TLA
+  operator-name syntax and are now checked against zero-arity selected-module
+  operator definitions.
   Multi-line `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
   continuation line. CFG constant bindings are checked against the selected TLA
-  module's constant declarations in both directions, and duplicated constant or
-  behavior/check targets are rejected. Every referenced CFG must also include at
-  least one
+  module's constant declarations in both directions, and duplicated constant,
+  constraint, or behavior/check targets are rejected. Every referenced CFG must
+  also include at least one
   non-`TypeInvariant` invariant/property target, so no baseline, scheduled, or
   expected-failure run can degrade into a type-only check. Every `.tla` and
   `.cfg` file in the Sumeragi formal directory must also be reached by at least
@@ -17714,10 +26456,15 @@ Last updated: 2026-06-03
   Apalache local and Docker paths must pass the selected length, config, run
   directory, and spec, while TLC must pass the selected worker count, metadata
   directory, config, and module. Static CFG constraints and TLC runner-generated
-  constraints must resolve to selected-module operators, so constrained TLC runs
-  cannot silently target stale or missing predicates. The guard also compares
-  the resolved Apalache and TLC mutation CFG targets, allowing only the explicit
-  commit-root `_tlc_bug_` configs to diverge from the Apalache CFG names.
+  constraints must resolve to zero-arity selected-module operators, so
+  constrained TLC runs cannot silently target stale, missing, or parameterized
+  predicates. Static CFG constraints and TLC runner-generated constraints must
+  also avoid literal `TRUE`/`FALSE` predicates, single-line or multi-line
+  boolean-only `TRUE`/`FALSE` wrappers, and simple alias chains resolving to
+  `TRUE`/`FALSE`/`TypeInvariant`, so constrained runs cannot silently disable
+  the model or prune every behavior. The guard also compares the resolved
+  Apalache and TLC mutation CFG targets, allowing only the explicit commit-root
+  `_tlc_bug_` configs to diverge from the Apalache CFG names.
 - Added TLC runner coverage for the eleven original frontier recovery mutation
   configs via `frontier-bug-*`, plus exact TLC mapping overrides for
   `rbc-bug-duplicate-ready` and `engine-proposal-bug-skip-validation`.
@@ -17727,7 +26474,9 @@ Last updated: 2026-06-03
   ordering, and guard-before-Apalache order checks, Apalache version pin
   extraction and drift rejection, expected-failure counterexample semantics
   checks, baseline expected-failure marker rejection, malformed proof-input and
-  scalar runner assignment rejection, runner command-shape validation, runner
+  scalar runner assignment rejection including append-style, declaration-style,
+  array-indexed mutations, and mutating shell builtins, runner command-shape
+  validation, runner
   invocation proof-input binding checks, Apalache length-table parsing and
   runner drift
   rejection, CFG directive validation including duplicate `CHECK_DEADLOCK`
@@ -17746,14 +26495,20 @@ Last updated: 2026-06-03
   same-module Apalache/TLC routing, TLC-only mode allowance, and cross-runner
   module drift rejection. The TLA dependency tests now pin parsing for
   `EXTENDS`, `LOCAL INSTANCE`, and named `INSTANCE` dependencies, plus
-  fail-closed rejection of missing local modules. The CFG operator-reference
-  tests now pin single-line and multi-line behavior/check/constraint directive
-  parsing, static TLA operator-name syntax, TLA operator definition parsing, and
-  fail-closed rejection when a CFG names an operator missing from the selected
-  module. TLC constraint tests now pin static CFG
-  `CONSTRAINT` parsing and fail-closed runner constraint validation. The CFG
+  fail-closed rejection of missing local modules, reserved module names,
+  reserved named-instance aliases, and top-level TLA assumption/proof
+  directives. The CFG operator-reference tests
+  now pin single-line and multi-line behavior/check/constraint directive parsing,
+  non-reserved static TLA operator-name syntax, TLA operator definition parsing,
+  named `INSTANCE` aliases staying out of proof-target definitions, recursive
+  declaration-to-definition matching, zero-arity CFG proof targets, and
+  fail-closed rejection when a CFG names an operator missing from the
+  selected module. TLC constraint tests now pin static CFG
+  `CONSTRAINT` parsing and fail-closed zero-arity runner constraint validation.
+  The CFG
   constant-binding tests now pin inline/block CFG bindings, annotated TLA
-  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines,
+  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines
+  and reserved constant binding names,
   fail-closed rejection when a CFG binds a constant missing from the selected
   module, and fail-closed rejection when a declared TLA constant is not bound by
   the CFG. The duplicate constant binding
@@ -17761,9 +26516,11 @@ Last updated: 2026-06-03
   repeated constant bindings. The CFG semantic-check tests now pin
   acceptance for `TypeInvariant` plus a semantic check and rejection for
   type-only CFGs. The duplicate CFG target tests now pin acceptance for unique
-  behavior/check targets and rejection for repeated behavior directives or
-  repeated invariant/property operators. The formal inventory tests now pin
-  fail-closed rejection of unreferenced `.tla` or `.cfg` files.
+  behavior/check targets and rejection for repeated behavior directives,
+  repeated static constraints, or repeated invariant/property operators. The
+  trivial-chain tests now also pin single-line and multi-line boolean-only
+  literal wrappers for semantic checks and constraints. The formal inventory
+  tests now pin fail-closed rejection of unreferenced `.tla` or `.cfg` files.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
@@ -17789,6 +26546,20 @@ Last updated: 2026-06-03
 
 ## 2026-06-01 TAIRA TRON SCCP XOR settlement admission
 
+- Aligned `TairaXorSccpBridge.finalizeFromTaira` with canonical SCCP
+  payloads: the TRON bridge now accepts the recorded transfer payload bytes,
+  parses route/asset/recipient/amount on-chain, binds the proof by recomputing
+  the SCCP transfer message id, and treats `publicInputs[1]` as Iroha's
+  canonical SCCP commitment payload hash.
+- Tightened JavaScript SCCP builders so TAIRA account fields must be canonical
+  TAIRA I105 account ids, and ETH/BSC, Solana, and TON codec values are
+  validated before canonical payload hashing to match Rust
+  `verify_sccp_payload_structure`.
+- Hardened TAIRA XOR TRON finalize calldata generation so externally supplied
+  canonical payload bytes are parsed as the exact SORA->TRON XOR route before
+  hashing, optional cleartext fields must match those bytes, and TAIRA
+  recipient hash helpers reject account aliases unless callers deliberately
+  pass raw recipient bytes or a precomputed hash.
 - Hardened `taira_tron_xor` source-record admission so an `IvmProved`
   execution that records a TAIRA-to-TRON XOR SCCP transfer must carry a
   same-overlay `Burn<Numeric, Asset>` settlement from the payload sender.
@@ -17804,6 +26575,37 @@ Last updated: 2026-06-03
 - Added a TAIRA burn-and-record Kotodama contract plus deployment-tool support
   for producing a forced-ZK contract artifact alongside the TRON bridge
   deployment evidence flow.
+- Added a deterministic TRON mainnet funding/energy estimate to
+  `scripts/sccp_tron_taira_xor_deploy.mjs`; operators can now run
+  `estimate-budget` before funding the offline deployer, `account-status`
+  reports the funding gap against the recommended minimum, and deployment plans
+  persist the budget assumptions. The SCCP contract-smoke corridor now runs the
+  TRON deployment-helper tests so deployer signing, address validation,
+  verifier-material validation, funding estimates, and TAIRA burn-record
+  compilation stay covered.
+- Added a non-broadcasting `doctor` preflight to the TRON TAIRA XOR deployment
+  helper. It checks the local Node version, source/evidence-script readability,
+  optional `solc`/`ethers` availability, deployer secret validity, production
+  verifier material, safe endpoint shape, and optional deployer funding
+  readiness without printing private key material.
+- Added an offline `route-manifest` command to
+  `scripts/sccp_tron_taira_xor_deploy.mjs`. It validates deployment evidence,
+  TAIRA burn-record contract artifacts, canonical settlement asset IDs, IVM VK
+  references, verifier material, and the computed TRON destination binding
+  key/hash before writing the wallet/Torii `taira_tron_xor` manifest draft, and
+  refuses `productionReady: true` without explicit mainnet and live-readback
+  acknowledgements.
+- Hardened the TRON deployment helper's mainnet path so endpoint overrides must
+  be HTTPS public gateways without credentials, query strings, fragments, or
+  local/private/reserved hosts (including carrier-grade NAT, IPv4-mapped
+  loopback, IPv6 unique-local/link-local, and documentation ranges), and
+  `deploy --broadcast true` now fetches the deployer balance and fails before
+  creating deployment transactions when the account is below the current
+  recommended funding minimum.
+- Hardened TAIRA inbound TRON-source proof package binding so callers can pass
+  the deployed TRON bridge address and force `sourceEventDigest` to match the
+  deterministic `BurnToTaira` source-event digest for the selected burner,
+  TAIRA recipient, amount, and nonce before TAIRA settlement is submitted.
 - Added browser-safe SDK builders for `RecordSccpMessage` instruction bytes
   and the TAIRA XOR burn-record ZK IVM request. Torii now normalizes
   self-describing ZK IVM `contract_payload` metadata before derive/prove
@@ -17825,8 +26627,13 @@ Last updated: 2026-06-03
     (`8 passed`)
   - `cargo test -p iroha_torii normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload --lib`
     (`1 passed`)
-  - `node --test --test-name-pattern "TAIRA XOR|RecordSccpMessage|burn-record" javascript/iroha_js/test/sccpSolanaProver.test.js`
-    (`9 passed`)
+  - `node --test --test-name-pattern "TAIRA XOR|SCCP codec" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`11 passed`; includes canonical account-id, non-text codec, raw
+    canonical-payload, and public-input mismatch negative cases)
+  - `NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules node contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
+    (`sccp_message_bridge_smoke: ok`; includes malformed TAIRA payload
+    parser cases for version, domains, codecs, route, asset, sender,
+    recipient, amount, trailing bytes, and replay)
   - `node --test --test-name-pattern "getSccpProofManifests" javascript/iroha_js/test/toriiClient.test.js`
     (`3 passed`)
   - `node --test --test-name-pattern "getSccpProofManifests|buildIvmProvedTransaction" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/transactionBuilder.test.js`
@@ -17836,11 +26643,16 @@ Last updated: 2026-06-03
   - `node --test --test-name-pattern "canonicalizes normalized SCCP message proof bundles|published package root exports" javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js`
     (`2 passed`)
   - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js javascript/iroha_js/test/package_dist.test.js`
-    (`137 passed`)
+    (`144 passed`; includes TRON-source proof package source-event digest
+    binding against the deployed bridge address)
   - `node --test --test-name-pattern "force feature mode bits" javascript/iroha_js/test/kotodamaCompiler.test.js`
     (`1 passed`)
   - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs`
-    (`10 passed`)
+    (`24 passed`; includes route-manifest draft generation, production-ready
+    acknowledgment gates, destination binding mismatch rejection, settlement
+    alias rejection, malformed VK refs, and tampered burn-record artifacts)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`SCCP production corridor completed`)
 
 ## 2026-06-01 SCCP release artifact path control-character guard
 

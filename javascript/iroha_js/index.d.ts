@@ -614,6 +614,9 @@ export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced"
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
 export const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: 384;
 export const SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1: "abi_tuple_v1";
+export const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: "norito:sccp-local-admission:v1";
+export const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: "local_admission";
+export const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: "SubmitBridgeProof";
 export const SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1: "tron_abi_tuple_v1";
 export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1: "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
 export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1: string;
@@ -659,9 +662,10 @@ export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
+export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1: 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1: "burn_and_record";
-export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
@@ -705,16 +709,145 @@ export interface TairaXorTransferPayloadInput {
   asset_key?: string;
   assetId?: string;
   asset_id?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaSender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   recipientAddress?: string;
   recipient_address?: string;
   recipient?: string;
   amount: string | number | bigint;
   nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  senderAddress?: string;
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaSettlementFragment {
+  entrypoint?: "finalize_inbound";
+  route?: "taira_tron_xor";
+  route_id?: "taira_tron_xor";
+  payload?: never;
+  payload_json?: never;
+  payloadJson?: never;
+  payload_bytes?: never;
+  payloadBytes?: never;
+  [key: string]: unknown;
+}
+
+export interface TairaXorTronToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  /** Optional TRON bridge contract address; when supplied, sourceEventDigest is bound to the burn event. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  tronBridgeAddress?: string | BinaryLike | number[];
+  tron_bridge_address?: string | BinaryLike | number[];
+  settlementDefaults?: TairaXorTronToTairaSettlementFragment;
+  settlement_defaults?: TairaXorTronToTairaSettlementFragment;
+}
+
+export interface TairaXorTronToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<Record<string, unknown> & {
+    entrypoint: "finalize_inbound";
+    route: "taira_tron_xor";
+  }>;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
+}
+
+export interface TairaXorTronBurnStartedEventInput extends TairaXorRouteHashInput {
+  event: Record<string, unknown>;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  expectedSourceEventDigest?: string;
+  expected_source_event_digest?: string;
+  burnerAddress?: string | BinaryLike | number[];
+  burner_address?: string | BinaryLike | number[];
+  burner?: string | BinaryLike | number[];
+  tronSender?: string | BinaryLike | number[];
+  tron_sender?: string | BinaryLike | number[];
+  sender?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount?: string | number | bigint;
+  /** Optional TRON bridge contract address; when supplied, sourceEventDigest is recomputed from event fields. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  tronBridgeAddress?: string | BinaryLike | number[];
+  tron_bridge_address?: string | BinaryLike | number[];
+}
+
+export interface TairaXorTronBoundBurnStartedEvent {
+  readonly eventName: "tairaxorburnstarted" | "burntotaira";
+  readonly sourceEventDigest: string;
+  readonly routeIdHash: string;
+  readonly assetKeyHash: string;
+  readonly bridgeAddress: string | null;
+  readonly burnerAddress: string;
+  readonly tairaRecipient: string;
+  readonly tairaRecipientHash: string;
+  readonly amount: string;
+  readonly nonce: string;
 }
 
 export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
@@ -3675,6 +3808,113 @@ export type EthereumMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
     | { proof_result: EvmSccpProofResult }
   );
 
+export interface EvmMainnetLocalAdmissionSubmissionInput {
+  proofResult?: {
+    proofBytes?: BinaryLike;
+    proof_bytes?: BinaryLike;
+    publicInputsBytes?: BinaryLike;
+    public_inputs_bytes?: BinaryLike;
+    bundleBytes?: BinaryLike;
+    bundle_bytes?: BinaryLike;
+    envelopeBytes?: BinaryLike;
+    envelope_bytes?: BinaryLike;
+    statementHash?: string;
+    statement_hash?: string;
+    sourceVerifierMaterialHash?: string;
+    source_verifier_material_hash?: string;
+    sourceAdapterEngineDeploymentHash?: string;
+    source_adapter_engine_deployment_hash?: string;
+    submissionPackage?: Record<string, unknown>;
+    submission_package?: Record<string, unknown>;
+  };
+  proof_result?: EvmMainnetLocalAdmissionSubmissionInput["proofResult"];
+  submissionPackage?: Record<string, unknown>;
+  submission_package?: Record<string, unknown>;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  envelopeBytes?: BinaryLike;
+  envelope_bytes?: BinaryLike;
+  statementHash?: string;
+  statement_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  verifierBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  verifier_backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  envelopeEncoding?: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  envelope_encoding?: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  submissionKind?: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  submission_kind?: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  verifierEntrypoint?: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+  verifier_entrypoint?: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+}
+
+export interface EvmMainnetLocalAdmissionPayload {
+  readonly version: 1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBytesHex: string;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicInputsBytesHex: string;
+  readonly bundleBytes: Uint8Array;
+  readonly bundleBytesHex: string;
+  readonly statementHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterEngineDeploymentHash: string;
+}
+
+export interface EvmMainnetLocalAdmissionSubmission {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly verifierBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly platformPayload: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  readonly envelopeEncoding: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  readonly submissionKind: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  readonly verifierEntrypoint: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: typeof SCCP_DOMAIN_SORA;
+  readonly statementHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterEngineDeploymentHash: string;
+  readonly arguments: readonly [];
+  readonly localAdmission: Readonly<EvmMainnetLocalAdmissionPayload>;
+  readonly proofBytes: Uint8Array;
+  readonly proofBytesHex: string;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicInputsBytesHex: string;
+  readonly bundleBytes: Uint8Array;
+  readonly bundleBytesHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
+}
+
+export type EthereumMainnetLocalAdmissionSubmissionInput =
+  EvmMainnetLocalAdmissionSubmissionInput;
+export type EthereumMainnetLocalAdmissionSubmission =
+  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_ETH };
+export type BscMainnetLocalAdmissionSubmissionInput =
+  EvmMainnetLocalAdmissionSubmissionInput;
+export type BscMainnetLocalAdmissionSubmission =
+  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
+
+export function buildEthereumMainnetSccpLocalAdmissionSubmission(
+  input: EthereumMainnetLocalAdmissionSubmissionInput,
+): EthereumMainnetLocalAdmissionSubmission;
+export function buildBscMainnetSccpLocalAdmissionSubmission(
+  input: BscMainnetLocalAdmissionSubmissionInput,
+): BscMainnetLocalAdmissionSubmission;
+
 export interface TronSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
@@ -4096,6 +4336,39 @@ export type EthereumMainnetExecutionProvider =
     }
   | ((args: { method: string; params?: readonly unknown[] }) => unknown | Promise<unknown>);
 
+export type EthereumMainnetBeaconRestFetchResponse = {
+  readonly ok?: boolean;
+  readonly status?: number;
+  readonly statusText?: string;
+  json(): unknown | Promise<unknown>;
+};
+
+export type EthereumMainnetBeaconRestFetch = (
+  input: string,
+  init?: { method?: string; headers?: unknown },
+) => EthereumMainnetBeaconRestFetchResponse | Promise<EthereumMainnetBeaconRestFetchResponse>;
+
+export interface EthereumMainnetBeaconRestConsensusProviderOptions {
+  endpoint?: string | URL;
+  baseUrl?: string | URL;
+  baseURL?: string | URL;
+  base_url?: string | URL;
+  beaconRestUrl?: string | URL;
+  beacon_rest_url?: string | URL;
+  beaconRestEndpoint?: string | URL;
+  beacon_rest_endpoint?: string | URL;
+  fetch?: EthereumMainnetBeaconRestFetch;
+  fetchFn?: EthereumMainnetBeaconRestFetch;
+  fetch_fn?: EthereumMainnetBeaconRestFetch;
+  headers?: unknown;
+  syncCommitteeRoot?: string;
+  sync_committee_root?: string;
+  syncCommitteePayload?: EthSyncCommitteePayloadInput | BinaryLike;
+  sync_committee_payload?: EthSyncCommitteePayloadInput | BinaryLike;
+  verifyFinalityCheckpoint?: boolean;
+  verify_finality_checkpoint?: boolean;
+}
+
 export interface EthereumMainnetBeaconFinalityEvidenceInput {
   executionBlockNumber?: string | number | bigint;
   execution_block_number?: string | number | bigint;
@@ -4109,6 +4382,17 @@ export interface EthereumMainnetBeaconFinalityEvidenceInput {
   execution_receipts_root?: string;
   receiptsRoot?: string;
   receipts_root?: string;
+  finalizedHeaderRoot?: string;
+  finalized_header_root?: string;
+  beaconFinalizedRoot?: string;
+  beacon_finalized_root?: string;
+  syncCommitteeRoot?: string;
+  sync_committee_root?: string;
+  beaconSlot?: string | number | bigint;
+  beacon_slot?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  slot?: string | number | bigint;
   [key: string]: unknown;
 }
 
@@ -4117,6 +4401,9 @@ export interface EthereumMainnetBeaconFinalityEvidence
   readonly executionBlockNumber: string;
   readonly executionBlockHash: string;
   readonly executionReceiptsRoot: string;
+  readonly finalizedHeaderRoot?: string;
+  readonly syncCommitteeRoot?: string;
+  readonly beaconSlot?: string;
 }
 
 export interface EthereumMainnetConsensusProviderInput {
@@ -4132,6 +4419,26 @@ export type EthereumMainnetConsensusProvider = {
   ): EthereumMainnetBeaconFinalityEvidenceInput | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
 };
 
+export class EthereumMainnetBeaconRestConsensusProvider
+  implements EthereumMainnetConsensusProvider {
+  constructor(options: EthereumMainnetBeaconRestConsensusProviderOptions | string | URL);
+  collectFinalityEvidence(
+    input: EthereumMainnetConsensusProviderInput,
+    options?: {
+      fetch?: EthereumMainnetBeaconRestFetch;
+      fetchFn?: EthereumMainnetBeaconRestFetch;
+      fetch_fn?: EthereumMainnetBeaconRestFetch;
+      headers?: unknown;
+      syncCommitteeRoot?: string;
+      sync_committee_root?: string;
+      syncCommitteePayload?: EthSyncCommitteePayloadInput | BinaryLike;
+      sync_committee_payload?: EthSyncCommitteePayloadInput | BinaryLike;
+      verifyFinalityCheckpoint?: boolean;
+      verify_finality_checkpoint?: boolean;
+    } & Record<string, unknown>,
+  ): Promise<EthereumMainnetBeaconFinalityEvidence>;
+}
+
 export interface EthereumMainnetInboundEvidenceInput {
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
@@ -4140,6 +4447,10 @@ export interface EthereumMainnetInboundEvidenceInput {
   transactionHash?: string;
   transaction_hash?: string;
   receipt?: Record<string, unknown>;
+  blockReceipts?: readonly Record<string, unknown>[];
+  block_receipts?: readonly Record<string, unknown>[];
+  receiptBlockReceipts?: readonly Record<string, unknown>[];
+  receipt_block_receipts?: readonly Record<string, unknown>[];
   block?: Record<string, unknown>;
   blockHash?: string;
   block_hash?: string;
@@ -4151,6 +4462,16 @@ export interface EthereumMainnetInboundEvidenceInput {
   receipt_proof?: EvmSccpReceiptProofInput;
   receiptProofHash?: string;
   receipt_proof_hash?: string;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string;
+  source_bridge_emitter_address?: string;
+  expectedSourceBridgeEmitterAddress?: string;
+  expected_source_bridge_emitter_address?: string;
+  inclusionBranch?: readonly BinaryLike[];
+  inclusion_branch?: readonly BinaryLike[];
+  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+  source_verifier_material?: SccpSourceVerifierMaterialInput;
   [key: string]: unknown;
 }
 
@@ -4160,15 +4481,17 @@ export interface EthereumMainnetInboundEvidence
   readonly targetDomain: number;
   readonly beaconFinality?: EthereumMainnetBeaconFinalityEvidence;
   readonly receiptProofHash?: string;
+  readonly sourceEventDigest?: string;
+  readonly sourceBridgeEmitterAddress?: string;
 }
 
 export type EthereumMainnetInboundProveFn = (
   evidence: EthereumMainnetInboundEvidence,
   options?: Record<string, unknown>,
-) => unknown | Promise<unknown>;
+) => BinaryLike | Promise<BinaryLike>;
 
 export type EthereumMainnetSubmitInboundFn = (
-  proofOrPayload: unknown,
+  proofBytes: Uint8Array,
   options?: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
@@ -4193,6 +4516,14 @@ export type EthereumMainnetSccpOptions = EvmSccpProverOptions & {
   submitToEthereum?: EthereumMainnetSubmitOutboundFn;
   destinationBinding?: EvmSccpDestinationBindingInput;
   destination_binding?: EvmSccpDestinationBindingInput;
+  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+  source_verifier_material?: SccpSourceVerifierMaterialInput;
+  sourceBridgeEmitterAddress?: string;
+  source_bridge_emitter_address?: string;
+  expectedSourceBridgeEmitterAddress?: string;
+  expected_source_bridge_emitter_address?: string;
+  bridgeAddress?: string;
+  bridge_address?: string;
   outboundProver?: EvmSccpProver;
   outbound_prover?: EvmSccpProver;
   prover?: EvmSccpProver;
@@ -4213,6 +4544,14 @@ export class EthereumMainnetSccp {
       execution_provider?: EthereumMainnetExecutionProvider;
       consensusProvider?: EthereumMainnetConsensusProvider;
       consensus_provider?: EthereumMainnetConsensusProvider;
+      sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+      source_verifier_material?: SccpSourceVerifierMaterialInput;
+      sourceBridgeEmitterAddress?: string;
+      source_bridge_emitter_address?: string;
+      expectedSourceBridgeEmitterAddress?: string;
+      expected_source_bridge_emitter_address?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
     } & Record<string, unknown>,
   ): Promise<EthereumMainnetInboundEvidence>;
   proveInboundToSora(
@@ -4226,15 +4565,18 @@ export class EthereumMainnetSccp {
       proveInboundToSora?: EthereumMainnetInboundProveFn;
       prove_inbound?: EthereumMainnetInboundProveFn;
     } & Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<Uint8Array>;
   submitInboundToIroha(
-    input: unknown,
+    input: BinaryLike,
     options?: {
       submitInboundToIroha?: EthereumMainnetSubmitInboundFn;
       submit_inbound_to_iroha?: EthereumMainnetSubmitInboundFn;
       submitToIroha?: EthereumMainnetSubmitInboundFn;
     } & Record<string, unknown>,
   ): Promise<unknown>;
+  buildLocalAdmissionSubmission(
+    input: EthereumMainnetLocalAdmissionSubmissionInput,
+  ): EthereumMainnetLocalAdmissionSubmission;
   buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
   proveOutboundToEthereum(
     input: EvmSccpProofRequestInput,
@@ -4325,6 +4667,8 @@ export interface BscMainnetInboundEvidenceInput {
   finality_evidence?: BscMainnetParliaFinalityEvidenceInput;
   receiptProof?: BscSccpReceiptProofInput;
   receipt_proof?: BscSccpReceiptProofInput;
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
   [key: string]: unknown;
 }
 
@@ -4409,6 +4753,9 @@ export class BscMainnetSccp {
       submitToIroha?: BscMainnetSubmitInboundFn;
     } & Record<string, unknown>,
   ): Promise<unknown>;
+  buildLocalAdmissionSubmission(
+    input: BscMainnetLocalAdmissionSubmissionInput,
+  ): BscMainnetLocalAdmissionSubmission;
   buildOutboundProofRequest(input: BscMainnetSccpProofRequestInput): BscMainnetSccpProofRequest;
   proveOutboundToBsc(
     input: BscMainnetSccpProofRequestInput,
@@ -4674,6 +5021,18 @@ export function buildSubstrateSccpSubmission(
 ): SubstrateSccpSubmission;
 export function canonicalEvmSccpReceiptProofBytes(input: EvmSccpReceiptProofInput): Uint8Array;
 export function evmSccpReceiptProofHash(input: EvmSccpReceiptProofInput): string;
+export function canonicalEvmReceiptRlp(receipt: Record<string, unknown>): Uint8Array;
+export function evmReceiptTrieKey(transactionIndex: number | bigint | string): string;
+export function buildEvmReceiptTrieProofFromReceipts(
+  receipts: readonly Record<string, unknown>[],
+  options: { transactionIndex?: number | bigint | string; transaction_index?: number | bigint | string },
+): {
+  readonly receiptsRoot: string;
+  readonly receiptRlp: string;
+  readonly receiptTrieKey: string;
+  readonly receiptTrieProofNodes: readonly Uint8Array[];
+};
+export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(receiptRoot: string): Uint8Array;
 export function canonicalEthSyncCommitteePayloadBytes(input: EthSyncCommitteePayloadInput): Uint8Array;
 export function ethSyncCommitteeHash(input: EthSyncCommitteePayloadInput): string;
@@ -4691,6 +5050,10 @@ export function ethBeaconBodyRootFromExecutionPayloadBranch(
   executionPayloadBranch: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[],
 ): string;
 export function ethBeaconBlockHeaderRoot(input: EthBeaconBlockHeaderRootInput): string;
+export const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH: 32;
+export const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD: 256;
+export const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: 8192;
+export function ethMainnetSyncCommitteePeriodForSlot(slot: string | number | bigint): bigint;
 export function canonicalEthSyncCommitteeTransitionMessageBytes(
   input: EthSyncCommitteeTransitionMessageInput,
 ): Uint8Array;
@@ -4929,6 +5292,27 @@ export function tronSccpSourceMessageCallData(
   targetDomain: number,
   sourceEventDigest: string,
 ): Uint8Array;
+export interface TronTriggerSmartContractRawDataParseOptions {
+  readonly expectedOwnerAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  readonly expectedContractAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  readonly expectedCallData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+}
+export interface TronTriggerSmartContractRawDataView {
+  readonly rawDataHash: string;
+  readonly ownerAddress: string;
+  readonly ownerAddress20: string;
+  readonly contractAddress: string;
+  readonly contractAddress20: string;
+  readonly callData: string;
+  readonly refBlockNum: string | null;
+  readonly timestampMs: string;
+  readonly expirationMs: string;
+  readonly feeLimit: string;
+}
+export function parseTronTriggerSmartContractRawData(
+  rawData: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  options?: TronTriggerSmartContractRawDataParseOptions,
+): TronTriggerSmartContractRawDataView;
 export function canonicalTronSccpTransactionSourceProofBytes(
   input: TronSccpTransactionSourceProofInput,
 ): Uint8Array;
@@ -5154,14 +5538,7 @@ export interface TairaXorRouteHashInput {
   asset_key_hash?: string;
 }
 
-export interface TairaXorTransferPayloadHashInput extends TairaXorRouteHashInput {
-  bridgeAddress?: string | BinaryLike | number[];
-  bridge_address?: string | BinaryLike | number[];
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
-}
+export interface TairaXorTransferPayloadHashInput extends TairaXorTransferPayloadInput {}
 
 export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
   bridgeAddress?: string | BinaryLike | number[];
@@ -5173,9 +5550,13 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   taira_recipient_hash?: string;
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
   nonce?: string | number | bigint;
@@ -5183,25 +5564,49 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   burn_nonce?: string | number | bigint;
 }
 
-export interface TairaXorFinalizeFromTairaCallDataInput extends TairaXorRouteHashInput {
+export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXorTransferPayloadInput> {
   proofBytes?: BinaryLike | number[];
   proof_bytes?: BinaryLike | number[];
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
   statementHash?: string;
   statement_hash?: string;
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonicalPayloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonical_payload_bytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonicalPayloadHex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonical_payload_hex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payload_bytes?: BinaryLike | number[];
 }
 
 export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+}
+
+export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHashInput {
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
 }
@@ -5209,6 +5614,9 @@ export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorTronToTairaTransferPayload(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
 ): Readonly<TairaXorSccpRecordDescriptor>;
@@ -5226,10 +5634,28 @@ export function tairaXorTransferMessageId(
   input: TairaXorTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
-export function tairaXorTransferPayloadHash(input: TairaXorTransferPayloadHashInput): string;
+export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTronToTairaTransferMessageId(
+  input: TairaXorTronToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTransferPayloadHash(
+  input: TairaXorTransferPayloadHashInput,
+  options?: { prefix?: boolean },
+): string;
 export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
 export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
 export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
+export function tairaXorBurnToTairaAccountCallData(input: TairaXorBurnToTairaAccountCallDataInput): string;
+export function isTairaXorTronBurnStartedEventName(value: unknown): boolean;
+export function bindTairaXorTronBurnStartedEvent(
+  input: TairaXorTronBurnStartedEventInput,
+): Readonly<TairaXorTronBoundBurnStartedEvent>;
+export function bindTairaXorTronToTairaSourceProofPackage(
+  input: TairaXorTronToTairaSourceProofPackageInput,
+): Readonly<TairaXorTronToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;
@@ -14760,6 +15186,10 @@ export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
   "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true;
@@ -14789,6 +15219,12 @@ export function preferredKagemushaOfflineSpendMode(
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,
+): boolean;
+export function isKagemushaRecursiveSpendLineageProofCircuitId(
+  proofCircuitId?: string | null,
+): boolean;
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+  outputProofCircuitId?: string | null,
 ): boolean;
 export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
   proofCircuitId: string,
@@ -16113,10 +16549,6 @@ export function buildRotateZkAceIdentityCommitmentInstruction(
 export function buildRevokeZkAceIdentityCommitmentInstruction(
   input: RevokeZkAceIdentityCommitmentInstructionInput,
 ): object;
-
-export function buildZkAceAuthorizationProofV1(
-  input: ZkAceAuthorizationProofV1Input,
-): { public_inputs: object; proof: object };
 
 export function buildZkAceAuthorizedTransferInstruction(
   input: ZkAceAuthorizedTransferInstructionInput,

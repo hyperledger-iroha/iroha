@@ -72,6 +72,7 @@ public let sccpTonMainnetShardAccountsDictionaryVerifierIdV1 =
     "sccp:ton:light-client:shard-accounts-dictionary-mainnet:v1"
 
 private let sccpEvmMaxReceiptValueBytes = 16 * 1024
+private let sccpEvmMaxBlockReceipts = 4096
 private let sccpSourceAdapterFastpqTraceRootV1: UInt64 = 0x002A_247F_81C6_F850
 private let sccpSourceAdapterFastpqLdeRootV1: UInt64 = 0x6026_3388_DBBF_9B2A
 private let sccpSourceAdapterFastpqOmegaCosetV1: UInt64 = 0x6AF3_25E8_25AD_5C18
@@ -85,6 +86,10 @@ private let sccpEthSyncCommitteeSignatureBytes = 96
 private let sccpEthMaxSyncCommitteePublicKeyBytes = 96
 private let sccpEthMaxSyncCommitteePopBytes = 256
 private let sccpEthMaxSyncCommitteeSignatureBytes = 192
+public let sccpEthMainnetSlotsPerEpoch: UInt64 = 32
+public let sccpEthMainnetEpochsPerSyncCommitteePeriod: UInt64 = 256
+public let sccpEthMainnetSlotsPerSyncCommitteePeriod: UInt64 =
+    sccpEthMainnetSlotsPerEpoch * sccpEthMainnetEpochsPerSyncCommitteePeriod
 private let sccpEthMaxSyncCommitteePayloadBytes =
     1 + 4 + sccpEthMaxSyncCommitteeAuthorities *
         (4 + sccpEthMaxSyncCommitteePublicKeyBytes + 8 + 4 + sccpEthMaxSyncCommitteePopBytes)
@@ -154,6 +159,14 @@ public enum SccpSourceProofHashError: Error, Equatable {
     case unsupportedSourceAdapterDomain(String)
     case unsupportedDestinationBindingDomain(String)
     case invalidSourceMaterial(String)
+}
+
+/// Ethereum receipt-trie proof material derived from an execution block's receipt list.
+public struct EvmReceiptTrieProof: Equatable {
+    public let receiptsRoot: String
+    public let receiptRlp: String
+    public let receiptTrieKey: String
+    public let receiptTrieProofNodes: [Data]
 }
 
 /// FastPQ public inputs used by Substrate runtime-storage source-state proofs.
@@ -1352,6 +1365,27 @@ public func ethSyncCommitteePayloadHash(syncCommitteePublicKeys: [Data],
     )
 }
 
+/// Return the Ethereum mainnet sync-committee period for a beacon slot.
+public func ethMainnetSyncCommitteePeriodForSlot(_ slot: UInt64) -> UInt64 {
+    slot / sccpEthMainnetSlotsPerSyncCommitteePeriod
+}
+
+private func requireEthMainnetTransitionPeriods(fromSyncPeriod: UInt64,
+                                                toSyncPeriod: UInt64,
+                                                transitionSlot: UInt64) throws {
+    guard transitionSlot != 0 else {
+        throw SccpSourceProofHashError.invalidValidatorSet("transitionSlot")
+    }
+    let nextPeriod = fromSyncPeriod.addingReportingOverflow(1)
+    guard !nextPeriod.overflow,
+          nextPeriod.partialValue == toSyncPeriod else {
+        throw SccpSourceProofHashError.invalidValidatorSet("toSyncPeriod")
+    }
+    guard ethMainnetSyncCommitteePeriodForSlot(transitionSlot) == fromSyncPeriod else {
+        throw SccpSourceProofHashError.invalidValidatorSet("transitionSlot")
+    }
+}
+
 /// Canonical ETH sync-committee transition message bytes.
 public func canonicalEthSyncCommitteeTransitionMessageBytes(sourceDomain: UInt32 = sccpDomainEthereum,
                                                             fromSyncPeriod: UInt64,
@@ -1362,6 +1396,14 @@ public func canonicalEthSyncCommitteeTransitionMessageBytes(sourceDomain: UInt32
                                                             nextSyncCommitteeHash: String,
                                                             nextSyncCommitteePayloadHash: String,
                                                             nextSyncCommitteeBranchHash: String) throws -> Data {
+    guard sourceDomain == sccpDomainEthereum else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
+    try requireEthMainnetTransitionPeriods(
+        fromSyncPeriod: fromSyncPeriod,
+        toSyncPeriod: toSyncPeriod,
+        transitionSlot: transitionSlot
+    )
     var out = Data()
     out.append(1)
     sourceProofAppendU32Le(sourceDomain, to: &out)
@@ -1514,6 +1556,14 @@ public func canonicalEthSyncCommitteeTransitionSignatureBytes(version: UInt8 = 1
     guard version == 1 else {
         throw SccpSourceProofHashError.invalidValidatorSet("ETH sync-committee transition signature version")
     }
+    guard sourceDomain == sccpDomainEthereum else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
+    try requireEthMainnetTransitionPeriods(
+        fromSyncPeriod: fromSyncPeriod,
+        toSyncPeriod: toSyncPeriod,
+        transitionSlot: transitionSlot
+    )
     let derivedPayloadHash = try ethSyncCommitteePayloadHash(payload: nextSyncCommitteePayload)
     guard derivedPayloadHash.lowercased() == nextSyncCommitteePayloadHash.lowercased() else {
         throw SccpSourceProofHashError.invalidValidatorSet("nextSyncCommitteePayloadHash")
@@ -2090,7 +2140,7 @@ public func ethBeaconBlockHeaderRoot(beaconSlot: UInt64,
 
 /// Typed EVM-family MPT value envelope carrying an SCCP receipt root.
 public func canonicalEvmReceiptRootMptValue(receiptRoot: String) throws -> Data {
-    let root = try sourceProofBytesFromHex32(receiptRoot, field: "receiptRoot")
+    let root = try sourceProofNonZeroBytesFromHex32(receiptRoot, field: "receiptRoot")
     let value = sourceProofRlpList([
         sourceProofRlpString(sccpEvmReceiptRootValueMarker),
         sourceProofRlpString(root),
@@ -4369,6 +4419,8 @@ private let sccpSourceMaterialTronTemplateComponentHashesV1: [(String, String)] 
     ("messageInclusionVerifierHash", "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc"),
     ("finalityPolicyHash", "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864"),
 ]
+private let sccpEthSourceBridgeConfigLabelV1 =
+    Data("iroha:sccp:eth-source-bridge-config:v1".utf8)
 private let sccpTronSourceBridgeConfigLabelV1 =
     Data("iroha:sccp:tron-source-bridge-config:v1".utf8)
 
@@ -4439,6 +4491,19 @@ private func tronSourceBridgeConfigHash(sourceDomain: UInt32,
     sourceProofAppendAbiU32(sourceDomain, to: &payload)
     sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
     payload.append(sourceProofAbiWordAddress20(ownerAddress))
+    return Data(irohaKeccak256(payload))
+}
+
+private func ethSourceBridgeConfigHash(sourceDomain: UInt32,
+                                       bridgeAddress: Data,
+                                       networkId: Data,
+                                       codeHash: Data) -> Data {
+    var payload = Data(irohaKeccak256(sccpEthSourceBridgeConfigLabelV1))
+    payload.append(sourceProofAbiWordAddress20(bridgeAddress))
+    payload.append(networkId)
+    sourceProofAppendAbiU32(sourceDomain, to: &payload)
+    sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
+    payload.append(codeHash)
     return Data(irohaKeccak256(payload))
 }
 
@@ -5320,7 +5385,7 @@ private func sccpSourceRecordProfile(sourceDomain: UInt32) throws -> SccpSourceR
             sourceStateVerifierId: "",
             sourceBridgeEmitterId: "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
             requiresSourceBridge: true,
-            requiresSourceBridgeConfig: false
+            requiresSourceBridgeConfig: true
         )
     case sccpDomainBsc:
         return SccpSourceRecordProfile(
@@ -5491,7 +5556,35 @@ private func normalizeSccpSourceMaterial(
     let bridgeNetworkId: Data
     let bridgeOwnerAddress: Data
     let bridgeConfigHash: Data
-    if profile.requiresSourceBridgeConfig {
+    if sourceDomain == sccpDomainEthereum {
+        guard let networkId else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
+        }
+        guard ownerAddress == nil else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeOwnerAddress")
+        }
+        guard let configHash else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("configHash")
+        }
+        bridgeNetworkId = try sourceProofNonZeroBytesFromHex32(networkId, field: "networkId")
+        bridgeOwnerAddress = Data()
+        bridgeConfigHash = try sourceProofNonZeroBytesFromHex32(configHash, field: "configHash")
+        let ethMainnetNetworkId = try sourceProofBytesFromHex32(
+            sccpEthereumMainnetNetworkId,
+            field: "sourceBridgeNetworkId"
+        )
+        guard bridgeNetworkId == ethMainnetNetworkId else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeNetworkId")
+        }
+        guard bridgeConfigHash == ethSourceBridgeConfigHash(
+            sourceDomain: sourceDomain,
+            bridgeAddress: bridgeEmitterAddress,
+            networkId: bridgeNetworkId,
+            codeHash: bridgeEmitterCodeHash
+        ) else {
+            throw SccpSourceProofHashError.invalidSourceMaterial("sourceBridgeConfigHash")
+        }
+    } else if profile.requiresSourceBridgeConfig {
         guard let networkId else {
             throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
         }
@@ -6223,6 +6316,438 @@ private func sourceProofBscParliaPayloadCandidates(extraData: Data) throws -> [D
     }
 
     return candidates
+}
+
+/// Canonical legacy or EIP-2718 typed Ethereum receipt RLP bytes.
+public func canonicalEvmReceiptRlp(_ receipt: [String: Any]) throws -> Data {
+    let status = try sourceProofEthereumRpcQuantity(receipt["status"], field: "receipt.status")
+    guard status == 0 || status == 1 else {
+        throw SccpSourceProofHashError.invalidRlp("receipt.status")
+    }
+    let payload = sourceProofRlpList([
+        sourceProofRlpString(sourceProofMinimalBigEndianBytes(status)),
+        sourceProofRlpString(
+            sourceProofMinimalBigEndianBytes(
+                try sourceProofEthereumRpcQuantity(
+                    sourceProofFirstPresent(receipt, "cumulativeGasUsed", "cumulative_gas_used"),
+                    field: "receipt.cumulativeGasUsed"
+                )
+            )
+        ),
+        try sourceProofRlpString(
+            sourceProofEthereumRpcHexBytes(
+                sourceProofFirstPresent(receipt, "logsBloom", "logs_bloom"),
+                field: "receipt.logsBloom",
+                byteLength: 256,
+                nonzero: false
+            )
+        ),
+        try sourceProofRlpList(sourceProofEvmReceiptLogsForRlp(receipt))
+    ])
+    guard let receiptType = try sourceProofEvmReceiptType(receipt) else {
+        return payload
+    }
+    var out = Data([receiptType])
+    out.append(payload)
+    return out
+}
+
+/// Raw Ethereum receipt-trie key: RLP(transactionIndex), not a hashed secure-trie key.
+public func evmReceiptTrieKey(_ transactionIndex: Any) throws -> String {
+    let index = try sourceProofEthereumUnsignedInteger(transactionIndex, field: "transactionIndex")
+    return "0x" + sourceProofRlpString(sourceProofMinimalBigEndianBytes(index)).hexEncodedString()
+}
+
+/// Build a receipt-trie proof from an ordered `eth_getBlockReceipts` response.
+public func buildEvmReceiptTrieProofFromReceipts(
+    _ receipts: [[String: Any]],
+    transactionIndex: Any
+) throws -> EvmReceiptTrieProof {
+    guard !receipts.isEmpty, receipts.count <= sccpEvmMaxBlockReceipts else {
+        throw SccpSourceProofHashError.invalidValidatorSet("blockReceipts")
+    }
+    let targetIndex = try sourceProofEthereumUnsignedInteger(
+        transactionIndex,
+        field: "transactionIndex",
+        max: UInt64(receipts.count - 1)
+    )
+    var items: [SourceProofEvmTrieItem] = []
+    items.reserveCapacity(receipts.count)
+    var targetReceiptRlp: Data?
+    for (index, receipt) in receipts.enumerated() {
+        let receiptIndex = try sourceProofEthereumRpcQuantity(
+            sourceProofFirstPresent(receipt, "transactionIndex", "transaction_index"),
+            field: "blockReceipts[\(index)].transactionIndex"
+        )
+        guard receiptIndex == UInt64(index) else {
+            throw SccpSourceProofHashError.invalidRlp("blockReceipts[\(index)].transactionIndex")
+        }
+        let encodedReceipt = try canonicalEvmReceiptRlp(receipt)
+        if receiptIndex == targetIndex {
+            targetReceiptRlp = encodedReceipt
+        }
+        let key = sourceProofRlpString(sourceProofMinimalBigEndianBytes(UInt64(index)))
+        items.append(SourceProofEvmTrieItem(path: sourceProofBytesToNibbles(key), value: encodedReceipt))
+    }
+    let root = try sourceProofBuildEvmTrieNode(items)
+    let receiptsRoot = "0x" + Data(irohaKeccak256(try sourceProofEncodeEvmTrieNode(root))).hexEncodedString()
+    let receiptTrieKey = sourceProofRlpString(sourceProofMinimalBigEndianBytes(targetIndex))
+    let proofNodes = try sourceProofCollectEvmTrieProofNodes(root, path: sourceProofBytesToNibbles(receiptTrieKey))
+    try sourceProofValidateMptProofNodes(proofNodes, field: "receiptTrieProofNodes")
+    guard let targetReceiptRlp else {
+        throw SccpSourceProofHashError.invalidRlp("transactionIndex")
+    }
+    return EvmReceiptTrieProof(
+        receiptsRoot: receiptsRoot,
+        receiptRlp: "0x" + targetReceiptRlp.hexEncodedString(),
+        receiptTrieKey: "0x" + receiptTrieKey.hexEncodedString(),
+        receiptTrieProofNodes: proofNodes
+    )
+}
+
+private func sourceProofEvmReceiptType(_ receipt: [String: Any]) throws -> UInt8? {
+    guard let typeInput = receipt["type"] else {
+        return nil
+    }
+    let receiptType = try sourceProofEthereumRpcQuantity(typeInput, field: "receipt.type")
+    if receiptType == 0 {
+        return nil
+    }
+    guard receiptType <= 0x7f else {
+        throw SccpSourceProofHashError.invalidRlp("receipt.type")
+    }
+    let admittedType = UInt8(receiptType)
+    guard (0x01...0x04).contains(admittedType) else {
+        throw SccpSourceProofHashError.invalidRlp("receipt.type")
+    }
+    return admittedType
+}
+
+private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws -> [Data] {
+    let logs: [[String: Any]]
+    if let typedLogs = receipt["logs"] as? [[String: Any]] {
+        logs = typedLogs
+    } else if let rawLogs = receipt["logs"] as? [Any] {
+        logs = try rawLogs.enumerated().map { index, value in
+            guard let log = value as? [String: Any] else {
+                throw SccpSourceProofHashError.invalidRlp("receipt.logs[\(index)]")
+            }
+            return log
+        }
+    } else {
+        throw SccpSourceProofHashError.invalidRlp("receipt.logs")
+    }
+    return try logs.enumerated().map { index, log in
+        if (log["removed"] as? Bool) == true {
+            throw SccpSourceProofHashError.invalidRlp("receipt.logs[\(index)]")
+        }
+        guard let topics = log["topics"] as? [Any], topics.count <= 4 else {
+            throw SccpSourceProofHashError.invalidRlp("receipt.logs[\(index)].topics")
+        }
+        let encodedTopics = try topics.enumerated().map { topicIndex, topic in
+            try sourceProofRlpString(
+                sourceProofEthereumRpcHexBytes(
+                    topic,
+                    field: "receipt.logs[\(index)].topics[\(topicIndex)]",
+                    byteLength: 32,
+                    nonzero: false
+                )
+            )
+        }
+        return try sourceProofRlpList([
+            sourceProofRlpString(
+                sourceProofEthereumRpcHexBytes(
+                    log["address"],
+                    field: "receipt.logs[\(index)].address",
+                    byteLength: 20,
+                    nonzero: false
+                )
+            ),
+            sourceProofRlpList(encodedTopics),
+            sourceProofRlpString(
+                sourceProofEthereumRpcHexBytes(
+                    log["data"],
+                    field: "receipt.logs[\(index)].data",
+                    nonzero: false,
+                    allowEmpty: true
+                )
+            )
+        ])
+    }
+}
+
+private struct SourceProofEvmTrieItem {
+    let path: [UInt8]
+    let value: Data
+}
+
+private final class SourceProofEvmTrieNode {
+    enum Kind {
+        case leaf(path: [UInt8], value: Data)
+        case `extension`(path: [UInt8], child: SourceProofEvmTrieNode)
+        case branch(children: [SourceProofEvmTrieNode?], value: Data)
+    }
+
+    let kind: Kind
+    var rlp: Data?
+
+    init(_ kind: Kind) {
+        self.kind = kind
+    }
+}
+
+private func sourceProofBuildEvmTrieNode(_ items: [SourceProofEvmTrieItem]) throws -> SourceProofEvmTrieNode {
+    guard !items.isEmpty else {
+        throw SccpSourceProofHashError.invalidRlp("trie")
+    }
+    if items.count == 1 {
+        return SourceProofEvmTrieNode(.leaf(path: items[0].path, value: items[0].value))
+    }
+    let prefix = sourceProofLongestCommonNibblePrefix(items.map(\.path))
+    if !prefix.isEmpty {
+        return try SourceProofEvmTrieNode(
+            .extension(
+                path: prefix,
+                child: sourceProofBuildEvmTrieNode(
+                    items.map { SourceProofEvmTrieItem(path: Array($0.path.dropFirst(prefix.count)), value: $0.value) }
+                )
+            )
+        )
+    }
+    var grouped = Array(repeating: [SourceProofEvmTrieItem](), count: 16)
+    var branchValue = Data()
+    for item in items {
+        if item.path.isEmpty {
+            branchValue = item.value
+        } else {
+            grouped[Int(item.path[0])].append(
+                SourceProofEvmTrieItem(path: Array(item.path.dropFirst()), value: item.value)
+            )
+        }
+    }
+    let children = try grouped.map { group -> SourceProofEvmTrieNode? in
+        group.isEmpty ? nil : try sourceProofBuildEvmTrieNode(group)
+    }
+    return SourceProofEvmTrieNode(.branch(children: children, value: branchValue))
+}
+
+private func sourceProofEncodeEvmTrieNode(_ node: SourceProofEvmTrieNode) throws -> Data {
+    if let rlp = node.rlp {
+        return rlp
+    }
+    let encoded: Data
+    switch node.kind {
+    case let .leaf(path, value):
+        encoded = sourceProofRlpList([
+            sourceProofRlpString(try sourceProofEncodeEvmTrieCompactPath(path, leaf: true)),
+            sourceProofRlpString(value)
+        ])
+    case let .extension(path, child):
+        encoded = try sourceProofRlpList([
+            sourceProofRlpString(sourceProofEncodeEvmTrieCompactPath(path, leaf: false)),
+            sourceProofRlpString(sourceProofEvmTrieNodeReference(child))
+        ])
+    case let .branch(children, value):
+        var fields = try children.map { child -> Data in
+            let reference: Data
+            if let child {
+                reference = try sourceProofEvmTrieNodeReference(child)
+            } else {
+                reference = Data()
+            }
+            return sourceProofRlpString(reference)
+        }
+        fields.append(sourceProofRlpString(value))
+        encoded = sourceProofRlpList(fields)
+    }
+    node.rlp = encoded
+    return encoded
+}
+
+private func sourceProofEvmTrieNodeReference(_ node: SourceProofEvmTrieNode) throws -> Data {
+    let rlp = try sourceProofEncodeEvmTrieNode(node)
+    return rlp.count < 32 ? rlp : Data(irohaKeccak256(rlp))
+}
+
+private func sourceProofCollectEvmTrieProofNodes(_ node: SourceProofEvmTrieNode, path: [UInt8]) throws -> [Data] {
+    var proof = [try sourceProofEncodeEvmTrieNode(node)]
+    switch node.kind {
+    case let .leaf(nodePath, _):
+        guard nodePath == path else {
+            throw SccpSourceProofHashError.invalidRlp("receiptTrieProofNodes")
+        }
+    case let .extension(nodePath, child):
+        guard path.count >= nodePath.count, Array(path.prefix(nodePath.count)) == nodePath else {
+            throw SccpSourceProofHashError.invalidRlp("receiptTrieProofNodes")
+        }
+        proof.append(contentsOf: try sourceProofCollectEvmTrieProofNodes(child, path: Array(path.dropFirst(nodePath.count))))
+    case let .branch(children, value):
+        if path.isEmpty {
+            guard !value.isEmpty else {
+                throw SccpSourceProofHashError.invalidRlp("receiptTrieProofNodes")
+            }
+        } else {
+            guard let child = children[Int(path[0])] else {
+                throw SccpSourceProofHashError.invalidRlp("receiptTrieProofNodes")
+            }
+            proof.append(contentsOf: try sourceProofCollectEvmTrieProofNodes(child, path: Array(path.dropFirst())))
+        }
+    }
+    return proof
+}
+
+private func sourceProofEncodeEvmTrieCompactPath(_ nibbles: [UInt8], leaf: Bool) throws -> Data {
+    for nibble in nibbles where nibble > 15 {
+        throw SccpSourceProofHashError.invalidRlp("triePath")
+    }
+    let flags: UInt8 = leaf ? 2 : 0
+    var out = Data()
+    var start = 0
+    if nibbles.count % 2 == 1 {
+        out.append(((flags + 1) << 4) | nibbles[0])
+        start = 1
+    } else {
+        out.append(flags << 4)
+    }
+    var index = start
+    while index < nibbles.count {
+        out.append((nibbles[index] << 4) | nibbles[index + 1])
+        index += 2
+    }
+    return out
+}
+
+private func sourceProofBytesToNibbles(_ bytes: Data) -> [UInt8] {
+    bytes.flatMap { byte in [byte >> 4, byte & 0x0f] }
+}
+
+private func sourceProofLongestCommonNibblePrefix(_ paths: [[UInt8]]) -> [UInt8] {
+    guard var prefix = paths.first else {
+        return []
+    }
+    for path in paths.dropFirst() {
+        var index = 0
+        let limit = min(prefix.count, path.count)
+        while index < limit, prefix[index] == path[index] {
+            index += 1
+        }
+        prefix.removeSubrange(index..<prefix.count)
+        if prefix.isEmpty {
+            break
+        }
+    }
+    return prefix
+}
+
+private func sourceProofFirstPresent(_ input: [String: Any], _ keys: String...) -> Any? {
+    for key in keys where input.keys.contains(key) {
+        return input[key]
+    }
+    return nil
+}
+
+private func sourceProofEthereumRpcQuantity(_ value: Any?, field: String) throws -> UInt64 {
+    guard let text = value as? String,
+          text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+          text.hasPrefix("0x") else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    let hex = String(text.dropFirst(2))
+    guard !hex.isEmpty,
+          hex == "0" || (hex.first != "0" && hex.allSatisfy { sourceProofIsLowerHex($0) }),
+          let value = UInt64(hex, radix: 16) else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    return value
+}
+
+private func sourceProofEthereumUnsignedInteger(_ value: Any?,
+                                                field: String,
+                                                max: UInt64 = UInt64.max) throws -> UInt64 {
+    let parsed: UInt64
+    switch value {
+    case let value as UInt64:
+        parsed = value
+    case let value as UInt32:
+        parsed = UInt64(value)
+    case let value as UInt:
+        parsed = UInt64(value)
+    case let value as Int:
+        guard value >= 0 else {
+            throw SccpSourceProofHashError.invalidRlp(field)
+        }
+        parsed = UInt64(value)
+    case let text as String:
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines) == text else {
+            throw SccpSourceProofHashError.invalidRlp(field)
+        }
+        if text.hasPrefix("0x") {
+            parsed = try sourceProofEthereumRpcQuantity(text, field: field)
+        } else {
+            guard !text.isEmpty,
+                  text == "0" || (text.first != "0" && text.allSatisfy({ sourceProofIsDecimalDigit($0) })),
+                  let value = UInt64(text, radix: 10) else {
+                throw SccpSourceProofHashError.invalidRlp(field)
+            }
+            parsed = value
+        }
+    default:
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    guard parsed <= max else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    return parsed
+}
+
+private func sourceProofEthereumRpcHexBytes(_ value: Any?,
+                                            field: String,
+                                            byteLength: Int? = nil,
+                                            nonzero: Bool = true,
+                                            allowEmpty: Bool = false) throws -> Data {
+    guard let text = value as? String,
+          text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+          text.hasPrefix("0x") else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    let hex = String(text.dropFirst(2))
+    guard (allowEmpty || !hex.isEmpty),
+          hex.count % 2 == 0,
+          hex.allSatisfy({ sourceProofIsLowerHex($0) }) else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    if let byteLength, hex.count != byteLength * 2 {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    let decoded = hex.isEmpty ? Data() : Data(hexString: hex)
+    guard let bytes = decoded, bytes.count == hex.count / 2 else {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    if nonzero, !bytes.contains(where: { $0 != 0 }) {
+        throw SccpSourceProofHashError.invalidRlp(field)
+    }
+    return bytes
+}
+
+private func sourceProofIsLowerHex(_ character: Character) -> Bool {
+    "0123456789abcdef".contains(character)
+}
+
+private func sourceProofIsDecimalDigit(_ character: Character) -> Bool {
+    "0123456789".contains(character)
+}
+
+private func sourceProofMinimalBigEndianBytes(_ value: UInt64) -> Data {
+    if value == 0 {
+        return Data()
+    }
+    var working = value
+    var bytes: [UInt8] = []
+    while working > 0 {
+        bytes.insert(UInt8(working & 0xff), at: 0)
+        working >>= 8
+    }
+    return Data(bytes)
 }
 
 private enum SourceProofRlpItem {

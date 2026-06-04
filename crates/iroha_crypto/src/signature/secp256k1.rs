@@ -42,10 +42,12 @@ impl EcdsaSecp256k1Sha256 {
     /// Recover a secp256k1 public key from a 32-byte prehash and recoverable signature.
     ///
     /// The signature must be encoded as `r || s || v` where `v` is `27` or `28`.
+    /// Only canonical low-S signatures are accepted.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::BadSignature`] if recovery fails or the payload is malformed.
+    /// Returns [`Error::BadSignature`] if recovery fails, the payload is malformed,
+    /// or the signature is non-canonical.
     pub fn recover_public_key_from_prehash(
         prehash: &[u8; 32],
         signature: &[u8; 65],
@@ -226,9 +228,14 @@ mod ecdsa_secp256k1 {
             sk: &PrivateKey,
         ) -> Result<[u8; 65], Error> {
             let signing_key = SigningKey::from(sk);
-            let (signature, recovery_id) = signing_key
+            let (mut signature, mut recovery_id) = signing_key
                 .sign_prehash_recoverable(prehash)
                 .map_err(|err| Error::Signing(format!("{err:?}")))?;
+            if let Some(normalized) = signature.normalize_s() {
+                signature = normalized;
+                recovery_id = RecoveryId::from_byte(recovery_id.to_byte() ^ 1)
+                    .expect("flipping secp256k1 recovery parity keeps id valid");
+            }
             let mut out = [0u8; 65];
             let signature_bytes = signature.to_bytes();
             out[..64].copy_from_slice(&signature_bytes);
@@ -245,6 +252,9 @@ mod ecdsa_secp256k1 {
                     .ok_or(Error::BadSignature)?;
             let signature =
                 Signature::from_slice(&signature[..64]).map_err(|_| Error::BadSignature)?;
+            if signature.normalize_s().is_some() {
+                return Err(Error::BadSignature);
+            }
             VerifyingKey::recover_from_prehash(prehash, &signature, recovery_id)
                 .map(Into::into)
                 .map_err(|_| Error::BadSignature)
@@ -531,6 +541,12 @@ mod test {
 
         let signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
             .expect("recoverable signature");
+        let compact =
+            k256::ecdsa::Signature::from_slice(&signature[..64]).expect("signature parse");
+        assert!(
+            compact.normalize_s().is_none(),
+            "recoverable signatures produced by iroha_crypto must be low-S"
+        );
         let recovered = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature)
             .expect("recoverable public key");
 
@@ -540,5 +556,33 @@ mod test {
             EcdsaSecp256k1Sha256::evm_address(&public)
         );
         assert!(matches!(signature[64], 27 | 28));
+    }
+
+    #[test]
+    fn recoverable_prehash_rejects_high_s_malleable_signature() {
+        let secret = private_key();
+        let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-high-s-recovery");
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&prehash);
+
+        let mut signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
+            .expect("recoverable signature");
+        let low = k256::ecdsa::Signature::from_slice(&signature[..64]).expect("signature parse");
+        assert!(
+            low.normalize_s().is_none(),
+            "test vector must start from canonical low-S form"
+        );
+        let (r, s) = low.split_scalars();
+        let high = k256::ecdsa::Signature::from_scalars(r, -s).expect("high-S signature");
+        assert!(high.normalize_s().is_some());
+        signature[..64].copy_from_slice(high.to_bytes().as_ref());
+        signature[64] = match signature[64] {
+            27 => 28,
+            28 => 27,
+            recovery => panic!("unexpected recovery id {recovery}"),
+        };
+
+        let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature);
+        assert!(matches!(err, Err(Error::BadSignature)));
     }
 }

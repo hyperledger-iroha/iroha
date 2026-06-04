@@ -7,6 +7,10 @@ public final class KagemushaRecursiveSpendProver {
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-spend-lineage-v1";
+  public static final String RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+      "kagemusha-recursive-spend-lineage-onehop-v1";
+  public static final String RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+      "kagemusha-recursive-spend-lineage-append-v1";
   public static final int COMPACT_TOKEN_MAX_HOPS = 64;
   public static final int RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
   public static final boolean RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
@@ -65,9 +69,20 @@ public final class KagemushaRecursiveSpendProver {
 
   public static boolean canRedeemWitnessless(final String circuitId, final int hopCount) {
     return RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        && RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(circuitId)
+        && isLineageProofCircuitId(circuitId)
         && hopCount >= 1
         && hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1;
+  }
+
+  public static boolean isLineageProofCircuitId(final String circuitId) {
+    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(circuitId)
+        || RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.equals(circuitId)
+        || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(circuitId);
+  }
+
+  public static boolean isLineageAppendOutputCircuitId(final String outputCircuitId) {
+    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)
+        || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId);
   }
 
   public static boolean requiresLineageWitnessForRedeem(
@@ -85,23 +100,26 @@ public final class KagemushaRecursiveSpendProver {
     if (outputCircuitId == null || outputCircuitId.isEmpty()) {
       return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
     }
+    if (RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)) {
+      return RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+    }
     return outputCircuitId;
   }
 
   public static boolean isSupportedAppendOutputCircuitId(final String outputCircuitId) {
     final String normalized = normalizeAppendOutputCircuitId(outputCircuitId);
     return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalized)
-        || RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(normalized);
+        || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(normalized);
   }
 
   public static boolean isSupportedPreviousProofCircuitId(final String previousProofCircuitId) {
     return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(previousProofCircuitId)
-        || RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(previousProofCircuitId);
+        || isLineageProofCircuitId(previousProofCircuitId);
   }
 
   public static boolean requiresPreviousLineageVerifierRecordForAppend(
       final String previousProofCircuitId) {
-    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(previousProofCircuitId);
+    return isLineageProofCircuitId(previousProofCircuitId);
   }
 
   public static boolean isSupportedAppendProofTransition(
@@ -109,14 +127,14 @@ public final class KagemushaRecursiveSpendProver {
     final String normalizedOutput = normalizeAppendOutputCircuitId(outputCircuitId);
     return (RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(previousProofCircuitId)
             && RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalizedOutput))
-        || (RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(previousProofCircuitId)
+        || (isLineageProofCircuitId(previousProofCircuitId)
             && (RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalizedOutput)
-                || RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(normalizedOutput)));
+                || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(normalizedOutput)));
   }
 
   public static String preferredAppendOutputCircuitId(final int previousHopCount) {
     if (canAppendWitnesslessLineage(previousHopCount)) {
-      return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1;
+      return RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
     }
     return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
   }
@@ -130,7 +148,7 @@ public final class KagemushaRecursiveSpendProver {
     if (RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalized)) {
       return previousHopCount < COMPACT_TOKEN_MAX_HOPS;
     }
-    if (RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(normalized)) {
+    if (RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(normalized)) {
       return canAppendWitnesslessLineage(previousHopCount);
     }
     return false;
@@ -151,8 +169,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static boolean requiresPreviousProofOpenEnvelopesForAppend(
       final String outputCircuitId, final int previousHopCount) {
-    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(
-            normalizeAppendOutputCircuitId(outputCircuitId))
+    return isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId))
         && previousHopCount >= 1;
   }
 

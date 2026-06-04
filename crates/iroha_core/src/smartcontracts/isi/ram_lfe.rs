@@ -633,5 +633,25 @@ mod tests {
         let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier)
             .expect_err("zero verifier-key hash must reject before proof parsing");
         assert!(err.contains("non-zero"), "unexpected error: {err}");
+
+        let schema_drift = sample_proof_box(&verifier, |envelope| {
+            envelope.public_inputs.extend_from_slice(b":schema-drift");
+        });
+        let err = verify_execution_proof(&schema_drift, &execution, &verifier)
+            .expect_err("public-input schema drift must reject before proof parsing");
+        assert!(
+            err.contains("public-input schema hash"),
+            "unexpected error: {err}"
+        );
+
+        let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
+            envelope.vk_hash = [0xA5; Hash::LENGTH];
+        });
+        let err = verify_execution_proof(&wrong_vk_hash, &execution, &verifier)
+            .expect_err("wrong verifier-key hash must reject before proof parsing");
+        assert!(
+            err.contains("mismatched verifying key"),
+            "unexpected error: {err}"
+        );
     }
 }

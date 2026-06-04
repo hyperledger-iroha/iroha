@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -40,9 +40,10 @@ use p256::ecdsa::{
 };
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 use x509_parser::{
     extensions::{GeneralName, NameConstraints, ParsedExtension},
-    oid_registry::OID_SIG_ECDSA_WITH_SHA256,
+    oid_registry::{OID_EC_P256, OID_KEY_TYPE_EC_PUBLIC_KEY, OID_SIG_ECDSA_WITH_SHA256},
     prelude::{FromDer as _, X509Certificate},
     revocation_list::CertificateRevocationList,
     time::ASN1Time,
@@ -63,6 +64,9 @@ pub struct Iso20022BridgeRuntime {
     default_profile_id: String,
     profiles: Arc<HashMap<String, TradfiRailProfile>>,
     store_dir: Option<PathBuf>,
+    store_retention: Duration,
+    store_max_records: usize,
+    audit_export_dir: Option<PathBuf>,
     dedupe_ttl: Duration,
     records: DashMap<String, IsoMessageRecord>,
     tx_hash_index: DashMap<String, String>,
@@ -88,6 +92,17 @@ pub struct IsoMessageContext {
     settlement_movement_type: Option<String>,
     settlement_payment_type: Option<String>,
     security_instrument_id: Option<String>,
+    collateral_obligation_id: Option<String>,
+    collateral_original_amount: Option<String>,
+    collateral_original_currency: Option<String>,
+    collateral_original_instrument_id: Option<String>,
+    collateral_substitute_amount: Option<String>,
+    collateral_substitute_currency: Option<String>,
+    collateral_substitute_instrument_id: Option<String>,
+    collateral_effective_date: Option<String>,
+    collateral_substitution_type: Option<String>,
+    collateral_haircut: Option<String>,
+    collateral_reason_code: Option<String>,
     plan_execution_order: Option<String>,
     plan_atomicity: Option<String>,
     source_address_observation: AddressParseObservation,
@@ -163,6 +178,61 @@ impl IsoMessageContext {
     /// Financial instrument identifier carried by a securities settlement instruction.
     pub fn security_instrument_id(&self) -> Option<&str> {
         self.security_instrument_id.as_deref()
+    }
+
+    /// Repo or collateral obligation identifier carried by a collateral message.
+    pub fn collateral_obligation_id(&self) -> Option<&str> {
+        self.collateral_obligation_id.as_deref()
+    }
+
+    /// Original collateral amount carried by a substitution message.
+    pub fn collateral_original_amount(&self) -> Option<&str> {
+        self.collateral_original_amount.as_deref()
+    }
+
+    /// Original collateral currency carried by a substitution message.
+    pub fn collateral_original_currency(&self) -> Option<&str> {
+        self.collateral_original_currency.as_deref()
+    }
+
+    /// Original collateral instrument identifier carried by a substitution message.
+    pub fn collateral_original_instrument_id(&self) -> Option<&str> {
+        self.collateral_original_instrument_id.as_deref()
+    }
+
+    /// Substitute collateral amount carried by a substitution message.
+    pub fn collateral_substitute_amount(&self) -> Option<&str> {
+        self.collateral_substitute_amount.as_deref()
+    }
+
+    /// Substitute collateral currency carried by a substitution message.
+    pub fn collateral_substitute_currency(&self) -> Option<&str> {
+        self.collateral_substitute_currency.as_deref()
+    }
+
+    /// Substitute collateral instrument identifier carried by a substitution message.
+    pub fn collateral_substitute_instrument_id(&self) -> Option<&str> {
+        self.collateral_substitute_instrument_id.as_deref()
+    }
+
+    /// Effective date carried by a collateral substitution message.
+    pub fn collateral_effective_date(&self) -> Option<&str> {
+        self.collateral_effective_date.as_deref()
+    }
+
+    /// Substitution type carried by a collateral substitution message.
+    pub fn collateral_substitution_type(&self) -> Option<&str> {
+        self.collateral_substitution_type.as_deref()
+    }
+
+    /// Haircut value carried by a collateral substitution message.
+    pub fn collateral_haircut(&self) -> Option<&str> {
+        self.collateral_haircut.as_deref()
+    }
+
+    /// Reason code carried by a collateral substitution message.
+    pub fn collateral_reason_code(&self) -> Option<&str> {
+        self.collateral_reason_code.as_deref()
     }
 
     /// Durable execution-order plan captured from supplementary settlement data.
@@ -482,6 +552,50 @@ impl IsoMessageStatus {
         self.context.security_instrument_id.as_deref()
     }
 
+    pub fn collateral_obligation_id(&self) -> Option<&str> {
+        self.context.collateral_obligation_id.as_deref()
+    }
+
+    pub fn collateral_original_amount(&self) -> Option<&str> {
+        self.context.collateral_original_amount.as_deref()
+    }
+
+    pub fn collateral_original_currency(&self) -> Option<&str> {
+        self.context.collateral_original_currency.as_deref()
+    }
+
+    pub fn collateral_original_instrument_id(&self) -> Option<&str> {
+        self.context.collateral_original_instrument_id.as_deref()
+    }
+
+    pub fn collateral_substitute_amount(&self) -> Option<&str> {
+        self.context.collateral_substitute_amount.as_deref()
+    }
+
+    pub fn collateral_substitute_currency(&self) -> Option<&str> {
+        self.context.collateral_substitute_currency.as_deref()
+    }
+
+    pub fn collateral_substitute_instrument_id(&self) -> Option<&str> {
+        self.context.collateral_substitute_instrument_id.as_deref()
+    }
+
+    pub fn collateral_effective_date(&self) -> Option<&str> {
+        self.context.collateral_effective_date.as_deref()
+    }
+
+    pub fn collateral_substitution_type(&self) -> Option<&str> {
+        self.context.collateral_substitution_type.as_deref()
+    }
+
+    pub fn collateral_haircut(&self) -> Option<&str> {
+        self.context.collateral_haircut.as_deref()
+    }
+
+    pub fn collateral_reason_code(&self) -> Option<&str> {
+        self.context.collateral_reason_code.as_deref()
+    }
+
     pub fn plan_execution_order(&self) -> Option<&str> {
         self.context.plan_execution_order.as_deref()
     }
@@ -737,6 +851,16 @@ impl IsoMessageRecord {
 
 const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
+const ISO_PERSISTED_RECORD_VERSION: u64 = 1;
+const ISO_PERSISTED_RECORD_DIGEST_FIELD: &str = "record_sha256";
+const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
+const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
+const ISO_PERSISTED_AUDIT_INDEX_FILE: &str = "messages.index.json";
+const ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD: &str = "index_sha256";
+const ISO_AUDIT_EXPORT_ANCHOR_VERSION: u64 = 1;
+const ISO_AUDIT_EXPORT_ANCHOR_DIR: &str = "anchors";
+const ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE: &str = "latest.notary.json";
+const ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD: &str = "anchor_sha256";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
@@ -806,6 +930,11 @@ fn convert_config_profile(
         "trusted_certificate_sha256",
         &config.trusted_certificate_sha256,
     )?;
+    let revoked_certificate_sha256 = normalise_profile_sha256_pins(
+        id,
+        "revoked_certificate_sha256",
+        &config.revoked_certificate_sha256,
+    )?;
     let required_reference_datasets = config
         .required_reference_datasets
         .iter()
@@ -866,6 +995,7 @@ fn convert_config_profile(
         x509_ocsp_response_der_base64,
         trusted_public_key_sha256,
         trusted_certificate_sha256,
+        revoked_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
@@ -933,10 +1063,14 @@ fn normalise_profile_sha256_pins(
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
     for pin in pins {
-        let candidate = pin.trim().to_ascii_lowercase();
-        if candidate.len() != 64 || !candidate.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        let candidate = pin.as_str();
+        if candidate.len() != 64
+            || !candidate
+                .chars()
+                .all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+        {
             eyre::bail!(
-                "iso_bridge profile `{profile_id}` {field} entries must be 64-character SHA-256 hex strings"
+                "iso_bridge profile `{profile_id}` {field} entries must be canonical lowercase 64-character SHA-256 hex strings"
             );
         }
         if candidate.chars().all(|ch| ch == '0') {
@@ -944,8 +1078,8 @@ fn normalise_profile_sha256_pins(
                 "iso_bridge profile `{profile_id}` {field} must not contain the all-zero placeholder"
             );
         }
-        if seen.insert(candidate.clone()) {
-            normalized.push(candidate);
+        if seen.insert(candidate.to_owned()) {
+            normalized.push(candidate.to_owned());
         }
     }
     Ok(normalized)
@@ -1140,6 +1274,9 @@ impl Iso20022BridgeRuntime {
             default_profile_id: config.default_profile.trim().to_owned(),
             profiles: Arc::new(profiles),
             store_dir: config.store_dir.clone(),
+            store_retention: Duration::from_secs(config.store_retention_secs),
+            store_max_records: usize::try_from(config.store_max_records).unwrap_or(usize::MAX),
+            audit_export_dir: config.audit_export_dir.clone(),
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             records: DashMap::new(),
             tx_hash_index: DashMap::new(),
@@ -1187,6 +1324,17 @@ impl Iso20022BridgeRuntime {
         &self.reference_data
     }
 
+    /// Return the deterministic audit manifest for durable ISO message records.
+    pub fn audit_index(&self) -> JsonValue {
+        let mut records = self
+            .records
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+        persisted_audit_index_value(&records)
+    }
+
     /// Return the configured default rail profile.
     pub fn default_profile(&self) -> &TradfiRailProfile {
         self.profiles
@@ -1213,7 +1361,7 @@ impl Iso20022BridgeRuntime {
     ) -> Result<IsoMessageMetadata, MsgError> {
         let message_profile = profile
             .message_profile(message_type, MessageDirection::Inbound)
-            .ok_or(MsgError::ValidationFailed)?;
+            .ok_or(MsgError::UnknownMessageType)?;
         self.require_profile_reference_data(profile)?;
         let definition_id =
             message_definition_id(parsed, message_type).ok_or(MsgError::ValidationFailed)?;
@@ -1262,6 +1410,8 @@ impl Iso20022BridgeRuntime {
         self.validate_amount_minor_units(message_profile, parsed)?;
         self.validate_supplementary_data_limit(message_profile, parsed)?;
         self.validate_structured_address_mode(message_profile, parsed)?;
+        self.validate_message_reference_data(message_type, parsed)?;
+        self.validate_securities_ledger_mapping(profile, message_type, parsed)?;
         let embedded_signature_detected =
             has_embedded_signature_marker(parsed) || payload_has_embedded_signature(payload);
         match profile.embedded_signature_policy {
@@ -1272,16 +1422,7 @@ impl Iso20022BridgeRuntime {
             EmbeddedSignaturePolicy::RejectUnsupported => {}
             EmbeddedSignaturePolicy::RequireVerified => {
                 if !embedded_signature_detected
-                    || !verify_embedded_xml_signature(
-                        payload,
-                        &profile.signature_public_key_sha256_pins,
-                        &profile.x509_trust_anchor_sha256_pins,
-                        &profile.x509_required_certificate_policy_oids,
-                        profile.x509_require_crl_revocation_check,
-                        &profile.x509_crl_der_base64,
-                        profile.x509_require_ocsp_revocation_check,
-                        &profile.x509_ocsp_response_der_base64,
-                    )?
+                    || !verify_embedded_xml_signature(payload, profile, parsed)?
                 {
                     return Err(MsgError::ValidationFailed);
                 }
@@ -1697,12 +1838,18 @@ impl Iso20022BridgeRuntime {
         parsed: &ParsedMessage,
     ) -> Result<String, MsgError> {
         let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?;
-        let securities_tx_id = if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
+        let securities_tx_id = if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
             unique_field_text_by_suffix(parsed, &["TxId"], "TxId")?
         } else {
             None
         };
-        let id = if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
+        let id = if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
             securities_tx_id
                 .or_else(|| business_message_id(parsed))
                 .or(referenced_message_id)
@@ -1716,7 +1863,10 @@ impl Iso20022BridgeRuntime {
         if id.is_empty() {
             return Err(MsgError::MissingField("MsgId"));
         }
-        if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
+        if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
             Ok(format!("{message_type}:{id}"))
         } else {
             Ok(id.to_owned())
@@ -2249,6 +2399,10 @@ impl Iso20022BridgeRuntime {
     }
 
     fn prune_expired(&self, now: Instant) {
+        if self.store_dir.is_some() {
+            self.compact_persisted_records();
+            return;
+        }
         let ttl = self.dedupe_ttl;
         let expired = self
             .records
@@ -2330,29 +2484,29 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let messages_dir = store_dir.join("messages");
-        let Ok(entries) = fs::read_dir(&messages_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
-                continue;
-            };
-            if let Some((message_id, record)) = persisted_record_from_value(&value) {
-                self.insert_metadata_indexes(&message_id, &record.metadata);
-                if let Some(tx_hash) = record.transaction_hash.as_deref() {
-                    self.tx_hash_index
-                        .insert(tx_hash.to_owned(), message_id.clone());
+        if let Ok(entries) = fs::read_dir(&messages_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
                 }
-                self.records.insert(message_id, record);
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
+                    continue;
+                };
+                if let Some((message_id, record)) = persisted_record_from_value(&value) {
+                    self.insert_metadata_indexes(&message_id, &record.metadata);
+                    if let Some(tx_hash) = record.transaction_hash.as_deref() {
+                        self.tx_hash_index
+                            .insert(tx_hash.to_owned(), message_id.clone());
+                    }
+                    self.records.insert(message_id, record);
+                }
             }
         }
+        self.compact_persisted_records();
     }
 
     fn persist_message(&self, message_id: &str) {
@@ -2371,13 +2525,122 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let path = messages_dir.join(message_filename(message_id));
-        let _ = fs::write(path, json);
+        if fs::write(path, json).is_ok() {
+            self.compact_persisted_records();
+        }
     }
 
     fn remove_persisted_message(&self, message_id: &str) {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return;
         };
+        let path = store_dir
+            .join("messages")
+            .join(message_filename(message_id));
+        let _ = fs::remove_file(path);
+        self.persist_audit_index();
+    }
+
+    fn persist_audit_index(&self) {
+        let payload = self.audit_index();
+        let Ok(json) = norito::json::to_string_pretty(&payload) else {
+            return;
+        };
+        if let Some(store_dir) = self.store_dir.as_deref() {
+            let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
+            if fs::create_dir_all(&audit_dir).is_ok() {
+                let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+                let _ = fs::write(path, &json);
+            }
+        }
+        self.persist_external_audit_export(&payload, &json);
+    }
+
+    fn persist_external_audit_export(&self, payload: &JsonValue, json: &str) {
+        let Some(export_dir) = self.audit_export_dir.as_deref() else {
+            return;
+        };
+        if fs::create_dir_all(export_dir).is_err() {
+            return;
+        }
+        let _ = fs::write(export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), json);
+
+        let Some(index_sha256) = audit_index_digest(payload) else {
+            return;
+        };
+        let anchor = audit_export_anchor_value(payload, self.store_dir.as_deref());
+        let Ok(anchor_json) = norito::json::to_string_pretty(&anchor) else {
+            return;
+        };
+        let _ = fs::write(
+            export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE),
+            &anchor_json,
+        );
+        let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
+        if fs::create_dir_all(&anchor_dir).is_err() {
+            return;
+        }
+        let _ = fs::write(
+            anchor_dir.join(format!("{index_sha256}.notary.json")),
+            anchor_json,
+        );
+    }
+
+    fn compact_persisted_records(&self) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return;
+        };
+        let message_ids = self.retention_prune_message_ids(SystemTime::now());
+        if message_ids.is_empty() {
+            self.persist_audit_index();
+            return;
+        }
+        for message_id in message_ids {
+            self.remove_record_for_retention(&message_id, store_dir);
+        }
+        self.persist_audit_index();
+    }
+
+    fn retention_prune_message_ids(&self, now: SystemTime) -> Vec<String> {
+        let mut prune = HashSet::new();
+        let mut records = self
+            .records
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().updated_at))
+            .collect::<Vec<_>>();
+
+        if !self.store_retention.is_zero() {
+            for (message_id, updated_at) in &records {
+                if now
+                    .duration_since(*updated_at)
+                    .is_ok_and(|age| age > self.store_retention)
+                {
+                    prune.insert(message_id.clone());
+                }
+            }
+        }
+
+        if self.store_max_records > 0 && records.len() > self.store_max_records {
+            records.sort_by(|left, right| {
+                system_time_to_ms(left.1)
+                    .cmp(&system_time_to_ms(right.1))
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            let overflow = records.len() - self.store_max_records;
+            for (message_id, _) in records.into_iter().take(overflow) {
+                prune.insert(message_id);
+            }
+        }
+
+        let mut prune = prune.into_iter().collect::<Vec<_>>();
+        prune.sort();
+        prune
+    }
+
+    fn remove_record_for_retention(&self, message_id: &str, store_dir: &Path) {
+        if let Some((_, record)) = self.records.remove(message_id) {
+            self.remove_record_indexes(message_id, &record);
+        }
         let path = store_dir
             .join("messages")
             .join(message_filename(message_id));
@@ -2455,11 +2718,192 @@ impl Iso20022BridgeRuntime {
         Ok(())
     }
 
+    fn validate_message_reference_data(
+        &self,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        if !matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
+            return Ok(());
+        }
+        for (field, value) in parsed.iter() {
+            let value = core::str::from_utf8(value).map_err(|_| MsgError::InvalidValue {
+                field: field.to_owned(),
+                kind: InvalidValueKind::Utf8,
+            })?;
+            if is_instrument_reference_field(field) {
+                self.require_instrument_crosswalk(field, value)?;
+            }
+            if is_settlement_venue_field(field) {
+                self.require_mic(field, value)?;
+            }
+            if is_settlement_party_bic_field(field) {
+                self.require_bic(field, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_securities_ledger_mapping(
+        &self,
+        profile: &TradfiRailProfile,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        if profile.rail != TradfiRail::SecuritiesCsd || message_type != "sese.023" {
+            return Ok(());
+        }
+
+        let instrument = parsed
+            .field_text("SctiesLeg/FinInstrmId")
+            .ok_or(MsgError::MissingField("SctiesLeg/FinInstrmId"))?;
+        self.require_instrument_ledger_mapping("SctiesLeg/FinInstrmId", instrument)?;
+
+        let venue_mic = parsed
+            .field_text("PlcOfSttlm/MktId")
+            .ok_or(MsgError::MissingField("PlcOfSttlm/MktId"))?;
+        self.require_csd_venue_mapping("PlcOfSttlm/MktId", venue_mic)?;
+
+        let delivering_bic = parsed
+            .field_text("DlvrgSttlmPties/Pty/Bic")
+            .ok_or(MsgError::MissingField("DlvrgSttlmPties/Pty/Bic"))?;
+        let delivering_account = parsed
+            .field_text("DlvrgSttlmPties/Acct")
+            .ok_or(MsgError::MissingField("DlvrgSttlmPties/Acct"))?;
+        self.require_securities_account_mapping(
+            "DlvrgSttlmPties/Acct",
+            delivering_account,
+            Some(delivering_bic),
+        )?;
+
+        let receiving_bic = parsed
+            .field_text("RcvgSttlmPties/Pty/Bic")
+            .ok_or(MsgError::MissingField("RcvgSttlmPties/Pty/Bic"))?;
+        let receiving_account = parsed
+            .field_text("RcvgSttlmPties/Acct")
+            .ok_or(MsgError::MissingField("RcvgSttlmPties/Acct"))?;
+        self.require_securities_account_mapping(
+            "RcvgSttlmPties/Acct",
+            receiving_account,
+            Some(receiving_bic),
+        )?;
+
+        let currency = parsed
+            .field_text("CashLeg/Ccy")
+            .ok_or(MsgError::MissingField("CashLeg/Ccy"))?;
+        let payment_type = parsed.field_text("SttlmTpAndAddtlParams/Pmt");
+        self.require_cash_leg_mapping("CashLeg/Ccy", currency, payment_type)?;
+
+        Ok(())
+    }
+
+    fn require_instrument_crosswalk(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let isin = normalise_identifier(IdentifierKind::Isin, value);
+        if ivm::iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
+            return match self.reference_data.validate_isin(&isin) {
+                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+            };
+        }
+        let cusip = normalise_identifier(IdentifierKind::Cusip, value);
+        if ivm::iso20022::validate_identifier(IdentifierKind::Cusip, &cusip) {
+            return match self.reference_data.validate_cusip(&cusip) {
+                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Cusip, err)),
+            };
+        }
+        Err(MsgError::InvalidIdentifier {
+            field: field.to_owned(),
+            kind: IdentifierKind::Isin,
+        })
+    }
+
+    fn require_instrument_ledger_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        match self
+            .reference_data
+            .validate_instrument_ledger_mapping(value)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+        }
+    }
+
+    fn require_mic(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let mic = require_identifier(field, IdentifierKind::Mic, value)?;
+        match self.reference_data.validate_mic(&mic) {
+            Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+        }
+    }
+
+    fn require_csd_venue_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let mic = require_identifier(field, IdentifierKind::Mic, value)?;
+        match self.reference_data.validate_csd_venue(&mic) {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+        }
+    }
+
+    fn require_securities_account_mapping(
+        &self,
+        field: &str,
+        account: &str,
+        bic: Option<&str>,
+    ) -> Result<(), MsgError> {
+        let account = account.trim();
+        if account.is_empty() {
+            return Err(MsgError::MissingField("SecuritiesAccount"));
+        }
+        match self
+            .reference_data
+            .validate_securities_account(account, bic)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped)
+            | Err(ReferenceDataError::MissingLedgerMapping { .. }) => {
+                Err(MsgError::ValidationFailed)
+            }
+            Err(ReferenceDataError::DatasetFailed { .. }) => Err(MsgError::ValidationFailed),
+            Err(ReferenceDataError::NotFound { .. } | ReferenceDataError::MicInactive { .. }) => {
+                Err(MsgError::InvalidValue {
+                    field: field.to_owned(),
+                    kind: InvalidValueKind::Enum,
+                })
+            }
+        }
+    }
+
     fn require_bic(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let bic = require_identifier(field, IdentifierKind::Bic, value)?;
         match self.reference_data.validate_bic(&bic) {
             Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Bic, err)),
+        }
+    }
+
+    fn require_cash_leg_mapping(
+        &self,
+        field: &str,
+        currency: &str,
+        payment_type: Option<&str>,
+    ) -> Result<(), MsgError> {
+        let currency = require_identifier(field, IdentifierKind::Currency, currency)?;
+        match self
+            .reference_data
+            .validate_cash_leg(&currency, payment_type)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Currency,
+                err,
+            )),
         }
     }
 
@@ -2474,12 +2918,27 @@ impl Iso20022BridgeRuntime {
                 field: field.to_owned(),
                 kind: IdentifierKind::Mic,
             },
+            ReferenceDataError::MissingLedgerMapping { .. } => MsgError::ValidationFailed,
         }
     }
 }
 
 fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+    let mut root = persisted_record_body_value(message_id, record);
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> norito::json::Map {
     let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_RECORD_VERSION),
+    );
     root.insert("message_id".to_owned(), JsonValue::from(message_id));
     root.insert("state".to_owned(), JsonValue::from(record.state.label()));
     root.insert(
@@ -2535,11 +2994,42 @@ fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonVa
                 .collect::<Vec<_>>(),
         ),
     );
-    JsonValue::Object(root)
+    root
+}
+
+fn persisted_record_digest(value: &JsonValue) -> String {
+    let json = norito::json::to_string(value).expect("ISO persisted record JSON must serialize");
+    sha256_hex(json.as_bytes())
+}
+
+fn persisted_json_digest_matches(obj: &norito::json::Map, digest_field: &str) -> bool {
+    let Some(expected) = obj.get(digest_field).and_then(JsonValue::as_str) else {
+        return false;
+    };
+    if expected.len() != 64
+        || !expected
+            .chars()
+            .all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+    {
+        return false;
+    }
+    let mut body = obj.clone();
+    body.remove(digest_field);
+    persisted_record_digest(&JsonValue::Object(body)) == expected
+}
+
+fn persisted_record_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_PERSISTED_RECORD_DIGEST_FIELD)
 }
 
 fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecord)> {
     let obj = value.as_object()?;
+    if obj.get("version").and_then(JsonValue::as_u64)? != ISO_PERSISTED_RECORD_VERSION {
+        return None;
+    }
+    if !persisted_record_digest_matches(obj) {
+        return None;
+    }
     let message_id = obj.get("message_id")?.as_str()?.to_owned();
     let state = state_from_label(obj.get("state")?.as_str()?)?;
     let updated_at = obj
@@ -2615,6 +3105,142 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     Some((message_id, record))
 }
 
+fn persisted_audit_index_value(records: &[(String, IsoMessageRecord)]) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_AUDIT_INDEX_VERSION),
+    );
+    root.insert(
+        "record_count".to_owned(),
+        JsonValue::from(u64::try_from(records.len()).unwrap_or(u64::MAX)),
+    );
+    root.insert(
+        "records".to_owned(),
+        JsonValue::Array(
+            records
+                .iter()
+                .map(|(message_id, record)| persisted_audit_index_entry_value(message_id, record))
+                .collect(),
+        ),
+    );
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn persisted_audit_index_entry_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+    let persisted_record = persisted_record_value(message_id, record);
+    let record_sha256 = persisted_record
+        .as_object()
+        .and_then(|obj| obj.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
+        .and_then(JsonValue::as_str)
+        .expect("persisted ISO record digest is always present");
+    let mut entry = norito::json::Map::new();
+    entry.insert("message_id".to_owned(), JsonValue::from(message_id));
+    entry.insert(
+        "filename".to_owned(),
+        JsonValue::from(message_filename(message_id).as_str()),
+    );
+    entry.insert(
+        ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+        JsonValue::from(record_sha256),
+    );
+    entry.insert("state".to_owned(), JsonValue::from(record.state.label()));
+    entry.insert(
+        "pacs002_code".to_owned(),
+        JsonValue::from(record.derived_status().code()),
+    );
+    entry.insert(
+        "updated_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(record.updated_at)),
+    );
+    entry.insert(
+        "settled_at_ms".to_owned(),
+        record
+            .settled_at
+            .map(system_time_to_ms)
+            .map_or(JsonValue::Null, JsonValue::from),
+    );
+    entry.insert(
+        "transaction_hash".to_owned(),
+        string_or_null(record.transaction_hash.as_deref()),
+    );
+    entry.insert(
+        "profile_id".to_owned(),
+        string_or_null(record.metadata.profile_id()),
+    );
+    entry.insert(
+        "message_type".to_owned(),
+        string_or_null(record.metadata.message_type()),
+    );
+    entry.insert(
+        "business_message_id".to_owned(),
+        string_or_null(record.metadata.business_message_id()),
+    );
+    entry.insert("uetr".to_owned(), string_or_null(record.metadata.uetr()));
+    entry.insert(
+        "payload_hash".to_owned(),
+        string_or_null(record.metadata.payload_hash()),
+    );
+    entry.insert(
+        "reference_snapshot_id".to_owned(),
+        string_or_null(record.metadata.reference_snapshot_id()),
+    );
+    JsonValue::Object(entry)
+}
+
+fn persisted_audit_index_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
+}
+
+fn audit_index_digest(index: &JsonValue) -> Option<&str> {
+    index
+        .as_object()
+        .and_then(|obj| obj.get(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD))
+        .and_then(JsonValue::as_str)
+}
+
+fn audit_export_anchor_value(index: &JsonValue, store_dir: Option<&Path>) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_AUDIT_EXPORT_ANCHOR_VERSION),
+    );
+    root.insert(
+        "index_sha256".to_owned(),
+        audit_index_digest(index).map_or(JsonValue::Null, JsonValue::from),
+    );
+    root.insert(
+        "record_count".to_owned(),
+        index
+            .as_object()
+            .and_then(|obj| obj.get("record_count"))
+            .and_then(JsonValue::as_u64)
+            .map_or(JsonValue::Null, JsonValue::from),
+    );
+    root.insert(
+        "store_dir".to_owned(),
+        store_dir.map_or(JsonValue::Null, |path| {
+            JsonValue::from(path.display().to_string().as_str())
+        }),
+    );
+    root.insert("audit_index".to_owned(), index.clone());
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
+}
+
 fn context_value(context: &IsoMessageContext) -> JsonValue {
     let mut map = norito::json::Map::new();
     map.insert(
@@ -2674,6 +3300,50 @@ fn context_value(context: &IsoMessageContext) -> JsonValue {
         string_or_null(context.security_instrument_id.as_deref()),
     );
     map.insert(
+        "collateral_obligation_id".to_owned(),
+        string_or_null(context.collateral_obligation_id.as_deref()),
+    );
+    map.insert(
+        "collateral_original_amount".to_owned(),
+        string_or_null(context.collateral_original_amount.as_deref()),
+    );
+    map.insert(
+        "collateral_original_currency".to_owned(),
+        string_or_null(context.collateral_original_currency.as_deref()),
+    );
+    map.insert(
+        "collateral_original_instrument_id".to_owned(),
+        string_or_null(context.collateral_original_instrument_id.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_amount".to_owned(),
+        string_or_null(context.collateral_substitute_amount.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_currency".to_owned(),
+        string_or_null(context.collateral_substitute_currency.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_instrument_id".to_owned(),
+        string_or_null(context.collateral_substitute_instrument_id.as_deref()),
+    );
+    map.insert(
+        "collateral_effective_date".to_owned(),
+        string_or_null(context.collateral_effective_date.as_deref()),
+    );
+    map.insert(
+        "collateral_substitution_type".to_owned(),
+        string_or_null(context.collateral_substitution_type.as_deref()),
+    );
+    map.insert(
+        "collateral_haircut".to_owned(),
+        string_or_null(context.collateral_haircut.as_deref()),
+    );
+    map.insert(
+        "collateral_reason_code".to_owned(),
+        string_or_null(context.collateral_reason_code.as_deref()),
+    );
+    map.insert(
         "plan_execution_order".to_owned(),
         string_or_null(context.plan_execution_order.as_deref()),
     );
@@ -2701,6 +3371,23 @@ fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
         settlement_movement_type: optional_string(obj, "settlement_movement_type"),
         settlement_payment_type: optional_string(obj, "settlement_payment_type"),
         security_instrument_id: optional_string(obj, "security_instrument_id"),
+        collateral_obligation_id: optional_string(obj, "collateral_obligation_id"),
+        collateral_original_amount: optional_string(obj, "collateral_original_amount"),
+        collateral_original_currency: optional_string(obj, "collateral_original_currency"),
+        collateral_original_instrument_id: optional_string(
+            obj,
+            "collateral_original_instrument_id",
+        ),
+        collateral_substitute_amount: optional_string(obj, "collateral_substitute_amount"),
+        collateral_substitute_currency: optional_string(obj, "collateral_substitute_currency"),
+        collateral_substitute_instrument_id: optional_string(
+            obj,
+            "collateral_substitute_instrument_id",
+        ),
+        collateral_effective_date: optional_string(obj, "collateral_effective_date"),
+        collateral_substitution_type: optional_string(obj, "collateral_substitution_type"),
+        collateral_haircut: optional_string(obj, "collateral_haircut"),
+        collateral_reason_code: optional_string(obj, "collateral_reason_code"),
         plan_execution_order: optional_string(obj, "plan_execution_order"),
         plan_atomicity: optional_string(obj, "plan_atomicity"),
         source_address_observation: AddressParseObservation::default(),
@@ -2881,6 +3568,7 @@ fn lifecycle_referenced_message_id<'a>(
         }
         "sese.024" | "sese.025" => unique_field_text_by_suffix(parsed, &["TxId"], "TxId"),
         "sese.023" => Ok(None),
+        "colr.007" | "colr.012" => Ok(None),
         _ => Ok(None),
     }
 }
@@ -2901,6 +3589,7 @@ fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> O
         ),
         "sese.025" => parsed.field_text("ConfSts"),
         "sese.023" => Some("ACTC"),
+        "colr.007" | "colr.012" => Some("ACSC"),
         _ => None,
     }
     .filter(|value| !value.trim().is_empty())
@@ -2917,6 +3606,7 @@ fn lifecycle_reason_code(parsed: &ParsedMessage) -> Option<&str> {
             "CxlRsnInf/Rsn/Prtry",
             "StsRsnInf/Rsn/Cd",
             "StsRsnInf/Rsn/Prtry",
+            "Substitution/ReasonCd",
         ],
     )
     .filter(|value| !value.trim().is_empty())
@@ -2950,6 +3640,7 @@ fn lifecycle_update_matches_original(lifecycle_type: &str, original_type: Option
             is_iso_family(original_type, "pacs.008") || is_iso_family(original_type, "pacs.009")
         }
         "sese.024" | "sese.025" => is_iso_family(original_type, "sese.023"),
+        "colr.007" | "colr.012" => false,
         _ => false,
     }
 }
@@ -2989,6 +3680,23 @@ fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMe
             context.plan_execution_order = parsed_text(parsed, "Plan/ExecutionOrder");
             context.plan_atomicity = parsed_text(parsed, "Plan/Atomicity");
         }
+        "colr.007" | "colr.012" => {
+            context.collateral_obligation_id = parsed_text(parsed, "OblgtnId");
+            context.collateral_original_amount = parsed_text(parsed, "Substitution/OriginalAmt");
+            context.collateral_original_currency = parsed_text(parsed, "Substitution/OriginalCcy");
+            context.collateral_original_instrument_id =
+                parsed_text(parsed, "Substitution/OriginalFinInstrmId");
+            context.collateral_substitute_amount =
+                parsed_text(parsed, "Substitution/SubstituteAmt");
+            context.collateral_substitute_currency =
+                parsed_text(parsed, "Substitution/SubstituteCcy");
+            context.collateral_substitute_instrument_id =
+                parsed_text(parsed, "Substitution/SubstituteFinInstrmId");
+            context.collateral_effective_date = parsed_text(parsed, "Substitution/EffectiveDt");
+            context.collateral_substitution_type = parsed_text(parsed, "Substitution/Type");
+            context.collateral_haircut = parsed_text(parsed, "Substitution/Haircut");
+            context.collateral_reason_code = parsed_text(parsed, "Substitution/ReasonCd");
+        }
         _ => return None,
     }
 
@@ -3000,6 +3708,17 @@ fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMe
         context.security_instrument_id.as_deref(),
         context.settlement_amount.as_deref(),
         context.settlement_currency.as_deref(),
+        context.collateral_obligation_id.as_deref(),
+        context.collateral_original_amount.as_deref(),
+        context.collateral_original_currency.as_deref(),
+        context.collateral_original_instrument_id.as_deref(),
+        context.collateral_substitute_amount.as_deref(),
+        context.collateral_substitute_currency.as_deref(),
+        context.collateral_substitute_instrument_id.as_deref(),
+        context.collateral_effective_date.as_deref(),
+        context.collateral_substitution_type.as_deref(),
+        context.collateral_haircut.as_deref(),
+        context.collateral_reason_code.as_deref(),
         context.plan_execution_order.as_deref(),
         context.plan_atomicity.as_deref(),
     ]
@@ -3014,6 +3733,27 @@ fn parsed_text(parsed: &ParsedMessage, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn is_instrument_reference_field(field: &str) -> bool {
+    matches!(
+        field,
+        "SctiesLeg/FinInstrmId"
+            | "Substitution/OriginalFinInstrmId"
+            | "Substitution/SubstituteFinInstrmId"
+    ) || field.ends_with("/SctiesLeg/FinInstrmId")
+        || field.ends_with("/Substitution/OriginalFinInstrmId")
+        || field.ends_with("/Substitution/SubstituteFinInstrmId")
+}
+
+fn is_settlement_venue_field(field: &str) -> bool {
+    field == "PlcOfSttlm/MktId" || field.ends_with("/PlcOfSttlm/MktId")
+}
+
+fn is_settlement_party_bic_field(field: &str) -> bool {
+    matches!(field, "DlvrgSttlmPties/Pty/Bic" | "RcvgSttlmPties/Pty/Bic")
+        || field.ends_with("/DlvrgSttlmPties/Pty/Bic")
+        || field.ends_with("/RcvgSttlmPties/Pty/Bic")
 }
 
 fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Option<&'a str> {
@@ -3086,53 +3826,24 @@ struct XmlElementSpan {
     end: usize,
 }
 
-struct XadesSignedProperties<'a> {
-    id: String,
-    xml: &'a str,
-    signed_signature_properties_start: usize,
-    signed_signature_properties_xml: &'a str,
-}
-
+const XMLDSIG_NS: &str = "http://www.w3.org/2000/09/xmldsig#";
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 const XMLDSIG_ECDSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
 const XMLDSIG_SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
 const XMLDSIG_ENVELOPED_SIGNATURE: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
-const XADES_SIGNED_PROPERTIES_REFERENCE_TYPE: &str = "http://uri.etsi.org/01903#SignedProperties";
-const XADES_UNSUPPORTED_QUALIFYING_PROPERTIES_ELEMENTS: &[&str] = &[
-    "UnsignedProperties",
-    "UnsignedSignatureProperties",
-    "SignatureTimeStamp",
-    "CompleteCertificateRefs",
-    "CompleteRevocationRefs",
-    "AttributeCertificateRefs",
-    "AttributeRevocationRefs",
-    "SigAndRefsTimeStamp",
-    "RefsOnlyTimeStamp",
-    "CertificateValues",
-    "RevocationValues",
-    "ArchiveTimeStamp",
-    "CounterSignature",
-];
-const XADES_UNSUPPORTED_SIGNED_PROPERTIES_ELEMENTS: &[&str] = &[
-    "SignedDataObjectProperties",
-    "DataObjectFormat",
-    "CommitmentTypeIndication",
-    "AllDataObjectsTimeStamp",
-    "IndividualDataObjectsTimeStamp",
-];
-const XADES_UNSUPPORTED_SIGNED_SIGNATURE_PROPERTIES_ELEMENTS: &[&str] = &[
-    "SigningPolicyIdentifier",
-    "SignatureProductionPlace",
-    "SignatureProductionPlaceV2",
-    "SignerRole",
-    "SignerRoleV2",
-];
-const XADES_UNSUPPORTED_SIGNING_CERTIFICATE_ELEMENTS: &[&str] =
-    &["IssuerSerial", "IssuerSerialV2", "X509IssuerSerial"];
+const XADES_NS: &str = "http://uri.etsi.org/01903/v1.3.2#";
+const XADES_SIGNED_PROPERTIES_TYPE: &str = "http://uri.etsi.org/01903#SignedProperties";
 const XML_C14N_1_0: &str = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
 const XML_C14N_1_1: &str = "http://www.w3.org/2006/12/xml-c14n11";
 const XML_EXCLUSIVE_C14N_1_0: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
+const XMLDSIG_P256_NAMED_CURVE: &str = "urn:oid:1.2.840.10045.3.1.7";
+const P256_XMLDSIG_SIGNATURE_LEN: usize = 64;
+const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
 const X509_EKU_DOCUMENT_SIGNING_OID: &str = "1.3.6.1.5.5.7.3.36";
+const X509_ANY_POLICY_OID: &str = "2.5.29.32.0";
 const XMLDSIG_MAX_X509_CERTIFICATES: usize = 8;
+const XML_SIGNATURE_MAX_X509_CERTIFICATES: usize = XMLDSIG_MAX_X509_CERTIFICATES;
 const XMLDSIG_MAX_X509_CERTIFICATE_BYTES: usize = 16 * 1024;
 const XMLDSIG_MAX_X509_CRLS: usize = 8;
 const XMLDSIG_MAX_X509_CRL_BYTES: usize = 1024 * 1024;
@@ -3151,621 +3862,1488 @@ fn payload_has_embedded_signature(payload: &[u8]) -> bool {
 
 fn verify_embedded_xml_signature(
     payload: &[u8],
-    signature_public_key_sha256_pins: &[String],
-    x509_trust_anchor_sha256_pins: &[String],
-    x509_required_certificate_policy_oids: &[String],
-    x509_require_crl_revocation_check: bool,
-    x509_crl_der_base64: &[String],
-    x509_require_ocsp_revocation_check: bool,
-    x509_ocsp_response_der_base64: &[String],
+    profile: &TradfiRailProfile,
+    parsed: &ParsedMessage,
 ) -> Result<bool, MsgError> {
     let text = std::str::from_utf8(payload).map_err(|_| MsgError::InvalidFormat)?;
-    let Some(signature_span) =
-        find_first_xml_element(text, "Signature").or_else(|| find_first_xml_element(text, "Sgntr"))
-    else {
+    let Some(signature_carrier) = xml_signature_carrier(text)? else {
         return Ok(false);
     };
-    if signature_public_key_sha256_pins.is_empty() && x509_trust_anchor_sha256_pins.is_empty() {
-        return Err(MsgError::ValidationFailed);
-    }
-    if find_first_xml_element(&text[signature_span.end..], "Signature").is_some()
-        || find_first_xml_element(&text[signature_span.end..], "Sgntr").is_some()
-    {
+    let signature_span = signature_carrier.signature_span;
+    if !profile.has_xml_signature_trust_anchors() {
         return Err(MsgError::ValidationFailed);
     }
     let signature_xml = &text[signature_span.start..signature_span.end];
-    let xades_signed_properties = verify_xades_qualifying_properties(signature_xml)?;
-    let signed_info_span =
-        find_first_xml_element(signature_xml, "SignedInfo").ok_or(MsgError::ValidationFailed)?;
-    let signed_info_xml = &signature_xml[signed_info_span.start..signed_info_span.end];
-    let c14n_algorithm = child_attr(signed_info_xml, "CanonicalizationMethod", "Algorithm")
+    let signature_children = xml_signature_direct_child_spans_with_namespaces(
+        signature_xml,
+        &signature_carrier.inherited_namespaces,
+    )?;
+    let signature_root_span = required_single_xml_element(signature_xml, "Signature")?;
+    let signature_namespaces = xml_element_namespace_scope(
+        signature_xml,
+        signature_root_span,
+        &signature_carrier.inherited_namespaces,
+    )?;
+    let signed_info_xml =
+        &signature_xml[signature_children.signed_info.start..signature_children.signed_info.end];
+    let signed_info_root_span = required_single_xml_element(signed_info_xml, "SignedInfo")?;
+    let signed_info_namespaces = xml_element_namespace_scope(
+        signed_info_xml,
+        signed_info_root_span,
+        &signature_namespaces,
+    )?;
+    let signed_info_children =
+        xml_signed_info_direct_child_spans_with_namespaces(signed_info_xml, &signature_namespaces)?;
+    let c14n_method_span = signed_info_children.canonicalization_method;
+    ensure_xml_element_attributes_allowed(signed_info_xml, c14n_method_span, &["Algorithm"])?;
+    ensure_xml_element_content_empty(signed_info_xml, c14n_method_span)?;
+    let c14n_algorithm = element_attr(signed_info_xml, c14n_method_span, "Algorithm")
         .ok_or(MsgError::ValidationFailed)?;
-    if c14n_algorithm != XML_C14N_1_0 {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signature_algorithm = child_attr(signed_info_xml, "SignatureMethod", "Algorithm")
+    let c14n_mode = xml_canonicalization_mode(&c14n_algorithm)?;
+    let signature_method_span = signed_info_children.signature_method;
+    ensure_xml_element_attributes_allowed(signed_info_xml, signature_method_span, &["Algorithm"])?;
+    ensure_xml_element_content_empty(signed_info_xml, signature_method_span)?;
+    let signature_algorithm = element_attr(signed_info_xml, signature_method_span, "Algorithm")
         .ok_or(MsgError::ValidationFailed)?;
     if signature_algorithm != XMLDSIG_ECDSA_SHA256 {
         return Err(MsgError::ValidationFailed);
     }
-    verify_xml_signature_references(
+    let inherited_namespaces = inherited_namespace_attributes_from_scope(&signature_namespaces);
+    let canonical_signed_info =
+        canonicalize_supported_xml_with_mode(signed_info_xml, &inherited_namespaces, c14n_mode)?;
+    let reference_verification = verify_xml_signature_references(
         text,
         signature_span,
+        signature_carrier.carrier_span,
+        signature_xml,
         signed_info_xml,
-        xades_signed_properties.as_ref(),
+        &signed_info_namespaces,
     )?;
 
-    let signature_value = decode_required_child_base64(signature_xml, "SignatureValue")?;
-    let public_key = xml_signature_public_key(
-        signature_xml,
-        xades_signed_properties.as_ref(),
-        signature_public_key_sha256_pins,
-        x509_trust_anchor_sha256_pins,
-        x509_required_certificate_policy_oids,
-        x509_require_crl_revocation_check,
-        x509_crl_der_base64,
-        x509_require_ocsp_revocation_check,
-        x509_ocsp_response_der_base64,
+    let signature_value =
+        decode_direct_child_base64(signature_xml, signature_children.signature_value)?;
+    let evaluation_time = xml_signature_evaluation_time_for_verified_properties(
+        parsed,
+        reference_verification.signed_properties.as_ref(),
     )?;
-    let verifying_key =
-        P256VerifyingKey::from_sec1_bytes(&public_key).map_err(|_| MsgError::ValidationFailed)?;
-    let signature =
-        P256Signature::from_der(&signature_value).map_err(|_| MsgError::ValidationFailed)?;
-    verifying_key
-        .verify(signed_info_xml.as_bytes(), &signature)
+    let key_info_xml =
+        &signature_xml[signature_children.key_info.start..signature_children.key_info.end];
+    let embedded_revocation =
+        xml_signature_x509_revocation_values_with_namespaces(key_info_xml, &signature_namespaces)?;
+    let key_material = xml_signature_key_material_for_profile_with_namespaces(
+        key_info_xml,
+        evaluation_time,
+        &signature_namespaces,
+        profile,
+        &embedded_revocation.crls,
+        &embedded_revocation.ocsp_responses,
+    )?;
+    if let Some(signed_properties) = reference_verification.signed_properties.as_ref() {
+        verify_xades_signing_certificate_v2_binding_with_namespaces(
+            signed_properties.xml,
+            &signed_properties.inherited_namespaces,
+            &key_material,
+        )?;
+    }
+    if !profile.has_xml_signature_trust_anchors()
+        || !profile.accepts_xml_signature_key(
+            &sha256_hex(&key_material.public_key),
+            &key_material.certificate_sha256,
+        )
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let verifying_key = P256VerifyingKey::from_sec1_bytes(&key_material.public_key)
         .map_err(|_| MsgError::ValidationFailed)?;
+    let signature = decode_p256_xmldsig_signature(&signature_value)?;
+    if verifying_key
+        .verify(canonical_signed_info.as_bytes(), &signature)
+        .is_err()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
     Ok(true)
 }
 
-fn verify_xades_qualifying_properties(
-    signature_xml: &str,
-) -> Result<Option<XadesSignedProperties<'_>>, MsgError> {
-    let Some(qualifying_properties_span) =
-        find_first_xml_element(signature_xml, "QualifyingProperties")
-    else {
-        return Ok(None);
-    };
-    if find_first_xml_element(
-        &signature_xml[qualifying_properties_span.end..],
-        "QualifyingProperties",
-    )
-    .is_some()
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signature_span = find_first_xml_element(signature_xml, "Signature")
-        .or_else(|| find_first_xml_element(signature_xml, "Sgntr"))
-        .ok_or(MsgError::ValidationFailed)?;
-    let signature_id = element_attr(signature_xml, signature_span, "Id")
-        .or_else(|| element_attr(signature_xml, signature_span, "ID"))
-        .or_else(|| element_attr(signature_xml, signature_span, "id"))
-        .ok_or(MsgError::ValidationFailed)?;
-    if signature_id.is_empty() {
-        return Err(MsgError::ValidationFailed);
-    }
-    let target = element_attr(signature_xml, qualifying_properties_span, "Target")
-        .ok_or(MsgError::ValidationFailed)?;
-    let Some(target_id) = target.strip_prefix('#') else {
-        return Err(MsgError::ValidationFailed);
-    };
-    if target_id.is_empty() || target_id != signature_id {
-        return Err(MsgError::ValidationFailed);
-    }
-
-    let object_span =
-        find_first_xml_element(signature_xml, "Object").ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(&signature_xml[object_span.end..], "Object").is_some() {
-        return Err(MsgError::ValidationFailed);
-    }
-    if qualifying_properties_span.start < object_span.content_start
-        || qualifying_properties_span.end > object_span.content_end
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-
-    let qualifying_properties_xml =
-        &signature_xml[qualifying_properties_span.start..qualifying_properties_span.end];
-    reject_xades_elements(
-        qualifying_properties_xml,
-        XADES_UNSUPPORTED_QUALIFYING_PROPERTIES_ELEMENTS,
-    )?;
-    let signed_properties_span =
-        find_first_xml_element(qualifying_properties_xml, "SignedProperties")
-            .ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(
-        &qualifying_properties_xml[signed_properties_span.end..],
-        "SignedProperties",
-    )
-    .is_some()
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let first_signed_properties_span = find_first_xml_element(signature_xml, "SignedProperties")
-        .ok_or(MsgError::ValidationFailed)?;
-    if first_signed_properties_span.start
-        != qualifying_properties_span.start + signed_properties_span.start
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    if find_first_xml_element(
-        &signature_xml[first_signed_properties_span.end..],
-        "SignedProperties",
-    )
-    .is_some()
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signed_properties_id =
-        element_attr(qualifying_properties_xml, signed_properties_span, "Id")
-            .or_else(|| element_attr(qualifying_properties_xml, signed_properties_span, "ID"))
-            .or_else(|| element_attr(qualifying_properties_xml, signed_properties_span, "id"))
-            .ok_or(MsgError::ValidationFailed)?;
-    if signed_properties_id.is_empty() {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signed_properties_xml =
-        &qualifying_properties_xml[signed_properties_span.start..signed_properties_span.end];
-    reject_xades_elements(
-        signed_properties_xml,
-        XADES_UNSUPPORTED_SIGNED_PROPERTIES_ELEMENTS,
-    )?;
-    let signed_signature_properties_span =
-        validate_xades_signed_signature_properties(signed_properties_xml)?;
-
-    Ok(Some(XadesSignedProperties {
-        id: signed_properties_id,
-        xml: signed_properties_xml,
-        signed_signature_properties_start: signed_signature_properties_span.start,
-        signed_signature_properties_xml: &signed_properties_xml
-            [signed_signature_properties_span.start..signed_signature_properties_span.end],
-    }))
-}
-
-fn validate_xades_signed_signature_properties(
-    signed_properties_xml: &str,
-) -> Result<XmlElementSpan, MsgError> {
-    let signed_signature_properties_span =
-        find_first_xml_element(signed_properties_xml, "SignedSignatureProperties")
-            .ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(
-        &signed_properties_xml[signed_signature_properties_span.end..],
-        "SignedSignatureProperties",
-    )
-    .is_some()
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signed_signature_properties_xml = &signed_properties_xml
-        [signed_signature_properties_span.start..signed_signature_properties_span.end];
-    reject_xades_elements(
-        signed_signature_properties_xml,
-        XADES_UNSUPPORTED_SIGNED_SIGNATURE_PROPERTIES_ELEMENTS,
-    )?;
-    let signing_time_span = find_first_xml_element(signed_signature_properties_xml, "SigningTime")
-        .ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(
-        &signed_signature_properties_xml[signing_time_span.end..],
-        "SigningTime",
-    )
-    .is_some()
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let signing_time = &signed_signature_properties_xml
-        [signing_time_span.content_start..signing_time_span.content_end];
-    if !is_canonical_xades_signing_time(signing_time) {
-        return Err(MsgError::ValidationFailed);
-    }
-    Ok(signed_signature_properties_span)
-}
-
-fn reject_xades_elements(container: &str, elements: &[&str]) -> Result<(), MsgError> {
-    for element in elements {
-        if find_first_xml_element(container, element).is_some() {
-            return Err(MsgError::ValidationFailed);
-        }
-    }
-    Ok(())
-}
-
-fn is_canonical_xades_signing_time(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 20
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes[10] != b'T'
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-        || bytes[19] != b'Z'
-    {
-        return false;
-    }
-    let Some(year) = parse_ascii_decimal_u32(bytes, 0, 4) else {
-        return false;
-    };
-    let Some(month) = parse_ascii_decimal_u32(bytes, 5, 2) else {
-        return false;
-    };
-    let Some(day) = parse_ascii_decimal_u32(bytes, 8, 2) else {
-        return false;
-    };
-    let Some(hour) = parse_ascii_decimal_u32(bytes, 11, 2) else {
-        return false;
-    };
-    let Some(minute) = parse_ascii_decimal_u32(bytes, 14, 2) else {
-        return false;
-    };
-    let Some(second) = parse_ascii_decimal_u32(bytes, 17, 2) else {
-        return false;
-    };
-    year > 0
-        && (1..=12).contains(&month)
-        && day >= 1
-        && day <= days_in_month(year, month)
-        && hour <= 23
-        && minute <= 59
-        && second <= 59
-}
-
-fn parse_ascii_decimal_u32(bytes: &[u8], offset: usize, len: usize) -> Option<u32> {
-    let mut value = 0u32;
-    for byte in bytes.get(offset..offset + len)? {
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-        value = value * 10 + u32::from(byte - b'0');
-    }
-    Some(value)
-}
-
-fn days_in_month(year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: u32) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-fn verify_xml_signature_references(
-    full_xml: &str,
+#[derive(Debug)]
+struct XmlSignatureCarrier {
+    carrier_span: XmlElementSpan,
     signature_span: XmlElementSpan,
-    signed_info_xml: &str,
-    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
-) -> Result<(), MsgError> {
-    let mut references = Vec::new();
-    let mut rest = signed_info_xml;
-    while let Some(reference_span) = find_first_xml_element(rest, "Reference") {
-        references.push(&rest[reference_span.start..reference_span.end]);
-        rest = &rest[reference_span.end..];
-    }
-    let expected_reference_count = if xades_signed_properties.is_some() {
-        2
-    } else {
-        1
-    };
-    if references.len() != expected_reference_count {
-        return Err(MsgError::ValidationFailed);
-    }
-    let mut saw_payload_reference = false;
-    let mut saw_signed_properties_reference = false;
-    for reference_xml in references {
-        let reference_span =
-            find_first_xml_element(reference_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
-        let uri = element_attr(reference_xml, reference_span, "URI").unwrap_or_default();
-        let reference_type = element_attr(reference_xml, reference_span, "Type");
-        if uri.is_empty() && reference_type.is_none() {
-            if saw_payload_reference {
+    inherited_namespaces: Vec<CanonicalXmlNamespaceBinding>,
+}
+
+fn xml_signature_carrier(text: &str) -> Result<Option<XmlSignatureCarrier>, MsgError> {
+    let signature = find_first_xml_element(text, "Signature");
+    let sgntr = find_first_xml_element(text, "Sgntr");
+    match (signature, sgntr) {
+        (None, None) => Ok(None),
+        (Some(signature_span), None) => {
+            ensure_no_xml_signature_carrier_outside_span(text, signature_span)?;
+            Ok(Some(XmlSignatureCarrier {
+                carrier_span: signature_span,
+                signature_span,
+                inherited_namespaces: Vec::new(),
+            }))
+        }
+        (_, Some(sgntr_span)) => {
+            ensure_xml_element_attributes_allowed(text, sgntr_span, &[])?;
+            ensure_direct_xml_child_elements(text, sgntr_span, &["Signature"])?;
+            let signature_span = required_direct_xml_child_element(text, sgntr_span, "Signature")?;
+            ensure_no_xml_signature_carrier_outside_span(text, sgntr_span)?;
+            if find_xml_element_outside_span(text, signature_span, "Signature") {
                 return Err(MsgError::ValidationFailed);
             }
-            verify_payload_xml_signature_reference(full_xml, signature_span, reference_xml)?;
-            saw_payload_reference = true;
-            continue;
+            let inherited_namespaces = xml_element_namespace_scope(text, sgntr_span, &[])?;
+            Ok(Some(XmlSignatureCarrier {
+                carrier_span: sgntr_span,
+                signature_span,
+                inherited_namespaces,
+            }))
         }
-        let Some(xades_signed_properties) = xades_signed_properties else {
-            return Err(MsgError::ValidationFailed);
-        };
-        if saw_signed_properties_reference {
-            return Err(MsgError::ValidationFailed);
-        }
-        verify_signed_properties_xml_signature_reference(
-            reference_xml,
-            &uri,
-            reference_type.as_deref(),
-            xades_signed_properties,
-        )?;
-        saw_signed_properties_reference = true;
     }
-    if !saw_payload_reference
-        || (xades_signed_properties.is_some() && !saw_signed_properties_reference)
-    {
-        return Err(MsgError::ValidationFailed);
+}
+
+fn ensure_no_xml_signature_carrier_outside_span(
+    text: &str,
+    allowed_span: XmlElementSpan,
+) -> Result<(), MsgError> {
+    for carrier in ["Signature", "Sgntr"] {
+        if find_xml_element_outside_span(text, allowed_span, carrier) {
+            return Err(MsgError::ValidationFailed);
+        }
     }
     Ok(())
 }
 
-fn verify_payload_xml_signature_reference(
-    full_xml: &str,
-    signature_span: XmlElementSpan,
-    reference_xml: &str,
-) -> Result<(), MsgError> {
-    let reference_span =
-        find_first_xml_element(reference_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
-    let uri = element_attr(reference_xml, reference_span, "URI").unwrap_or_default();
-    if !uri.is_empty() {
+fn decode_p256_xmldsig_signature(signature_value: &[u8]) -> Result<P256Signature, MsgError> {
+    let signature = if signature_value.len() == P256_XMLDSIG_SIGNATURE_LEN {
+        P256Signature::from_slice(signature_value).map_err(|_| MsgError::ValidationFailed)
+    } else {
+        P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)
+    }?;
+    if signature.normalize_s().is_some() {
         return Err(MsgError::ValidationFailed);
     }
-    let transform_span =
-        find_first_xml_element(reference_xml, "Transform").ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(&reference_xml[transform_span.end..], "Transform").is_some() {
+    Ok(signature)
+}
+
+#[derive(Debug)]
+struct XmlSignatureDirectChildSpans {
+    signed_info: XmlElementSpan,
+    signature_value: XmlElementSpan,
+    key_info: XmlElementSpan,
+}
+
+fn xml_signature_direct_child_spans(
+    signature_xml: &str,
+) -> Result<XmlSignatureDirectChildSpans, MsgError> {
+    xml_signature_direct_child_spans_with_namespaces(signature_xml, &[])
+}
+
+fn xml_signature_direct_child_spans_with_namespaces(
+    signature_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XmlSignatureDirectChildSpans, MsgError> {
+    let signature_span = required_single_xml_element(signature_xml, "Signature")?;
+    if signature_span.start != 0 || signature_span.end != signature_xml.len() {
         return Err(MsgError::ValidationFailed);
     }
-    if element_attr(reference_xml, transform_span, "Algorithm").as_deref()
-        != Some(XMLDSIG_ENVELOPED_SIGNATURE)
+    ensure_xml_element_prefixed_namespace(
+        signature_xml,
+        signature_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let signature_namespaces =
+        xml_element_namespace_scope(signature_xml, signature_span, inherited_namespaces)?;
+    ensure_xml_element_attributes_allowed(signature_xml, signature_span, &["Id"])?;
+    ensure_direct_xml_child_elements(
+        signature_xml,
+        signature_span,
+        &["SignedInfo", "SignatureValue", "KeyInfo", "Object"],
+    )?;
+    let signed_info =
+        required_direct_xml_child_element(signature_xml, signature_span, "SignedInfo")?;
+    let signature_value =
+        required_direct_xml_child_element(signature_xml, signature_span, "SignatureValue")?;
+    let key_info = required_direct_xml_child_element(signature_xml, signature_span, "KeyInfo")?;
+    let object = optional_direct_xml_child_element(signature_xml, signature_span, "Object")?;
+    for child_span in [signed_info, signature_value, key_info] {
+        ensure_xml_element_prefixed_namespace(
+            signature_xml,
+            child_span,
+            &signature_namespaces,
+            XMLDSIG_NS,
+        )?;
+    }
+    if let Some(object) = object {
+        ensure_xml_element_prefixed_namespace(
+            signature_xml,
+            object,
+            &signature_namespaces,
+            XMLDSIG_NS,
+        )?;
+    }
+    if !(signed_info.start < signature_value.start && signature_value.start < key_info.start)
+        || object.is_some_and(|object| key_info.start > object.start)
     {
         return Err(MsgError::ValidationFailed);
     }
-    let digest_algorithm =
-        child_attr(reference_xml, "DigestMethod", "Algorithm").ok_or(MsgError::ValidationFailed)?;
-    if digest_algorithm != XMLDSIG_SHA256 {
+    Ok(XmlSignatureDirectChildSpans {
+        signed_info,
+        signature_value,
+        key_info,
+    })
+}
+
+#[derive(Debug)]
+struct XmlSignedInfoDirectChildSpans {
+    canonicalization_method: XmlElementSpan,
+    signature_method: XmlElementSpan,
+}
+
+fn xml_signed_info_direct_child_spans(
+    signed_info_xml: &str,
+) -> Result<XmlSignedInfoDirectChildSpans, MsgError> {
+    xml_signed_info_direct_child_spans_with_namespaces(signed_info_xml, &[])
+}
+
+fn xml_signed_info_direct_child_spans_with_namespaces(
+    signed_info_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XmlSignedInfoDirectChildSpans, MsgError> {
+    let signed_info_span = required_single_xml_element(signed_info_xml, "SignedInfo")?;
+    if signed_info_span.start != 0 || signed_info_span.end != signed_info_xml.len() {
         return Err(MsgError::ValidationFailed);
     }
-    let expected_digest = decode_required_child_base64(reference_xml, "DigestValue")?;
+    ensure_xml_element_prefixed_namespace(
+        signed_info_xml,
+        signed_info_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let signed_info_namespaces =
+        xml_element_namespace_scope(signed_info_xml, signed_info_span, inherited_namespaces)?;
+    ensure_direct_xml_child_elements_allowing_comments(
+        signed_info_xml,
+        signed_info_span,
+        &["CanonicalizationMethod", "SignatureMethod", "Reference"],
+    )?;
+    let canonicalization_method = required_direct_xml_child_element_allowing_comments(
+        signed_info_xml,
+        signed_info_span,
+        "CanonicalizationMethod",
+    )?;
+    let signature_method = required_direct_xml_child_element_allowing_comments(
+        signed_info_xml,
+        signed_info_span,
+        "SignatureMethod",
+    )?;
+    ensure_xml_element_prefixed_namespace(
+        signed_info_xml,
+        canonicalization_method,
+        &signed_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    ensure_xml_element_prefixed_namespace(
+        signed_info_xml,
+        signature_method,
+        &signed_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let first_reference =
+        find_first_xml_element(signed_info_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
+    ensure_xml_element_prefixed_namespace(
+        signed_info_xml,
+        first_reference,
+        &signed_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    if !(canonicalization_method.start < signature_method.start
+        && signature_method.start < first_reference.start)
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(XmlSignedInfoDirectChildSpans {
+        canonicalization_method,
+        signature_method,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CanonicalXmlMode {
+    Inclusive,
+    Exclusive,
+}
+
+fn xml_canonicalization_mode(algorithm: &str) -> Result<CanonicalXmlMode, MsgError> {
+    match algorithm {
+        XML_C14N_1_0 | XML_C14N_1_1 => Ok(CanonicalXmlMode::Inclusive),
+        XML_EXCLUSIVE_C14N_1_0 => Ok(CanonicalXmlMode::Exclusive),
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+struct XmlSignatureReferenceVerification<'a> {
+    signed_properties: Option<VerifiedSignedProperties<'a>>,
+}
+
+struct VerifiedSignedProperties<'a> {
+    xml: &'a str,
+    inherited_namespaces: Vec<CanonicalXmlNamespaceBinding>,
+}
+
+fn verify_xml_signature_references<'a>(
+    full_xml: &str,
+    signature_span: XmlElementSpan,
+    carrier_span: XmlElementSpan,
+    signature_xml: &'a str,
+    signed_info_xml: &str,
+    signed_info_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XmlSignatureReferenceVerification<'a>, MsgError> {
     let mut unsigned = String::with_capacity(full_xml.len());
     unsigned.push_str(&full_xml[..signature_span.start]);
     unsigned.push_str(&full_xml[signature_span.end..]);
-    let digest = Sha256::digest(unsigned.trim().as_bytes());
-    if expected_digest.as_slice() != &digest[..] {
+    if unsigned.as_str() != unsigned.trim() {
         return Err(MsgError::ValidationFailed);
     }
-    Ok(())
+
+    let mut cursor = 0usize;
+    let mut payload_reference_seen = false;
+    let mut signed_properties = None;
+    let mut reference_count = 0usize;
+    while cursor < signed_info_xml.len() {
+        let Some(span) = find_first_xml_element(&signed_info_xml[cursor..], "Reference") else {
+            break;
+        };
+        let reference_span = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        reference_count += 1;
+        ensure_xml_element_prefixed_namespace(
+            signed_info_xml,
+            reference_span,
+            signed_info_namespaces,
+            XMLDSIG_NS,
+        )?;
+        let reference_xml = &signed_info_xml[reference_span.start..reference_span.end];
+        let uri = element_attr(signed_info_xml, reference_span, "URI").unwrap_or_default();
+        match element_attr(signed_info_xml, reference_span, "Type").as_deref() {
+            None => {
+                if payload_reference_seen {
+                    return Err(MsgError::ValidationFailed);
+                }
+                payload_reference_seen = true;
+                verify_xml_signature_payload_reference(
+                    full_xml,
+                    &unsigned,
+                    carrier_span,
+                    reference_xml,
+                    &uri,
+                    signed_info_namespaces,
+                )?;
+            }
+            Some(XADES_SIGNED_PROPERTIES_TYPE) => {
+                if signed_properties.is_some() {
+                    return Err(MsgError::ValidationFailed);
+                }
+                signed_properties = Some(verify_xml_signature_signed_properties_reference(
+                    signature_xml,
+                    reference_xml,
+                    &uri,
+                    signed_info_namespaces,
+                )?);
+            }
+            Some(_) => return Err(MsgError::ValidationFailed),
+        }
+        cursor = reference_span.end;
+    }
+
+    if reference_count == 0 || !payload_reference_seen {
+        return Err(MsgError::ValidationFailed);
+    }
+    ensure_xades_signed_properties_reference_coverage(
+        signature_xml,
+        signed_properties.as_ref().map(|properties| properties.xml),
+    )?;
+    if signed_properties.is_some() {
+        ensure_xades_qualifying_properties_target(signature_xml)?;
+    }
+    Ok(XmlSignatureReferenceVerification { signed_properties })
 }
 
-fn verify_signed_properties_xml_signature_reference(
+fn verify_xml_signature_payload_reference(
+    full_xml: &str,
+    unsigned_xml: &str,
+    carrier_span: XmlElementSpan,
     reference_xml: &str,
     uri: &str,
-    reference_type: Option<&str>,
-    xades_signed_properties: &XadesSignedProperties<'_>,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
 ) -> Result<(), MsgError> {
-    let expected_uri = format!("#{}", xades_signed_properties.id);
-    if uri != expected_uri
-        || reference_type != Some(XADES_SIGNED_PROPERTIES_REFERENCE_TYPE)
-        || find_first_xml_element(reference_xml, "Transform").is_some()
-    {
-        return Err(MsgError::ValidationFailed);
+    let c14n_mode = supported_xml_signature_reference_c14n_mode_with_namespaces(
+        reference_xml,
+        inherited_namespaces,
+    )?;
+    ensure_xml_signature_payload_reference_covers_carrier(full_xml, uri, carrier_span)?;
+    let referenced_xml = xml_signature_reference_target(unsigned_xml, uri)?;
+    let canonical_referenced_xml = canonicalize_supported_xml_with_mode(
+        referenced_xml.xml,
+        &referenced_xml.inherited_namespaces,
+        c14n_mode,
+    )?;
+    verify_xml_signature_reference_digest_with_namespaces(
+        reference_xml,
+        &canonical_referenced_xml,
+        inherited_namespaces,
+    )
+}
+
+fn ensure_xml_signature_payload_reference_covers_carrier(
+    full_xml: &str,
+    uri: &str,
+    carrier_span: XmlElementSpan,
+) -> Result<(), MsgError> {
+    if uri.is_empty() {
+        return Ok(());
     }
-    let digest_algorithm =
-        child_attr(reference_xml, "DigestMethod", "Algorithm").ok_or(MsgError::ValidationFailed)?;
+    let reference_id = uri
+        .strip_prefix('#')
+        .filter(|reference_id| !reference_id.is_empty())
+        .ok_or(MsgError::ValidationFailed)?;
+    ensure_supported_same_document_reference_id(reference_id)?;
+    let target = find_xml_element_by_reference_id(full_xml, reference_id)?;
+    if target.span.start < carrier_span.start && carrier_span.end < target.span.end {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn verify_xml_signature_signed_properties_reference<'a>(
+    signature_xml: &'a str,
+    reference_xml: &str,
+    uri: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<VerifiedSignedProperties<'a>, MsgError> {
+    let c14n_mode =
+        signed_properties_reference_c14n_mode_with_namespaces(reference_xml, inherited_namespaces)?;
+    let referenced_xml = xml_signature_reference_target(signature_xml, uri)?;
+    let signed_properties_namespaces =
+        namespace_bindings_from_attributes(&referenced_xml.inherited_namespaces);
+    ensure_signed_properties_reference_target_with_namespaces(
+        referenced_xml.xml,
+        &signed_properties_namespaces,
+    )?;
+    let canonical_referenced_xml = canonicalize_supported_xml_with_mode(
+        referenced_xml.xml,
+        &referenced_xml.inherited_namespaces,
+        c14n_mode,
+    )?;
+    verify_xml_signature_reference_digest_with_namespaces(
+        reference_xml,
+        &canonical_referenced_xml,
+        inherited_namespaces,
+    )?;
+    Ok(VerifiedSignedProperties {
+        xml: referenced_xml.xml,
+        inherited_namespaces: signed_properties_namespaces,
+    })
+}
+
+fn verify_xml_signature_reference_digest(
+    reference_xml: &str,
+    canonical_referenced_xml: &str,
+) -> Result<(), MsgError> {
+    verify_xml_signature_reference_digest_with_namespaces(
+        reference_xml,
+        canonical_referenced_xml,
+        &[],
+    )
+}
+
+fn verify_xml_signature_reference_digest_with_namespaces(
+    reference_xml: &str,
+    canonical_referenced_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    let reference_span = required_single_xml_element(reference_xml, "Reference")?;
+    let reference_namespaces =
+        xml_element_namespace_scope(reference_xml, reference_span, inherited_namespaces)?;
+    let digest_method_span = required_single_xml_element(reference_xml, "DigestMethod")?;
+    ensure_xml_element_prefixed_namespace(
+        reference_xml,
+        digest_method_span,
+        &reference_namespaces,
+        XMLDSIG_NS,
+    )?;
+    ensure_xml_element_attributes_allowed(reference_xml, digest_method_span, &["Algorithm"])?;
+    ensure_xml_element_content_empty(reference_xml, digest_method_span)?;
+    let digest_algorithm = element_attr(reference_xml, digest_method_span, "Algorithm")
+        .ok_or(MsgError::ValidationFailed)?;
     if digest_algorithm != XMLDSIG_SHA256 {
         return Err(MsgError::ValidationFailed);
     }
-    let expected_digest = decode_required_child_base64(reference_xml, "DigestValue")?;
-    let digest = Sha256::digest(xades_signed_properties.xml.as_bytes());
+    let digest_value_span = required_single_xml_element(reference_xml, "DigestValue")?;
+    ensure_xml_element_prefixed_namespace(
+        reference_xml,
+        digest_value_span,
+        &reference_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let expected_digest = decode_direct_child_base64(reference_xml, digest_value_span)?;
+    let digest = Sha256::digest(canonical_referenced_xml.as_bytes());
     if expected_digest.as_slice() != &digest[..] {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
 }
 
-fn xades_signed_properties_has_signing_certificate_v2(
-    xades_signed_properties: &XadesSignedProperties<'_>,
-) -> bool {
-    find_first_xml_element(
-        xades_signed_properties.signed_signature_properties_xml,
-        "SigningCertificateV2",
-    )
-    .is_some()
+fn supported_xml_signature_reference_c14n_mode(
+    reference_xml: &str,
+) -> Result<CanonicalXmlMode, MsgError> {
+    supported_xml_signature_reference_c14n_mode_with_namespaces(reference_xml, &[])
 }
 
-fn validate_xades_signing_certificate_v2(
-    xades_signed_properties: &XadesSignedProperties<'_>,
-    leaf_certificate_der: &[u8],
+fn supported_xml_signature_reference_c14n_mode_with_namespaces(
+    reference_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<CanonicalXmlMode, MsgError> {
+    ensure_xml_signature_reference_shape_with_namespaces(
+        reference_xml,
+        &["URI"],
+        inherited_namespaces,
+    )?;
+    let transform_algorithms = xml_signature_reference_transform_algorithms_with_namespaces(
+        reference_xml,
+        inherited_namespaces,
+    )?;
+
+    match transform_algorithms.as_slice() {
+        [transform] if transform == XMLDSIG_ENVELOPED_SIGNATURE => Ok(CanonicalXmlMode::Exclusive),
+        [transform, c14n_algorithm] if transform == XMLDSIG_ENVELOPED_SIGNATURE => {
+            xml_canonicalization_mode(c14n_algorithm)
+        }
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+fn signed_properties_reference_c14n_mode(
+    reference_xml: &str,
+) -> Result<CanonicalXmlMode, MsgError> {
+    signed_properties_reference_c14n_mode_with_namespaces(reference_xml, &[])
+}
+
+fn signed_properties_reference_c14n_mode_with_namespaces(
+    reference_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<CanonicalXmlMode, MsgError> {
+    ensure_xml_signature_reference_shape_with_namespaces(
+        reference_xml,
+        &["URI", "Type"],
+        inherited_namespaces,
+    )?;
+    let transform_algorithms = xml_signature_reference_transform_algorithms_with_namespaces(
+        reference_xml,
+        inherited_namespaces,
+    )?;
+    let mut c14n_mode = None;
+    for algorithm in transform_algorithms {
+        let mode = xml_canonicalization_mode(&algorithm)?;
+        if c14n_mode.replace(mode).is_some() {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    c14n_mode.ok_or(MsgError::ValidationFailed)
+}
+
+fn ensure_xml_signature_reference_shape(
+    reference_xml: &str,
+    allowed_attributes: &[&str],
 ) -> Result<(), MsgError> {
-    if find_first_xml_element(xades_signed_properties.xml, "SigningCertificate").is_some() {
+    ensure_xml_signature_reference_shape_with_namespaces(reference_xml, allowed_attributes, &[])
+}
+
+fn ensure_xml_signature_reference_shape_with_namespaces(
+    reference_xml: &str,
+    allowed_attributes: &[&str],
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    let reference_span = required_single_xml_element(reference_xml, "Reference")?;
+    if reference_span.start != 0 || reference_span.end != reference_xml.len() {
         return Err(MsgError::ValidationFailed);
     }
-    let global_signing_certificate_span =
-        find_first_xml_element(xades_signed_properties.xml, "SigningCertificateV2")
-            .ok_or(MsgError::ValidationFailed)?;
-    let signing_certificate_span = find_first_xml_element(
-        xades_signed_properties.signed_signature_properties_xml,
-        "SigningCertificateV2",
-    )
-    .ok_or(MsgError::ValidationFailed)?;
-    let expected_start =
-        xades_signed_properties.signed_signature_properties_start + signing_certificate_span.start;
-    let expected_end =
-        xades_signed_properties.signed_signature_properties_start + signing_certificate_span.end;
-    if global_signing_certificate_span.start != expected_start
-        || global_signing_certificate_span.end != expected_end
+    ensure_xml_element_prefixed_namespace(
+        reference_xml,
+        reference_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let reference_namespaces =
+        xml_element_namespace_scope(reference_xml, reference_span, inherited_namespaces)?;
+    ensure_xml_element_attributes_allowed(reference_xml, reference_span, allowed_attributes)?;
+    ensure_direct_xml_child_elements_allowing_comments(
+        reference_xml,
+        reference_span,
+        &["Transforms", "DigestMethod", "DigestValue"],
+    )?;
+    let transforms = required_direct_xml_child_element_allowing_comments(
+        reference_xml,
+        reference_span,
+        "Transforms",
+    )?;
+    let digest_method = optional_direct_xml_child_element_allowing_comments(
+        reference_xml,
+        reference_span,
+        "DigestMethod",
+    )?;
+    let digest_value = optional_direct_xml_child_element_allowing_comments(
+        reference_xml,
+        reference_span,
+        "DigestValue",
+    )?;
+    ensure_xml_element_prefixed_namespace(
+        reference_xml,
+        transforms,
+        &reference_namespaces,
+        XMLDSIG_NS,
+    )?;
+    if let Some(digest_method) = digest_method {
+        ensure_xml_element_prefixed_namespace(
+            reference_xml,
+            digest_method,
+            &reference_namespaces,
+            XMLDSIG_NS,
+        )?;
+    }
+    if let Some(digest_value) = digest_value {
+        ensure_xml_element_prefixed_namespace(
+            reference_xml,
+            digest_value,
+            &reference_namespaces,
+            XMLDSIG_NS,
+        )?;
+    }
+    if digest_method.is_some_and(|digest_method| transforms.start > digest_method.start)
+        || digest_value.is_some_and(|digest_value| transforms.start > digest_value.start)
+        || digest_method
+            .zip(digest_value)
+            .is_some_and(|(digest_method, digest_value)| digest_method.start > digest_value.start)
     {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn xml_signature_reference_transform_algorithms(
+    reference_xml: &str,
+) -> Result<Vec<String>, MsgError> {
+    xml_signature_reference_transform_algorithms_with_namespaces(reference_xml, &[])
+}
+
+fn xml_signature_reference_transform_algorithms_with_namespaces(
+    reference_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Vec<String>, MsgError> {
+    let reference_span = required_single_xml_element(reference_xml, "Reference")?;
+    let reference_namespaces =
+        xml_element_namespace_scope(reference_xml, reference_span, inherited_namespaces)?;
+    let transforms_span = required_single_xml_element(reference_xml, "Transforms")?;
+    ensure_xml_element_prefixed_namespace(
+        reference_xml,
+        transforms_span,
+        &reference_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let transforms_namespaces =
+        xml_element_namespace_scope(reference_xml, transforms_span, &reference_namespaces)?;
+    ensure_xml_element_attributes_allowed(reference_xml, transforms_span, &[])?;
+    ensure_direct_xml_child_elements_allowing_comments(
+        reference_xml,
+        transforms_span,
+        &["Transform"],
+    )?;
+    if find_first_xml_element(&reference_xml[..transforms_span.start], "Transform").is_some()
+        || find_first_xml_element(&reference_xml[transforms_span.end..], "Transform").is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+
+    let transforms_xml = &reference_xml[transforms_span.content_start..transforms_span.content_end];
+    let mut cursor = 0usize;
+    let mut transform_algorithms = Vec::new();
+    while cursor < transforms_xml.len() {
+        let Some(span) = find_first_xml_element(&transforms_xml[cursor..], "Transform") else {
+            break;
+        };
+        let absolute = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        ensure_xml_element_prefixed_namespace(
+            transforms_xml,
+            absolute,
+            &transforms_namespaces,
+            XMLDSIG_NS,
+        )?;
+        ensure_xml_element_attributes_allowed(transforms_xml, absolute, &["Algorithm"])?;
+        ensure_xml_element_content_empty(transforms_xml, absolute)?;
+        transform_algorithms.push(
+            element_attr(transforms_xml, absolute, "Algorithm")
+                .ok_or(MsgError::ValidationFailed)?,
+        );
+        cursor = absolute.end;
+    }
+    Ok(transform_algorithms)
+}
+
+fn ensure_signed_properties_reference_target(target_xml: &str) -> Result<(), MsgError> {
+    ensure_signed_properties_reference_target_with_namespaces(target_xml, &[])
+}
+
+fn ensure_signed_properties_reference_target_with_namespaces(
+    target_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    let span =
+        find_first_xml_element(target_xml, "SignedProperties").ok_or(MsgError::ValidationFailed)?;
+    if span.start == 0 && span.end == target_xml.len() {
+        ensure_xades_element_prefixed_namespace(target_xml, span, inherited_namespaces)?;
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn ensure_xades_signed_properties_reference_coverage(
+    signature_xml: &str,
+    referenced_signed_properties_xml: Option<&str>,
+) -> Result<(), MsgError> {
+    let Some(signed_properties_span) = find_first_xml_element(signature_xml, "SignedProperties")
+    else {
+        return if referenced_signed_properties_xml.is_none() {
+            Ok(())
+        } else {
+            Err(MsgError::ValidationFailed)
+        };
+    };
+    let signed_properties_xml =
+        &signature_xml[signed_properties_span.start..signed_properties_span.end];
+    if Some(signed_properties_xml) != referenced_signed_properties_xml {
         return Err(MsgError::ValidationFailed);
     }
     if find_first_xml_element(
-        &xades_signed_properties.xml[global_signing_certificate_span.end..],
-        "SigningCertificateV2",
+        &signature_xml[signed_properties_span.end..],
+        "SignedProperties",
     )
     .is_some()
     {
         return Err(MsgError::ValidationFailed);
     }
-    let signing_certificate_xml = &xades_signed_properties.signed_signature_properties_xml
-        [signing_certificate_span.start..signing_certificate_span.end];
-    reject_xades_elements(
-        signing_certificate_xml,
-        XADES_UNSUPPORTED_SIGNING_CERTIFICATE_ELEMENTS,
-    )?;
-    let cert_span = find_first_xml_element(signing_certificate_xml, "Cert")
+    Ok(())
+}
+
+fn ensure_xades_qualifying_properties_target(signature_xml: &str) -> Result<(), MsgError> {
+    let signature_span =
+        find_first_xml_element(signature_xml, "Signature").ok_or(MsgError::ValidationFailed)?;
+    if signature_span.start != 0 || signature_span.end != signature_xml.len() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signature_namespaces = xml_element_namespace_scope(signature_xml, signature_span, &[])?;
+    let signature_id = element_attr(signature_xml, signature_span, "Id")
+        .filter(|id| !id.is_empty())
         .ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(&signing_certificate_xml[cert_span.end..], "Cert").is_some() {
+    let object_span = required_direct_xml_child_element(signature_xml, signature_span, "Object")?;
+    let object_namespaces =
+        xml_element_namespace_scope(signature_xml, object_span, &signature_namespaces)?;
+    ensure_xml_element_attributes_allowed(signature_xml, object_span, &[])?;
+    ensure_direct_xml_child_elements(signature_xml, object_span, &["QualifyingProperties"])?;
+    let qualifying_properties_span =
+        required_direct_xml_child_element(signature_xml, object_span, "QualifyingProperties")?;
+    ensure_xades_element_prefixed_namespace(
+        signature_xml,
+        qualifying_properties_span,
+        &object_namespaces,
+    )?;
+    let qualifying_properties_namespaces = xml_element_namespace_scope(
+        signature_xml,
+        qualifying_properties_span,
+        &object_namespaces,
+    )?;
+    if find_xml_element_outside_span(signature_xml, object_span, "QualifyingProperties") {
         return Err(MsgError::ValidationFailed);
     }
-    let cert_xml = &signing_certificate_xml[cert_span.start..cert_span.end];
-    let cert_digest_span =
-        find_first_xml_element(cert_xml, "CertDigest").ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(&cert_xml[cert_digest_span.end..], "CertDigest").is_some() {
+    ensure_xml_element_attributes_allowed(signature_xml, qualifying_properties_span, &["Target"])?;
+    ensure_direct_xml_child_elements(
+        signature_xml,
+        qualifying_properties_span,
+        &["SignedProperties"],
+    )?;
+    required_direct_xml_child_element(
+        signature_xml,
+        qualifying_properties_span,
+        "SignedProperties",
+    )
+    .and_then(|signed_properties_span| {
+        ensure_xades_element_prefixed_namespace(
+            signature_xml,
+            signed_properties_span,
+            &qualifying_properties_namespaces,
+        )
+    })?;
+    let target = element_attr(signature_xml, qualifying_properties_span, "Target")
+        .ok_or(MsgError::ValidationFailed)?;
+    if target == format!("#{signature_id}") {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn verify_xades_signing_certificate_v2_binding(
+    signed_properties_xml: &str,
+    key_material: &XmlSignatureKeyMaterial,
+) -> Result<(), MsgError> {
+    verify_xades_signing_certificate_v2_binding_with_namespaces(
+        signed_properties_xml,
+        &[],
+        key_material,
+    )
+}
+
+fn verify_xades_signing_certificate_v2_binding_with_namespaces(
+    signed_properties_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    key_material: &XmlSignatureKeyMaterial,
+) -> Result<(), MsgError> {
+    let signed_signature_properties = xades_signed_signature_properties_with_namespaces(
+        signed_properties_xml,
+        inherited_namespaces,
+    )?;
+    let signed_signature_properties_xml = signed_signature_properties.xml;
+    let signed_signature_properties_span =
+        required_single_xml_element(signed_signature_properties_xml, "SignedSignatureProperties")?;
+    let Some(signing_certificate_span) = optional_direct_xml_child_element(
+        signed_signature_properties_xml,
+        signed_signature_properties_span,
+        "SigningCertificateV2",
+    )?
+    else {
+        if key_material.certificate_sha256.is_empty() {
+            return Ok(());
+        }
+        return Err(MsgError::ValidationFailed);
+    };
+    if key_material.certificate_sha256.is_empty() {
         return Err(MsgError::ValidationFailed);
     }
+    ensure_xades_element_prefixed_namespace(
+        signed_signature_properties_xml,
+        signing_certificate_span,
+        &signed_signature_properties.namespaces,
+    )?;
+    let signing_certificate_xml = &signed_signature_properties_xml
+        [signing_certificate_span.start..signing_certificate_span.end];
+    let certificate_digests = xades_signing_certificate_v2_digests_with_namespaces(
+        signing_certificate_xml,
+        &signed_signature_properties.namespaces,
+    )?;
+    ensure_xades_signing_certificate_v2_chain_prefix(
+        &certificate_digests,
+        &key_material.certificate_sha256,
+    )
+}
+
+fn ensure_xades_signing_certificate_v2_chain_prefix(
+    certificate_digests: &[String],
+    verified_certificate_sha256: &[String],
+) -> Result<(), MsgError> {
+    if certificate_digests.is_empty()
+        || certificate_digests.len() > verified_certificate_sha256.len()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let mut seen = HashSet::new();
+    for (index, digest) in certificate_digests.iter().enumerate() {
+        if !seen.insert(digest.as_str()) {
+            return Err(MsgError::ValidationFailed);
+        }
+        match verified_certificate_sha256.get(index) {
+            Some(expected) if expected == digest => {}
+            _ => return Err(MsgError::ValidationFailed),
+        }
+    }
+    Ok(())
+}
+
+fn xades_signed_signature_properties_xml(signed_properties_xml: &str) -> Result<&str, MsgError> {
+    Ok(xades_signed_signature_properties_with_namespaces(signed_properties_xml, &[])?.xml)
+}
+
+struct XadesSignedSignatureProperties<'a> {
+    xml: &'a str,
+    namespaces: Vec<CanonicalXmlNamespaceBinding>,
+}
+
+fn xades_signed_signature_properties_with_namespaces<'a>(
+    signed_properties_xml: &'a str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XadesSignedSignatureProperties<'a>, MsgError> {
+    let signed_properties_span =
+        required_single_xml_element(signed_properties_xml, "SignedProperties")?;
+    if signed_properties_span.start != 0
+        || signed_properties_span.end != signed_properties_xml.len()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    ensure_xades_element_prefixed_namespace(
+        signed_properties_xml,
+        signed_properties_span,
+        inherited_namespaces,
+    )?;
+    let signed_properties_namespaces = xml_element_namespace_scope(
+        signed_properties_xml,
+        signed_properties_span,
+        inherited_namespaces,
+    )?;
+    ensure_xml_element_attributes_allowed(signed_properties_xml, signed_properties_span, &["Id"])?;
+    ensure_direct_xml_child_elements(
+        signed_properties_xml,
+        signed_properties_span,
+        &["SignedSignatureProperties"],
+    )?;
+    let signed_signature_properties_span = optional_direct_xml_child_element(
+        signed_properties_xml,
+        signed_properties_span,
+        "SignedSignatureProperties",
+    )?
+    .ok_or(MsgError::ValidationFailed)?;
+    ensure_xades_element_prefixed_namespace(
+        signed_properties_xml,
+        signed_signature_properties_span,
+        &signed_properties_namespaces,
+    )?;
+    let signed_signature_properties_namespaces = xml_element_namespace_scope(
+        signed_properties_xml,
+        signed_signature_properties_span,
+        &signed_properties_namespaces,
+    )?;
+    ensure_xml_element_attributes_allowed(
+        signed_properties_xml,
+        signed_signature_properties_span,
+        &[],
+    )?;
+    ensure_direct_xml_child_elements(
+        signed_properties_xml,
+        signed_signature_properties_span,
+        &["SigningTime", "SigningCertificateV2"],
+    )?;
+    for xades_child in ["SigningTime", "SigningCertificateV2"] {
+        if let Some(child_span) = optional_direct_xml_child_element(
+            signed_properties_xml,
+            signed_signature_properties_span,
+            xades_child,
+        )? {
+            ensure_xades_element_prefixed_namespace(
+                signed_properties_xml,
+                child_span,
+                &signed_signature_properties_namespaces,
+            )?;
+        }
+    }
+    Ok(XadesSignedSignatureProperties {
+        xml: &signed_properties_xml
+            [signed_signature_properties_span.start..signed_signature_properties_span.end],
+        namespaces: signed_signature_properties_namespaces,
+    })
+}
+
+fn xades_signing_certificate_v2_digests(
+    signing_certificate_xml: &str,
+) -> Result<Vec<String>, MsgError> {
+    xades_signing_certificate_v2_digests_with_namespaces(signing_certificate_xml, &[])
+}
+
+fn xades_signing_certificate_v2_digests_with_namespaces(
+    signing_certificate_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Vec<String>, MsgError> {
+    let signing_certificate_span =
+        required_single_xml_element(signing_certificate_xml, "SigningCertificateV2")?;
+    if signing_certificate_span.start != 0
+        || signing_certificate_span.end != signing_certificate_xml.len()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    ensure_xades_element_prefixed_namespace(
+        signing_certificate_xml,
+        signing_certificate_span,
+        inherited_namespaces,
+    )?;
+    let signing_certificate_namespaces = xml_element_namespace_scope(
+        signing_certificate_xml,
+        signing_certificate_span,
+        inherited_namespaces,
+    )?;
+    ensure_xml_element_attributes_allowed(signing_certificate_xml, signing_certificate_span, &[])?;
+    ensure_direct_xml_child_elements(signing_certificate_xml, signing_certificate_span, &["Cert"])?;
+
+    let mut cursor = 0usize;
+    let mut digests = Vec::new();
+    while cursor < signing_certificate_xml.len() {
+        let Some(span) = find_first_xml_element(&signing_certificate_xml[cursor..], "Cert") else {
+            break;
+        };
+        let cert_span = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        ensure_xades_element_prefixed_namespace(
+            signing_certificate_xml,
+            cert_span,
+            &signing_certificate_namespaces,
+        )?;
+        let cert_xml = &signing_certificate_xml[cert_span.start..cert_span.end];
+        digests.push(xades_cert_digest_sha256_with_namespaces(
+            cert_xml,
+            &signing_certificate_namespaces,
+        )?);
+        cursor = cert_span.end;
+    }
+    Ok(digests)
+}
+
+fn xades_cert_digest_sha256(cert_xml: &str) -> Result<String, MsgError> {
+    xades_cert_digest_sha256_with_namespaces(cert_xml, &[])
+}
+
+fn xades_cert_digest_sha256_with_namespaces(
+    cert_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<String, MsgError> {
+    let cert_span = required_single_xml_element(cert_xml, "Cert")?;
+    if cert_span.start != 0 || cert_span.end != cert_xml.len() {
+        return Err(MsgError::ValidationFailed);
+    }
+    ensure_xades_element_prefixed_namespace(cert_xml, cert_span, inherited_namespaces)?;
+    let cert_namespaces = xml_element_namespace_scope(cert_xml, cert_span, inherited_namespaces)?;
+    ensure_xml_element_attributes_allowed(cert_xml, cert_span, &[])?;
+    ensure_direct_xml_child_elements(cert_xml, cert_span, &["CertDigest"])?;
+
+    let cert_digest_span = required_single_xml_element(cert_xml, "CertDigest")?;
+    ensure_xades_element_prefixed_namespace(cert_xml, cert_digest_span, &cert_namespaces)?;
+    let cert_digest_namespaces =
+        xml_element_namespace_scope(cert_xml, cert_digest_span, &cert_namespaces)?;
+    ensure_xml_element_attributes_allowed(cert_xml, cert_digest_span, &[])?;
+    ensure_direct_xml_child_elements(cert_xml, cert_digest_span, &["DigestMethod", "DigestValue"])?;
     let cert_digest_xml = &cert_xml[cert_digest_span.start..cert_digest_span.end];
-    let digest_algorithm = child_attr(cert_digest_xml, "DigestMethod", "Algorithm")
+    let digest_method_span = required_single_xml_element(cert_digest_xml, "DigestMethod")?;
+    ensure_xml_element_prefixed_namespace(
+        cert_digest_xml,
+        digest_method_span,
+        &cert_digest_namespaces,
+        XMLDSIG_NS,
+    )?;
+    ensure_xml_element_attributes_allowed(cert_digest_xml, digest_method_span, &["Algorithm"])?;
+    ensure_xml_element_content_empty(cert_digest_xml, digest_method_span)?;
+    let digest_algorithm = element_attr(cert_digest_xml, digest_method_span, "Algorithm")
         .ok_or(MsgError::ValidationFailed)?;
     if digest_algorithm != XMLDSIG_SHA256 {
         return Err(MsgError::ValidationFailed);
     }
-    let expected_digest = decode_required_child_base64(cert_digest_xml, "DigestValue")?;
-    let digest = Sha256::digest(leaf_certificate_der);
-    if expected_digest.as_slice() != &digest[..] {
+    let digest_value_span = required_single_xml_element(cert_digest_xml, "DigestValue")?;
+    ensure_xml_element_prefixed_namespace(
+        cert_digest_xml,
+        digest_value_span,
+        &cert_digest_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let digest = decode_direct_child_base64(cert_digest_xml, digest_value_span)?;
+    if digest.len() != 32 {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(lower_hex(&digest))
+}
+
+#[derive(Debug)]
+struct XmlSignatureReferenceTarget<'a> {
+    xml: &'a str,
+    inherited_namespaces: Vec<CanonicalXmlAttribute>,
+}
+
+fn xml_signature_reference_target<'a>(
+    unsigned_xml: &'a str,
+    uri: &str,
+) -> Result<XmlSignatureReferenceTarget<'a>, MsgError> {
+    if uri.is_empty() {
+        return Ok(XmlSignatureReferenceTarget {
+            xml: unsigned_xml,
+            inherited_namespaces: Vec::new(),
+        });
+    }
+    let reference_id = uri
+        .strip_prefix('#')
+        .filter(|reference_id| !reference_id.is_empty())
+        .ok_or(MsgError::ValidationFailed)?;
+    ensure_supported_same_document_reference_id(reference_id)?;
+    let target = find_xml_element_by_reference_id(unsigned_xml, reference_id)?;
+    Ok(XmlSignatureReferenceTarget {
+        xml: &unsigned_xml[target.span.start..target.span.end],
+        inherited_namespaces: target.inherited_namespaces,
+    })
+}
+
+fn ensure_supported_same_document_reference_id(reference_id: &str) -> Result<(), MsgError> {
+    ensure_supported_xml_name(reference_id)?;
+    if reference_id.contains(':') {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
 }
 
-fn xml_signature_public_key(
-    signature_xml: &str,
-    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
-    signature_public_key_sha256_pins: &[String],
-    x509_trust_anchor_sha256_pins: &[String],
-    x509_required_certificate_policy_oids: &[String],
-    x509_require_crl_revocation_check: bool,
-    x509_crl_der_base64: &[String],
-    x509_require_ocsp_revocation_check: bool,
-    x509_ocsp_response_der_base64: &[String],
-) -> Result<Vec<u8>, MsgError> {
-    let public_key = single_child_text_compact(signature_xml, "PublicKey")?;
-    let certificates = child_texts_compact(signature_xml, "X509Certificate");
-    let embedded_crls = child_texts_compact(signature_xml, "X509CRL");
-    let mut embedded_ocsp_responses = child_texts_compact(signature_xml, "OCSPResponse");
-    embedded_ocsp_responses.extend(child_texts_compact(signature_xml, "EncapsulatedOCSPValue"));
-    match (public_key, certificates.is_empty()) {
-        (Some(public_key), true) => {
-            if xades_signed_properties
-                .is_some_and(xades_signed_properties_has_signing_certificate_v2)
-            {
-                return Err(MsgError::ValidationFailed);
-            }
-            if x509_require_crl_revocation_check
-                || !x509_crl_der_base64.is_empty()
-                || !embedded_crls.is_empty()
-                || x509_require_ocsp_revocation_check
-                || !x509_ocsp_response_der_base64.is_empty()
-                || !embedded_ocsp_responses.is_empty()
-            {
-                return Err(MsgError::ValidationFailed);
-            }
-            let public_key = BASE64_STANDARD
-                .decode(public_key)
-                .map_err(|_| MsgError::ValidationFailed)?;
-            if !public_key_pin_matches(&public_key, signature_public_key_sha256_pins) {
-                return Err(MsgError::ValidationFailed);
-            }
-            Ok(public_key)
-        }
-        (None, false) => x509_signature_public_key(
-            &certificates,
-            &embedded_crls,
-            &embedded_ocsp_responses,
-            xades_signed_properties,
-            signature_public_key_sha256_pins,
-            x509_trust_anchor_sha256_pins,
-            x509_required_certificate_policy_oids,
-            x509_require_crl_revocation_check,
-            x509_crl_der_base64,
-            x509_require_ocsp_revocation_check,
-            x509_ocsp_response_der_base64,
-        ),
-        (Some(_), false) | (None, true) => Err(MsgError::ValidationFailed),
-    }
+#[derive(Debug)]
+struct XmlReferenceTarget {
+    span: XmlElementSpan,
+    inherited_namespaces: Vec<CanonicalXmlAttribute>,
 }
 
-fn x509_signature_public_key(
-    certificate_values: &[String],
+fn find_xml_element_by_reference_id(
+    text: &str,
+    reference_id: &str,
+) -> Result<XmlReferenceTarget, MsgError> {
+    let mut cursor = 0usize;
+    let mut found = None;
+    let mut namespace_scope_lengths = Vec::new();
+    let mut in_scope_namespaces = Vec::new();
+    while cursor < text.len() {
+        let Some(start_offset) = text[cursor..].find('<') else {
+            break;
+        };
+        let start = cursor + start_offset;
+        let tag_start = start + 1;
+        let opening_end =
+            find_xml_tag_end(text.as_bytes(), tag_start).ok_or(MsgError::ValidationFailed)?;
+        let raw_tag = text[tag_start..opening_end].trim();
+        if raw_tag.starts_with('/')
+            || raw_tag.starts_with('?')
+            || raw_tag.starts_with("!--")
+            || raw_tag.starts_with("![CDATA[")
+        {
+            if raw_tag.starts_with('/') {
+                let namespace_scope_len = namespace_scope_lengths
+                    .pop()
+                    .ok_or(MsgError::ValidationFailed)?;
+                in_scope_namespaces.truncate(namespace_scope_len);
+            }
+            cursor = opening_end + 1;
+            continue;
+        }
+        let self_closing = raw_tag.ends_with('/');
+        let tag_body = raw_tag.trim_end_matches('/').trim_end();
+        let (name, attributes) = split_supported_xml_tag(tag_body)?;
+        ensure_supported_xml_name(name)?;
+        let mut attributes = parse_supported_xml_attributes(attributes)?;
+        sort_and_validate_canonical_xml_attributes(&mut attributes, &in_scope_namespaces)?;
+        if same_document_reference_id_matches(raw_tag, reference_id) {
+            if found.is_some() {
+                return Err(MsgError::ValidationFailed);
+            }
+            let inherited_namespaces =
+                inherited_namespace_attributes_from_scope(&in_scope_namespaces);
+            let span = if self_closing {
+                XmlElementSpan {
+                    start,
+                    opening_end,
+                    content_start: opening_end + 1,
+                    content_end: opening_end + 1,
+                    end: opening_end + 1,
+                }
+            } else {
+                let (content_end, end) = find_xml_element_end(text, opening_end + 1, name)
+                    .ok_or(MsgError::ValidationFailed)?;
+                XmlElementSpan {
+                    start,
+                    opening_end,
+                    content_start: opening_end + 1,
+                    content_end,
+                    end,
+                }
+            };
+            found = Some(XmlReferenceTarget {
+                span,
+                inherited_namespaces,
+            });
+        }
+        if !self_closing {
+            namespace_scope_lengths.push(in_scope_namespaces.len());
+            in_scope_namespaces.extend(
+                attributes
+                    .iter()
+                    .filter_map(namespace_binding_from_attribute),
+            );
+        }
+        cursor = opening_end + 1;
+    }
+    found.ok_or(MsgError::ValidationFailed)
+}
+
+fn same_document_reference_id_matches(opening: &str, reference_id: &str) -> bool {
+    ["Id", "ID", "id", "xml:id"]
+        .iter()
+        .any(|attr| attr_value_exact(opening, attr).as_deref() == Some(reference_id))
+}
+
+#[derive(Debug)]
+struct XmlSignatureKeyMaterial {
+    public_key: Vec<u8>,
+    certificate_sha256: Vec<String>,
+}
+
+struct XmlSignatureEmbeddedRevocationValues {
+    crls: Vec<String>,
+    ocsp_responses: Vec<String>,
+}
+
+fn xml_signature_key_material(
+    signature_xml: &str,
+    evaluation_time: Option<ASN1Time>,
+) -> Result<XmlSignatureKeyMaterial, MsgError> {
+    xml_signature_key_material_with_namespaces(signature_xml, evaluation_time, &[])
+}
+
+fn xml_signature_key_material_with_namespaces(
+    signature_xml: &str,
+    evaluation_time: Option<ASN1Time>,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XmlSignatureKeyMaterial, MsgError> {
+    xml_signature_key_material_with_policy(
+        signature_xml,
+        evaluation_time,
+        inherited_namespaces,
+        None,
+        &[],
+        &[],
+    )
+}
+
+fn xml_signature_key_material_for_profile_with_namespaces(
+    signature_xml: &str,
+    evaluation_time: Option<ASN1Time>,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    profile: &TradfiRailProfile,
     embedded_crl_values: &[String],
     embedded_ocsp_response_values: &[String],
-    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
-    signature_public_key_sha256_pins: &[String],
-    x509_trust_anchor_sha256_pins: &[String],
-    x509_required_certificate_policy_oids: &[String],
-    x509_require_crl_revocation_check: bool,
-    x509_crl_der_base64: &[String],
-    x509_require_ocsp_revocation_check: bool,
-    x509_ocsp_response_der_base64: &[String],
-) -> Result<Vec<u8>, MsgError> {
-    let certificate_chain = decode_x509_certificate_chain(certificate_values)?;
-    ensure_x509_certificates_parse(&certificate_chain)?;
-    let leaf = parse_x509_certificate_der(&certificate_chain[0])?;
-    if let Some(xades_signed_properties) = xades_signed_properties {
-        validate_xades_signing_certificate_v2(xades_signed_properties, &certificate_chain[0])?;
-    }
-    if !leaf.validity().is_valid() {
-        return Err(MsgError::ValidationFailed);
-    }
-    if !x509_certificate_is_end_entity_signer(&leaf)? {
-        return Err(MsgError::ValidationFailed);
-    }
-    if !x509_certificate_allows_digital_signature(&leaf)? {
-        return Err(MsgError::ValidationFailed);
-    }
-    if !x509_certificate_allows_xml_signature_purpose(&leaf)? {
-        return Err(MsgError::ValidationFailed);
-    }
-    if !x509_certificate_satisfies_policy_oids(&leaf, x509_required_certificate_policy_oids)? {
-        return Err(MsgError::ValidationFailed);
-    }
-    let public_key = leaf.public_key().subject_public_key.data.to_vec();
-    let authorized_by_pin = public_key_pin_matches(&public_key, signature_public_key_sha256_pins);
-    if !authorized_by_pin {
-        validate_x509_certificate_chain(&certificate_chain, x509_trust_anchor_sha256_pins)?;
-        validate_x509_name_constraints(&certificate_chain)?;
-    }
-    validate_x509_leaf_revocation(
-        &certificate_chain,
+) -> Result<XmlSignatureKeyMaterial, MsgError> {
+    xml_signature_key_material_with_policy(
+        signature_xml,
+        evaluation_time,
+        inherited_namespaces,
+        Some(profile),
         embedded_crl_values,
-        x509_require_crl_revocation_check,
-        x509_crl_der_base64,
         embedded_ocsp_response_values,
-        x509_require_ocsp_revocation_check,
-        x509_ocsp_response_der_base64,
-    )?;
-    if authorized_by_pin {
-        return Ok(public_key);
-    }
-    Ok(public_key)
+    )
 }
 
-fn decode_x509_certificate_chain(certificate_values: &[String]) -> Result<Vec<Vec<u8>>, MsgError> {
-    if certificate_values.is_empty() || certificate_values.len() > XMLDSIG_MAX_X509_CERTIFICATES {
+fn xml_signature_key_material_with_policy(
+    signature_xml: &str,
+    evaluation_time: Option<ASN1Time>,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    profile: Option<&TradfiRailProfile>,
+    embedded_crl_values: &[String],
+    embedded_ocsp_response_values: &[String],
+) -> Result<XmlSignatureKeyMaterial, MsgError> {
+    let key_info_span = required_single_xml_element(signature_xml, "KeyInfo")?;
+    ensure_xml_element_prefixed_namespace(
+        signature_xml,
+        key_info_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let key_info_namespaces =
+        xml_element_namespace_scope(signature_xml, key_info_span, inherited_namespaces)?;
+    for key_material_element in [
+        "PublicKey",
+        "X509Certificate",
+        "X509CRL",
+        "OCSPResponse",
+        "EncapsulatedOCSPValue",
+    ] {
+        if find_xml_element_outside_span(signature_xml, key_info_span, key_material_element) {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    let key_info_xml = &signature_xml[key_info_span.start..key_info_span.end];
+    let public_key = optional_single_child_text_compact(key_info_xml, "PublicKey")?;
+    let has_certificate = find_first_xml_element(key_info_xml, "X509Certificate").is_some();
+    if public_key.is_some() && has_certificate {
         return Err(MsgError::ValidationFailed);
     }
-    certificate_values
+    if let Some(public_key) = public_key {
+        ensure_xml_signature_public_key_info_shape_with_namespaces(
+            key_info_xml,
+            &key_info_namespaces,
+        )?;
+        let public_key = BASE64_STANDARD
+            .decode(public_key)
+            .map_err(|_| MsgError::ValidationFailed)?;
+        ensure_xml_signature_p256_public_key(&public_key)?;
+        if let Some(profile) = profile
+            && (profile.x509_require_crl_revocation_check
+                || !profile.x509_crl_der_base64.is_empty()
+                || !embedded_crl_values.is_empty()
+                || profile.x509_require_ocsp_revocation_check
+                || !profile.x509_ocsp_response_der_base64.is_empty()
+                || !embedded_ocsp_response_values.is_empty()
+                || !profile.x509_required_certificate_policy_oids.is_empty())
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+        return Ok(XmlSignatureKeyMaterial {
+            public_key,
+            certificate_sha256: Vec::new(),
+        });
+    }
+    let certificates =
+        xml_signature_x509_certificates_with_namespaces(key_info_xml, &key_info_namespaces)?;
+    ensure_xml_signature_certificate_chain_bounds(&certificates)?;
+    let evaluation_time = evaluation_time.ok_or(MsgError::ValidationFailed)?;
+    let parsed_certificates = certificates
         .iter()
         .map(|certificate| {
-            let certificate = BASE64_STANDARD
-                .decode(certificate)
-                .map_err(|_| MsgError::ValidationFailed)?;
-            if certificate.is_empty() || certificate.len() > XMLDSIG_MAX_X509_CERTIFICATE_BYTES {
+            X509Certificate::from_der(certificate)
+                .map(|(_, cert)| cert)
+                .map_err(|_| MsgError::ValidationFailed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for certificate in &parsed_certificates {
+        ensure_xml_signature_supported_certificate_algorithm(certificate)?;
+        ensure_xml_signature_supported_critical_extensions(certificate)?;
+    }
+    let public_key = parsed_certificates[0]
+        .public_key()
+        .subject_public_key
+        .data
+        .to_vec();
+    ensure_xml_signature_certificate_valid_at(&parsed_certificates[0], evaluation_time)?;
+    ensure_xml_signature_leaf_certificate_policy(&parsed_certificates[0])?;
+    let mut certificate_sha256 = vec![sha256_hex(&certificates[0])];
+    for (subordinate_ca_count, (certificates_der, chain_pair)) in certificates[1..]
+        .iter()
+        .zip(parsed_certificates.windows(2))
+        .enumerate()
+    {
+        ensure_xml_signature_certificate_valid_at(&chain_pair[1], evaluation_time)?;
+        ensure_xml_signature_issuer_certificate_policy(&chain_pair[1])?;
+        ensure_xml_signature_issuer_path_len(&chain_pair[1], subordinate_ca_count)?;
+        ensure_xml_signature_certificate_issued_by(&chain_pair[0], &chain_pair[1])?;
+        chain_pair[0]
+            .verify_signature(Some(chain_pair[1].public_key()))
+            .map_err(|_| MsgError::ValidationFailed)?;
+        certificate_sha256.push(sha256_hex(certificates_der));
+    }
+    if let Some(profile) = profile {
+        if let (Some(terminal_certificate), Some(terminal_certificate_sha256)) =
+            (parsed_certificates.last(), certificate_sha256.last())
+        {
+            let terminal_is_trust_anchor = profile
+                .x509_trust_anchor_sha256_pins
+                .iter()
+                .chain(profile.trusted_certificate_sha256.iter())
+                .any(|pin| pin == terminal_certificate_sha256);
+            if terminal_is_trust_anchor && !x509_certificate_is_ca(terminal_certificate)? {
                 return Err(MsgError::ValidationFailed);
             }
-            Ok(certificate)
-        })
-        .collect()
+        }
+        if !x509_certificate_satisfies_policy_oids(
+            &parsed_certificates[0],
+            &profile.x509_required_certificate_policy_oids,
+        )? {
+            return Err(MsgError::ValidationFailed);
+        }
+        validate_x509_required_certificate_policy_path(
+            &parsed_certificates,
+            &profile.x509_required_certificate_policy_oids,
+        )?;
+        validate_x509_name_constraints(&certificates)?;
+        validate_x509_leaf_revocation(
+            &certificates,
+            evaluation_time,
+            embedded_crl_values,
+            profile.x509_require_crl_revocation_check,
+            &profile.x509_crl_der_base64,
+            embedded_ocsp_response_values,
+            profile.x509_require_ocsp_revocation_check,
+            &profile.x509_ocsp_response_der_base64,
+        )?;
+    }
+    Ok(XmlSignatureKeyMaterial {
+        public_key,
+        certificate_sha256,
+    })
 }
 
-fn ensure_x509_certificates_parse(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
-    for certificate in certificate_chain {
-        let certificate = parse_x509_certificate_der(certificate)?;
-        validate_x509_certificate_critical_extensions(&certificate)?;
+fn xml_signature_x509_revocation_values_with_namespaces(
+    key_info_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<XmlSignatureEmbeddedRevocationValues, MsgError> {
+    let Some(x509_data_span) = find_first_xml_element(key_info_xml, "X509Data") else {
+        return Ok(XmlSignatureEmbeddedRevocationValues {
+            crls: Vec::new(),
+            ocsp_responses: Vec::new(),
+        });
+    };
+    let key_info_span = required_single_xml_element(key_info_xml, "KeyInfo")?;
+    if find_xml_element_outside_span(key_info_xml, key_info_span, "X509Data") {
+        return Err(MsgError::ValidationFailed);
     }
-    Ok(())
+    let key_info_namespaces =
+        xml_element_namespace_scope(key_info_xml, key_info_span, inherited_namespaces)?;
+    ensure_xml_element_prefixed_namespace(
+        key_info_xml,
+        x509_data_span,
+        &key_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let x509_data_namespaces =
+        xml_element_namespace_scope(key_info_xml, x509_data_span, &key_info_namespaces)?;
+    let x509_data_xml = &key_info_xml[x509_data_span.start..x509_data_span.end];
+    let crls = child_base64_text_values_with_namespaces(
+        x509_data_xml,
+        "X509CRL",
+        &x509_data_namespaces,
+        &[XMLDSIG_NS],
+    )?;
+    let mut ocsp_responses = child_base64_text_values_with_namespaces(
+        x509_data_xml,
+        "OCSPResponse",
+        &x509_data_namespaces,
+        &[XMLDSIG_NS],
+    )?;
+    ocsp_responses.extend(child_base64_text_values_with_namespaces(
+        x509_data_xml,
+        "EncapsulatedOCSPValue",
+        &x509_data_namespaces,
+        &[XMLDSIG_NS, XADES_NS],
+    )?);
+    Ok(XmlSignatureEmbeddedRevocationValues {
+        crls,
+        ocsp_responses,
+    })
 }
 
 fn validate_x509_certificate_chain(
     certificate_chain: &[Vec<u8>],
     x509_trust_anchor_sha256_pins: &[String],
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
     if certificate_chain.is_empty() || x509_trust_anchor_sha256_pins.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -3777,9 +5355,7 @@ fn validate_x509_certificate_chain(
         }
         let certificate = parse_x509_certificate_der(certificate_der)?;
         validate_x509_certificate_critical_extensions(&certificate)?;
-        if !certificate.validity().is_valid() {
-            return Err(MsgError::ValidationFailed);
-        }
+        ensure_xml_signature_certificate_valid_at(&certificate, evaluation_time)?;
     }
 
     for index in 0..certificate_chain.len() {
@@ -4212,6 +5788,7 @@ fn uri_host(uri: &str) -> Option<&str> {
 
 fn validate_x509_leaf_revocation(
     certificate_chain: &[Vec<u8>],
+    evaluation_time: ASN1Time,
     embedded_crl_values: &[String],
     x509_require_crl_revocation_check: bool,
     x509_crl_der_base64: &[String],
@@ -4235,6 +5812,7 @@ fn validate_x509_leaf_revocation(
         validate_x509_leaf_crl_revocation(
             &leaf,
             &issuer,
+            evaluation_time,
             embedded_crl_values,
             x509_require_crl_revocation_check,
             x509_crl_der_base64,
@@ -4244,6 +5822,7 @@ fn validate_x509_leaf_revocation(
         validate_x509_leaf_ocsp_revocation(
             &leaf,
             &issuer,
+            evaluation_time,
             embedded_ocsp_response_values,
             x509_require_ocsp_revocation_check,
             x509_ocsp_response_der_base64,
@@ -4255,6 +5834,7 @@ fn validate_x509_leaf_revocation(
 fn validate_x509_leaf_crl_revocation(
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
     embedded_crl_values: &[String],
     x509_require_crl_revocation_check: bool,
     x509_crl_der_base64: &[String],
@@ -4273,7 +5853,7 @@ fn validate_x509_leaf_crl_revocation(
     let mut matching_crl_seen = false;
     for crl_der in &crl_der_values {
         let crl = parse_x509_crl_der(crl_der)?;
-        validate_x509_crl_freshness(&crl)?;
+        validate_x509_crl_freshness(&crl, evaluation_time)?;
         if crl.issuer() != issuer.subject() {
             continue;
         }
@@ -4295,6 +5875,7 @@ fn validate_x509_leaf_crl_revocation(
 fn validate_x509_leaf_ocsp_revocation(
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
     embedded_ocsp_response_values: &[String],
     x509_require_ocsp_revocation_check: bool,
     x509_ocsp_response_der_base64: &[String],
@@ -4310,7 +5891,7 @@ fn validate_x509_leaf_ocsp_revocation(
         decode_x509_ocsp_responses(embedded_ocsp_response_values, x509_ocsp_response_der_base64)?;
     let mut matching_good_response_seen = false;
     for ocsp_response_der in &ocsp_response_der_values {
-        match validate_ocsp_response_for_leaf(ocsp_response_der, leaf, issuer)? {
+        match validate_ocsp_response_for_leaf(ocsp_response_der, leaf, issuer, evaluation_time)? {
             OcspLeafStatus::Good => matching_good_response_seen = true,
             OcspLeafStatus::Revoked | OcspLeafStatus::Unknown => {
                 return Err(MsgError::ValidationFailed);
@@ -4420,15 +6001,16 @@ fn validate_ocsp_response_for_leaf(
     ocsp_response_der: &[u8],
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<OcspLeafStatus, MsgError> {
     let response = parse_ocsp_response_der(ocsp_response_der)?;
-    validate_ocsp_response_signature(&response, issuer)?;
+    validate_ocsp_response_signature(&response, issuer, evaluation_time)?;
     let mut matched_status = None;
     for single_response in &response.responses {
         if !ocsp_cert_id_matches_leaf(single_response, leaf, issuer) {
             continue;
         }
-        validate_ocsp_response_freshness(response.produced_at, single_response)?;
+        validate_ocsp_response_freshness(response.produced_at, single_response, evaluation_time)?;
         if matched_status.replace(single_response.status).is_some() {
             return Err(MsgError::ValidationFailed);
         }
@@ -4441,9 +6023,188 @@ fn validate_ocsp_response_for_leaf(
     })
 }
 
+fn ensure_xml_signature_certificate_chain_bounds(certificates: &[Vec<u8>]) -> Result<(), MsgError> {
+    if certificates.is_empty() || certificates.len() > XML_SIGNATURE_MAX_X509_CERTIFICATES {
+        return Err(MsgError::ValidationFailed);
+    }
+    let mut seen = HashSet::new();
+    for certificate in certificates {
+        if !seen.insert(sha256_hex(certificate)) {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn ensure_xml_signature_public_key_info_shape(key_info_xml: &str) -> Result<(), MsgError> {
+    ensure_xml_signature_public_key_info_shape_with_namespaces(key_info_xml, &[])
+}
+
+fn ensure_xml_signature_p256_public_key(public_key: &[u8]) -> Result<(), MsgError> {
+    if public_key.len() != P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
+        || public_key.first().copied() != Some(0x04)
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    P256VerifyingKey::from_sec1_bytes(public_key)
+        .map(|_| ())
+        .map_err(|_| MsgError::ValidationFailed)
+}
+
+fn ensure_xml_signature_public_key_info_shape_with_namespaces(
+    key_info_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    if find_first_xml_element(key_info_xml, "X509Data").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let key_info_span = required_single_xml_element(key_info_xml, "KeyInfo")?;
+    ensure_xml_element_prefixed_namespace(
+        key_info_xml,
+        key_info_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let key_info_namespaces =
+        xml_element_namespace_scope(key_info_xml, key_info_span, inherited_namespaces)?;
+    ensure_xml_element_attributes_allowed(key_info_xml, key_info_span, &[])?;
+    ensure_direct_xml_child_elements(key_info_xml, key_info_span, &["KeyValue"])?;
+    let key_value_span = required_single_xml_element(key_info_xml, "KeyValue")?;
+    ensure_xml_element_prefixed_namespace(
+        key_info_xml,
+        key_value_span,
+        &key_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let key_value_namespaces =
+        xml_element_namespace_scope(key_info_xml, key_value_span, &key_info_namespaces)?;
+    ensure_xml_element_attributes_allowed(key_info_xml, key_value_span, &[])?;
+    ensure_direct_xml_child_elements(key_info_xml, key_value_span, &["ECKeyValue"])?;
+    for key_value_element in ["ECKeyValue", "NamedCurve", "PublicKey"] {
+        if find_xml_element_outside_span(key_info_xml, key_value_span, key_value_element) {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    let key_value_xml = &key_info_xml[key_value_span.start..key_value_span.end];
+    let ec_key_value_span = required_single_xml_element(key_value_xml, "ECKeyValue")?;
+    ensure_xml_element_prefixed_namespace(
+        key_value_xml,
+        ec_key_value_span,
+        &key_value_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let ec_key_value_namespaces =
+        xml_element_namespace_scope(key_value_xml, ec_key_value_span, &key_value_namespaces)?;
+    ensure_xml_element_attributes_allowed(key_value_xml, ec_key_value_span, &[])?;
+    ensure_direct_xml_child_elements(
+        key_value_xml,
+        ec_key_value_span,
+        &["NamedCurve", "PublicKey"],
+    )?;
+    for ec_key_value_element in ["NamedCurve", "PublicKey"] {
+        if find_xml_element_outside_span(key_value_xml, ec_key_value_span, ec_key_value_element) {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    let ec_key_value_xml = &key_value_xml[ec_key_value_span.start..ec_key_value_span.end];
+    let named_curve_span = required_single_xml_element(ec_key_value_xml, "NamedCurve")?;
+    ensure_xml_element_prefixed_namespace(
+        ec_key_value_xml,
+        named_curve_span,
+        &ec_key_value_namespaces,
+        XMLDSIG_NS,
+    )?;
+    ensure_xml_element_attributes_allowed(ec_key_value_xml, named_curve_span, &["URI"])?;
+    ensure_xml_element_content_empty(ec_key_value_xml, named_curve_span)?;
+    if element_attr(ec_key_value_xml, named_curve_span, "URI").as_deref()
+        != Some(XMLDSIG_P256_NAMED_CURVE)
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let public_key_span = required_single_xml_element(ec_key_value_xml, "PublicKey")?;
+    ensure_xml_element_prefixed_namespace(
+        ec_key_value_xml,
+        public_key_span,
+        &ec_key_value_namespaces,
+        XMLDSIG_NS,
+    )?;
+    ensure_xml_element_attributes_allowed(ec_key_value_xml, public_key_span, &[])?;
+    ensure_xml_element_text_only(ec_key_value_xml, public_key_span)?;
+    required_single_child_text_compact(ec_key_value_xml, "PublicKey")?;
+    Ok(())
+}
+
+fn xml_signature_x509_certificates(key_info_xml: &str) -> Result<Vec<Vec<u8>>, MsgError> {
+    xml_signature_x509_certificates_with_namespaces(key_info_xml, &[])
+}
+
+fn xml_signature_x509_certificates_with_namespaces(
+    key_info_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Vec<Vec<u8>>, MsgError> {
+    if find_first_xml_element(key_info_xml, "KeyValue").is_some()
+        || find_first_xml_element(key_info_xml, "PublicKey").is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let key_info_span = required_single_xml_element(key_info_xml, "KeyInfo")?;
+    ensure_xml_element_prefixed_namespace(
+        key_info_xml,
+        key_info_span,
+        inherited_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let key_info_namespaces =
+        xml_element_namespace_scope(key_info_xml, key_info_span, inherited_namespaces)?;
+    ensure_xml_element_attributes_allowed(key_info_xml, key_info_span, &[])?;
+    ensure_direct_xml_child_elements(key_info_xml, key_info_span, &["X509Data"])?;
+    let x509_data_span = required_single_xml_element(key_info_xml, "X509Data")?;
+    ensure_xml_element_prefixed_namespace(
+        key_info_xml,
+        x509_data_span,
+        &key_info_namespaces,
+        XMLDSIG_NS,
+    )?;
+    let x509_data_namespaces =
+        xml_element_namespace_scope(key_info_xml, x509_data_span, &key_info_namespaces)?;
+    ensure_xml_element_attributes_allowed(key_info_xml, x509_data_span, &[])?;
+    ensure_direct_xml_child_elements(
+        key_info_xml,
+        x509_data_span,
+        &[
+            "X509Certificate",
+            "X509CRL",
+            "OCSPResponse",
+            "EncapsulatedOCSPValue",
+        ],
+    )?;
+    for x509_child in [
+        "X509Certificate",
+        "X509CRL",
+        "OCSPResponse",
+        "EncapsulatedOCSPValue",
+    ] {
+        if find_xml_element_outside_span(key_info_xml, x509_data_span, x509_child) {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    let x509_data_xml = &key_info_xml[x509_data_span.start..x509_data_span.end];
+    decode_child_base64_values_with_namespaces(
+        x509_data_xml,
+        "X509Certificate",
+        &x509_data_namespaces,
+    )
+}
+
+fn find_xml_element_outside_span(container: &str, allowed: XmlElementSpan, local: &str) -> bool {
+    find_first_xml_element(&container[..allowed.start], local).is_some()
+        || find_first_xml_element(&container[allowed.end..], local).is_some()
+}
+
 fn validate_ocsp_response_signature(
     response: &ParsedOcspResponse<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
     if response.signature_algorithm_oid != OID_ECDSA_WITH_SHA256_DER {
         return Err(MsgError::ValidationFailed);
@@ -4454,7 +6215,7 @@ fn validate_ocsp_response_signature(
     for certificate_der in &response.responder_certificates {
         let responder = parse_x509_certificate_der(certificate_der)?;
         validate_x509_certificate_critical_extensions(&responder)?;
-        if !responder.validity().is_valid()
+        if !responder.validity().is_valid_at(evaluation_time)
             || responder.issuer() != issuer.subject()
             || !x509_certificate_allows_ocsp_signing(&responder)?
             || !ocsp_responder_id_matches_certificate(&response.responder_id, &responder)?
@@ -4532,9 +6293,12 @@ fn ocsp_cert_id_matches_leaf(
 fn validate_ocsp_response_freshness(
     produced_at: ASN1Time,
     response: &ParsedOcspSingleResponse<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
-    let now = ASN1Time::now();
-    if produced_at > now || response.this_update > now || response.next_update < now {
+    if produced_at > evaluation_time
+        || response.this_update > evaluation_time
+        || response.next_update < evaluation_time
+    {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
@@ -4611,7 +6375,7 @@ fn parse_ocsp_response_data<'a>(
     let responses = der_read_required(&mut content, 0x30)?;
     let responses = parse_ocsp_single_responses(responses.value)?;
     if content.first() == Some(&0xA1) {
-        let _extensions = der_read_required(&mut content, 0xA1)?;
+        return Err(MsgError::ValidationFailed);
     }
     if !content.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -4665,7 +6429,7 @@ fn parse_ocsp_single_response(
         return Err(MsgError::ValidationFailed);
     };
     if content.first() == Some(&0xA1) {
-        let _extensions = der_read_required(&mut content, 0xA1)?;
+        return Err(MsgError::ValidationFailed);
     }
     if !content.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -4731,7 +6495,7 @@ fn parse_ocsp_responder_certificates(certs_der: &[u8]) -> Result<Vec<&[u8]>, Msg
     Ok(certificates)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct DerElement<'a> {
     tag: u8,
     value: &'a [u8],
@@ -4769,6 +6533,9 @@ fn der_read_element<'a>(input: &mut &'a [u8]) -> Result<DerElement<'a>, MsgError
         if length_len == 0 || length_len > 4 || start.len() < 2 + length_len {
             return Err(MsgError::ValidationFailed);
         }
+        if length_len > 1 && start[2] == 0 {
+            return Err(MsgError::ValidationFailed);
+        }
         let mut length = 0usize;
         for byte in &start[2..2 + length_len] {
             length = length
@@ -4803,6 +6570,9 @@ fn der_read_required_integer(input: &mut &[u8], tag: u8) -> Result<u64, MsgError
 
 fn der_integer_value(value: &[u8]) -> Result<u64, MsgError> {
     if value.is_empty() || value.len() > 8 || value[0] & 0x80 != 0 {
+        return Err(MsgError::ValidationFailed);
+    }
+    if value.len() > 1 && value[0] == 0 && value[1] & 0x80 == 0 {
         return Err(MsgError::ValidationFailed);
     }
     let mut result = 0u64;
@@ -4874,15 +6644,17 @@ fn x509_leaf_issuer_certificate<'a>(
     Err(MsgError::ValidationFailed)
 }
 
-fn validate_x509_crl_freshness(crl: &CertificateRevocationList<'_>) -> Result<(), MsgError> {
-    let now = ASN1Time::now();
-    if crl.last_update() > now {
+fn validate_x509_crl_freshness(
+    crl: &CertificateRevocationList<'_>,
+    evaluation_time: ASN1Time,
+) -> Result<(), MsgError> {
+    if crl.last_update() > evaluation_time {
         return Err(MsgError::ValidationFailed);
     }
     let Some(next_update) = crl.next_update() else {
         return Err(MsgError::ValidationFailed);
     };
-    if next_update < now {
+    if next_update < evaluation_time {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
@@ -4993,27 +6765,64 @@ fn x509_certificate_satisfies_policy_oids(
     if required_policy_oids.is_empty() {
         return Ok(true);
     }
+    let Some(present) = x509_certificate_policy_oids(certificate)? else {
+        return Ok(false);
+    };
+    Ok(required_policy_oids
+        .iter()
+        .all(|required| present.contains(required)))
+}
+
+fn validate_x509_required_certificate_policy_path(
+    certificate_chain: &[X509Certificate<'_>],
+    required_policy_oids: &[String],
+) -> Result<(), MsgError> {
+    if required_policy_oids.is_empty() || certificate_chain.len() <= 2 {
+        return Ok(());
+    }
+    for intermediate in &certificate_chain[1..certificate_chain.len() - 1] {
+        let Some(present) = x509_certificate_policy_oids(intermediate)? else {
+            return Err(MsgError::ValidationFailed);
+        };
+        if present.contains(X509_ANY_POLICY_OID) {
+            continue;
+        }
+        if !required_policy_oids
+            .iter()
+            .all(|required| present.contains(required))
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn x509_certificate_policy_oids(
+    certificate: &X509Certificate<'_>,
+) -> Result<Option<HashSet<String>>, MsgError> {
     let mut policy_extension_count = 0usize;
     let mut present = HashSet::new();
     for extension in certificate.extensions() {
         if let ParsedExtension::CertificatePolicies(policies) = extension.parsed_extension() {
             policy_extension_count += 1;
             for policy in policies {
-                present.insert(policy.policy_id.to_string());
+                if !present.insert(policy.policy_id.to_string()) {
+                    return Err(MsgError::ValidationFailed);
+                }
             }
         }
     }
-    if policy_extension_count != 1 {
-        return Ok(false);
+    match policy_extension_count {
+        0 => Ok(None),
+        1 => Ok(Some(present)),
+        _ => Err(MsgError::ValidationFailed),
     }
-    Ok(required_policy_oids
-        .iter()
-        .all(|required| present.contains(required)))
 }
 
 fn validate_x509_certificate_critical_extensions(
     certificate: &X509Certificate<'_>,
 ) -> Result<(), MsgError> {
+    ensure_no_unsupported_x509_policy_processing_extensions(certificate)?;
     for extension in certificate.extensions() {
         if !extension.critical {
             continue;
@@ -5022,6 +6831,20 @@ fn validate_x509_certificate_critical_extensions(
             ParsedExtension::UnsupportedExtension { .. }
             | ParsedExtension::ParseError { .. }
             | ParsedExtension::Unparsed => return Err(MsgError::ValidationFailed),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_unsupported_x509_policy_processing_extensions(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    for extension in certificate.extensions() {
+        match extension.parsed_extension() {
+            ParsedExtension::PolicyMappings(_)
+            | ParsedExtension::PolicyConstraints(_)
+            | ParsedExtension::InhibitAnyPolicy(_) => return Err(MsgError::ValidationFailed),
             _ => {}
         }
     }
@@ -5079,25 +6902,1430 @@ fn certificate_der_pin_matches(certificate_der: &[u8], pins: &[String]) -> bool 
 }
 
 fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>, MsgError> {
-    let value = child_text_compact(container, child).ok_or(MsgError::ValidationFailed)?;
+    let span = required_single_xml_element(container, child)?;
+    ensure_xml_element_attributes_allowed(container, span, &[])?;
+    ensure_xml_element_text_only(container, span)?;
+    let value: String = container[span.content_start..span.content_end]
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
     BASE64_STANDARD
         .decode(value)
         .map_err(|_| MsgError::ValidationFailed)
 }
 
-fn child_attr(container: &str, child: &str, attr: &str) -> Option<String> {
-    let span = find_first_xml_element(container, child)?;
-    element_attr(container, span, attr)
+fn decode_child_base64_values(container: &str, child: &str) -> Result<Vec<Vec<u8>>, MsgError> {
+    decode_child_base64_values_with_namespaces(container, child, &[])
 }
 
-fn child_text_compact(container: &str, child: &str) -> Option<String> {
-    let span = find_first_xml_element(container, child)?;
-    Some(
+fn decode_child_base64_values_with_namespaces(
+    container: &str,
+    child: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Vec<Vec<u8>>, MsgError> {
+    child_base64_text_values_with_namespaces(container, child, inherited_namespaces, &[XMLDSIG_NS])?
+        .into_iter()
+        .map(|value| {
+            BASE64_STANDARD
+                .decode(value)
+                .map_err(|_| MsgError::ValidationFailed)
+        })
+        .collect()
+}
+
+fn child_base64_text_values_with_namespaces(
+    container: &str,
+    child: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    allowed_namespaces: &[&str],
+) -> Result<Vec<String>, MsgError> {
+    let mut values = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < container.len() {
+        let Some(span) = find_first_xml_element(&container[cursor..], child) else {
+            break;
+        };
+        let absolute = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        ensure_xml_element_any_namespace(
+            container,
+            absolute,
+            inherited_namespaces,
+            allowed_namespaces,
+        )?;
+        ensure_xml_element_attributes_allowed(container, absolute, &[])?;
+        ensure_xml_element_text_only(container, absolute)?;
+        let value: String = container[absolute.content_start..absolute.content_end]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        values.push(value);
+        cursor = absolute.end;
+    }
+    Ok(values)
+}
+
+fn ensure_xml_element_any_namespace(
+    container: &str,
+    span: XmlElementSpan,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    allowed_namespaces: &[&str],
+) -> Result<(), MsgError> {
+    if allowed_namespaces.iter().any(|namespace| {
+        ensure_xml_element_prefixed_namespace(container, span, inherited_namespaces, namespace)
+            .is_ok()
+    }) {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn xml_signature_evaluation_time(
+    parsed: &ParsedMessage,
+    signed_properties_xml: Option<&str>,
+) -> Result<Option<ASN1Time>, MsgError> {
+    let signed_properties = signed_properties_xml.map(|xml| VerifiedSignedProperties {
+        xml,
+        inherited_namespaces: Vec::new(),
+    });
+    xml_signature_evaluation_time_for_verified_properties(parsed, signed_properties.as_ref())
+}
+
+fn xml_signature_evaluation_time_for_verified_properties(
+    parsed: &ParsedMessage,
+    signed_properties: Option<&VerifiedSignedProperties<'_>>,
+) -> Result<Option<ASN1Time>, MsgError> {
+    let signed_properties_time = signed_properties
+        .map(|properties| {
+            xades_signed_properties_signing_time_with_namespaces(
+                properties.xml,
+                &properties.inherited_namespaces,
+            )
+        })
+        .transpose()?
+        .flatten();
+    signed_properties_time
+        .or_else(|| app_header_creation_date(parsed).map(ToOwned::to_owned))
+        .map(|value| parse_iso_datetime_as_asn1_time(&value))
+        .transpose()
+}
+
+fn xades_signed_properties_signing_time(
+    signed_properties_xml: &str,
+) -> Result<Option<String>, MsgError> {
+    xades_signed_properties_signing_time_with_namespaces(signed_properties_xml, &[])
+}
+
+fn xades_signed_properties_signing_time_with_namespaces(
+    signed_properties_xml: &str,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Option<String>, MsgError> {
+    let signed_signature_properties = xades_signed_signature_properties_with_namespaces(
+        signed_properties_xml,
+        inherited_namespaces,
+    )?;
+    let signed_signature_properties_xml = signed_signature_properties.xml;
+    let signed_signature_properties_span =
+        required_single_xml_element(signed_signature_properties_xml, "SignedSignatureProperties")?;
+    let Some(signing_time) = optional_direct_xml_child_element(
+        signed_signature_properties_xml,
+        signed_signature_properties_span,
+        "SigningTime",
+    )?
+    else {
+        return Ok(None);
+    };
+    ensure_xades_element_prefixed_namespace(
+        signed_signature_properties_xml,
+        signing_time,
+        &signed_signature_properties.namespaces,
+    )?;
+    ensure_xml_element_attributes_allowed(signed_signature_properties_xml, signing_time, &[])?;
+    ensure_xml_element_text_only(signed_signature_properties_xml, signing_time)?;
+    Ok(Some(
+        signed_signature_properties_xml[signing_time.content_start..signing_time.content_end]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect(),
+    ))
+}
+
+fn parse_iso_datetime_as_asn1_time(value: &str) -> Result<ASN1Time, MsgError> {
+    let value = value.trim();
+    let (date_part, rest) = value.split_once('T').ok_or(MsgError::ValidationFailed)?;
+    let date_bytes = date_part.as_bytes();
+    if date_bytes.len() != 10 || date_bytes[4] != b'-' || date_bytes[7] != b'-' {
+        return Err(MsgError::ValidationFailed);
+    }
+    let year: i32 = parse_ascii_decimal(&date_bytes[0..4])?;
+    let month: u8 = parse_ascii_decimal(&date_bytes[5..7])?;
+    let day: u8 = parse_ascii_decimal(&date_bytes[8..10])?;
+
+    let (time_part, offset) = if let Some(time_part) = rest.strip_suffix('Z') {
+        (time_part, UtcOffset::UTC)
+    } else if let Some(offset_idx) = rest.rfind(['+', '-']) {
+        let offset_literal = &rest[offset_idx..];
+        let offset_bytes = offset_literal.as_bytes();
+        if offset_bytes.len() != 6
+            || !matches!(offset_bytes[0], b'+' | b'-')
+            || offset_bytes[3] != b':'
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+        let sign = if offset_bytes[0] == b'-' { -1 } else { 1 };
+        let hours: i8 = parse_ascii_decimal(&offset_bytes[1..3])?;
+        let minutes: i8 = parse_ascii_decimal(&offset_bytes[4..6])?;
+        let offset = UtcOffset::from_hms(sign * hours, sign * minutes, 0)
+            .map_err(|_| MsgError::ValidationFailed)?;
+        (&rest[..offset_idx], offset)
+    } else {
+        return Err(MsgError::ValidationFailed);
+    };
+
+    let mut pieces = time_part.split(':');
+    let hour_literal = pieces
+        .next()
+        .filter(|value| value.len() == 2)
+        .ok_or(MsgError::ValidationFailed)?;
+    let hour: u8 = parse_ascii_decimal(hour_literal.as_bytes())?;
+    let minute_literal = pieces
+        .next()
+        .filter(|value| value.len() == 2)
+        .ok_or(MsgError::ValidationFailed)?;
+    let minute: u8 = parse_ascii_decimal(minute_literal.as_bytes())?;
+    let second_fragment = pieces.next().ok_or(MsgError::ValidationFailed)?;
+    if pieces.next().is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let second_literal = if let Some((second, fraction)) = second_fragment.split_once('.') {
+        if fraction.is_empty() || !fraction.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err(MsgError::ValidationFailed);
+        }
+        second
+    } else {
+        second_fragment
+    };
+    if second_literal.len() != 2 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let second: u8 = parse_ascii_decimal(second_literal.as_bytes())?;
+
+    let date = Date::from_calendar_date(
+        year,
+        Month::try_from(month).map_err(|_| MsgError::ValidationFailed)?,
+        day,
+    )
+    .map_err(|_| MsgError::ValidationFailed)?;
+    let time = Time::from_hms(hour, minute, second).map_err(|_| MsgError::ValidationFailed)?;
+    let timestamp = PrimitiveDateTime::new(date, time)
+        .assume_offset(offset)
+        .to_offset(UtcOffset::UTC)
+        .unix_timestamp();
+    ASN1Time::from_timestamp(timestamp).map_err(|_| MsgError::ValidationFailed)
+}
+
+fn parse_ascii_decimal<T: std::str::FromStr>(value: &[u8]) -> Result<T, MsgError> {
+    if value.is_empty() || !value.iter().all(|byte| byte.is_ascii_digit()) {
+        return Err(MsgError::ValidationFailed);
+    }
+    std::str::from_utf8(value)
+        .map_err(|_| MsgError::ValidationFailed)?
+        .parse()
+        .map_err(|_| MsgError::ValidationFailed)
+}
+
+fn ensure_xml_signature_leaf_certificate_policy(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    if matches!(
+        certificate
+            .basic_constraints()
+            .map_err(|_| MsgError::ValidationFailed)?,
+        Some(basic_constraints) if basic_constraints.value.ca
+    ) {
+        return Err(MsgError::ValidationFailed);
+    }
+    match certificate
+        .key_usage()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(key_usage) if key_usage.critical && key_usage.value.digital_signature() => Ok(()),
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+fn ensure_xml_signature_certificate_valid_at(
+    certificate: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
+) -> Result<(), MsgError> {
+    certificate
+        .validity()
+        .is_valid_at(evaluation_time)
+        .then_some(())
+        .ok_or(MsgError::ValidationFailed)
+}
+
+fn ensure_xml_signature_certificate_issued_by(
+    certificate: &X509Certificate<'_>,
+    issuer: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    (certificate.issuer().as_raw() == issuer.subject().as_raw())
+        .then_some(())
+        .ok_or(MsgError::ValidationFailed)
+}
+
+fn ensure_xml_signature_supported_certificate_algorithm(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    if certificate.signature_algorithm.algorithm != OID_SIG_ECDSA_WITH_SHA256 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let public_key = certificate.public_key();
+    let public_key_algorithm = &public_key.algorithm;
+    if public_key_algorithm.algorithm != OID_KEY_TYPE_EC_PUBLIC_KEY {
+        return Err(MsgError::ValidationFailed);
+    }
+    match public_key_algorithm
+        .parameters
+        .as_ref()
+        .and_then(|parameters| parameters.as_oid().ok())
+    {
+        Some(curve_oid) if curve_oid == OID_EC_P256 => {
+            ensure_xml_signature_p256_public_key(public_key.subject_public_key.data.as_ref())
+        }
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+fn ensure_xml_signature_issuer_certificate_policy(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    match certificate
+        .basic_constraints()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(basic_constraints) if basic_constraints.critical && basic_constraints.value.ca => {}
+        _ => return Err(MsgError::ValidationFailed),
+    }
+    match certificate
+        .key_usage()
+        .map_err(|_| MsgError::ValidationFailed)?
+    {
+        Some(key_usage) if key_usage.critical && key_usage.value.key_cert_sign() => Ok(()),
+        _ => Err(MsgError::ValidationFailed),
+    }
+}
+
+fn ensure_xml_signature_issuer_path_len(
+    certificate: &X509Certificate<'_>,
+    subordinate_ca_count: usize,
+) -> Result<(), MsgError> {
+    let Some(basic_constraints) = certificate
+        .basic_constraints()
+        .map_err(|_| MsgError::ValidationFailed)?
+    else {
+        return Err(MsgError::ValidationFailed);
+    };
+    match basic_constraints.value.path_len_constraint {
+        Some(path_len_constraint) if subordinate_ca_count > path_len_constraint as usize => {
+            Err(MsgError::ValidationFailed)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn ensure_xml_signature_supported_critical_extensions(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    ensure_no_unsupported_x509_policy_processing_extensions(certificate)?;
+    for extension in certificate.extensions() {
+        if !extension.critical {
+            continue;
+        }
+        match extension.parsed_extension() {
+            ParsedExtension::BasicConstraints(_) | ParsedExtension::KeyUsage(_) => {}
+            ParsedExtension::UnsupportedExtension { .. }
+            | ParsedExtension::ParseError { .. }
+            | ParsedExtension::Unparsed => return Err(MsgError::ValidationFailed),
+            _ => return Err(MsgError::ValidationFailed),
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CanonicalXmlAttributeKind {
+    Namespace,
+    Attribute,
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalXmlAttribute {
+    name: String,
+    value: String,
+    kind: CanonicalXmlAttributeKind,
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalXmlNamespaceBinding {
+    prefix: String,
+    uri: String,
+}
+
+fn canonicalize_supported_xml(xml: &str) -> Result<String, MsgError> {
+    canonicalize_supported_xml_with_inherited_namespaces(xml, &[])
+}
+
+fn canonicalize_supported_xml_with_inherited_namespaces(
+    xml: &str,
+    inherited_namespaces: &[CanonicalXmlAttribute],
+) -> Result<String, MsgError> {
+    canonicalize_supported_xml_with_mode(xml, inherited_namespaces, CanonicalXmlMode::Exclusive)
+}
+
+fn canonicalize_supported_xml_with_mode(
+    xml: &str,
+    inherited_namespaces: &[CanonicalXmlAttribute],
+    mode: CanonicalXmlMode,
+) -> Result<String, MsgError> {
+    if xml.is_empty()
+        || xml.trim() != xml
+        || xml.contains("<?")
+        || xml.contains("<![CDATA[")
+        || xml.contains("]]>")
+        || xml.contains('\r')
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+
+    let mut cursor = 0usize;
+    let mut output = String::with_capacity(xml.len());
+    let mut stack = Vec::new();
+    let mut namespace_scope_lengths = Vec::new();
+    let mut in_scope_namespaces = Vec::new();
+    let mut root_seen = false;
+    while cursor < xml.len() {
+        let Some(tag_start) = xml[cursor..].find('<').map(|offset| cursor + offset) else {
+            let text = &xml[cursor..];
+            if stack.is_empty() && !text.is_empty() {
+                return Err(MsgError::ValidationFailed);
+            }
+            push_canonical_xml_text(text, &mut output)?;
+            break;
+        };
+        let text = &xml[cursor..tag_start];
+        if stack.is_empty() && !text.is_empty() {
+            return Err(MsgError::ValidationFailed);
+        }
+        push_canonical_xml_text(text, &mut output)?;
+        if xml[tag_start..].starts_with("<!--") {
+            cursor = find_supported_xml_comment_end(xml, tag_start)? + 3;
+            continue;
+        }
+        let raw_start = tag_start + 1;
+        let tag_end =
+            find_xml_tag_end(xml.as_bytes(), raw_start).ok_or(MsgError::ValidationFailed)?;
+        let raw_tag_literal = &xml[raw_start..tag_end];
+        if raw_tag_literal
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+        let raw_tag = raw_tag_literal.trim();
+        if raw_tag.is_empty() || raw_tag.starts_with('?') || raw_tag.starts_with('!') {
+            return Err(MsgError::ValidationFailed);
+        }
+        if let Some(closing_tag) = raw_tag.strip_prefix('/') {
+            let name = closing_tag.trim();
+            if name.is_empty() || name.split_once(char::is_whitespace).is_some() {
+                return Err(MsgError::ValidationFailed);
+            }
+            ensure_supported_xml_name(name)?;
+            match stack.pop() {
+                Some(open_name) if open_name == name => {}
+                _ => return Err(MsgError::ValidationFailed),
+            }
+            let namespace_scope_len = namespace_scope_lengths
+                .pop()
+                .ok_or(MsgError::ValidationFailed)?;
+            in_scope_namespaces.truncate(namespace_scope_len);
+            output.push_str("</");
+            output.push_str(name);
+            output.push('>');
+        } else {
+            let self_closing = raw_tag.ends_with('/');
+            let tag_body = if self_closing {
+                raw_tag.trim_end_matches('/').trim_end()
+            } else {
+                raw_tag
+            };
+            let (name, attributes) = split_supported_xml_tag(tag_body)?;
+            ensure_supported_xml_name(name)?;
+            let mut attributes = parse_supported_xml_attributes(attributes)?;
+            if stack.is_empty() {
+                apply_inherited_root_namespaces(name, &mut attributes, inherited_namespaces, mode)?;
+            }
+            ensure_supported_xml_element_namespace(name, &attributes, &in_scope_namespaces)?;
+            sort_and_validate_canonical_xml_attributes(&mut attributes, &in_scope_namespaces)?;
+            if stack.is_empty() {
+                if root_seen {
+                    return Err(MsgError::ValidationFailed);
+                }
+                root_seen = true;
+            }
+            push_canonical_xml_start_tag(name, &attributes, &mut output)?;
+            if self_closing {
+                output.push_str("</");
+                output.push_str(name);
+                output.push('>');
+            } else {
+                namespace_scope_lengths.push(in_scope_namespaces.len());
+                in_scope_namespaces.extend(
+                    attributes
+                        .iter()
+                        .filter_map(namespace_binding_from_attribute),
+                );
+                stack.push(name);
+            }
+        }
+        cursor = tag_end + 1;
+    }
+    if !root_seen || !stack.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(output)
+}
+
+fn find_supported_xml_comment_end(xml: &str, start: usize) -> Result<usize, MsgError> {
+    let Some(comment_body_start) = xml[start..].strip_prefix("<!--").map(|_| start + 4) else {
+        return Err(MsgError::ValidationFailed);
+    };
+    let comment_end = xml[comment_body_start..]
+        .find("-->")
+        .map(|offset| comment_body_start + offset)
+        .ok_or(MsgError::ValidationFailed)?;
+    let comment_body = &xml[comment_body_start..comment_end];
+    if comment_body.contains("--") || comment_body.ends_with('-') {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(comment_end)
+}
+
+fn xml_root_namespace_declarations(xml: &str) -> Result<Vec<CanonicalXmlAttribute>, MsgError> {
+    if !xml.starts_with('<') {
+        return Err(MsgError::ValidationFailed);
+    }
+    let tag_end = find_xml_tag_end(xml.as_bytes(), 1).ok_or(MsgError::ValidationFailed)?;
+    let raw_tag = xml[1..tag_end].trim();
+    if raw_tag.is_empty()
+        || raw_tag.starts_with('/')
+        || raw_tag.starts_with('?')
+        || raw_tag.starts_with('!')
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let tag_body = raw_tag.trim_end_matches('/').trim_end();
+    let (_, attributes) = split_supported_xml_tag(tag_body)?;
+    let mut attributes = parse_supported_xml_attributes(attributes)?;
+    sort_and_validate_canonical_xml_attributes(&mut attributes, &[])?;
+    Ok(attributes
+        .into_iter()
+        .filter(|attribute| attribute.kind == CanonicalXmlAttributeKind::Namespace)
+        .collect())
+}
+
+fn split_supported_xml_tag(tag_body: &str) -> Result<(&str, &str), MsgError> {
+    if let Some((name, attributes)) = tag_body.split_once(char::is_whitespace) {
+        if name.is_empty() {
+            return Err(MsgError::ValidationFailed);
+        }
+        Ok((name, attributes))
+    } else if tag_body.is_empty() {
+        Err(MsgError::ValidationFailed)
+    } else {
+        Ok((tag_body, ""))
+    }
+}
+
+fn parse_supported_xml_attributes(
+    attributes: &str,
+) -> Result<Vec<CanonicalXmlAttribute>, MsgError> {
+    let mut parsed = Vec::new();
+    let mut cursor = attributes.trim();
+    while !cursor.is_empty() {
+        let name_end = cursor
+            .find(|ch: char| ch.is_whitespace() || ch == '=')
+            .ok_or(MsgError::ValidationFailed)?;
+        let name = &cursor[..name_end];
+        ensure_supported_xml_name(name)?;
+        let kind = if name == "xmlns" || name.starts_with("xmlns:") {
+            CanonicalXmlAttributeKind::Namespace
+        } else {
+            CanonicalXmlAttributeKind::Attribute
+        };
+        cursor = cursor[name_end..].trim_start();
+        cursor = cursor
+            .strip_prefix('=')
+            .ok_or(MsgError::ValidationFailed)?
+            .trim_start();
+        let quote = cursor
+            .chars()
+            .next()
+            .filter(|quote| matches!(quote, '"' | '\''))
+            .ok_or(MsgError::ValidationFailed)?;
+        cursor = &cursor[quote.len_utf8()..];
+        let value_end = cursor.find(quote).ok_or(MsgError::ValidationFailed)?;
+        let value = &cursor[..value_end];
+        ensure_supported_xml_attribute_value(value)?;
+        if kind == CanonicalXmlAttributeKind::Namespace {
+            ensure_supported_xml_namespace_declaration(name, value)?;
+        }
+        parsed.push(CanonicalXmlAttribute {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            kind,
+        });
+        cursor = cursor[value_end + quote.len_utf8()..].trim_start();
+    }
+    Ok(parsed)
+}
+
+fn apply_inherited_root_namespaces(
+    name: &str,
+    attributes: &mut Vec<CanonicalXmlAttribute>,
+    inherited_namespaces: &[CanonicalXmlAttribute],
+    mode: CanonicalXmlMode,
+) -> Result<(), MsgError> {
+    match mode {
+        CanonicalXmlMode::Inclusive => {
+            for namespace in inherited_namespaces {
+                if !attributes
+                    .iter()
+                    .any(|attribute| attribute.name == namespace.name)
+                {
+                    attributes.push(namespace.clone());
+                }
+            }
+        }
+        CanonicalXmlMode::Exclusive => {
+            if let Some((prefix, _)) = name.split_once(':') {
+                let namespace_name = format!("xmlns:{prefix}");
+                apply_inherited_namespace(attributes, inherited_namespaces, &namespace_name);
+            } else if !attributes.iter().any(|attribute| attribute.name == "xmlns") {
+                if let Some(namespace) = inherited_namespaces
+                    .iter()
+                    .find(|attribute| attribute.name == "xmlns" && !attribute.value.is_empty())
+                {
+                    attributes.push(namespace.clone());
+                }
+            }
+            let visibly_used_attribute_namespaces = attributes
+                .iter()
+                .filter(|attribute| attribute.kind == CanonicalXmlAttributeKind::Attribute)
+                .filter_map(|attribute| attribute.name.split_once(':').map(|(prefix, _)| prefix))
+                .filter(|prefix| *prefix != "xml")
+                .map(|prefix| format!("xmlns:{prefix}"))
+                .collect::<Vec<_>>();
+            for namespace_name in visibly_used_attribute_namespaces {
+                apply_inherited_namespace(attributes, inherited_namespaces, &namespace_name);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_inherited_namespace(
+    attributes: &mut Vec<CanonicalXmlAttribute>,
+    inherited_namespaces: &[CanonicalXmlAttribute],
+    namespace_name: &str,
+) {
+    if attributes
+        .iter()
+        .any(|attribute| attribute.name == namespace_name)
+    {
+        return;
+    }
+    if let Some(namespace) = inherited_namespaces
+        .iter()
+        .find(|attribute| attribute.name == namespace_name)
+    {
+        attributes.push(namespace.clone());
+    }
+}
+
+fn sort_and_validate_canonical_xml_attributes(
+    parsed: &mut Vec<CanonicalXmlAttribute>,
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    ensure_supported_xml_attribute_namespaces(parsed, in_scope_namespaces)?;
+    ensure_unique_canonical_xml_attribute_names(parsed, in_scope_namespaces)?;
+    let lookup = parsed.clone();
+    parsed.sort_by(|left, right| match (left.kind, right.kind) {
+        (CanonicalXmlAttributeKind::Namespace, CanonicalXmlAttributeKind::Namespace) => {
+            namespace_attribute_sort_key(&left.name).cmp(namespace_attribute_sort_key(&right.name))
+        }
+        (CanonicalXmlAttributeKind::Namespace, CanonicalXmlAttributeKind::Attribute) => {
+            std::cmp::Ordering::Less
+        }
+        (CanonicalXmlAttributeKind::Attribute, CanonicalXmlAttributeKind::Namespace) => {
+            std::cmp::Ordering::Greater
+        }
+        (CanonicalXmlAttributeKind::Attribute, CanonicalXmlAttributeKind::Attribute) => {
+            canonical_xml_attribute_sort_key(&left.name, &lookup, in_scope_namespaces)
+                .expect("attribute namespaces are validated before sorting")
+                .cmp(
+                    &canonical_xml_attribute_sort_key(&right.name, &lookup, in_scope_namespaces)
+                        .expect("attribute namespaces are validated before sorting"),
+                )
+        }
+    });
+    if parsed
+        .windows(2)
+        .any(|attrs| attrs[0].name.as_str() == attrs[1].name.as_str())
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn namespace_attribute_sort_key(name: &str) -> &str {
+    name.strip_prefix("xmlns:").unwrap_or_default()
+}
+
+fn canonical_xml_attribute_sort_key(
+    name: &str,
+    attributes: &[CanonicalXmlAttribute],
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(String, String), MsgError> {
+    if let Some((prefix, local)) = name.split_once(':') {
+        let namespace_uri = namespace_uri_for_prefix(prefix, attributes, in_scope_namespaces)
+            .ok_or(MsgError::ValidationFailed)?;
+        Ok((namespace_uri.to_owned(), local.to_owned()))
+    } else {
+        Ok((String::new(), name.to_owned()))
+    }
+}
+
+fn namespace_binding_from_attribute(
+    attribute: &CanonicalXmlAttribute,
+) -> Option<CanonicalXmlNamespaceBinding> {
+    if attribute.kind != CanonicalXmlAttributeKind::Namespace {
+        return None;
+    }
+    let prefix = if attribute.name == "xmlns" {
+        ""
+    } else {
+        attribute.name.strip_prefix("xmlns:")?
+    };
+    if prefix == "xml" {
+        return None;
+    }
+    Some(CanonicalXmlNamespaceBinding {
+        prefix: prefix.to_owned(),
+        uri: attribute.value.clone(),
+    })
+}
+
+fn namespace_bindings_from_attributes(
+    attributes: &[CanonicalXmlAttribute],
+) -> Vec<CanonicalXmlNamespaceBinding> {
+    attributes
+        .iter()
+        .filter_map(namespace_binding_from_attribute)
+        .collect()
+}
+
+fn inherited_namespace_attributes_from_scope(
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Vec<CanonicalXmlAttribute> {
+    let mut inherited = Vec::new();
+    for binding in in_scope_namespaces.iter().rev() {
+        let name = if binding.prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{}", binding.prefix)
+        };
+        if inherited
+            .iter()
+            .any(|attribute: &CanonicalXmlAttribute| attribute.name == name)
+        {
+            continue;
+        }
+        inherited.push(CanonicalXmlAttribute {
+            name,
+            value: binding.uri.clone(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        });
+    }
+    inherited.reverse();
+    inherited
+}
+
+fn namespace_uri_for_prefix<'a>(
+    prefix: &str,
+    attributes: &'a [CanonicalXmlAttribute],
+    in_scope_namespaces: &'a [CanonicalXmlNamespaceBinding],
+) -> Option<&'a str> {
+    if prefix == "xml" {
+        return Some(XML_NS);
+    }
+    if prefix == "xmlns" {
+        return None;
+    }
+    attributes
+        .iter()
+        .rev()
+        .find(|attribute| namespace_prefix_from_attribute(attribute) == Some(prefix))
+        .map(|attribute| attribute.value.as_str())
+        .or_else(|| {
+            in_scope_namespaces
+                .iter()
+                .rev()
+                .find(|binding| binding.prefix == prefix)
+                .map(|binding| binding.uri.as_str())
+        })
+}
+
+fn namespace_prefix_from_attribute(attribute: &CanonicalXmlAttribute) -> Option<&str> {
+    if attribute.kind != CanonicalXmlAttributeKind::Namespace {
+        return None;
+    }
+    if attribute.name == "xmlns" {
+        Some("")
+    } else {
+        attribute.name.strip_prefix("xmlns:")
+    }
+}
+
+fn ensure_supported_xml_attribute_namespaces(
+    attributes: &[CanonicalXmlAttribute],
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.kind == CanonicalXmlAttributeKind::Attribute)
+    {
+        let Some((prefix, _)) = attribute.name.split_once(':') else {
+            continue;
+        };
+        namespace_uri_for_prefix(prefix, attributes, in_scope_namespaces)
+            .ok_or(MsgError::ValidationFailed)?;
+    }
+    Ok(())
+}
+
+fn ensure_unique_canonical_xml_attribute_names(
+    attributes: &[CanonicalXmlAttribute],
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    let mut expanded_names = Vec::new();
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.kind == CanonicalXmlAttributeKind::Attribute)
+    {
+        let expanded_name =
+            canonical_xml_attribute_sort_key(&attribute.name, attributes, in_scope_namespaces)?;
+        if expanded_names
+            .iter()
+            .any(|existing| existing == &expanded_name)
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+        expanded_names.push(expanded_name);
+    }
+    Ok(())
+}
+
+fn ensure_supported_xml_namespace_declaration(name: &str, value: &str) -> Result<(), MsgError> {
+    if name == "xmlns:xml" {
+        return if value == XML_NS {
+            Ok(())
+        } else {
+            Err(MsgError::ValidationFailed)
+        };
+    }
+    if name.starts_with("xmlns:") && value.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let reserved_prefix = name
+        .strip_prefix("xmlns:")
+        .is_some_and(|prefix| matches!(prefix, "xml" | "xmlns"));
+    let reserved_namespace = matches!(value, XML_NS | XMLNS_NS);
+    if reserved_prefix || reserved_namespace {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn ensure_supported_xml_name(name: &str) -> Result<(), MsgError> {
+    if name.starts_with(':') || name.ends_with(':') || name.matches(':').count() > 1 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return Err(MsgError::ValidationFailed);
+    };
+    if !matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_' | b':') {
+        return Err(MsgError::ValidationFailed);
+    }
+    if bytes.all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b':'
+        )
+    }) {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn ensure_supported_xml_element_namespace(
+    name: &str,
+    attributes: &[CanonicalXmlAttribute],
+    in_scope_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    let Some((prefix, _)) = name.split_once(':') else {
+        return Ok(());
+    };
+    if namespace_uri_for_prefix(prefix, attributes, in_scope_namespaces).is_some() {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn ensure_supported_xml_attribute_value(value: &str) -> Result<(), MsgError> {
+    if value.contains('<') || value.contains('\r') || value.contains('\n') || value.contains('\t') {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn push_canonical_xml_start_tag(
+    name: &str,
+    attributes: &[CanonicalXmlAttribute],
+    output: &mut String,
+) -> Result<(), MsgError> {
+    output.push('<');
+    output.push_str(name);
+    for attribute in attributes {
+        if attribute.name == "xmlns:xml" && attribute.value == XML_NS {
+            continue;
+        }
+        output.push(' ');
+        output.push_str(&attribute.name);
+        output.push_str("=\"");
+        push_canonical_xml_attribute_value(&attribute.value, output)?;
+        output.push('"');
+    }
+    output.push('>');
+    Ok(())
+}
+
+fn push_canonical_xml_text(value: &str, output: &mut String) -> Result<(), MsgError> {
+    push_canonical_xml_value(value, output, push_canonical_xml_text_char)
+}
+
+fn push_canonical_xml_attribute_value(value: &str, output: &mut String) -> Result<(), MsgError> {
+    push_canonical_xml_value(value, output, push_canonical_xml_attribute_char)
+}
+
+fn push_canonical_xml_value(
+    value: &str,
+    output: &mut String,
+    push_char: fn(char, &mut String) -> Result<(), MsgError>,
+) -> Result<(), MsgError> {
+    let mut cursor = 0usize;
+    while cursor < value.len() {
+        let Some(entity_start) = value[cursor..].find('&').map(|offset| cursor + offset) else {
+            push_raw_canonical_xml_chars(&value[cursor..], output, push_char)?;
+            return Ok(());
+        };
+        push_raw_canonical_xml_chars(&value[cursor..entity_start], output, push_char)?;
+        let reference_start = entity_start + 1;
+        let reference_end = value[reference_start..]
+            .find(';')
+            .map(|offset| reference_start + offset)
+            .ok_or(MsgError::ValidationFailed)?;
+        let ch = decode_supported_xml_character_reference(&value[reference_start..reference_end])?;
+        push_char(ch, output)?;
+        cursor = reference_end + 1;
+    }
+    Ok(())
+}
+
+fn push_raw_canonical_xml_chars(
+    value: &str,
+    output: &mut String,
+    push_char: fn(char, &mut String) -> Result<(), MsgError>,
+) -> Result<(), MsgError> {
+    for ch in value.chars() {
+        push_char(ch, output)?;
+    }
+    Ok(())
+}
+
+fn push_canonical_xml_text_char(ch: char, output: &mut String) -> Result<(), MsgError> {
+    ensure_supported_xml_char(ch)?;
+    match ch {
+        '&' => output.push_str("&amp;"),
+        '<' => output.push_str("&lt;"),
+        '>' => output.push_str("&gt;"),
+        '\r' => output.push_str("&#xD;"),
+        _ => output.push(ch),
+    }
+    Ok(())
+}
+
+fn push_canonical_xml_attribute_char(ch: char, output: &mut String) -> Result<(), MsgError> {
+    ensure_supported_xml_char(ch)?;
+    match ch {
+        '&' => output.push_str("&amp;"),
+        '<' => output.push_str("&lt;"),
+        '"' => output.push_str("&quot;"),
+        '\t' => output.push_str("&#x9;"),
+        '\n' => output.push_str("&#xA;"),
+        '\r' => output.push_str("&#xD;"),
+        _ => output.push(ch),
+    }
+    Ok(())
+}
+
+fn decode_supported_xml_character_reference(reference: &str) -> Result<char, MsgError> {
+    match reference {
+        "amp" => return Ok('&'),
+        "lt" => return Ok('<'),
+        "gt" => return Ok('>'),
+        "quot" => return Ok('"'),
+        "apos" => return Ok('\''),
+        _ => {}
+    }
+    let codepoint = if let Some(hex) = reference.strip_prefix("#x") {
+        if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(MsgError::ValidationFailed);
+        }
+        u32::from_str_radix(hex, 16).map_err(|_| MsgError::ValidationFailed)?
+    } else if let Some(decimal) = reference.strip_prefix('#') {
+        if decimal.is_empty() || !decimal.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(MsgError::ValidationFailed);
+        }
+        decimal
+            .parse::<u32>()
+            .map_err(|_| MsgError::ValidationFailed)?
+    } else {
+        return Err(MsgError::ValidationFailed);
+    };
+    let ch = char::from_u32(codepoint).ok_or(MsgError::ValidationFailed)?;
+    ensure_supported_xml_char(ch)?;
+    Ok(ch)
+}
+
+fn ensure_supported_xml_char(ch: char) -> Result<(), MsgError> {
+    if matches!(ch, '\u{9}' | '\u{a}' | '\u{d}')
+        || ('\u{20}'..='\u{d7ff}').contains(&ch)
+        || ('\u{e000}'..='\u{fffd}').contains(&ch)
+        || ('\u{10000}'..='\u{10ffff}').contains(&ch)
+    {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn required_single_xml_element(container: &str, local: &str) -> Result<XmlElementSpan, MsgError> {
+    let span = find_first_xml_element(container, local).ok_or(MsgError::ValidationFailed)?;
+    ensure_supported_xml_element_span_name(container, span)?;
+    if find_first_xml_element(&container[span.end..], local).is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(span)
+}
+
+fn ensure_xml_element_content_empty(container: &str, span: XmlElementSpan) -> Result<(), MsgError> {
+    if container[span.content_start..span.content_end]
+        .trim()
+        .is_empty()
+    {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn ensure_xml_element_text_only(container: &str, span: XmlElementSpan) -> Result<(), MsgError> {
+    if container[span.content_start..span.content_end].contains('<') {
+        Err(MsgError::ValidationFailed)
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_direct_xml_child_elements(
+    container: &str,
+    parent_span: XmlElementSpan,
+    allowed_children: &[&str],
+) -> Result<(), MsgError> {
+    ensure_direct_xml_child_elements_with_comment_policy(
+        container,
+        parent_span,
+        allowed_children,
+        false,
+    )
+}
+
+fn ensure_direct_xml_child_elements_allowing_comments(
+    container: &str,
+    parent_span: XmlElementSpan,
+    allowed_children: &[&str],
+) -> Result<(), MsgError> {
+    ensure_direct_xml_child_elements_with_comment_policy(
+        container,
+        parent_span,
+        allowed_children,
+        true,
+    )
+}
+
+fn ensure_direct_xml_child_elements_with_comment_policy(
+    container: &str,
+    parent_span: XmlElementSpan,
+    allowed_children: &[&str],
+    allow_comments: bool,
+) -> Result<(), MsgError> {
+    let mut cursor = parent_span.content_start;
+    while cursor < parent_span.content_end {
+        let Some(offset) = container[cursor..parent_span.content_end].find('<') else {
+            return if container[cursor..parent_span.content_end].trim().is_empty() {
+                Ok(())
+            } else {
+                Err(MsgError::ValidationFailed)
+            };
+        };
+        let start = cursor + offset;
+        if !container[cursor..start].trim().is_empty() {
+            return Err(MsgError::ValidationFailed);
+        }
+
+        let tag_start = start + 1;
+        let tag_end =
+            find_xml_tag_end(container.as_bytes(), tag_start).ok_or(MsgError::ValidationFailed)?;
+        if tag_end > parent_span.content_end {
+            return Err(MsgError::ValidationFailed);
+        }
+        if allow_comments && container[start..].starts_with("<!--") {
+            let comment_end = find_supported_xml_comment_end(container, start)? + 3;
+            if comment_end > parent_span.content_end {
+                return Err(MsgError::ValidationFailed);
+            }
+            cursor = comment_end;
+            continue;
+        }
+        let raw_tag = container[tag_start..tag_end].trim();
+        if raw_tag.starts_with('/')
+            || raw_tag.starts_with('?')
+            || raw_tag.starts_with("!--")
+            || raw_tag.starts_with("![CDATA[")
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+
+        let self_closing = raw_tag.ends_with('/');
+        let tag_body = raw_tag.trim_end_matches('/').trim_end();
+        let (name, _) = tag_body
+            .split_once(char::is_whitespace)
+            .unwrap_or((tag_body, ""));
+        ensure_supported_xml_name(name)?;
+        let local = xml_local_name(name);
+        if !allowed_children
+            .iter()
+            .any(|allowed_child| local == *allowed_child)
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+        cursor = if self_closing {
+            tag_end + 1
+        } else {
+            let (_, end) = find_xml_element_end(container, tag_end + 1, name)
+                .ok_or(MsgError::ValidationFailed)?;
+            if end > parent_span.content_end {
+                return Err(MsgError::ValidationFailed);
+            }
+            end
+        };
+    }
+    Ok(())
+}
+
+fn optional_direct_xml_child_element(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+) -> Result<Option<XmlElementSpan>, MsgError> {
+    optional_direct_xml_child_element_with_comment_policy(container, parent_span, child, false)
+}
+
+fn optional_direct_xml_child_element_allowing_comments(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+) -> Result<Option<XmlElementSpan>, MsgError> {
+    optional_direct_xml_child_element_with_comment_policy(container, parent_span, child, true)
+}
+
+fn optional_direct_xml_child_element_with_comment_policy(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+    allow_comments: bool,
+) -> Result<Option<XmlElementSpan>, MsgError> {
+    let mut cursor = parent_span.content_start;
+    let mut found = None;
+    while cursor < parent_span.content_end {
+        let Some(offset) = container[cursor..parent_span.content_end].find('<') else {
+            return if container[cursor..parent_span.content_end].trim().is_empty() {
+                Ok(found)
+            } else {
+                Err(MsgError::ValidationFailed)
+            };
+        };
+        let start = cursor + offset;
+        if !container[cursor..start].trim().is_empty() {
+            return Err(MsgError::ValidationFailed);
+        }
+
+        let tag_start = start + 1;
+        let tag_end =
+            find_xml_tag_end(container.as_bytes(), tag_start).ok_or(MsgError::ValidationFailed)?;
+        if tag_end > parent_span.content_end {
+            return Err(MsgError::ValidationFailed);
+        }
+        if allow_comments && container[start..].starts_with("<!--") {
+            let comment_end = find_supported_xml_comment_end(container, start)? + 3;
+            if comment_end > parent_span.content_end {
+                return Err(MsgError::ValidationFailed);
+            }
+            cursor = comment_end;
+            continue;
+        }
+        let raw_tag = container[tag_start..tag_end].trim();
+        if raw_tag.starts_with('/')
+            || raw_tag.starts_with('?')
+            || raw_tag.starts_with("!--")
+            || raw_tag.starts_with("![CDATA[")
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+
+        let self_closing = raw_tag.ends_with('/');
+        let tag_body = raw_tag.trim_end_matches('/').trim_end();
+        let (name, _) = tag_body
+            .split_once(char::is_whitespace)
+            .unwrap_or((tag_body, ""));
+        ensure_supported_xml_name(name)?;
+        let local = xml_local_name(name);
+        let child_span = if self_closing {
+            XmlElementSpan {
+                start,
+                opening_end: tag_end,
+                content_start: tag_end + 1,
+                content_end: tag_end + 1,
+                end: tag_end + 1,
+            }
+        } else {
+            let (content_end, end) = find_xml_element_end(container, tag_end + 1, name)
+                .ok_or(MsgError::ValidationFailed)?;
+            if end > parent_span.content_end {
+                return Err(MsgError::ValidationFailed);
+            }
+            XmlElementSpan {
+                start,
+                opening_end: tag_end,
+                content_start: tag_end + 1,
+                content_end,
+                end,
+            }
+        };
+        if local == child && found.replace(child_span).is_some() {
+            return Err(MsgError::ValidationFailed);
+        }
+        cursor = child_span.end;
+    }
+    Ok(found)
+}
+
+fn required_direct_xml_child_element(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+) -> Result<XmlElementSpan, MsgError> {
+    optional_direct_xml_child_element(container, parent_span, child)?
+        .ok_or(MsgError::ValidationFailed)
+}
+
+fn required_direct_xml_child_element_allowing_comments(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+) -> Result<XmlElementSpan, MsgError> {
+    optional_direct_xml_child_element_allowing_comments(container, parent_span, child)?
+        .ok_or(MsgError::ValidationFailed)
+}
+
+fn decode_direct_child_base64(
+    container: &str,
+    child_span: XmlElementSpan,
+) -> Result<Vec<u8>, MsgError> {
+    ensure_xml_element_attributes_allowed(container, child_span, &[])?;
+    ensure_xml_element_text_only(container, child_span)?;
+    let value: String = container[child_span.content_start..child_span.content_end]
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    BASE64_STANDARD
+        .decode(value)
+        .map_err(|_| MsgError::ValidationFailed)
+}
+
+fn optional_direct_child_text_compact(
+    container: &str,
+    parent_span: XmlElementSpan,
+    child: &str,
+) -> Result<Option<String>, MsgError> {
+    let Some(span) = optional_direct_xml_child_element(container, parent_span, child)? else {
+        return Ok(None);
+    };
+    ensure_xml_element_attributes_allowed(container, span, &[])?;
+    ensure_xml_element_text_only(container, span)?;
+    Ok(Some(
         container[span.content_start..span.content_end]
             .chars()
             .filter(|ch| !ch.is_whitespace())
             .collect(),
-    )
+    ))
+}
+
+fn ensure_xml_element_attributes_allowed(
+    container: &str,
+    span: XmlElementSpan,
+    allowed_attributes: &[&str],
+) -> Result<(), MsgError> {
+    let (_, attributes) = validated_xml_element_name_and_attributes(container, span, &[])?;
+    for attribute in attributes {
+        if attribute.kind == CanonicalXmlAttributeKind::Namespace {
+            continue;
+        }
+        if !allowed_attributes
+            .iter()
+            .any(|allowed_attribute| attribute.name == *allowed_attribute)
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn ensure_xml_element_prefixed_namespace(
+    container: &str,
+    span: XmlElementSpan,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+    expected_namespace: &str,
+) -> Result<(), MsgError> {
+    let (name, attributes) =
+        validated_xml_element_name_and_attributes(container, span, inherited_namespaces)?;
+    let Some((prefix, _)) = name.split_once(':') else {
+        return match namespace_uri_for_prefix("", &attributes, inherited_namespaces) {
+            Some(namespace) if !namespace.is_empty() && namespace != expected_namespace => {
+                Err(MsgError::ValidationFailed)
+            }
+            _ => Ok(()),
+        };
+    };
+    if namespace_uri_for_prefix(prefix, &attributes, inherited_namespaces)
+        == Some(expected_namespace)
+    {
+        Ok(())
+    } else {
+        Err(MsgError::ValidationFailed)
+    }
+}
+
+fn ensure_xades_element_prefixed_namespace(
+    container: &str,
+    span: XmlElementSpan,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(), MsgError> {
+    ensure_xml_element_prefixed_namespace(container, span, inherited_namespaces, XADES_NS)
+}
+
+fn xml_element_namespace_scope(
+    container: &str,
+    span: XmlElementSpan,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<Vec<CanonicalXmlNamespaceBinding>, MsgError> {
+    let (_, attributes) =
+        validated_xml_element_name_and_attributes(container, span, inherited_namespaces)?;
+    let mut scope = inherited_namespaces.to_vec();
+    scope.extend(
+        attributes
+            .iter()
+            .filter_map(namespace_binding_from_attribute),
+    );
+    Ok(scope)
+}
+
+fn validated_xml_element_name_and_attributes<'a>(
+    container: &'a str,
+    span: XmlElementSpan,
+    inherited_namespaces: &[CanonicalXmlNamespaceBinding],
+) -> Result<(&'a str, Vec<CanonicalXmlAttribute>), MsgError> {
+    let opening = container[span.start + 1..span.opening_end].trim();
+    let tag_body = opening.trim_end_matches('/').trim_end();
+    let (name, attributes) = split_supported_xml_tag(tag_body)?;
+    ensure_supported_xml_name(name)?;
+    let mut attributes = parse_supported_xml_attributes(attributes)?;
+    sort_and_validate_canonical_xml_attributes(&mut attributes, inherited_namespaces)?;
+    Ok((name, attributes))
+}
+
+fn ensure_supported_xml_element_span_name(
+    container: &str,
+    span: XmlElementSpan,
+) -> Result<(), MsgError> {
+    let opening = container[span.start + 1..span.opening_end].trim();
+    let tag_body = opening.trim_end_matches('/').trim_end();
+    let (name, _) = split_supported_xml_tag(tag_body)?;
+    ensure_supported_xml_name(name)
+}
+
+fn required_single_child_text_compact(container: &str, child: &str) -> Result<String, MsgError> {
+    optional_single_child_text_compact(container, child)?.ok_or(MsgError::ValidationFailed)
+}
+
+fn optional_single_child_text_compact(
+    container: &str,
+    child: &str,
+) -> Result<Option<String>, MsgError> {
+    let Some(span) = find_first_xml_element(container, child) else {
+        return Ok(None);
+    };
+    if find_first_xml_element(&container[span.end..], child).is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(Some(
+        container[span.content_start..span.content_end]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect(),
+    ))
 }
 
 fn child_texts_compact(container: &str, child: &str) -> Vec<String> {
@@ -5132,10 +8360,21 @@ fn single_child_text_compact(container: &str, child: &str) -> Result<Option<Stri
 
 fn element_attr(container: &str, span: XmlElementSpan, attr: &str) -> Option<String> {
     let opening = &container[span.start + 1..span.opening_end];
-    attr_value(opening, attr)
+    attr_value_exact(opening, attr)
+}
+
+fn attr_value_exact(opening: &str, attr: &str) -> Option<String> {
+    attr_value_matching(opening, |name| name == attr)
 }
 
 fn attr_value(opening: &str, attr: &str) -> Option<String> {
+    attr_value_exact(opening, attr)
+}
+
+fn attr_value_matching(
+    opening: &str,
+    mut name_matches: impl FnMut(&str) -> bool,
+) -> Option<String> {
     let mut cursor = opening.trim();
     if let Some((_, rest)) = cursor.split_once(char::is_whitespace) {
         cursor = rest.trim();
@@ -5158,7 +8397,7 @@ fn attr_value(opening: &str, attr: &str) -> Option<String> {
         }
         remainder = &remainder[1..];
         let end_idx = remainder.find(quote as char)?;
-        if name == attr || xml_local_name(name) == attr {
+        if name_matches(name) {
             return Some(remainder[..end_idx].to_owned());
         }
         remainder = remainder[end_idx + 1..].trim_start();
@@ -5197,7 +8436,7 @@ fn find_first_xml_element(text: &str, local: &str) -> Option<XmlElementSpan> {
                     end: opening_end + 1,
                 });
             }
-            let (content_end, end) = find_xml_element_end(text, opening_end + 1, local)?;
+            let (content_end, end) = find_xml_element_end(text, opening_end + 1, name)?;
             return Some(XmlElementSpan {
                 start,
                 opening_end,
@@ -5211,7 +8450,11 @@ fn find_first_xml_element(text: &str, local: &str) -> Option<XmlElementSpan> {
     None
 }
 
-fn find_xml_element_end(text: &str, mut cursor: usize, local: &str) -> Option<(usize, usize)> {
+fn find_xml_element_end(
+    text: &str,
+    mut cursor: usize,
+    opening_name: &str,
+) -> Option<(usize, usize)> {
     let mut depth = 1usize;
     while cursor < text.len() {
         let start = cursor + text[cursor..].find('<')?;
@@ -5234,7 +8477,7 @@ fn find_xml_element_end(text: &str, mut cursor: usize, local: &str) -> Option<(u
         let (name, _) = tag_body
             .split_once(char::is_whitespace)
             .unwrap_or((tag_body, ""));
-        if xml_local_name(name) == local {
+        if name == opening_name {
             if closing {
                 depth -= 1;
                 if depth == 0 {
@@ -5302,9 +8545,13 @@ fn normalise_business_message_id(value: &str) -> Option<String> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
+    lower_hex(&digest)
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
         out.push(HEX[(byte >> 4) as usize] as char);
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
@@ -5413,8 +8660,16 @@ mod tests {
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
     use p256::{
-        ecdsa::{SigningKey as P256SigningKey, signature::Signer as _},
+        ecdsa::{
+            SigningKey as P256SigningKey,
+            signature::{Signer as _, Verifier as _},
+        },
         pkcs8::DecodePrivateKey as _,
+    };
+    use rcgen::{
+        BasicConstraints, CertificateParams, CustomExtension, DnType, ExtendedKeyUsagePurpose,
+        IsCa, Issuer, KeyPair as RcgenKeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+        PKCS_ECDSA_P384_SHA384, PublicKeyData, SignatureAlgorithm, SigningKey as _, date_time_ymd,
     };
     use tempfile::{NamedTempFile, TempDir};
 
@@ -5422,14 +8677,32 @@ mod tests {
 
     const LEGACY_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
+    const XML_SIGNATURE_TEST_SIGNING_TIME: &str = "2026-06-02T12:00:00Z";
+
     const OFFICIAL_XSD_PACS008_001_08: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.008.001.08.xsd");
     const OFFICIAL_XSD_PACS009_001_08: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.009.001.08.xsd");
+    const OFFICIAL_XSD_PACS002_001_10: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.002.001.10.xsd");
+    const OFFICIAL_XSD_PACS004_001_10: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.004.001.10.xsd");
+    const OFFICIAL_XSD_CAMT056_001_08: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/camt.056.001.08.xsd");
+    const PACS002_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
+    const PACS004_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/pacs004_fixture.xml");
+    const CAMT056_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/camt056_fixture.xml");
     const SESE023_FIXTURE_XML: &str =
         include_str!(r"../../../fixtures/iso20022/sese023_fixture.xml");
+    const SESE024_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese024_fixture.xml");
     const SESE025_FIXTURE_XML: &str =
         include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
+    const COLR012_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/colr012_fixture.xml");
     const TEST_X509_CERTIFICATE_DER_B64: &str = "MIIBlTCCATugAwIBAgIUXiaSrYGsJgKt3u4x6BKKksfNLiAwCgYIKoZIzj0EAwIwIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMB4XDTI2MDYwMTExMjgyOVoXDTM2MDUyOTExMjgyOVowIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAWqzmlOSaGzSgxorUv+ewSw3Fy3Sde/6hMOgKLkgt21a791Jequ1zTyts6rrpZoBLozZBqHl0A7E8vTW587o9KNTMFEwHQYDVR0OBBYEFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMB8GA1UdIwQYMBaAFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgZQdqU2vQe1kA3tnVW3/Md+A0CvjHC4VwaRGw1GTVsQwCIQD7mrXnQAnnVmnriWX35eVtmDSz2uGA5Xztav0D1Gd0PA==";
     const TEST_X509_CHAIN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgUryIDQvn/6N9fG2pQEVTQEP9UqzRspBrkNdwndN+s+WhRANCAARTR4/Y7uTA2FBawlygx0Q7obN3BTEoh3AKjHTqZl+nMYfoiY+9bGJ7YHVDy6Ca/xWf2Yd0y64/7P1Ti9rJqPM6";
     const TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBnzCCAUagAwIBAgIUUOi8MD0vRAq9AAbDmuxRfRDZdeQwCgYIKoZIzj0EAwIwHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgUm9vdDAgFw0yNjA2MDExMjAwMzhaGA8yMTI2MDUwODEyMDAzOFowHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABFNHj9ju5MDYUFrCXKDHRDuhs3cFMSiHcAqMdOpmX6cxh+iJj71sYntgdUPLoJr/FZ/Zh3TLrj/s/VOL2smo8zqjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBS7L2CAjWtk6fBcYscT8f7Cjpv4vDAfBgNVHSMEGDAWgBRD+yqEVN85+okIsrT2tOc86jK3HzAKBggqhkjOPQQDAgNHADBEAiAled9C2Mpk2BdR84/evD5DyQ+Kt9TZuNrZMkkrjx6tiwIgLHYNDEXdEZMgKj838ELQ/9vtz5f2WSNaUN5ehURQBjY=";
@@ -5479,6 +8752,9 @@ mod tests {
     const TEST_X509_CA_LEAF_CERTIFICATE_DER_B64: &str = "MIIBuTCCAV6gAwIBAgIUYGDPiGTotSHSfWM8XYe/GEbgxMAwCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIENBIExlYWYgVGVzdCBSb290MCAXDTI2MDYwMTE1Mzk0OFoYDzIxMjYwNTA4MTUzOTQ4WjAoMSYwJAYDVQQDDB1Jcm9oYSBJU08gQ0EgTGVhZiBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLEm+DVadYD1LlM2ajEFvT/AjUnpLMIDc0/tDON6N5yq8gPormUtKDGOsb7CMFHlVejOHtucto9Msj9S/aoREcCjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBTcnncTx0zw/Hfrbw/23gK54Jcx+DAfBgNVHSMEGDAWgBSU0NnWDyVoLCSbSLjWVa39Qo7RzjAKBggqhkjOPQQDAgNJADBGAiEAwgSjxDFs4mVOJytH5JxTIaTBWMp1MlMXpRunfQ3Gj8MCIQD8pkrPjeAjm8Rj+A234oR5BALB2rJnHNRjChyXXxYoJA==";
     const TEST_X509_CA_LEAF_ROOT_CERTIFICATE_DER_B64: &str = "MIIBtTCCAVygAwIBAgIUWUVYri4LhKX478p+THSVJUaPOo0wCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIENBIExlYWYgVGVzdCBSb290MCAXDTI2MDYwMTE1Mzk0OFoYDzIxMjYwNTA4MTUzOTQ4WjAmMSQwIgYDVQQDDBtJcm9oYSBJU08gQ0EgTGVhZiBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARA+2dbKqgiqg/E83r4aUwHObSZ+F3vOpucoKVw8/t0DiK1Ip4ajtLDFBUBB9KRW9AZn3VqX3pigu6N8VXkRRJ+o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUlNDZ1g8laCwkm0i41lWt/UKO0c4wHwYDVR0jBBgwFoAUlNDZ1g8laCwkm0i41lWt/UKO0c4wCgYIKoZIzj0EAwIDRwAwRAIgVnt/5K51wxExk4D7ndU8ZwyehZnQ7a3ZXUjSRHZeOAsCIEtJiNOCtiTilnOPOTLd44TpK/xJJ5en8VThPpTzvbQN";
     const TEST_X509_POLICY_OID: &str = "1.3.6.1.4.1.55555.1.1";
+    const TEST_X509_POLICY_OID_ARCS: &[u64] = &[1, 3, 6, 1, 4, 1, 55555, 1, 1];
+    const TEST_X509_WRONG_POLICY_OID_ARCS: &[u64] = &[1, 3, 6, 1, 4, 1, 55555, 1, 2];
+    const X509_ANY_POLICY_OID_ARCS: &[u64] = &[2, 5, 29, 32, 0];
     const TEST_X509_POLICY_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQf3eEFqA7jglOKGQ5WsPZaDme/HcKmlcWRlmlqR4bHGhRANCAASVooKXzWhB5zksBPxZWOT58wiH+r0Ibqwf2Ru5Rh7zw4nw8H7/j2vY8zbRJ3E3r/Rh3pOdK3z1Qw/w0bT3gB5A";
     const TEST_X509_POLICY_LEAF_CERTIFICATE_DER_B64: &str = "MIIBxzCCAW2gAwIBAgIUPuFsDaDMpHF3NgeTGnIEhCOq3NEwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwaSXJvaGEgSVNPIFBvbGljeSBUZXN0IFJvb3QwIBcNMjYwNjAxMTIxNzAwWhgPMjEyNjA1MDgxMjE3MDBaMCUxIzAhBgNVBAMMGklyb2hhIElTTyBQb2xpY3kgVGVzdCBMZWFmMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElaKCl81oQec5LAT8WVjk+fMIh/q9CG6sH9kbuUYe88OJ8PB+/49r2PM20SdxN6/0Yd6TnSt89UMP8NG094AeQKN5MHcwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFER1X6dAjJEwRyZR0U9snoEqP1m3MB8GA1UdIwQYMBaAFDdfynzPJ3kOExwR74uNUYowe1IRMBcGA1UdIAQQMA4wDAYKKwYBBAGDsgMBATAKBggqhkjOPQQDAgNIADBFAiA6Q8LV3dY5W+t3TkfF4CG5cSPnp0Ck1Y8syE121dXjbgIhAP0h9a2FZzfQP04iu/e8T8iE/VK1EJ+cUQJaGs09Wa9R";
     const TEST_X509_POLICY_ROOT_CERTIFICATE_DER_B64: &str = "MIIBszCCAVqgAwIBAgIUL5B/imcHZ4KDLP8LZnFRqYSmTqEwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwaSXJvaGEgSVNPIFBvbGljeSBUZXN0IFJvb3QwIBcNMjYwNjAxMTIxNzAwWhgPMjEyNjA1MDgxMjE3MDBaMCUxIzAhBgNVBAMMGklyb2hhIElTTyBQb2xpY3kgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbpV/eWHEwxV+no2+2M6BIGiPho0U+Ky+iUZ/J/4KXdEk0y81+/MC72LiD0rbSxLL+nxRE9VwhzILejQG8KVg8qNmMGQwHwYDVR0jBBgwFoAUN1/KfM8neQ4THBHvi41RijB7UhEwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFDdfynzPJ3kOExwR74uNUYowe1IRMAoGCCqGSM49BAMCA0cAMEQCIFDwLtr3jD6nngIPGkIb5a5VU3vI8CEp1TLTFkZDEi1EAiANb9nOlWWaTbgaVU6efVlbrwNmMVgH3aVRcGszRdg4BA==";
@@ -5552,6 +8828,11 @@ mod tests {
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
             store_dir: None,
+            store_retention_secs:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+            store_max_records:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+            audit_export_dir: None,
             embedded_signature_policy: None,
             signer: Some(actual::IsoBridgeSigner {
                 account_id: account_literal.clone(),
@@ -5591,6 +8872,7 @@ mod tests {
             x509_ocsp_response_der_base64: Vec::new(),
             trusted_public_key_sha256: Vec::new(),
             trusted_certificate_sha256: Vec::new(),
+            revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: message_type.to_owned(),
@@ -5633,6 +8915,7 @@ mod tests {
             x509_ocsp_response_der_base64: Vec::new(),
             trusted_public_key_sha256: Vec::new(),
             trusted_certificate_sha256: Vec::new(),
+            revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: vec![
                 "bic-lei".to_owned(),
                 "isin-cusip".to_owned(),
@@ -5640,6 +8923,7 @@ mod tests {
             ],
             message_profiles: vec![
                 message_profile("sese.023", "sese.023.001.11"),
+                message_profile("sese.024", "sese.024.001.10"),
                 message_profile("sese.025", "sese.025.001.11"),
             ],
         }
@@ -5659,6 +8943,7 @@ mod tests {
             x509_ocsp_response_der_base64: Vec::new(),
             trusted_public_key_sha256: Vec::new(),
             trusted_certificate_sha256: Vec::new(),
+            revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
                 message_type: "pacs.008".to_owned(),
@@ -5675,23 +8960,124 @@ mod tests {
         }
     }
 
-    fn unsigned_pacs008_xml() -> String {
-        concat!(
-            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
-            "<FIToFICstmrCdtTrf><GrpHdr><MsgId>sig-001</MsgId></GrpHdr>",
-            r#"<CdtTrfTxInf><IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>"#,
-            "<IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>",
-            "<DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>",
-            "<CdtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></CdtrAcct>",
-            "<DbtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></DbtrAgt>",
-            "<CdtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></CdtrAgt>",
-            "</CdtTrfTxInf></FIToFICstmrCdtTrf></Document>",
+    fn xml_signature_test_signing_key() -> P256SigningKey {
+        P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key")
+    }
+
+    fn low_s_p256_signature(signature: P256Signature) -> P256Signature {
+        signature.normalize_s().unwrap_or(signature)
+    }
+
+    fn low_s_p256_signature_der_from_bytes(signature: &[u8]) -> Vec<u8> {
+        let signature = if signature.len() == P256_XMLDSIG_SIGNATURE_LEN {
+            P256Signature::from_slice(signature)
+        } else {
+            P256Signature::from_der(signature)
+        }
+        .expect("rcgen P-256 signature");
+        low_s_p256_signature(signature).to_der().as_bytes().to_vec()
+    }
+
+    fn high_s_p256_signature(signature: P256Signature) -> P256Signature {
+        const P256_ORDER: [u8; 32] = [
+            0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
+            0xfc, 0x63, 0x25, 0x51,
+        ];
+        let low_s = low_s_p256_signature(signature);
+        let low_s_bytes = low_s.to_bytes();
+        let mut high_s_bytes = [0_u8; P256_XMLDSIG_SIGNATURE_LEN];
+        high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
+
+        let mut borrow = 0_u16;
+        for i in (0..32).rev() {
+            let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
+            let subtrahend = i16::from(low_s_bytes[32 + i]);
+            if minuend >= subtrahend {
+                high_s_bytes[32 + i] = (minuend - subtrahend) as u8;
+                borrow = 0;
+            } else {
+                high_s_bytes[32 + i] = (minuend + 256 - subtrahend) as u8;
+                borrow = 1;
+            }
+        }
+        assert_eq!(
+            borrow, 0,
+            "low-S fixture scalar must be below the curve order"
+        );
+        let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
+        assert!(
+            high_s.normalize_s().is_some(),
+            "test helper must produce a non-canonical high-S signature"
+        );
+        high_s
+    }
+
+    fn signed_profile_public_key_sha256() -> String {
+        let signing_key = xml_signature_test_signing_key();
+        sha256_hex(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
         )
-        .to_owned()
+    }
+
+    fn unsigned_pacs008_xml() -> String {
+        unsigned_pacs008_xml_with_message_id("sig-001")
+    }
+
+    fn unsigned_pacs008_xml_with_message_id(message_id: &str) -> String {
+        format!(
+            concat!(
+                r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+                "<FIToFICstmrCdtTrf><GrpHdr><MsgId>{}</MsgId></GrpHdr>",
+                r#"<CdtTrfTxInf><IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>"#,
+                "<IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>",
+                "<DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>",
+                "<CdtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></CdtrAcct>",
+                "<DbtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></DbtrAgt>",
+                "<CdtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></CdtrAgt>",
+                "</CdtTrfTxInf></FIToFICstmrCdtTrf></Document>",
+            ),
+            message_id
+        )
+    }
+
+    fn unsigned_pacs008_xml_with_document_id(reference_id: &str) -> String {
+        unsigned_pacs008_xml().replacen(
+            "<Document ",
+            &format!(r#"<Document Id="{reference_id}" "#),
+            1,
+        )
+    }
+
+    fn unsigned_pacs008_xml_with_inherited_default_namespace_reference_id(
+        reference_id: &str,
+    ) -> String {
+        unsigned_pacs008_xml().replacen(
+            "<FIToFICstmrCdtTrf>",
+            &format!(r#"<FIToFICstmrCdtTrf Id="{reference_id}">"#),
+            1,
+        )
+    }
+
+    fn unsigned_pacs008_xml_with_inherited_unused_namespace_reference_id(
+        reference_id: &str,
+    ) -> String {
+        unsigned_pacs008_xml_with_inherited_default_namespace_reference_id(reference_id).replacen(
+            r#"<Document xmlns=""#,
+            r#"<Document xmlns:unused="urn:unused" xmlns=""#,
+            1,
+        )
     }
 
     fn test_p256_signing_key() -> P256SigningKey {
         P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key")
+    }
+
+    fn signed_pacs008_xml() -> String {
+        signed_pacs008_xml_with_c14n_algorithm(XML_C14N_1_0)
     }
 
     fn test_p256_public_key_pin() -> String {
@@ -5897,6 +9283,14 @@ mod tests {
         P256SigningKey::from_pkcs8_der(&pkcs8).expect("CA KeyUsage leaf PKCS#8 fixture must parse")
     }
 
+    fn test_x509_ocsp_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
     fn test_x509_ca_key_usage_critical_root_certificate_pin() -> String {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64)
@@ -6057,179 +9451,210 @@ mod tests {
         sha256_hex(&certificate)
     }
 
-    fn test_x509_ocsp_key_usage_leaf_signing_key() -> P256SigningKey {
-        let pkcs8 = BASE64_STANDARD
-            .decode(TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
-            .expect("OCSP KeyUsage leaf PKCS#8 fixture must decode");
-        P256SigningKey::from_pkcs8_der(&pkcs8)
-            .expect("OCSP KeyUsage leaf PKCS#8 fixture must parse")
-    }
-
-    fn test_x509_ocsp_key_usage_root_certificate_pin() -> String {
-        let certificate = BASE64_STANDARD
-            .decode(TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64)
-            .expect("OCSP KeyUsage root X.509 fixture must decode");
-        sha256_hex(&certificate)
-    }
-
-    fn signed_pacs008_xml() -> String {
-        let signing_key = test_p256_signing_key();
-        signed_pacs008_xml_with_key_info(&signing_key, &test_p256_key_info(&signing_key))
-    }
-
-    fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
-        let public_key = BASE64_STANDARD.encode(
-            signing_key
-                .verifying_key()
-                .to_encoded_point(false)
-                .as_bytes(),
-        );
+    fn signed_pacs008_xml_with_public_key(public_key_base64: &str) -> String {
+        let payload = signed_pacs008_xml();
+        let public_key_start =
+            payload.find("<PublicKey>").expect("fixture PublicKey") + "<PublicKey>".len();
+        let public_key_end = payload[public_key_start..]
+            .find("</PublicKey>")
+            .expect("fixture PublicKey end")
+            + public_key_start;
         format!(
-            concat!(
-                "<KeyInfo><KeyValue><ECKeyValue>",
-                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
-                "<PublicKey>{public_key}</PublicKey>",
-                "</ECKeyValue></KeyValue></KeyInfo>"
-            ),
-            public_key = public_key
+            "{}{}{}",
+            &payload[..public_key_start],
+            public_key_base64,
+            &payload[public_key_end..]
         )
     }
 
-    fn test_p256_namespaced_key_info(signing_key: &P256SigningKey) -> String {
+    fn signed_pacs008_xml_with_c14n_algorithm(c14n_algorithm: &str) -> String {
+        signed_pacs008_xml_with_c14n_algorithm_and_signed_info_style(c14n_algorithm, false)
+    }
+
+    fn signed_pacs008_xml_with_self_closing_signed_info() -> String {
+        signed_pacs008_xml_with_c14n_algorithm_and_signed_info_style(XML_C14N_1_0, true)
+    }
+
+    fn signed_pacs008_xml_with_raw_self_closing_signed_info_signature() -> String {
+        signed_pacs008_xml_with_c14n_algorithm_and_signed_info_options(XML_C14N_1_0, true, false)
+    }
+
+    fn signed_pacs008_xml_with_fixed_width_signature_value() -> String {
+        signed_pacs008_xml_from_unsigned_with_signature_encoding(
+            unsigned_pacs008_xml(),
+            XML_C14N_1_0,
+            false,
+            true,
+            XmlSignatureValueEncoding::FixedWidth,
+        )
+    }
+
+    fn signed_pacs008_xml_with_sgntr_signature_carrier() -> String {
+        let unsigned = unsigned_pacs008_xml().replacen(
+            "</FIToFICstmrCdtTrf>",
+            &format!(r#"<Sgntr xmlns:ds="{XMLDSIG_NS}"></Sgntr></FIToFICstmrCdtTrf>"#),
+            1,
+        );
+        let insertion = unsigned.find("</Sgntr>").expect("Sgntr insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml_prefixed(XML_C14N_1_0, &digest);
+        let inherited_namespaces = [CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: XMLDSIG_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        let canonical_signed_info = canonicalize_supported_xml_with_mode(
+            &signed_info,
+            &inherited_namespaces,
+            CanonicalXmlMode::Inclusive,
+        )
+        .expect("canonical Sgntr-wrapped SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
         let public_key = BASE64_STANDARD.encode(
             signing_key
                 .verifying_key()
                 .to_encoded_point(false)
                 .as_bytes(),
         );
-        format!(
+        let signature_xml = format!(
             concat!(
+                r#"<ds:Signature Id="sig-001">{signed_info}"#,
+                "<ds:SignatureValue>{signature_value}</ds:SignatureValue>",
                 "<ds:KeyInfo><ds:KeyValue><ds:ECKeyValue>",
-                r#"<ds:NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
+                r#"<ds:NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></ds:NamedCurve>"#,
                 "<ds:PublicKey>{public_key}</ds:PublicKey>",
-                "</ds:ECKeyValue></ds:KeyValue></ds:KeyInfo>"
+                "</ds:ECKeyValue></ds:KeyValue></ds:KeyInfo>",
+                r##"<ds:Object><xades:QualifyingProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Target="#sig-001"></xades:QualifyingProperties></ds:Object>"##,
+                "</ds:Signature>"
             ),
+            signed_info = signed_info,
+            signature_value = signature_value,
             public_key = public_key
-        )
-    }
-
-    fn test_xades_signed_properties_xml() -> String {
-        test_xades_signed_properties_xml_with_extra("")
-    }
-
-    fn test_xades_signed_properties_xml_for_key_info(key_info: &str) -> String {
-        child_text_compact(key_info, "X509Certificate")
-            .map_or_else(test_xades_signed_properties_xml, |certificate| {
-                test_xades_signed_properties_xml_for_certificate(&certificate)
-            })
-    }
-
-    fn test_xades_signed_properties_xml_for_certificate(certificate: &str) -> String {
-        test_xades_signed_properties_xml_with_extra(&test_xades_signing_certificate_v2_xml(
-            certificate,
-        ))
-    }
-
-    fn test_xades_signed_properties_xml_with_extra(
-        signed_signature_properties_extra: &str,
-    ) -> String {
-        test_xades_signed_properties_xml_with_signing_time_and_extra(
-            "2026-06-02T00:00:00Z",
-            signed_signature_properties_extra,
-        )
-    }
-
-    fn test_xades_signed_properties_xml_with_signing_time(signing_time: &str) -> String {
-        test_xades_signed_properties_xml_with_signing_time_and_extra(signing_time, "")
-    }
-
-    fn test_xades_signed_properties_xml_with_signing_time_and_extra(
-        signing_time: &str,
-        signed_signature_properties_extra: &str,
-    ) -> String {
+        );
         format!(
-            r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties><SigningTime>{signing_time}</SigningTime>{signed_signature_properties_extra}</SignedSignatureProperties></SignedProperties>"#
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
         )
     }
 
-    fn test_xades_namespaced_signed_properties_xml() -> String {
-        test_xades_namespaced_signed_properties_xml_with_extra("")
+    fn signed_pacs008_xml_with_extra_sgntr_carrier() -> String {
+        let unsigned = unsigned_pacs008_xml().replacen(
+            "</FIToFICstmrCdtTrf>",
+            "<Sgntr><SignedInfo><SignatureMethod>ignored</SignatureMethod></SignedInfo><SignatureValue>ignored</SignatureValue></Sgntr></FIToFICstmrCdtTrf>",
+            1,
+        );
+        signed_pacs008_xml_from_unsigned(unsigned, XML_C14N_1_0, false, true)
     }
 
-    fn test_xades_namespaced_signed_properties_xml_with_extra(
-        signed_signature_properties_extra: &str,
-    ) -> String {
+    fn signed_pacs008_xml_with_same_document_reference() -> String {
+        let reference_id = "doc-001";
+        let unsigned = unsigned_pacs008_xml_with_document_id(reference_id);
+        signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+            unsigned,
+            XML_C14N_1_0,
+            &format!("#{reference_id}"),
+            false,
+            true,
+            XmlSignatureValueEncoding::Der,
+        )
+    }
+
+    fn signed_pacs008_xml_with_inherited_namespace_same_document_reference() -> String {
+        let reference_id = "doc-001";
+        let unsigned =
+            unsigned_pacs008_xml_with_inherited_default_namespace_reference_id(reference_id);
+        signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+            unsigned,
+            XML_C14N_1_0,
+            &format!("#{reference_id}"),
+            false,
+            true,
+            XmlSignatureValueEncoding::Der,
+        )
+    }
+
+    fn signed_pacs008_xml_with_header_only_same_document_reference() -> String {
+        let reference_id = "grp-header-001";
+        let unsigned = unsigned_pacs008_xml().replacen(
+            "<GrpHdr>",
+            &format!(r#"<GrpHdr Id="{reference_id}">"#),
+            1,
+        );
+        signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+            unsigned,
+            XML_C14N_1_0,
+            &format!("#{reference_id}"),
+            false,
+            true,
+            XmlSignatureValueEncoding::Der,
+        )
+    }
+
+    fn signed_pacs008_xml_with_reference_c14n_transform() -> String {
+        let reference_id = "doc-001";
+        let unsigned =
+            unsigned_pacs008_xml_with_inherited_unused_namespace_reference_id(reference_id);
+        signed_pacs008_xml_from_unsigned_with_reference_options(
+            unsigned,
+            XML_C14N_1_0,
+            &format!("#{reference_id}"),
+            false,
+            true,
+            XmlSignatureValueEncoding::Der,
+            Some(XML_C14N_1_0),
+        )
+    }
+
+    fn signed_pacs008_xml_with_extra_reference_transform() -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let supported_transform =
+            format!(r#"<Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform>"#);
+        let signed_info = signed_info_xml(XML_C14N_1_0, &digest, false).replace(
+            &supported_transform,
+            &format!(
+                r#"{supported_transform}<Transform Algorithm="urn:unsupported-transform"></Transform>"#
+            ),
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical transformed SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
         format!(
-            r#"<xades:SignedProperties Id="xades-signed-props-001"><xades:SignedSignatureProperties><xades:SigningTime>2026-06-02T00:00:00Z</xades:SigningTime>{signed_signature_properties_extra}</xades:SignedSignatureProperties></xades:SignedProperties>"#
-        )
-    }
-
-    fn test_xades_signing_certificate_v2_xml(certificate: &str) -> String {
-        test_xades_signing_certificate_v2_xml_with_cert_extra(certificate, "")
-    }
-
-    fn test_xades_signing_certificate_v2_xml_with_cert_extra(
-        certificate: &str,
-        cert_extra: &str,
-    ) -> String {
-        let certificate_der = BASE64_STANDARD
-            .decode(certificate)
-            .expect("X.509 certificate fixture must decode");
-        let digest = BASE64_STANDARD.encode(Sha256::digest(&certificate_der));
-        format!(
-            r#"<SigningCertificateV2><Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></CertDigest>{cert_extra}</Cert></SigningCertificateV2>"#
-        )
-    }
-
-    fn test_xades_qualifying_properties_xml(signed_properties_xml: &str) -> String {
-        format!(
-            r##"<QualifyingProperties Target="#sig-001">{signed_properties_xml}</QualifyingProperties>"##
-        )
-    }
-
-    fn test_xades_object_xml(signed_properties_xml: &str) -> String {
-        format!(
-            "<Object>{}</Object>",
-            test_xades_qualifying_properties_xml(signed_properties_xml)
-        )
-    }
-
-    fn test_xades_namespaced_object_xml(signed_properties_xml: &str) -> String {
-        format!(
-            r##"<ds:Object><xades:QualifyingProperties Target="#sig-001">{signed_properties_xml}</xades:QualifyingProperties></ds:Object>"##
-        )
-    }
-
-    fn test_xades_signed_properties_reference_xml(
-        uri: &str,
-        reference_type: &str,
-        digest: &str,
-    ) -> String {
-        format!(
-            r#"<Reference URI="{uri}" Type="{reference_type}"><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference>"#
-        )
-    }
-
-    fn test_xades_default_signed_properties_reference_xml() -> String {
-        let signed_properties_xml = test_xades_signed_properties_xml();
-        test_xades_signed_properties_reference_for_xml(&signed_properties_xml)
-    }
-
-    fn test_xades_signed_properties_reference_for_xml(signed_properties_xml: &str) -> String {
-        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
-        test_xades_signed_properties_reference_xml(
-            "#xades-signed-props-001",
-            XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
-            &digest,
-        )
-    }
-
-    fn test_xades_namespaced_signed_properties_reference_for_xml(
-        signed_properties_xml: &str,
-    ) -> String {
-        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
-        format!(
-            r##"<ds:Reference URI="#xades-signed-props-001" Type="{XADES_SIGNED_PROPERTIES_REFERENCE_TYPE}"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"/><ds:DigestValue>{digest}</ds:DigestValue></ds:Reference>"##
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
         )
     }
 
@@ -6244,35 +9669,57 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_x509_certificate_chain() -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let leaf_der = BASE64_STANDARD
+            .decode(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64)
+            .expect("chain leaf certificate DER");
+        let signed_properties_id = "signed-props-001";
+        let (signed_properties, _) =
+            signed_properties_xml_with_signing_certificate_v2(signed_properties_id, &leaf_der);
+        let canonical_signed_properties =
+            canonicalize_supported_xml(&signed_properties).expect("canonical SignedProperties");
+        let signed_properties_digest =
+            BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        let signed_info = signed_info_xml_with_signed_properties_reference(
+            XML_C14N_1_0,
+            &payload_digest,
+            signed_properties_id,
+            &signed_properties_digest,
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
         let signing_key = test_x509_chain_leaf_signing_key();
-        signed_pacs008_xml_with_key_info(&signing_key, &test_x509_chain_key_info())
-    }
-
-    fn test_x509_chain_key_info() -> String {
-        format!(
+        let signature: P256Signature = signing_key.sign(canonical_signed_info.as_bytes());
+        let signature = low_s_p256_signature(signature);
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let signature_xml = format!(
             concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
                 "<KeyInfo><X509Data>",
                 "<X509Certificate>{leaf}</X509Certificate>",
                 "<X509Certificate>{root}</X509Certificate>",
-                "</X509Data></KeyInfo>"
+                "</X509Data></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                "{signed_properties}",
+                "</QualifyingProperties></Object>",
+                "</Signature>"
             ),
+            signed_info = signed_info,
+            signature_value = signature_value,
             leaf = TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
-            root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64
-        )
-    }
-
-    fn signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
-        signed_properties_xml: &str,
-    ) -> String {
-        let signing_key = test_x509_chain_leaf_signing_key();
-        let signed_properties_reference_xml =
-            test_xades_signed_properties_reference_for_xml(signed_properties_xml);
-        let xades_object_xml = test_xades_object_xml(signed_properties_xml);
-        signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_x509_chain_key_info(),
-            &signed_properties_reference_xml,
-            &xades_object_xml,
+            root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64,
+            signed_properties = signed_properties
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
         )
     }
 
@@ -6559,11 +10006,21 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_crl_x509_certificate_chain(embedded_crl: Option<&str>) -> String {
+        signed_pacs008_xml_with_crl_x509_certificate_chain_at(
+            embedded_crl,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_crl_x509_certificate_chain_at(
+        embedded_crl: Option<&str>,
+        signing_time: &str,
+    ) -> String {
         let signing_key = test_x509_crl_leaf_signing_key();
         let crl_xml = embedded_crl
             .map(|crl| format!("<X509CRL>{crl}</X509CRL>"))
             .unwrap_or_default();
-        signed_pacs008_xml_with_key_info(
+        signed_pacs008_xml_with_key_info_at(
             &signing_key,
             &format!(
                 concat!(
@@ -6577,6 +10034,7 @@ mod tests {
                 root = TEST_X509_CRL_ROOT_CERTIFICATE_DER_B64,
                 crl_xml = crl_xml
             ),
+            signing_time,
         )
     }
 
@@ -6618,11 +10076,21 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_ocsp_x509_certificate_chain(embedded_ocsp: Option<&str>) -> String {
+        signed_pacs008_xml_with_ocsp_x509_certificate_chain_at(
+            embedded_ocsp,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_ocsp_x509_certificate_chain_at(
+        embedded_ocsp: Option<&str>,
+        signing_time: &str,
+    ) -> String {
         let signing_key = test_x509_ocsp_leaf_signing_key();
         let ocsp_xml = embedded_ocsp
             .map(|ocsp| format!("<EncapsulatedOCSPValue>{ocsp}</EncapsulatedOCSPValue>"))
             .unwrap_or_default();
-        signed_pacs008_xml_with_key_info(
+        signed_pacs008_xml_with_key_info_at(
             &signing_key,
             &format!(
                 concat!(
@@ -6636,6 +10104,7 @@ mod tests {
                 root = TEST_X509_OCSP_ROOT_CERTIFICATE_DER_B64,
                 ocsp_xml = ocsp_xml
             ),
+            signing_time,
         )
     }
 
@@ -6674,15 +10143,415 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_key_info(signing_key: &P256SigningKey, key_info: &str) -> String {
-        let signed_properties_xml = test_xades_signed_properties_xml_for_key_info(key_info);
-        let signed_properties_reference_xml =
-            test_xades_signed_properties_reference_for_xml(&signed_properties_xml);
-        let xades_object_xml = test_xades_object_xml(&signed_properties_xml);
+        signed_pacs008_xml_with_key_info_at(signing_key, key_info, XML_SIGNATURE_TEST_SIGNING_TIME)
+    }
+
+    fn signed_pacs008_xml_with_key_info_at(
+        signing_key: &P256SigningKey,
+        key_info: &str,
+        signing_time: &str,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_properties_id = "signed-props-001";
+        let signed_properties = xml_signature_x509_certificates(key_info)
+            .ok()
+            .and_then(|certificates| certificates.first().cloned())
+            .map(|leaf_der| {
+                signed_properties_xml_with_signing_certificate_v2_at(
+                    signed_properties_id,
+                    &leaf_der,
+                    signing_time,
+                )
+                .0
+            });
+        let signed_info = if let Some(signed_properties) = signed_properties.as_ref() {
+            let canonical_signed_properties =
+                canonicalize_supported_xml(signed_properties).expect("canonical SignedProperties");
+            let signed_properties_digest =
+                BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+            signed_info_xml_with_signed_properties_reference(
+                XML_C14N_1_0,
+                &payload_digest,
+                signed_properties_id,
+                &signed_properties_digest,
+            )
+        } else {
+            signed_info_xml(XML_C14N_1_0, &payload_digest, false)
+        };
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signature: P256Signature = signing_key.sign(canonical_signed_info.as_bytes());
+        let signature = low_s_p256_signature(signature);
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let qualifying_properties = if let Some(signed_properties) = signed_properties {
+            format!(
+                r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties}</QualifyingProperties></Object>"##
+            )
+        } else {
+            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##
+                .to_owned()
+        };
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "{key_info}",
+                "{qualifying_properties}",
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            key_info = key_info,
+            qualifying_properties = qualifying_properties
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_signed_info_rewrite(
+        rewrite_signed_info: impl FnOnce(String) -> String,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = rewrite_signed_info(signed_info_xml(XML_C14N_1_0, &digest, false));
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical rewritten SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_signed_properties_reference() -> String {
+        let signed_properties_id = "signed-props-001";
+        let signed_properties = signed_properties_xml(signed_properties_id);
+        signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
+    }
+
+    fn signed_pacs008_xml_with_prefixed_xades_signed_properties() -> String {
+        let signed_properties_id = "signed-props-001";
+        let signed_properties = signed_properties_xml_prefixed(signed_properties_id, XADES_NS);
+        signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
+    }
+
+    fn signed_pacs008_xml_with_wrong_prefixed_xades_namespace() -> String {
+        let signed_properties_id = "signed-props-001";
+        let signed_properties =
+            signed_properties_xml_prefixed(signed_properties_id, "urn:not-xades");
+        signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
+    }
+
+    fn signed_pacs008_xml_with_wrong_default_xades_namespace() -> String {
+        let signed_properties_id = "signed-props-001";
+        let signed_properties =
+            signed_properties_xml_with_default_namespace(signed_properties_id, "urn:not-xades");
+        signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties)
+            .replacen(
+                r##"<QualifyingProperties Target="#sig-001">"##,
+                r##"<QualifyingProperties xmlns="urn:not-xades" Target="#sig-001">"##,
+                1,
+            )
+    }
+
+    fn signed_pacs008_xml_with_signed_properties(
+        signed_properties_id: &str,
+        signed_properties: &str,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let canonical_signed_properties =
+            canonicalize_supported_xml(signed_properties).expect("canonical SignedProperties");
+        let signed_properties_digest =
+            BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        let signed_info = signed_info_xml_with_signed_properties_reference(
+            XML_C14N_1_0,
+            &payload_digest,
+            signed_properties_id,
+            &signed_properties_digest,
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                "{signed_properties}",
+                "</QualifyingProperties></Object>",
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key,
+            signed_properties = signed_properties
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_properties_xml(id: &str) -> String {
+        format!(
+            concat!(
+                r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                "<SigningTime>{signing_time}</SigningTime>",
+                "</SignedSignatureProperties></SignedProperties>"
+            ),
+            id = id,
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+        )
+    }
+
+    fn signed_properties_xml_prefixed(id: &str, xades_namespace: &str) -> String {
+        format!(
+            concat!(
+                r#"<xades:SignedProperties xmlns:xades="{xades_namespace}" Id="{id}">"#,
+                "<xades:SignedSignatureProperties>",
+                "<xades:SigningTime>{signing_time}</xades:SigningTime>",
+                "</xades:SignedSignatureProperties>",
+                "</xades:SignedProperties>"
+            ),
+            id = id,
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            xades_namespace = xades_namespace
+        )
+    }
+
+    fn signed_properties_xml_with_default_namespace(id: &str, xades_namespace: &str) -> String {
+        format!(
+            concat!(
+                r#"<SignedProperties xmlns="{xades_namespace}" Id="{id}">"#,
+                "<SignedSignatureProperties>",
+                "<SigningTime>{signing_time}</SigningTime>",
+                "</SignedSignatureProperties>",
+                "</SignedProperties>"
+            ),
+            id = id,
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            xades_namespace = xades_namespace
+        )
+    }
+
+    fn signed_properties_xml_with_signing_certificate_v2(
+        id: &str,
+        leaf_der: &[u8],
+    ) -> (String, String) {
+        signed_properties_xml_with_signing_certificate_v2_at(
+            id,
+            leaf_der,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_properties_xml_with_signing_certificate_v2_at(
+        id: &str,
+        leaf_der: &[u8],
+        signing_time: &str,
+    ) -> (String, String) {
+        let leaf_digest = BASE64_STANDARD.encode(Sha256::digest(leaf_der));
+        (
+            format!(
+                concat!(
+                    r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                    "<SigningTime>{signing_time}</SigningTime>",
+                    "<SigningCertificateV2><Cert><CertDigest>",
+                    r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                    "<DigestValue>{leaf_digest}</DigestValue>",
+                    "</CertDigest></Cert></SigningCertificateV2>",
+                    "</SignedSignatureProperties></SignedProperties>"
+                ),
+                id = id,
+                signing_time = signing_time,
+                sha256 = XMLDSIG_SHA256,
+                leaf_digest = leaf_digest
+            ),
+            leaf_digest,
+        )
+    }
+
+    fn test_xades_signed_properties_xml() -> String {
+        signed_properties_xml("signed-props-001")
+    }
+
+    fn test_xades_signed_properties_xml_for_certificate(certificate_der_b64: &str) -> String {
+        let certificate_der = BASE64_STANDARD
+            .decode(certificate_der_b64)
+            .expect("XAdES certificate fixture must decode");
+        signed_properties_xml_with_signing_certificate_v2("signed-props-001", &certificate_der).0
+    }
+
+    fn test_xades_signing_certificate_v2_xml(certificate_der_b64: &str) -> String {
+        test_xades_signing_certificate_v2_xml_with_cert_extra(certificate_der_b64, "")
+    }
+
+    fn test_xades_signing_certificate_v2_xml_with_cert_extra(
+        certificate_der_b64: &str,
+        cert_extra: &str,
+    ) -> String {
+        let certificate_der = BASE64_STANDARD
+            .decode(certificate_der_b64)
+            .expect("XAdES certificate fixture must decode");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(&certificate_der));
+        format!(
+            concat!(
+                "<SigningCertificateV2><Cert><CertDigest>",
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                "<DigestValue>{digest}</DigestValue>",
+                "</CertDigest>{cert_extra}</Cert></SigningCertificateV2>"
+            ),
+            sha256 = XMLDSIG_SHA256,
+            digest = digest,
+            cert_extra = cert_extra
+        )
+    }
+
+    fn test_xades_signed_properties_xml_with_extra(extra: &str) -> String {
+        format!(
+            concat!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties>"#,
+                "<SigningTime>{signing_time}</SigningTime>",
+                "{extra}",
+                "</SignedSignatureProperties></SignedProperties>"
+            ),
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            extra = extra
+        )
+    }
+
+    fn signed_properties_id_from_xml(signed_properties_xml: &str) -> &str {
+        let start = signed_properties_xml
+            .find(r#"Id=""#)
+            .map(|index| index + r#"Id=""#.len())
+            .expect("SignedProperties Id attribute");
+        let end = signed_properties_xml[start..]
+            .find('"')
+            .map(|index| start + index)
+            .expect("SignedProperties Id closing quote");
+        &signed_properties_xml[start..end]
+    }
+
+    fn test_xades_signed_properties_reference_for_xml(signed_properties_xml: &str) -> String {
+        let signed_properties_id = signed_properties_id_from_xml(signed_properties_xml);
+        let canonical_signed_properties =
+            canonicalize_supported_xml(signed_properties_xml).expect("canonical SignedProperties");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        format!(
+            concat!(
+                r##"<Reference URI="#{signed_properties_id}" Type="{signed_properties_type}">"##,
+                r#"<Transforms><Transform Algorithm="{exclusive_c14n}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                "<DigestValue>{digest}</DigestValue></Reference>"
+            ),
+            signed_properties_id = signed_properties_id,
+            signed_properties_type = XADES_SIGNED_PROPERTIES_TYPE,
+            exclusive_c14n = XML_EXCLUSIVE_C14N_1_0,
+            sha256 = XMLDSIG_SHA256,
+            digest = digest
+        )
+    }
+
+    fn test_xades_object_xml(signed_properties_xml: &str) -> String {
+        format!(
+            r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties_xml}</QualifyingProperties></Object>"##
+        )
+    }
+
+    fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        format!(
+            concat!(
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="{named_curve}"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>"
+            ),
+            named_curve = XMLDSIG_P256_NAMED_CURVE,
+            public_key = public_key
+        )
+    }
+
+    fn signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+        signed_properties_xml: &str,
+    ) -> String {
+        let signed_properties_reference =
+            test_xades_signed_properties_reference_for_xml(signed_properties_xml);
+        let xades_object = test_xades_object_xml(signed_properties_xml);
+        let key_info = format!(
+            concat!(
+                "<KeyInfo><X509Data>",
+                "<X509Certificate>{leaf}</X509Certificate>",
+                "<X509Certificate>{root}</X509Certificate>",
+                "</X509Data></KeyInfo>"
+            ),
+            leaf = TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+            root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64
+        );
         signed_pacs008_xml_with_key_info_and_xades_parts(
-            signing_key,
-            key_info,
-            &signed_properties_reference_xml,
-            &xades_object_xml,
+            &test_x509_chain_leaf_signing_key(),
+            &key_info,
+            &signed_properties_reference,
+            &xades_object,
         )
     }
 
@@ -6696,36 +10565,30 @@ mod tests {
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
             .expect("signature insertion point");
-        let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
         let signed_info = format!(
             concat!(
-                r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/>"#,
-                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/>"#,
-                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>"#,
-                r#"</Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/>"#,
-                r#"<DigestValue>{digest}</DigestValue></Reference>"#,
-                "{signed_properties_reference_xml}</SignedInfo>"
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n}"></CanonicalizationMethod>"#,
+                r#"<SignatureMethod Algorithm="{ecdsa_sha256}"></SignatureMethod>"#,
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{enveloped_signature}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod><DigestValue>{payload_digest}</DigestValue></Reference>"#,
+                "{signed_properties_reference_xml}",
+                "</SignedInfo>"
             ),
-            XML_C14N_1_0 = XML_C14N_1_0,
-            XMLDSIG_ECDSA_SHA256 = XMLDSIG_ECDSA_SHA256,
-            XMLDSIG_ENVELOPED_SIGNATURE = XMLDSIG_ENVELOPED_SIGNATURE,
-            XMLDSIG_SHA256 = XMLDSIG_SHA256,
-            digest = digest,
+            c14n = XML_C14N_1_0,
+            ecdsa_sha256 = XMLDSIG_ECDSA_SHA256,
+            enveloped_signature = XMLDSIG_ENVELOPED_SIGNATURE,
+            sha256 = XMLDSIG_SHA256,
+            payload_digest = payload_digest,
             signed_properties_reference_xml = signed_properties_reference_xml
         );
-        let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
         let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
         let signature_xml = format!(
-            concat!(
-                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
-                "{key_info}",
-                "{xades_object_xml}",
-                "</Signature>"
-            ),
-            signed_info = signed_info,
-            signature_value = signature_value,
-            key_info = key_info,
-            xades_object_xml = xades_object_xml
+            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>{key_info}{xades_object_xml}</Signature>"#
         );
         format!(
             "{}{}{}",
@@ -6735,47 +10598,175 @@ mod tests {
         )
     }
 
-    fn signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
-        signing_key: &P256SigningKey,
-        key_info: &str,
-        signed_properties_reference_xml: &str,
-        xades_object_xml: &str,
+    fn signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+        id: &str,
+        digests: &[[u8; 32]],
     ) -> String {
+        let certs = digests
+            .iter()
+            .map(|digest| {
+                let digest = BASE64_STANDARD.encode(digest);
+                format!(
+                    concat!(
+                        "<Cert><CertDigest>",
+                        r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                        "<DigestValue>{digest}</DigestValue>",
+                        "</CertDigest></Cert>"
+                    ),
+                    sha256 = XMLDSIG_SHA256,
+                    digest = digest
+                )
+            })
+            .collect::<String>();
+        format!(
+            concat!(
+                r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                "<SigningTime>{signing_time}</SigningTime>",
+                "<SigningCertificateV2>{certs}</SigningCertificateV2>",
+                "</SignedSignatureProperties></SignedProperties>"
+            ),
+            id = id,
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            certs = certs
+        )
+    }
+
+    struct CertificateChainSignedPropertiesPayload {
+        payload: String,
+        issuer_sha256: String,
+        signing_certificate_digest: String,
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_signed_properties_reference()
+    -> CertificateChainSignedPropertiesPayload {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
             .expect("signature insertion point");
-        let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
-        let signed_info = format!(
-            concat!(
-                r#"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/>"#,
-                r#"<ds:SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/>"#,
-                r#"<ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>"#,
-                r#"</ds:Transforms><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"/>"#,
-                r#"<ds:DigestValue>{digest}</ds:DigestValue></ds:Reference>"#,
-                "{signed_properties_reference_xml}</ds:SignedInfo>"
-            ),
-            XML_C14N_1_0 = XML_C14N_1_0,
-            XMLDSIG_ECDSA_SHA256 = XMLDSIG_ECDSA_SHA256,
-            XMLDSIG_ENVELOPED_SIGNATURE = XMLDSIG_ENVELOPED_SIGNATURE,
-            XMLDSIG_SHA256 = XMLDSIG_SHA256,
-            digest = digest,
-            signed_properties_reference_xml = signed_properties_reference_xml
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer_sha256 = sha256_hex(issuer_cert.der().as_ref());
+        let issuer = Issuer::from_params(&issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+        let signed_properties_id = "signed-props-001";
+        let (signed_properties, signing_certificate_digest) =
+            signed_properties_xml_with_signing_certificate_v2(
+                signed_properties_id,
+                leaf_cert.der().as_ref(),
+            );
+        let canonical_signed_properties =
+            canonicalize_supported_xml(&signed_properties).expect("canonical SignedProperties");
+        let signed_properties_digest =
+            BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        let signed_info = signed_info_xml_with_signed_properties_reference(
+            XML_C14N_1_0,
+            &payload_digest,
+            signed_properties_id,
+            &signed_properties_digest,
         );
-        let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
-        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signature = leaf_key
+            .sign(canonical_signed_info.as_bytes())
+            .expect("leaf XMLDSig signature");
+        let signature_value =
+            BASE64_STANDARD.encode(low_s_p256_signature_der_from_bytes(&signature));
+        let leaf_certificate = BASE64_STANDARD.encode(leaf_cert.der().as_ref());
+        let issuer_certificate = BASE64_STANDARD.encode(issuer_cert.der().as_ref());
         let signature_xml = format!(
             concat!(
-                r#"<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Id="sig-001">"#,
-                "{signed_info}<ds:SignatureValue>{signature_value}</ds:SignatureValue>",
-                "{key_info}",
-                "{xades_object_xml}",
-                "</ds:Signature>"
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "<KeyInfo><X509Data>",
+                "<X509Certificate>{leaf_certificate}</X509Certificate>",
+                "<X509Certificate>{issuer_certificate}</X509Certificate>",
+                "</X509Data></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                "{signed_properties}",
+                "</QualifyingProperties></Object>",
+                "</Signature>"
             ),
             signed_info = signed_info,
             signature_value = signature_value,
-            key_info = key_info,
-            xades_object_xml = xades_object_xml
+            leaf_certificate = leaf_certificate,
+            issuer_certificate = issuer_certificate,
+            signed_properties = signed_properties
+        );
+        CertificateChainSignedPropertiesPayload {
+            payload: format!(
+                "{}{}{}",
+                &unsigned[..insertion],
+                signature_xml,
+                &unsigned[insertion..]
+            ),
+            issuer_sha256,
+            signing_certificate_digest,
+        }
+    }
+
+    fn signed_pacs008_xml_with_comments() -> String {
+        let unsigned = unsigned_pacs008_xml_with_comments();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned =
+            canonicalize_supported_xml(&unsigned).expect("canonical commented payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml(XML_C14N_1_0, &digest, false)
+            .replace("<Reference", "<!--signed-info comment--><Reference")
+            .replace("</SignedInfo>", "<!--signed-info tail--></SignedInfo>");
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical commented SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
         );
         format!(
             "{}{}{}",
@@ -6783,6 +10774,1303 @@ mod tests {
             signature_xml,
             &unsigned[insertion..]
         )
+    }
+
+    fn unsigned_pacs008_xml_with_comments() -> String {
+        unsigned_pacs008_xml()
+            .replace(
+                "<FIToFICstmrCdtTrf>",
+                "<!--document comment--><FIToFICstmrCdtTrf><!--payment comment-->",
+            )
+            .replace(
+                "<MsgId>sig-001</MsgId>",
+                "<!--group header comment--><MsgId>sig-001</MsgId>",
+            )
+            .replace(
+                "</CdtTrfTxInf>",
+                "<!--transaction tail comment--></CdtTrfTxInf>",
+            )
+    }
+
+    fn signed_pacs008_xml_with_character_reference_message_id() -> String {
+        signed_pacs008_xml_from_unsigned(
+            unsigned_pacs008_xml_with_message_id("sig&amp;001"),
+            XML_C14N_1_0,
+            false,
+            true,
+        )
+    }
+
+    fn unsigned_pacs008_xml_with_xml_namespace_attribute() -> String {
+        unsigned_pacs008_xml().replace("<GrpHdr>", r#"<GrpHdr xml:lang="en">"#)
+    }
+
+    fn unsigned_pacs008_xml_with_prefixed_attribute() -> String {
+        unsigned_pacs008_xml().replace(
+            "<GrpHdr>",
+            r#"<GrpHdr xmlns:pay="urn:iso:test:pay" pay:scope="retail">"#,
+        )
+    }
+
+    fn signed_pacs008_xml_with_xml_namespace_attribute() -> String {
+        signed_pacs008_xml_from_unsigned(
+            unsigned_pacs008_xml_with_xml_namespace_attribute(),
+            XML_C14N_1_0,
+            false,
+            true,
+        )
+    }
+
+    fn signed_pacs008_xml_with_prefixed_attribute() -> String {
+        signed_pacs008_xml_from_unsigned(
+            unsigned_pacs008_xml_with_prefixed_attribute(),
+            XML_C14N_1_0,
+            false,
+            true,
+        )
+    }
+
+    fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml(XML_C14N_1_0, &digest, false).replacen(
+            "<SignedInfo>",
+            r#"<SignedInfo xml:lang="en">"#,
+            1,
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical xml-attribute SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml(XML_EXCLUSIVE_C14N_1_0, &digest, false).replacen(
+            "<SignedInfo>",
+            r#"<SignedInfo ext:role="authorization">"#,
+            1,
+        );
+        let inherited_namespaces = vec![CanonicalXmlAttribute {
+            name: "xmlns:ext".to_owned(),
+            value: "urn:iso:test:ext".to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        let canonical_signed_info = canonicalize_supported_xml_with_mode(
+            &signed_info,
+            &inherited_namespaces,
+            CanonicalXmlMode::Exclusive,
+        )
+        .expect("canonical inherited prefixed-attribute SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature xmlns:ext="urn:iso:test:ext">{signed_info}"#,
+                "<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_prefixed_signature_namespace() -> String {
+        signed_pacs008_xml_with_prefixed_signature_namespace_options(XML_C14N_1_0, false, true)
+    }
+
+    fn signed_pacs008_xml_with_wrong_prefixed_signature_namespace() -> String {
+        signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
+            XML_C14N_1_0,
+            false,
+            true,
+            "urn:not-xmldsig",
+        )
+    }
+
+    fn signed_pacs008_xml_with_wrong_default_signature_namespace() -> String {
+        signed_pacs008_xml_with_default_signature_namespace("urn:not-xmldsig")
+    }
+
+    fn signed_pacs008_xml_with_default_signature_namespace(xmldsig_namespace: &str) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml(XML_C14N_1_0, &digest, false);
+        let inherited_namespaces = [CanonicalXmlAttribute {
+            name: "xmlns".to_owned(),
+            value: xmldsig_namespace.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        let canonical_signed_info = canonicalize_supported_xml_with_mode(
+            &signed_info,
+            &inherited_namespaces,
+            CanonicalXmlMode::Inclusive,
+        )
+        .expect("canonical default-namespaced SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature xmlns="{xmldsig_ns}" Id="sig-001">{signed_info}"#,
+                "<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "</Signature>"
+            ),
+            xmldsig_ns = xmldsig_namespace,
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_inclusive_unused_signature_namespace() -> String {
+        signed_pacs008_xml_with_prefixed_signature_namespace_options(XML_C14N_1_0, true, true)
+    }
+
+    fn signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive() -> String {
+        signed_pacs008_xml_with_prefixed_signature_namespace_options(XML_C14N_1_0, true, false)
+    }
+
+    fn signed_pacs008_xml_with_prefixed_signature_namespace_options(
+        c14n_algorithm: &str,
+        include_unused_namespace: bool,
+        sign_with_declared_c14n_mode: bool,
+    ) -> String {
+        signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
+            c14n_algorithm,
+            include_unused_namespace,
+            sign_with_declared_c14n_mode,
+            XMLDSIG_NS,
+        )
+    }
+
+    fn signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
+        c14n_algorithm: &str,
+        include_unused_namespace: bool,
+        sign_with_declared_c14n_mode: bool,
+        xmldsig_namespace: &str,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = signed_info_xml_prefixed(c14n_algorithm, &digest);
+        let mut inherited_namespaces = vec![CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: xmldsig_namespace.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        if include_unused_namespace {
+            inherited_namespaces.push(CanonicalXmlAttribute {
+                name: "xmlns:unused".to_owned(),
+                value: "urn:unused".to_owned(),
+                kind: CanonicalXmlAttributeKind::Namespace,
+            });
+        }
+        let signing_mode = if sign_with_declared_c14n_mode {
+            xml_canonicalization_mode(c14n_algorithm).expect("test canonicalization algorithm")
+        } else {
+            CanonicalXmlMode::Exclusive
+        };
+        let canonical_signed_info =
+            canonicalize_supported_xml_with_mode(&signed_info, &inherited_namespaces, signing_mode)
+                .expect("canonical prefixed SignedInfo");
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                r#"<ds:Signature xmlns:ds="{xmldsig_ns}"{unused_namespace}>{signed_info}"#,
+                "<ds:SignatureValue>{signature_value}</ds:SignatureValue>",
+                "<ds:KeyInfo><ds:KeyValue><ds:ECKeyValue>",
+                r#"<ds:NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></ds:NamedCurve>"#,
+                "<ds:PublicKey>{public_key}</ds:PublicKey>",
+                "</ds:ECKeyValue></ds:KeyValue></ds:KeyInfo>",
+                r##"<ds:Object><xades:QualifyingProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Target="#sig-001"></xades:QualifyingProperties></ds:Object>"##,
+                "</ds:Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key,
+            xmldsig_ns = xmldsig_namespace,
+            unused_namespace = if include_unused_namespace {
+                r#" xmlns:unused="urn:unused""#
+            } else {
+                ""
+            }
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_c14n_algorithm_and_signed_info_style(
+        c14n_algorithm: &str,
+        self_closing_signed_info_methods: bool,
+    ) -> String {
+        signed_pacs008_xml_with_c14n_algorithm_and_signed_info_options(
+            c14n_algorithm,
+            self_closing_signed_info_methods,
+            true,
+        )
+    }
+
+    fn signed_pacs008_xml_with_c14n_algorithm_and_signed_info_options(
+        c14n_algorithm: &str,
+        self_closing_signed_info_methods: bool,
+        sign_canonical_signed_info: bool,
+    ) -> String {
+        signed_pacs008_xml_from_unsigned(
+            unsigned_pacs008_xml(),
+            c14n_algorithm,
+            self_closing_signed_info_methods,
+            sign_canonical_signed_info,
+        )
+    }
+
+    fn signed_pacs008_xml_from_unsigned(
+        unsigned: String,
+        c14n_algorithm: &str,
+        self_closing_signed_info_methods: bool,
+        sign_canonical_signed_info: bool,
+    ) -> String {
+        signed_pacs008_xml_from_unsigned_with_signature_encoding(
+            unsigned,
+            c14n_algorithm,
+            self_closing_signed_info_methods,
+            sign_canonical_signed_info,
+            XmlSignatureValueEncoding::Der,
+        )
+    }
+
+    fn signed_pacs008_xml_from_unsigned_with_signature_encoding(
+        unsigned: String,
+        c14n_algorithm: &str,
+        self_closing_signed_info_methods: bool,
+        sign_canonical_signed_info: bool,
+        signature_encoding: XmlSignatureValueEncoding,
+    ) -> String {
+        signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+            unsigned,
+            c14n_algorithm,
+            "",
+            self_closing_signed_info_methods,
+            sign_canonical_signed_info,
+            signature_encoding,
+        )
+    }
+
+    fn signed_pacs008_xml_from_unsigned_with_reference_uri_and_signature_encoding(
+        unsigned: String,
+        c14n_algorithm: &str,
+        reference_uri: &str,
+        self_closing_signed_info_methods: bool,
+        sign_canonical_signed_info: bool,
+        signature_encoding: XmlSignatureValueEncoding,
+    ) -> String {
+        signed_pacs008_xml_from_unsigned_with_reference_options(
+            unsigned,
+            c14n_algorithm,
+            reference_uri,
+            self_closing_signed_info_methods,
+            sign_canonical_signed_info,
+            signature_encoding,
+            None,
+        )
+    }
+
+    fn signed_pacs008_xml_from_unsigned_with_reference_options(
+        unsigned: String,
+        c14n_algorithm: &str,
+        reference_uri: &str,
+        self_closing_signed_info_methods: bool,
+        sign_canonical_signed_info: bool,
+        signature_encoding: XmlSignatureValueEncoding,
+        reference_c14n_algorithm: Option<&str>,
+    ) -> String {
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let reference_target =
+            xml_signature_reference_target(&unsigned, reference_uri).expect("reference target");
+        let reference_c14n_mode = reference_c14n_algorithm
+            .map(xml_canonicalization_mode)
+            .transpose()
+            .expect("reference canonicalization algorithm")
+            .unwrap_or(CanonicalXmlMode::Exclusive);
+        let canonical_reference = canonicalize_supported_xml_with_mode(
+            reference_target.xml,
+            &reference_target.inherited_namespaces,
+            reference_c14n_mode,
+        )
+        .expect("canonical payload");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_reference.as_bytes()));
+        let signed_info = signed_info_xml_with_reference_options(
+            c14n_algorithm,
+            &digest,
+            reference_uri,
+            self_closing_signed_info_methods,
+            reference_c14n_algorithm,
+        );
+        let canonical_signed_info = if sign_canonical_signed_info {
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo")
+        } else {
+            signed_info.clone()
+        };
+        let signing_key = xml_signature_test_signing_key();
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = encode_p256_signature_value(&signature, signature_encoding);
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn encode_p256_signature_value(
+        signature: &P256Signature,
+        encoding: XmlSignatureValueEncoding,
+    ) -> String {
+        match encoding {
+            XmlSignatureValueEncoding::Der => BASE64_STANDARD.encode(signature.to_der().as_bytes()),
+            XmlSignatureValueEncoding::FixedWidth => {
+                BASE64_STANDARD.encode(signature.to_bytes().as_slice())
+            }
+        }
+    }
+
+    fn signed_info_xml(c14n_algorithm: &str, digest: &str, self_closing_methods: bool) -> String {
+        signed_info_xml_with_reference_uri(c14n_algorithm, digest, "", self_closing_methods)
+    }
+
+    fn signed_info_xml_with_reference_uri(
+        c14n_algorithm: &str,
+        digest: &str,
+        reference_uri: &str,
+        self_closing_methods: bool,
+    ) -> String {
+        signed_info_xml_with_reference_options(
+            c14n_algorithm,
+            digest,
+            reference_uri,
+            self_closing_methods,
+            None,
+        )
+    }
+
+    fn signed_info_xml_with_reference_options(
+        c14n_algorithm: &str,
+        digest: &str,
+        reference_uri: &str,
+        self_closing_methods: bool,
+        reference_c14n_algorithm: Option<&str>,
+    ) -> String {
+        if self_closing_methods {
+            let c14n_transform = reference_c14n_algorithm
+                .map(|algorithm| format!(r#"<Transform Algorithm="{algorithm}"/>"#))
+                .unwrap_or_default();
+            return format!(
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n_algorithm}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI="{reference_uri}"><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>{c14n_transform}</Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+            );
+        }
+        let c14n_transform = reference_c14n_algorithm
+            .map(|algorithm| format!(r#"<Transform Algorithm="{algorithm}"></Transform>"#))
+            .unwrap_or_default();
+        format!(
+            r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n_algorithm}"></CanonicalizationMethod><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod><Reference URI="{reference_uri}"><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform>{c14n_transform}</Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+        )
+    }
+
+    fn signed_info_xml_with_signed_properties_reference(
+        c14n_algorithm: &str,
+        payload_digest: &str,
+        signed_properties_id: &str,
+        signed_properties_digest: &str,
+    ) -> String {
+        format!(
+            concat!(
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n_algorithm}"></CanonicalizationMethod>"#,
+                r#"<SignatureMethod Algorithm="{ecdsa_sha256}"></SignatureMethod>"#,
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{enveloped_signature}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod><DigestValue>{payload_digest}</DigestValue></Reference>"#,
+                r##"<Reference URI="#{signed_properties_id}" Type="{signed_properties_type}">"##,
+                r#"<Transforms><Transform Algorithm="{exclusive_c14n}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod><DigestValue>{signed_properties_digest}</DigestValue></Reference>"#,
+                "</SignedInfo>"
+            ),
+            c14n_algorithm = c14n_algorithm,
+            ecdsa_sha256 = XMLDSIG_ECDSA_SHA256,
+            enveloped_signature = XMLDSIG_ENVELOPED_SIGNATURE,
+            sha256 = XMLDSIG_SHA256,
+            payload_digest = payload_digest,
+            signed_properties_id = signed_properties_id,
+            signed_properties_type = XADES_SIGNED_PROPERTIES_TYPE,
+            exclusive_c14n = XML_EXCLUSIVE_C14N_1_0,
+            signed_properties_digest = signed_properties_digest
+        )
+    }
+
+    fn signed_info_xml_prefixed(c14n_algorithm: &str, digest: &str) -> String {
+        format!(
+            r#"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{c14n_algorithm}"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></ds:SignatureMethod><ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></ds:Reference></ds:SignedInfo>"#
+        )
+    }
+
+    struct CertificateChainSignedPayload {
+        payload: String,
+        leaf_sha256: String,
+        issuer_sha256: String,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CertificateChainValidity {
+        Valid,
+        ExpiredLeaf,
+        FutureIssuer,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CertificateChainIssuerName {
+        Matching,
+        MismatchedLeafIssuer,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CertificateChainCriticalUnknownExtension {
+        Leaf,
+        Issuer,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CertificateChainCriticalUnsupportedParsedExtension {
+        Leaf,
+        Issuer,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CertificatePolicyPathMode {
+        Required,
+        AnyPolicy,
+        Wrong,
+        Missing,
+    }
+
+    #[derive(Clone, Copy)]
+    enum UnsupportedPolicyProcessingExtension {
+        PolicyMappings,
+        PolicyConstraints,
+        InhibitAnyPolicy,
+    }
+
+    #[derive(Clone, Copy)]
+    enum XmlSignatureValueEncoding {
+        Der,
+        FixedWidth,
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain() -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_policy(true, true, true)
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_policy(
+        issuer_is_ca: bool,
+        issuer_key_cert_sign: bool,
+        leaf_digital_signature: bool,
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_options(
+            issuer_is_ca,
+            issuer_key_cert_sign,
+            leaf_digital_signature,
+            CertificateChainValidity::Valid,
+            CertificateChainIssuerName::Matching,
+            false,
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_options(
+        issuer_is_ca: bool,
+        issuer_key_cert_sign: bool,
+        leaf_digital_signature: bool,
+        validity: CertificateChainValidity,
+        issuer_name: CertificateChainIssuerName,
+        leaf_is_ca: bool,
+    ) -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = if issuer_is_ca {
+            IsCa::Ca(BasicConstraints::Unconstrained)
+        } else {
+            IsCa::NoCa
+        };
+        issuer_params.not_before = match validity {
+            CertificateChainValidity::FutureIssuer => date_time_ymd(2027, 1, 1),
+            CertificateChainValidity::Valid | CertificateChainValidity::ExpiredLeaf => {
+                date_time_ymd(2020, 1, 1)
+            }
+        };
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = if issuer_key_cert_sign {
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyCertSign,
+            ]
+        } else {
+            vec![KeyUsagePurpose::DigitalSignature]
+        };
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let signing_issuer_params = match issuer_name {
+            CertificateChainIssuerName::Matching => issuer_params.clone(),
+            CertificateChainIssuerName::MismatchedLeafIssuer => {
+                let mut params = issuer_params.clone();
+                params.distinguished_name = rcgen::DistinguishedName::new();
+                params
+                    .distinguished_name
+                    .push(DnType::CommonName, "ISO Bridge Mismatched Leaf Issuer");
+                params
+            }
+        };
+        let issuer = Issuer::new(signing_issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.is_ca = if leaf_is_ca {
+            IsCa::Ca(BasicConstraints::Unconstrained)
+        } else {
+            IsCa::NoCa
+        };
+        leaf_params.key_usages = if leaf_digital_signature {
+            vec![KeyUsagePurpose::DigitalSignature]
+        } else {
+            vec![KeyUsagePurpose::KeyEncipherment]
+        };
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = match validity {
+            CertificateChainValidity::ExpiredLeaf => date_time_ymd(2024, 1, 1),
+            CertificateChainValidity::Valid | CertificateChainValidity::FutureIssuer => {
+                date_time_ymd(2030, 1, 1)
+            }
+        };
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+        intermediate_policy: CertificatePolicyPathMode,
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+            intermediate_policy,
+            None,
+        )
+    }
+
+    fn signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+        extension: UnsupportedPolicyProcessingExtension,
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+            CertificatePolicyPathMode::Required,
+            Some(extension),
+        )
+    }
+
+    fn signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+        intermediate_policy: CertificatePolicyPathMode,
+        unsupported_policy_processing_extension: Option<UnsupportedPolicyProcessingExtension>,
+    ) -> CertificateChainSignedPayload {
+        let root_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("root key");
+        let mut root_params =
+            CertificateParams::new(vec!["iso-root.example".to_owned()]).expect("root params");
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Policy Path Test Root");
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        root_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        root_params.not_before = date_time_ymd(2020, 1, 1);
+        root_params.not_after = date_time_ymd(2030, 1, 1);
+        let root_cert = root_params
+            .self_signed(&root_key)
+            .expect("root certificate");
+        let root = Issuer::new(root_params, root_key);
+
+        let intermediate_key =
+            RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("intermediate key");
+        let mut intermediate_params =
+            CertificateParams::new(vec!["iso-intermediate.example".to_owned()])
+                .expect("intermediate params");
+        intermediate_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Policy Path Test Intermediate",
+        );
+        intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        intermediate_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        intermediate_params.not_before = date_time_ymd(2020, 1, 1);
+        intermediate_params.not_after = date_time_ymd(2030, 1, 1);
+        apply_certificate_policy_extension(&mut intermediate_params, intermediate_policy);
+        if let Some(extension) = unsupported_policy_processing_extension {
+            intermediate_params
+                .custom_extensions
+                .push(unsupported_policy_processing_x509_extension(extension));
+        }
+        let intermediate_cert = intermediate_params
+            .signed_by(&intermediate_key, &root)
+            .expect("intermediate certificate");
+        let intermediate = Issuer::new(intermediate_params, intermediate_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Policy Path Test Leaf");
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        apply_certificate_policy_extension(&mut leaf_params, CertificatePolicyPathMode::Required);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &intermediate)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[
+                leaf_cert.der().as_ref(),
+                intermediate_cert.der().as_ref(),
+                root_cert.der().as_ref(),
+            ],
+        )
+    }
+
+    fn apply_certificate_policy_extension(
+        params: &mut CertificateParams,
+        policy: CertificatePolicyPathMode,
+    ) {
+        let policy_arcs = match policy {
+            CertificatePolicyPathMode::Required => Some(TEST_X509_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::AnyPolicy => Some(X509_ANY_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::Wrong => Some(TEST_X509_WRONG_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::Missing => None,
+        };
+        if let Some(policy_arcs) = policy_arcs {
+            params
+                .custom_extensions
+                .push(certificate_policies_x509_extension(&[policy_arcs]));
+        }
+    }
+
+    fn signed_pacs008_xml_with_compressed_leaf_certificate_spki() -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let compressed_leaf_spki = compressed_p256_subject_public_key_info(&leaf_key);
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&compressed_leaf_spki, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_compressed_issuer_certificate_spki() -> CertificateChainSignedPayload
+    {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let compressed_issuer_spki = compressed_p256_subject_public_key_info(&issuer_key);
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer = Issuer::new(issuer_params.clone(), issuer_key);
+        let issuer_cert = issuer_params
+            .signed_by(&compressed_issuer_spki, &issuer)
+            .expect("issuer certificate");
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    struct CompressedP256PublicKey {
+        bytes: Vec<u8>,
+    }
+
+    impl PublicKeyData for CompressedP256PublicKey {
+        fn der_bytes(&self) -> &[u8] {
+            &self.bytes
+        }
+
+        fn algorithm(&self) -> &'static SignatureAlgorithm {
+            &PKCS_ECDSA_P256_SHA256
+        }
+    }
+
+    fn compressed_p256_subject_public_key_info(key_pair: &RcgenKeyPair) -> CompressedP256PublicKey {
+        let compressed_point = P256VerifyingKey::from_sec1_bytes(key_pair.public_key_raw())
+            .expect("rcgen P-256 public key")
+            .to_encoded_point(true);
+        CompressedP256PublicKey {
+            bytes: compressed_point.as_bytes().to_vec(),
+        }
+    }
+
+    fn signed_pacs008_xml_with_three_certificate_chain(
+        root_path_len: u8,
+    ) -> CertificateChainSignedPayload {
+        let root_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("root key");
+        let mut root_params =
+            CertificateParams::new(vec!["iso-root.example".to_owned()]).expect("root params");
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Root");
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(root_path_len));
+        root_params.not_before = date_time_ymd(2020, 1, 1);
+        root_params.not_after = date_time_ymd(2030, 1, 1);
+        root_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let root_cert = root_params
+            .self_signed(&root_key)
+            .expect("root certificate");
+        let root_issuer = Issuer::new(root_params, root_key);
+
+        let intermediate_key =
+            RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("intermediate key");
+        let mut intermediate_params =
+            CertificateParams::new(vec!["iso-intermediate.example".to_owned()])
+                .expect("intermediate params");
+        intermediate_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Intermediate");
+        intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        intermediate_params.not_before = date_time_ymd(2020, 1, 1);
+        intermediate_params.not_after = date_time_ymd(2030, 1, 1);
+        intermediate_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let intermediate_cert = intermediate_params
+            .signed_by(&intermediate_key, &root_issuer)
+            .expect("intermediate certificate");
+        let intermediate_issuer = Issuer::new(intermediate_params, intermediate_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &intermediate_issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[
+                leaf_cert.der().as_ref(),
+                intermediate_cert.der().as_ref(),
+                root_cert.der().as_ref(),
+            ],
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_material(
+        leaf_key: &RcgenKeyPair,
+        certificates_der: &[&[u8]],
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            leaf_key,
+            certificates_der,
+            "",
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+        leaf_key: &RcgenKeyPair,
+        certificates_der: &[&[u8]],
+        extra_x509_data_xml: &str,
+        signing_time: &str,
+    ) -> CertificateChainSignedPayload {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+
+        let signed_properties_id = "signed-props-001";
+        let (signed_properties, _) = signed_properties_xml_with_signing_certificate_v2_at(
+            signed_properties_id,
+            certificates_der[0],
+            signing_time,
+        );
+        let canonical_signed_properties =
+            canonicalize_supported_xml(&signed_properties).expect("canonical SignedProperties");
+        let signed_properties_digest =
+            BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        let signed_info = signed_info_xml_with_signed_properties_reference(
+            XML_C14N_1_0,
+            &payload_digest,
+            signed_properties_id,
+            &signed_properties_digest,
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signature = leaf_key
+            .sign(canonical_signed_info.as_bytes())
+            .expect("leaf XMLDSig signature");
+        let signature_value =
+            BASE64_STANDARD.encode(low_s_p256_signature_der_from_bytes(&signature));
+        let certificates_xml = certificates_der
+            .iter()
+            .map(|certificate_der| {
+                format!(
+                    "<X509Certificate>{}</X509Certificate>",
+                    BASE64_STANDARD.encode(certificate_der)
+                )
+            })
+            .collect::<String>();
+        let signature_xml = format!(
+            concat!(
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
+                "<KeyInfo><X509Data>",
+                "{certificates_xml}",
+                "{extra_x509_data_xml}",
+                "</X509Data></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                "{signed_properties}",
+                "</QualifyingProperties></Object>",
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            certificates_xml = certificates_xml,
+            extra_x509_data_xml = extra_x509_data_xml,
+            signed_properties = signed_properties
+        );
+        CertificateChainSignedPayload {
+            payload: format!(
+                "{}{}{}",
+                &unsigned[..insertion],
+                signature_xml,
+                &unsigned[insertion..]
+            ),
+            leaf_sha256: sha256_hex(certificates_der[0]),
+            issuer_sha256: sha256_hex(certificates_der[certificates_der.len() - 1]),
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum TestOcspResponseStatus {
+        Good,
+        Revoked,
+    }
+
+    struct GeneratedOcspSignedPayload {
+        payload: String,
+        trust_anchor_pin: String,
+        response_der_base64: String,
+    }
+
+    fn signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+        response_status: TestOcspResponseStatus,
+        embed_ocsp_response: bool,
+        signing_time: &str,
+    ) -> GeneratedOcspSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["ocsp-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Generated OCSP Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["ocsp-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Generated OCSP Leaf");
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        let response_der = test_ocsp_response_der(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            issuer.key(),
+            response_status,
+            None,
+        );
+        let response_der_base64 = BASE64_STANDARD.encode(&response_der);
+        let extra_x509_data_xml = embed_ocsp_response
+            .then(|| {
+                format!("<EncapsulatedOCSPValue>{response_der_base64}</EncapsulatedOCSPValue>")
+            })
+            .unwrap_or_default();
+        let certificates_der = [leaf_cert.der().as_ref(), issuer_cert.der().as_ref()];
+        let signed_payload = signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            &leaf_key,
+            &certificates_der,
+            &extra_x509_data_xml,
+            signing_time,
+        );
+
+        GeneratedOcspSignedPayload {
+            payload: signed_payload.payload,
+            trust_anchor_pin: signed_payload.issuer_sha256,
+            response_der_base64,
+        }
+    }
+
+    fn signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+        include_responder_certificate: bool,
+    ) -> GeneratedOcspSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["delegated-ocsp-issuer.example".to_owned()])
+                .expect("issuer params");
+        issuer_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Issuer",
+        );
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["delegated-ocsp-leaf.example".to_owned()])
+                .expect("leaf params");
+        leaf_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Leaf",
+        );
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        let responder_key =
+            RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("responder key");
+        let mut responder_params =
+            CertificateParams::new(vec!["delegated-ocsp-responder.example".to_owned()])
+                .expect("responder params");
+        responder_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Responder",
+        );
+        responder_params.is_ca = IsCa::NoCa;
+        responder_params.not_before = date_time_ymd(2020, 1, 1);
+        responder_params.not_after = date_time_ymd(2030, 1, 1);
+        responder_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        responder_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::OcspSigning];
+        let responder_cert = responder_params
+            .signed_by(&responder_key, &issuer)
+            .expect("responder certificate");
+
+        let response_der = test_ocsp_response_der(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            responder_cert.der().as_ref(),
+            &responder_key,
+            TestOcspResponseStatus::Good,
+            include_responder_certificate.then(|| responder_cert.der().as_ref()),
+        );
+        let response_der_base64 = BASE64_STANDARD.encode(&response_der);
+        let certificates_der = [leaf_cert.der().as_ref(), issuer_cert.der().as_ref()];
+        let signed_payload = signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            &leaf_key,
+            &certificates_der,
+            "",
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+
+        GeneratedOcspSignedPayload {
+            payload: signed_payload.payload,
+            trust_anchor_pin: signed_payload.issuer_sha256,
+            response_der_base64,
+        }
+    }
+
+    fn test_ocsp_response_der(
+        leaf_der: &[u8],
+        issuer_der: &[u8],
+        responder_der: &[u8],
+        signer_key: &RcgenKeyPair,
+        status: TestOcspResponseStatus,
+        responder_certificate_der: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let leaf = parse_x509_certificate_der(leaf_der).expect("leaf certificate DER");
+        let issuer = parse_x509_certificate_der(issuer_der).expect("issuer certificate DER");
+        let responder =
+            parse_x509_certificate_der(responder_der).expect("responder certificate DER");
+
+        let mut single_response = test_ocsp_cert_id_der(&leaf, &issuer);
+        single_response.extend(test_ocsp_cert_status_der(status));
+        single_response.extend(der_tlv(0x18, b"20260601141606Z".to_vec()));
+        single_response.extend(der_tlv(0xA0, der_tlv(0x18, b"21260508141606Z".to_vec())));
+        let single_response = der_sequence(single_response);
+
+        let mut response_data = Vec::new();
+        response_data.extend(der_tlv(0xA1, responder.subject().as_raw().to_vec()));
+        response_data.extend(der_tlv(0x18, b"20260601141606Z".to_vec()));
+        response_data.extend(der_sequence(single_response));
+        let tbs_response_data = der_sequence(response_data);
+
+        let signature = signer_key
+            .sign(&tbs_response_data)
+            .expect("OCSP response signature");
+        let signature = low_s_p256_signature_der_from_bytes(&signature);
+        let mut signature_bits = vec![0];
+        signature_bits.extend(signature);
+
+        let mut basic_response = tbs_response_data.clone();
+        basic_response.extend(der_sequence(der_tlv(
+            0x06,
+            OID_ECDSA_WITH_SHA256_DER.to_vec(),
+        )));
+        basic_response.extend(der_tlv(0x03, signature_bits));
+        if let Some(certificate_der) = responder_certificate_der {
+            basic_response.extend(der_tlv(0xA0, der_sequence(certificate_der.to_vec())));
+        }
+        let basic_response = der_sequence(basic_response);
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(der_tlv(0x06, OID_OCSP_BASIC_RESPONSE_DER.to_vec()));
+        response_bytes.extend(der_tlv(0x04, basic_response));
+        let response_bytes = der_sequence(response_bytes);
+
+        let mut ocsp_response = Vec::new();
+        ocsp_response.extend(der_tlv(0x0A, vec![0]));
+        ocsp_response.extend(der_tlv(0xA0, response_bytes));
+        der_sequence(ocsp_response)
+    }
+
+    fn test_ocsp_cert_id_der(leaf: &X509Certificate<'_>, issuer: &X509Certificate<'_>) -> Vec<u8> {
+        let issuer_name_hash = Sha256::digest(issuer.subject().as_raw());
+        let issuer_key_hash = Sha256::digest(issuer.public_key().subject_public_key.data.as_ref());
+        let mut cert_id = Vec::new();
+        cert_id.extend(der_sequence(der_tlv(0x06, OID_SHA256_DER.to_vec())));
+        cert_id.extend(der_tlv(0x04, issuer_name_hash.to_vec()));
+        cert_id.extend(der_tlv(0x04, issuer_key_hash.to_vec()));
+        cert_id.extend(der_tlv(0x02, leaf.raw_serial().to_vec()));
+        der_sequence(cert_id)
+    }
+
+    fn test_ocsp_cert_status_der(status: TestOcspResponseStatus) -> Vec<u8> {
+        match status {
+            TestOcspResponseStatus::Good => der_tlv(0x80, Vec::new()),
+            TestOcspResponseStatus::Revoked => {
+                der_tlv(0xA1, der_tlv(0x18, b"20260601000000Z".to_vec()))
+            }
+        }
     }
 
     fn swift_pacs008_xml(business_message_id: &str, uetr: &str) -> String {
@@ -6841,6 +12129,115 @@ mod tests {
         <CdtrAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></CdtrAgt>
       </CdtTrfTxInf>
     </FIToFICstmrCdtTrf>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn live_pacs002_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtStsRpt>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:01:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInfAndSts>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+        <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+        <GrpSts>ACSP</GrpSts>
+      </OrgnlGrpInfAndSts>
+      <TxInfAndSts>
+        <StsId>{business_message_id}-tx</StsId>
+        <TxSts>ACSP</TxSts>
+        <AddtlInf>live profile status fixture</AddtlInf>
+      </TxInfAndSts>
+    </FIToFIPmtStsRpt>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn live_pacs004_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <PmtRtr>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:02:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInf>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+      </OrgnlGrpInf>
+      <TxInf>
+        <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+        <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
+        <ChrgBr>SHAR</ChrgBr>
+        <RtrRsnInf><Rsn><Cd>AC01</Cd></Rsn></RtrRsnInf>
+      </TxInf>
+    </PmtRtr>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn live_camt056_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtCxlReq>
+      <Assgnmt>
+        <Id>{business_message_id}-assignment</Id>
+        <CreDtTm>2025-01-01T12:03:00Z</CreDtTm>
+      </Assgnmt>
+      <Undrlyg>
+        <TxInf>
+          <OrgnlGrpInf>
+            <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+            <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+          </OrgnlGrpInf>
+          <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+          <OrgnlEndToEndId>{business_message_id}-e2e</OrgnlEndToEndId>
+          <OrgnlTxId>{business_message_id}-tx</OrgnlTxId>
+          <CxlRsnInf>
+            <Rsn><Cd>DUPL</Cd></Rsn>
+            <AddtlInf>live profile cancellation fixture</AddtlInf>
+          </CxlRsnInf>
+        </TxInf>
+      </Undrlyg>
+    </FIToFIPmtCxlReq>
   </Document>
 </DataPDU>"#
         )
@@ -6940,6 +12337,7 @@ mod tests {
     }
 
     fn sample_config_with_live_reference_data() -> (actual::IsoBridge, Vec<NamedTempFile>) {
+        let asset_definition_id = sample_asset_definition_literal();
         let bic_lei = write_snapshot(
             r#"{
                 "version":"2024-05-01",
@@ -6950,13 +12348,17 @@ mod tests {
                 ]
             }"#,
         );
-        let isin_crosswalk = write_snapshot(
-            r#"{
+        let isin_crosswalk = write_snapshot(&format!(
+            r#"{{
                 "version":"2024-05-01",
                 "source":"ANNA DSB sample",
-                "entries":[{"isin":"US0378331005","cusip":"037833100"}]
-            }"#,
-        );
+                "entries":[{{
+                    "isin":"US0378331005",
+                    "cusip":"037833100",
+                    "asset_definition_id":"{asset_definition_id}"
+                }}]
+            }}"#
+        ));
         let mic_directory = write_snapshot(
             r#"{
                 "version":"2024-05-01",
@@ -6964,11 +12366,63 @@ mod tests {
                 "entries":[{"mic":"XNAS","status":"ACTIVE"}]
             }"#,
         );
+        let csd_venue = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD sample",
+                "entries":[{"mic":"XNAS","csd_id":"DTC","ledger_domain_id":"securities"}]
+            }"#,
+        );
+        let securities_account = write_snapshot(&format!(
+            r#"{{
+                "version":"2024-05-01",
+                "source":"CSD account sample",
+                "entries":[
+                    {{
+                        "settlement_account":"DLVRY-ACC",
+                        "bic":"DEUTDEFF",
+                        "account_id":"{}"
+                    }},
+                    {{
+                        "settlement_account":"RCVG-ACC",
+                        "bic":"MARKDEFF",
+                        "account_id":"{}"
+                    }}
+                ]
+            }}"#,
+            sample_account_bundle().1,
+            sample_account_bundle().1
+        ));
+        let cash_leg = write_snapshot(&format!(
+            r#"{{
+                "version":"2024-05-01",
+                "source":"CSD cash-leg sample",
+                "entries":[{{
+                    "currency":"USD",
+                    "payment_type":"APMT",
+                    "asset_definition_id":"{asset_definition_id}"
+                }}]
+            }}"#
+        ));
         let mut config = sample_config();
         config.reference_data.bic_lei_path = Some(bic_lei.path().to_path_buf());
         config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
         config.reference_data.mic_directory_path = Some(mic_directory.path().to_path_buf());
-        (config, vec![bic_lei, isin_crosswalk, mic_directory])
+        config.reference_data.csd_venue_path = Some(csd_venue.path().to_path_buf());
+        config.reference_data.securities_account_path =
+            Some(securities_account.path().to_path_buf());
+        config.reference_data.cash_leg_path = Some(cash_leg.path().to_path_buf());
+        (
+            config,
+            vec![
+                bic_lei,
+                isin_crosswalk,
+                mic_directory,
+                csd_venue,
+                securities_account,
+                cash_leg,
+            ],
+        )
     }
 
     fn inbound_metadata(message_id: &str, message_type: &str) -> IsoMessageMetadata {
@@ -6990,6 +12444,607 @@ mod tests {
                 .check_and_record_inbound(message_id, inbound_metadata(message_id, message_type)),
             "record original {message_id}"
         );
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_issuer_name_mismatch()
+    -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_options(
+            true,
+            true,
+            true,
+            CertificateChainValidity::Valid,
+            CertificateChainIssuerName::MismatchedLeafIssuer,
+            false,
+        )
+    }
+
+    fn signed_pacs008_xml_with_leaf_ca_certificate_chain() -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_options(
+            true,
+            true,
+            true,
+            CertificateChainValidity::Valid,
+            CertificateChainIssuerName::Matching,
+            true,
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_noncritical_issuer_basic_constraints()
+    -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        issuer_params
+            .custom_extensions
+            .push(noncritical_basic_constraints_ca_extension());
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_noncritical_issuer_key_usage()
+    -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params
+            .custom_extensions
+            .push(noncritical_key_usage_digital_signature_key_cert_sign_extension());
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_p384_issuer_certificate_chain() -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_noncritical_leaf_key_usage()
+    -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params
+            .custom_extensions
+            .push(noncritical_key_usage_digital_signature_extension());
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_critical_unknown_extension(
+        target: CertificateChainCriticalUnknownExtension,
+    ) -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        if matches!(target, CertificateChainCriticalUnknownExtension::Issuer) {
+            issuer_params
+                .custom_extensions
+                .push(critical_unknown_x509_extension());
+        }
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        if matches!(target, CertificateChainCriticalUnknownExtension::Leaf) {
+            leaf_params
+                .custom_extensions
+                .push(critical_unknown_x509_extension());
+        }
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_critical_unsupported_parsed_extension(
+        target: CertificateChainCriticalUnsupportedParsedExtension,
+    ) -> CertificateChainSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        if matches!(
+            target,
+            CertificateChainCriticalUnsupportedParsedExtension::Issuer
+        ) {
+            issuer_params
+                .custom_extensions
+                .push(critical_extended_key_usage_x509_extension());
+        }
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        if matches!(
+            target,
+            CertificateChainCriticalUnsupportedParsedExtension::Leaf
+        ) {
+            leaf_params
+                .custom_extensions
+                .push(critical_extended_key_usage_x509_extension());
+        }
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
+        )
+    }
+
+    fn critical_unknown_x509_extension() -> CustomExtension {
+        let mut extension =
+            CustomExtension::from_oid_content(&[1, 3, 6, 1, 4, 1, 55555, 42], vec![0x05, 0x00]);
+        extension.set_criticality(true);
+        extension
+    }
+
+    fn critical_extended_key_usage_x509_extension() -> CustomExtension {
+        let mut extension = CustomExtension::from_oid_content(
+            &[2, 5, 29, 37],
+            vec![
+                0x30, 0x0a, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01,
+            ],
+        );
+        extension.set_criticality(true);
+        extension
+    }
+
+    fn certificate_policies_x509_extension(policy_oids: &[&[u64]]) -> CustomExtension {
+        let mut policies = Vec::new();
+        for policy_oid in policy_oids {
+            policies.extend(der_sequence(der_oid(policy_oid)));
+        }
+        CustomExtension::from_oid_content(&[2, 5, 29, 32], der_sequence(policies))
+    }
+
+    fn unsupported_policy_processing_x509_extension(
+        extension: UnsupportedPolicyProcessingExtension,
+    ) -> CustomExtension {
+        match extension {
+            UnsupportedPolicyProcessingExtension::PolicyMappings => {
+                let mut mapping = Vec::new();
+                mapping.extend(der_oid(TEST_X509_POLICY_OID_ARCS));
+                mapping.extend(der_oid(TEST_X509_WRONG_POLICY_OID_ARCS));
+                CustomExtension::from_oid_content(
+                    &[2, 5, 29, 33],
+                    der_sequence(der_sequence(mapping)),
+                )
+            }
+            UnsupportedPolicyProcessingExtension::PolicyConstraints => {
+                CustomExtension::from_oid_content(
+                    &[2, 5, 29, 36],
+                    vec![0x30, 0x03, 0x80, 0x01, 0x00],
+                )
+            }
+            UnsupportedPolicyProcessingExtension::InhibitAnyPolicy => {
+                CustomExtension::from_oid_content(&[2, 5, 29, 54], vec![0x02, 0x01, 0x00])
+            }
+        }
+    }
+
+    fn der_oid(arcs: &[u64]) -> Vec<u8> {
+        assert!(
+            arcs.len() >= 2,
+            "OID fixtures must include at least two arcs"
+        );
+        assert!(
+            arcs[0] <= 2,
+            "OID first arc must fit DER object identifier rules"
+        );
+        assert!(
+            arcs[0] == 2 || arcs[1] < 40,
+            "OID second arc must fit DER object identifier rules"
+        );
+        let mut encoded = Vec::new();
+        append_der_oid_arc(&mut encoded, arcs[0] * 40 + arcs[1]);
+        for arc in &arcs[2..] {
+            append_der_oid_arc(&mut encoded, *arc);
+        }
+        der_tlv(0x06, encoded)
+    }
+
+    fn append_der_oid_arc(out: &mut Vec<u8>, arc: u64) {
+        let mut bytes = vec![(arc & 0x7f) as u8];
+        let mut remaining = arc >> 7;
+        while remaining > 0 {
+            bytes.push(((remaining & 0x7f) as u8) | 0x80);
+            remaining >>= 7;
+        }
+        out.extend(bytes.into_iter().rev());
+    }
+
+    fn der_sequence(content: Vec<u8>) -> Vec<u8> {
+        der_tlv(0x30, content)
+    }
+
+    fn der_tlv(tag: u8, content: Vec<u8>) -> Vec<u8> {
+        let mut out = vec![tag];
+        out.extend(der_length(content.len()));
+        out.extend(content);
+        out
+    }
+
+    fn der_length(len: usize) -> Vec<u8> {
+        if len < 0x80 {
+            return vec![len as u8];
+        }
+        let mut bytes = Vec::new();
+        let mut remaining = len;
+        while remaining > 0 {
+            bytes.push((remaining & 0xff) as u8);
+            remaining >>= 8;
+        }
+        bytes.reverse();
+        let mut out = vec![0x80 | bytes.len() as u8];
+        out.extend(bytes);
+        out
+    }
+
+    fn noncritical_basic_constraints_ca_extension() -> CustomExtension {
+        CustomExtension::from_oid_content(&[2, 5, 29, 19], vec![0x30, 0x03, 0x01, 0x01, 0xff])
+    }
+
+    fn noncritical_key_usage_digital_signature_key_cert_sign_extension() -> CustomExtension {
+        CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x02, 0x84])
+    }
+
+    fn noncritical_key_usage_digital_signature_extension() -> CustomExtension {
+        CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x07, 0x80])
+    }
+
+    fn assert_pinned_certificate_chain_rejected(
+        fixture: CertificateChainSignedPayload,
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    fn assert_pinned_certificate_chain_accepted(
+        fixture: CertificateChainSignedPayload,
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect(expected);
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_required_x509_policy_path_payload_accepted(fixture: CertificateChainSignedPayload) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
+        profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect("required X.509 certificate policy path should verify");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_required_x509_policy_path_payload_rejected(
+        fixture: CertificateChainSignedPayload,
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
+        profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    fn assert_x509_trust_anchor_payload_accepted(
+        payload: String,
+        trust_anchor_pin: String,
+        configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
+        configure_profile(&mut profile);
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect(expected);
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_x509_trust_anchor_payload_rejected(
+        payload: String,
+        trust_anchor_pin: String,
+        configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
+        configure_profile(&mut profile);
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    fn assert_require_verified_signed_payload_accepted(payload: String, expected: &str) {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect(expected);
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_require_verified_signed_payload_rejected(payload: String, expected: &str) {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     fn sample_world(asset_alias: Option<&str>) -> World {
@@ -7113,6 +13168,42 @@ mod tests {
     }
 
     #[test]
+    fn runtime_from_config_rejects_noncanonical_xml_signature_pin() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256 = vec!["AB".repeat(32)];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("uppercase SHA-256 pins must fail configuration"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("trusted_public_key_sha256"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_noncanonical_xml_signature_revocation_pin() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.revoked_certificate_sha256 = vec!["AB".repeat(32)];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("uppercase SHA-256 revocation pins must fail configuration"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("revoked_certificate_sha256"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn profile_validation_records_metadata_for_generic_messages() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -7131,6 +13222,43 @@ mod tests {
         assert!(metadata.payload_hash().is_some());
         assert!(metadata.reference_snapshot_id().is_some());
         assert!(!metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn profile_validation_records_reference_snapshot_checksum() {
+        let snapshot = r#"{
+            "version":"2024-05-01",
+            "source":"GLEIF sample",
+            "entries":[
+                {"bic":"DEUTDEFF","lei":"5493001KJTIIGC8Y1R12"}
+            ]
+        }"#;
+        let file = write_snapshot(snapshot);
+        let mut config = sample_config();
+        config.reference_data.bic_lei_path = Some(file.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = sample_pacs008();
+        let expected_snapshot_id = runtime.reference_data().snapshot_id();
+
+        let metadata = runtime
+            .validate_profile_submission(
+                runtime.default_profile(),
+                "pacs.008",
+                &parsed,
+                b"profile payload",
+            )
+            .expect("generic profile accepts message");
+
+        assert_eq!(
+            metadata.reference_snapshot_id(),
+            Some(expected_snapshot_id.as_str())
+        );
+        assert_ne!(
+            expected_snapshot_id,
+            ReferenceDataSnapshots::from_config(&actual::IsoReferenceData::default()).snapshot_id()
+        );
     }
 
     #[test]
@@ -7186,6 +13314,52 @@ mod tests {
     }
 
     #[test]
+    fn profile_validation_rejects_selected_profile_message_type_mismatch() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.009", "pacs.009.001.10"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.009-live-test"))
+            .expect("custom profile");
+        let parsed = sample_pacs008();
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("pacs.009 profile must not admit pacs.008 endpoint submissions");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
+    fn live_profile_rejects_app_header_message_definition_mismatch() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.008-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.008",
+            b"DataPDU/AppHdr/BizMsgIdr=HDR-MISMATCH\nDataPDU/AppHdr/MsgDefIdr=pacs.009.001.10\nDataPDU/AppHdr/CreDt=2025-01-01T12:00:00Z\nDataPDU/AppHdr/BizSvc=swift.cbprplus.02\nMsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("BAH MsgDefIdr must match the selected profile version set");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
     fn require_verified_profile_accepts_valid_p256_xmldsig_xades() {
         let mut config = sample_config();
         config
@@ -7208,664 +13382,15 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_accepts_namespaced_p256_xmldsig_xades() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = test_xades_namespaced_signed_properties_xml();
-        let payload = signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_namespaced_key_info(&signing_key),
-            &test_xades_namespaced_signed_properties_reference_for_xml(&signed_properties_xml),
-            &test_xades_namespaced_object_xml(&signed_properties_xml),
-        );
-
-        let embedded_signature = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect("prefixed XMLDSig/XAdES payload should pass require-verified verification");
-
-        assert!(embedded_signature);
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_qualifying_properties_wrong_target() {
-        let payload =
-            signed_pacs008_xml().replace(r##"Target="#sig-001""##, r##"Target="#sig-002""##);
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("mis-targeted XAdES QualifyingProperties must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_qualifying_properties_missing_target() {
-        let payload = signed_pacs008_xml().replace(r##" Target="#sig-001""##, "");
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES QualifyingProperties without Target must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_missing_signed_properties_reference() {
-        let signing_key = test_p256_signing_key();
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            "",
-            &test_xades_object_xml(&test_xades_signed_properties_xml()),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES QualifyingProperties must be backed by a SignedProperties reference");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_signed_properties_reference_wrong_uri() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = test_xades_signed_properties_xml();
-        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_xml(
-                "#copied-signed-props",
-                XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
-                &digest,
-            ),
-            &test_xades_object_xml(&signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("SignedProperties reference URI must bind to the XAdES object Id");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_signed_properties_reference_wrong_type() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = test_xades_signed_properties_xml();
-        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_xml(
-                "#xades-signed-props-001",
-                "urn:unsupported:signed-properties",
-                &digest,
-            ),
-            &test_xades_object_xml(&signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("SignedProperties references must carry the XAdES reference Type");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_signed_properties_digest_tampering() {
-        let signing_key = test_p256_signing_key();
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_xml(
-                "#xades-signed-props-001",
-                XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
-                &BASE64_STANDARD.encode([0_u8; 32]),
-            ),
-            &test_xades_object_xml(&test_xades_signed_properties_xml()),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("SignedProperties digest mismatch must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_signed_properties_content_tampering() {
-        let payload = signed_pacs008_xml().replace(
-            "<SigningTime>2026-06-02T00:00:00Z</SigningTime>",
-            "<SigningTime>2026-06-02T00:00:01Z</SigningTime>",
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("unsigned SignedProperties content tampering must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_missing_signed_properties_element() {
-        let signing_key = test_p256_signing_key();
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_default_signed_properties_reference_xml(),
-            r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("QualifyingProperties without SignedProperties must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_missing_signed_signature_properties() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = r#"<SignedProperties Id="xades-signed-props-001"><SignedDataObjectProperties/></SignedProperties>"#;
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
-            &test_xades_object_xml(signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES SignedProperties must contain SignedSignatureProperties");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_duplicate_signed_signature_properties() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = concat!(
-            r#"<SignedProperties Id="xades-signed-props-001">"#,
-            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
-            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:01Z</SigningTime></SignedSignatureProperties>",
-            "</SignedProperties>"
-        );
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
-            &test_xades_object_xml(signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("duplicate XAdES SignedSignatureProperties blocks must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_missing_signing_time() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties/></SignedProperties>"#;
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
-            &test_xades_object_xml(signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES SignedSignatureProperties must contain SigningTime");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_duplicate_signing_time() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = concat!(
-            r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties>"#,
-            "<SigningTime>2026-06-02T00:00:00Z</SigningTime>",
-            "<SigningTime>2026-06-02T00:00:01Z</SigningTime>",
-            "</SignedSignatureProperties></SignedProperties>"
-        );
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
-            &test_xades_object_xml(signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("duplicate XAdES SigningTime values must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_xades_canonical_leap_day_signing_time() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml =
-            test_xades_signed_properties_xml_with_signing_time("2024-02-29T23:59:59Z");
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
-            &test_xades_object_xml(&signed_properties_xml),
-        );
-
-        verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect("canonical UTC leap-day SigningTime must be accepted");
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_malformed_signing_time_values() {
-        let cases = [
-            "",
-            "2026-06-02 00:00:00Z",
-            "2026-06-02T00:00:00+00:00",
-            "2026-06-02T00:00:00.000Z",
-            "2026-6-02T00:00:00Z",
-            "2026-06-02T00:00:00z",
-            "2026-06-02T00:00:00 Z",
-            "２０２６-06-02T00:00:00Z",
-        ];
-
-        for signing_time in cases {
-            let signing_key = test_p256_signing_key();
-            let signed_properties_xml =
-                test_xades_signed_properties_xml_with_signing_time(signing_time);
-            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-                &signing_key,
-                &test_p256_key_info(&signing_key),
-                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
-                &test_xades_object_xml(&signed_properties_xml),
-            );
-
-            let err = verify_embedded_xml_signature(
-                payload.as_bytes(),
-                &[test_p256_public_key_pin()],
-                &[],
-                &[],
-                false,
-                &[],
-                false,
-                &[],
-            )
-            .expect_err("malformed XAdES SigningTime must fail closed");
-
-            assert!(
-                matches!(err, MsgError::ValidationFailed),
-                "unexpected error for SigningTime {signing_time:?}: {err:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_out_of_range_signing_time_values() {
-        let cases = [
-            "0000-06-02T00:00:00Z",
-            "2026-00-02T00:00:00Z",
-            "2026-13-02T00:00:00Z",
-            "2026-02-29T00:00:00Z",
-            "2024-02-30T00:00:00Z",
-            "2026-04-31T00:00:00Z",
-            "2026-06-02T24:00:00Z",
-            "2026-06-02T00:60:00Z",
-            "2026-06-02T00:00:60Z",
-        ];
-
-        for signing_time in cases {
-            let signing_key = test_p256_signing_key();
-            let signed_properties_xml =
-                test_xades_signed_properties_xml_with_signing_time(signing_time);
-            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-                &signing_key,
-                &test_p256_key_info(&signing_key),
-                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
-                &test_xades_object_xml(&signed_properties_xml),
-            );
-
-            let err = verify_embedded_xml_signature(
-                payload.as_bytes(),
-                &[test_p256_public_key_pin()],
-                &[],
-                &[],
-                false,
-                &[],
-                false,
-                &[],
-            )
-            .expect_err("out-of-range XAdES SigningTime must fail closed");
-
-            assert!(
-                matches!(err, MsgError::ValidationFailed),
-                "unexpected error for SigningTime {signing_time:?}: {err:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_signed_data_object_properties() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = concat!(
-            r#"<SignedProperties Id="xades-signed-props-001">"#,
-            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
-            r#"<SignedDataObjectProperties><DataObjectFormat ObjectReference=""><MimeType>text/xml</MimeType></DataObjectFormat></SignedDataObjectProperties>"#,
-            "</SignedProperties>"
-        );
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
-            &test_xades_object_xml(signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("unsupported XAdES SignedDataObjectProperties must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_unsupported_signed_signature_properties() {
-        let cases = [
-            "<SigningPolicyIdentifier/>",
-            "<SignatureProductionPlace><City>Jerusalem</City></SignatureProductionPlace>",
-            "<SignerRole><ClaimedRoles><ClaimedRole>approver</ClaimedRole></ClaimedRoles></SignerRole>",
-        ];
-
-        for unsupported_property in cases {
-            let signing_key = test_p256_signing_key();
-            let signed_properties_xml =
-                test_xades_signed_properties_xml_with_extra(unsupported_property);
-            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-                &signing_key,
-                &test_p256_key_info(&signing_key),
-                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
-                &test_xades_object_xml(&signed_properties_xml),
-            );
-
-            let err = verify_embedded_xml_signature(
-                payload.as_bytes(),
-                &[test_p256_public_key_pin()],
-                &[],
-                &[],
-                false,
-                &[],
-                false,
-                &[],
-            )
-            .expect_err("unsupported XAdES SignedSignatureProperties child must fail closed");
-
-            assert!(
-                matches!(err, MsgError::ValidationFailed),
-                "unexpected error for property {unsupported_property:?}: {err:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_namespaced_xades_unsupported_signed_signature_property() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = test_xades_namespaced_signed_properties_xml_with_extra(
-            "<xades:SignerRole><xades:ClaimedRoles><xades:ClaimedRole>approver</xades:ClaimedRole></xades:ClaimedRoles></xades:SignerRole>",
-        );
-        let payload = signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_namespaced_key_info(&signing_key),
-            &test_xades_namespaced_signed_properties_reference_for_xml(&signed_properties_xml),
-            &test_xades_namespaced_object_xml(&signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("prefixed unsupported XAdES property must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_unsigned_properties() {
-        let signing_key = test_p256_signing_key();
-        let signed_properties_xml = test_xades_signed_properties_xml();
-        let xades_object_xml = format!(
-            concat!(
-                r##"<Object><QualifyingProperties Target="#sig-001">"##,
-                "{signed_properties_xml}",
-                "<UnsignedProperties><UnsignedSignatureProperties><SignatureTimeStamp/></UnsignedSignatureProperties></UnsignedProperties>",
-                "</QualifyingProperties></Object>"
-            ),
-            signed_properties_xml = signed_properties_xml,
-        );
-        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
-            &signing_key,
-            &test_p256_key_info(&signing_key),
-            &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
-            &xades_object_xml,
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("unsupported XAdES UnsignedProperties must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_qualifying_properties_missing_signature_id() {
-        let payload = signed_pacs008_xml().replace(r#"<Signature Id="sig-001">"#, "<Signature>");
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES target must bind to a Signature Id");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_duplicate_xades_qualifying_properties() {
-        let duplicate_object = test_xades_object_xml(&test_xades_signed_properties_xml());
-        let payload = signed_pacs008_xml()
-            .replace("</Signature>", &format!("{duplicate_object}</Signature>"));
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("duplicate XAdES QualifyingProperties must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_xades_qualifying_properties_outside_object() {
-        let signed_properties_xml = test_xades_signed_properties_xml();
-        let payload = signed_pacs008_xml().replace(
-            &test_xades_object_xml(&signed_properties_xml),
-            &test_xades_qualifying_properties_xml(&signed_properties_xml),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("XAdES QualifyingProperties outside Object must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_pinned_x509_certificate_key_info() {
+    fn require_verified_profile_accepts_xades_signed_properties_reference() {
         let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec![test_x509_public_key_pin()];
-        config.profiles.push(profile);
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        let payload = signed_pacs008_xml_with_x509_certificate();
+        let payload = signed_pacs008_xml_with_signed_properties_reference();
         let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
         let profile = runtime
             .resolve_profile(Some("signed-pacs008-test"))
@@ -7873,9 +13398,2012 @@ mod tests {
 
         let metadata = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("pinned X.509 XMLDSig payload should pass require-verified profile");
+            .expect("XAdES SignedProperties Reference digest should verify");
 
         assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_prefixed_xades_signed_properties_reference() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_prefixed_xades_signed_properties();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("prefixed XAdES SignedProperties should bind to the supported namespace");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_prefixed_xades_with_wrong_namespace() {
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_wrong_prefixed_xades_namespace(),
+            "prefixed XAdES elements must bind to the supported XAdES namespace",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unprefixed_xades_with_wrong_default_namespace() {
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_wrong_default_xades_namespace(),
+            "unprefixed XAdES elements must reject wrong default namespaces",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unreferenced_signed_properties() {
+        let payload = signed_pacs008_xml().replacen(
+            r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+            &format!(
+                r##"<Object><QualifyingProperties Target="#sig-001">{}</QualifyingProperties></Object>"##,
+                signed_properties_xml("unsigned-props-001")
+            ),
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unreferenced SignedProperties must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_signed_properties() {
+        let payload = signed_pacs008_xml_with_signed_properties_reference().replacen(
+            "</SignedProperties>",
+            &format!(
+                "</SignedProperties>{}",
+                signed_properties_xml("unsigned-props-002")
+            ),
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate SignedProperties must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signed_signing_time_unsupported_attribute() {
+        let signed_properties_id = "signed-props-001";
+        let signed_properties = format!(
+            concat!(
+                r#"<SignedProperties Id="{id}"><SignedSignatureProperties>"#,
+                r#"<SigningTime Source="unsupported">{signing_time}</SigningTime>"#,
+                "</SignedSignatureProperties></SignedProperties>"
+            ),
+            id = signed_properties_id,
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME
+        );
+        let payload =
+            signed_pacs008_xml_with_signed_properties(signed_properties_id, &signed_properties);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported signed SigningTime attributes must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_xades_signing_certificate_v2_binding() {
+        let fixture = signed_pacs008_xml_with_certificate_chain_signed_properties_reference();
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect("SigningCertificateV2 leaf digest should bind to the XMLDSig leaf certificate");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_supported_canonicalization_algorithms() {
+        for c14n_algorithm in [XML_C14N_1_1, XML_EXCLUSIVE_C14N_1_0] {
+            let mut config = sample_config();
+            config
+                .profiles
+                .push(signed_message_profile("require-verified"));
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let payload = signed_pacs008_xml_with_c14n_algorithm(c14n_algorithm);
+            let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+            let profile = runtime
+                .resolve_profile(Some("signed-pacs008-test"))
+                .expect("signed profile");
+
+            runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .expect("supported canonicalization URI should pass");
+        }
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_expands_empty_elements_and_sorts_attributes() {
+        let canonical =
+            canonicalize_supported_xml(r#"<A z='last' xmlns="urn:test" a="first"><B /></A>"#)
+                .expect("supported XML subset should canonicalize");
+
+        assert_eq!(
+            canonical,
+            r#"<A xmlns="urn:test" a="first" z="last"><B></B></A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_decodes_character_references() {
+        let canonical = canonicalize_supported_xml(
+            r#"<A attr='&quot;&amp;&lt;&apos;&#x9;&#10;&#xD;'>one&amp;&lt;&gt;&#13;</A>"#,
+        )
+        .expect("predefined and numeric XML character references should canonicalize");
+
+        assert_eq!(
+            canonical,
+            r#"<A attr="&quot;&amp;&lt;'&#x9;&#xA;&#xD;">one&amp;&lt;&gt;&#xD;</A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_accepts_xml_namespace_attributes() {
+        let canonical =
+            canonicalize_supported_xml(r#"<A z='last' xml:lang="en" a="first" xml:id='id-1'></A>"#)
+                .expect("implicit xml namespace attributes are inside the supported subset");
+
+        assert_eq!(
+            canonical,
+            r#"<A a="first" z="last" xml:id="id-1" xml:lang="en"></A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_omits_legal_xml_namespace_declaration() {
+        let canonical = canonicalize_supported_xml(
+            r#"<A xmlns:xml="http://www.w3.org/XML/1998/namespace" xml:lang="en"><B xml:id="b-1"></B></A>"#,
+        )
+        .expect("the fixed XML namespace declaration should be accepted and omitted");
+
+        assert_eq!(canonical, r#"<A xml:lang="en"><B xml:id="b-1"></B></A>"#);
+
+        let inherited_namespaces = vec![CanonicalXmlAttribute {
+            name: "xmlns:xml".to_owned(),
+            value: XML_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        let canonical = canonicalize_supported_xml_with_mode(
+            r#"<A xml:space="preserve"></A>"#,
+            &inherited_namespaces,
+            CanonicalXmlMode::Inclusive,
+        )
+        .expect("inherited XML namespace declaration should not serialize");
+
+        assert_eq!(canonical, r#"<A xml:space="preserve"></A>"#);
+    }
+
+    #[test]
+    fn supported_xml_reference_target_resolves_same_document_id() {
+        let xml = r#"<A><B xml:id="target"><C Id="other"></C></B></A>"#;
+        let target = xml_signature_reference_target(xml, "#target")
+            .expect("same-document xml:id reference should resolve");
+
+        assert_eq!(target.xml, r#"<B xml:id="target"><C Id="other"></C></B>"#);
+    }
+
+    #[test]
+    fn supported_xml_reference_target_carries_inherited_namespaces() {
+        let xml = r#"<Root xmlns:p="urn:p"><p:Payload Id="target"><p:Child></p:Child></p:Payload></Root>"#;
+        let target = xml_signature_reference_target(xml, "#target")
+            .expect("same-document reference target should inherit ancestor namespaces");
+        let canonical = canonicalize_supported_xml_with_inherited_namespaces(
+            target.xml,
+            &target.inherited_namespaces,
+        )
+        .expect("inherited namespace should canonicalize on referenced root");
+
+        assert_eq!(
+            canonical,
+            r#"<p:Payload xmlns:p="urn:p" Id="target"><p:Child></p:Child></p:Payload>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_reference_target_rejects_invalid_same_document_uris() {
+        for uri in [
+            "target",
+            "https://example.invalid/#target",
+            "#",
+            "#bad:prefix",
+        ] {
+            let err = xml_signature_reference_target(r#"<A Id="target"></A>"#, uri)
+                .expect_err("unsupported Reference URIs must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+
+        let err = xml_signature_reference_target(r#"<A Id="dup"><B Id="dup"></B></A>"#, "#dup")
+            .expect_err("duplicate same-document IDs must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let err = xml_signature_reference_target(
+            r#"<A xmlns:p="urn:test" p:Id="target"></A>"#,
+            "#target",
+        )
+        .expect_err("namespace-qualified non-xml ID attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_reference_transform_accepts_optional_c14n_transform() {
+        let valid = format!(
+            r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+        );
+        assert_eq!(
+            supported_xml_signature_reference_c14n_mode(&valid)
+                .expect("the supported Reference transform set should pass"),
+            CanonicalXmlMode::Exclusive
+        );
+
+        let valid_with_c14n = format!(
+            r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="{XML_C14N_1_0}"></Transform></Transforms></Reference>"#
+        );
+        assert_eq!(
+            supported_xml_signature_reference_c14n_mode(&valid_with_c14n)
+                .expect("a final supported C14N transform should pass"),
+            CanonicalXmlMode::Inclusive
+        );
+
+        let valid_with_transform_comments = format!(
+            r#"<Reference URI=""><Transforms><!--before--><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><!--after--></Transforms></Reference>"#
+        );
+        assert_eq!(
+            supported_xml_signature_reference_c14n_mode(&valid_with_transform_comments)
+                .expect("comments in no-comments SignedInfo transform wrappers should pass"),
+            CanonicalXmlMode::Exclusive
+        );
+
+        for reference in [
+            format!(
+                r#"<Reference URI="" Id="ref-001"><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference ds:URI="" xmlns:ds="{XMLDSIG_NS}"><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            r#"<Reference URI=""><Transforms></Transforms></Reference>"#.to_owned(),
+            format!(
+                r#"<Reference URI=""><Transforms Id="transforms-001"><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Id="transform-001" Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform ds:Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}" xmlns:ds="{XMLDSIG_NS}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Ignored></Ignored><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Ignored></Ignored></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms><DigestValue>AQ==</DigestValue></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms><DigestValue>AQ==</DigestValue><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Object></Object><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></Reference>"#
+            ),
+            r#"<Reference URI=""><Transforms><Transform Algorithm="urn:unsupported"></Transform></Transforms></Reference>"#
+                .to_owned(),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="urn:unsupported"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"><XPath>not-supported</XPath></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="{XML_C14N_1_0}"><InclusiveNamespaces PrefixList="unused"></InclusiveNamespaces></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform></Transforms></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform></Reference>"#
+            ),
+            format!(
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform><Transform Algorithm="{XML_C14N_1_0}"></Transform><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"#
+            ),
+        ] {
+            let err = supported_xml_signature_reference_c14n_mode(&reference)
+                .expect_err("missing, reordered, extra, or unsupported transforms must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_signature_reference_rejects_wrong_prefixed_namespace() {
+        let inherited_namespaces = vec![CanonicalXmlNamespaceBinding {
+            prefix: "ds".to_owned(),
+            uri: XMLDSIG_NS.to_owned(),
+        }];
+        let valid = format!(
+            r#"<ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></ds:Transform></ds:Transforms></ds:Reference>"#
+        );
+        assert_eq!(
+            supported_xml_signature_reference_c14n_mode_with_namespaces(
+                &valid,
+                &inherited_namespaces
+            )
+            .expect("XMLDSig-prefixed Reference should resolve through inherited namespace"),
+            CanonicalXmlMode::Exclusive
+        );
+
+        let wrong_transforms = format!(
+            r#"<ds:Reference URI=""><bad:Transforms xmlns:bad="urn:not-xmldsig"><ds:Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></ds:Transform></bad:Transforms></ds:Reference>"#
+        );
+        let err = supported_xml_signature_reference_c14n_mode_with_namespaces(
+            &wrong_transforms,
+            &inherited_namespaces,
+        )
+        .expect_err("Transforms bound outside XMLDSig must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let canonical = "<Document></Document>";
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical.as_bytes()));
+        let wrong_digest_method = format!(
+            r#"<ds:Reference URI=""><ds:DigestMethod xmlns:bad="urn:not-xmldsig" Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><bad:DigestValue xmlns:bad="urn:not-xmldsig">{digest}</bad:DigestValue></ds:Reference>"#
+        );
+        let err = verify_xml_signature_reference_digest_with_namespaces(
+            &wrong_digest_method,
+            canonical,
+            &inherited_namespaces,
+        )
+        .expect_err("DigestValue bound outside XMLDSig must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_signature_reference_rejects_malformed_qnames() {
+        let malformed_reference = format!(
+            r#"<ds::Reference xmlns:ds="{XMLDSIG_NS}" URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms></ds::Reference>"#
+        );
+        let err = supported_xml_signature_reference_c14n_mode(&malformed_reference)
+            .expect_err("malformed XMLDSig Reference QName must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let malformed_transform = format!(
+            r#"<Reference URI=""><Transforms><ds::Transform xmlns:ds="{XMLDSIG_NS}" Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></ds::Transform></Transforms></Reference>"#
+        );
+        let err = supported_xml_signature_reference_c14n_mode(&malformed_transform)
+            .expect_err("malformed direct XMLDSig Transform QName must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let canonical = "<Document></Document>";
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical.as_bytes()));
+        let malformed_digest_method = format!(
+            r#"<Reference URI=""><ds::DigestMethod xmlns:ds="{XMLDSIG_NS}" Algorithm="{XMLDSIG_SHA256}"></ds::DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
+        );
+        let err = verify_xml_signature_reference_digest(&malformed_digest_method, canonical)
+            .expect_err("malformed namespace-bound DigestMethod QName must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_signed_properties_reference_requires_supported_c14n_transform() {
+        let valid = format!(
+            r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+        );
+        assert_eq!(
+            signed_properties_reference_c14n_mode(&valid)
+                .expect("SignedProperties Reference with supported C14N should pass"),
+            CanonicalXmlMode::Exclusive
+        );
+
+        for reference in [
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}" Id="ref-001"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            r##"<Reference URI="#signed-props-001" Type="http://uri.etsi.org/01903#SignedProperties"><Transforms></Transforms></Reference>"##
+                .to_owned(),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms Id="transforms-001"><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Id="transform-001" Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Ignored></Ignored><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms><DigestValue>AQ==</DigestValue></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms><DigestValue>AQ==</DigestValue><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Object></Object><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Reference>"##
+            ),
+            r##"<Reference URI="#signed-props-001" Type="http://uri.etsi.org/01903#SignedProperties"><Transforms><Transform Algorithm="urn:unsupported"></Transform></Transforms></Reference>"##
+                .to_owned(),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"><InclusiveNamespaces PrefixList="ds"></InclusiveNamespaces></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_EXCLUSIVE_C14N_1_0}"></Transform></Transforms><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform></Transforms></Reference>"##
+            ),
+            format!(
+                r##"<Reference URI="#signed-props-001" Type="{XADES_SIGNED_PROPERTIES_TYPE}"><Transforms><Transform Algorithm="{XML_C14N_1_0}"></Transform><Transform Algorithm="{XML_C14N_1_1}"></Transform></Transforms></Reference>"##
+            ),
+        ] {
+            let err = signed_properties_reference_c14n_mode(&reference)
+                .expect_err("SignedProperties references require one supported C14N transform");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_reference_digest_rejects_digest_method_unsupported_attributes() {
+        let canonical = "<Document></Document>";
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical.as_bytes()));
+        let valid = format!(
+            r#"<Reference URI=""><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
+        );
+        verify_xml_signature_reference_digest(&valid, canonical)
+            .expect("SHA-256 Reference digest should pass");
+
+        let invalid = format!(
+            r#"<Reference URI=""><DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="digest-method-001"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
+        );
+        let err = verify_xml_signature_reference_digest(&invalid, canonical)
+            .expect_err("unsupported DigestMethod attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let namespace_qualified_algorithm = format!(
+            r#"<Reference URI=""><DigestMethod ds:Algorithm="{XMLDSIG_SHA256}" xmlns:ds="{XMLDSIG_NS}"></DigestMethod><DigestValue>{digest}</DigestValue></Reference>"#
+        );
+        let err = verify_xml_signature_reference_digest(&namespace_qualified_algorithm, canonical)
+            .expect_err("namespace-qualified DigestMethod Algorithm must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_signed_properties_reference_verifies_generated_fixture() {
+        let payload = signed_pacs008_xml_with_signed_properties_reference();
+        let signature_span = find_first_xml_element(&payload, "Signature").expect("signature");
+        let signature_xml = &payload[signature_span.start..signature_span.end];
+        ensure_xades_qualifying_properties_target(signature_xml)
+            .expect("QualifyingProperties Target should bind to Signature Id");
+        let signed_info_span =
+            find_first_xml_element(signature_xml, "SignedInfo").expect("SignedInfo");
+        let signed_info_xml = &signature_xml[signed_info_span.start..signed_info_span.end];
+
+        verify_xml_signature_references(
+            &payload,
+            signature_span,
+            signature_span,
+            signature_xml,
+            signed_info_xml,
+            &[],
+        )
+        .expect("generated XAdES fixture references should verify");
+    }
+
+    #[test]
+    fn supported_xml_xades_qualifying_properties_requires_direct_shape() {
+        let payload = signed_pacs008_xml_with_signed_properties_reference();
+        let signature_span = find_first_xml_element(&payload, "Signature").expect("signature");
+        let signature_xml = &payload[signature_span.start..signature_span.end];
+        ensure_xades_qualifying_properties_target(signature_xml)
+            .expect("direct XAdES QualifyingProperties should be accepted");
+
+        let prefixed_signature = format!(
+            r##"<Signature Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="{XADES_NS}" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
+        );
+        ensure_xades_qualifying_properties_target(&prefixed_signature)
+            .expect("prefixed XAdES QualifyingProperties should bind to the supported namespace");
+
+        for invalid_payload in [
+            format!(
+                r##"<Signature Id="sig-001"><Object><xades:QualifyingProperties xmlns:xades="urn:not-xades" Target="#sig-001"><xades:SignedProperties Id="signed-props-001"></xades:SignedProperties></xades:QualifyingProperties></Object></Signature>"##
+            ),
+            r##"<Signature Id="sig-001"><Object><QualifyingProperties xmlns="urn:not-xades" Target="#sig-001"><SignedProperties Id="signed-props-001"></SignedProperties></QualifyingProperties></Object></Signature>"##.to_owned(),
+            signed_pacs008_xml_with_signed_properties_reference().replacen(
+                r##"<QualifyingProperties Target="#sig-001">"##,
+                r##"<QualifyingProperties Target="#sig-001" Id="qp-001">"##,
+                1,
+            ),
+            signed_pacs008_xml_with_signed_properties_reference()
+                .replacen(
+                    r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                    r##"<Object><Wrapper><QualifyingProperties Target="#sig-001">"##,
+                    1,
+                )
+                .replacen(
+                    "</QualifyingProperties></Object>",
+                    "</QualifyingProperties></Wrapper></Object>",
+                    1,
+                ),
+            signed_pacs008_xml_with_signed_properties_reference()
+                .replacen("<SignedProperties", "<Wrapper><SignedProperties", 1)
+                .replacen("</SignedProperties>", "</SignedProperties></Wrapper>", 1),
+            signed_pacs008_xml_with_signed_properties_reference().replacen(
+                "</SignedProperties>",
+                "</SignedProperties><UnsignedProperties></UnsignedProperties>",
+                1,
+            ),
+        ] {
+            let signature_span =
+                find_first_xml_element(&invalid_payload, "Signature").expect("signature");
+            let signature_xml = &invalid_payload[signature_span.start..signature_span.end];
+            let err = ensure_xades_qualifying_properties_target(signature_xml)
+                .expect_err("unsupported XAdES wrapper shape must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_xades_signing_certificate_v2_requires_direct_cert_children() {
+        let digest = BASE64_STANDARD.encode([7_u8; 32]);
+        let cert = format!(
+            r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+        );
+        let valid = format!(r#"<SigningCertificateV2>{cert}</SigningCertificateV2>"#);
+        assert_eq!(
+            xades_signing_certificate_v2_digests(&valid)
+                .expect("direct Cert children should be accepted"),
+            vec![lower_hex(&[7_u8; 32])]
+        );
+
+        let prefixed_cert = format!(
+            r#"<xades:Cert><xades:CertDigest xmlns:ds="{XMLDSIG_NS}"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></xades:CertDigest></xades:Cert>"#
+        );
+        let prefixed = format!(
+            r#"<xades:SigningCertificateV2 xmlns:xades="{XADES_NS}">{prefixed_cert}</xades:SigningCertificateV2>"#
+        );
+        assert_eq!(
+            xades_signing_certificate_v2_digests(&prefixed)
+                .expect("prefixed XAdES SigningCertificateV2 should decode"),
+            vec![lower_hex(&[7_u8; 32])]
+        );
+
+        for invalid in [
+            format!(
+                r#"<xades:SigningCertificateV2 xmlns:xades="urn:not-xades">{prefixed_cert}</xades:SigningCertificateV2>"#
+            ),
+            format!(r#"<SigningCertificateV2 Id="certs-001">{cert}</SigningCertificateV2>"#),
+            format!(r#"<SigningCertificateV2><Wrapper>{cert}</Wrapper></SigningCertificateV2>"#),
+            format!(
+                r#"<SigningCertificateV2>{cert}<Wrapper>{cert}</Wrapper></SigningCertificateV2>"#
+            ),
+        ] {
+            let err = xades_signing_certificate_v2_digests(&invalid)
+                .expect_err("wrapped Cert children must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_xades_signing_certificate_v2_binds_ordered_chain_prefix() {
+        let leaf = [1_u8; 32];
+        let issuer = [2_u8; 32];
+        let root = [3_u8; 32];
+        let extra = [4_u8; 32];
+        let key_material = XmlSignatureKeyMaterial {
+            public_key: Vec::new(),
+            certificate_sha256: vec![lower_hex(&leaf), lower_hex(&issuer), lower_hex(&root)],
+        };
+
+        for valid in [
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, issuer],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, issuer, root],
+            ),
+        ] {
+            verify_xades_signing_certificate_v2_binding(&valid, &key_material)
+                .expect("ordered certificate chain prefix should be accepted");
+        }
+
+        for invalid in [
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[issuer],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, root],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, leaf],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, issuer, leaf],
+            ),
+            signed_properties_xml_with_signing_certificate_v2_digest_bytes(
+                "signed-props-001",
+                &[leaf, issuer, root, extra],
+            ),
+        ] {
+            let err = verify_xades_signing_certificate_v2_binding(&invalid, &key_material)
+                .expect_err("unordered, duplicate, or unknown chain digest must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_xades_cert_digest_requires_direct_child() {
+        let digest = BASE64_STANDARD.encode([9_u8; 32]);
+        let cert_digest = format!(
+            r#"<CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest>"#
+        );
+        let valid = format!(r#"<Cert>{cert_digest}</Cert>"#);
+        assert_eq!(
+            xades_cert_digest_sha256(&valid).expect("direct CertDigest should be accepted"),
+            lower_hex(&[9_u8; 32])
+        );
+
+        for invalid in [
+            format!(r#"<Cert Id="cert-001">{cert_digest}</Cert>"#),
+            format!(
+                r#"<Cert><CertDigest Id="digest-001"><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+            ),
+            format!(
+                r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="method-001"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+            ),
+            format!(r#"<Cert><Wrapper>{cert_digest}</Wrapper></Cert>"#),
+            format!(r#"<Cert>{cert_digest}<Wrapper>{cert_digest}</Wrapper></Cert>"#),
+            format!(
+                r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue><Other></Other></CertDigest></Cert>"#
+            ),
+        ] {
+            let err = xades_cert_digest_sha256(&invalid)
+                .expect_err("wrapped CertDigest children must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_xades_signed_signature_properties_requires_direct_shape() {
+        let valid = signed_properties_xml("signed-props-001");
+        xades_signed_signature_properties_xml(&valid)
+            .expect("direct SignedSignatureProperties should be accepted");
+        assert_eq!(
+            xades_signed_properties_signing_time(&valid)
+                .expect("direct SigningTime should be accepted"),
+            Some(XML_SIGNATURE_TEST_SIGNING_TIME.to_owned())
+        );
+
+        let prefixed = signed_properties_xml_prefixed("signed-props-001", XADES_NS);
+        xades_signed_signature_properties_xml(&prefixed)
+            .expect("prefixed SignedSignatureProperties should bind to the supported namespace");
+        assert_eq!(
+            xades_signed_properties_signing_time(&prefixed)
+                .expect("prefixed SigningTime should be accepted"),
+            Some(XML_SIGNATURE_TEST_SIGNING_TIME.to_owned())
+        );
+
+        for invalid in [
+            signed_properties_xml_prefixed("signed-props-001", "urn:not-xades"),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><Wrapper>{}</Wrapper></SignedProperties>"#,
+                signed_properties_xml("inner")
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><Wrapper><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></Wrapper></SignedSignatureProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedDataObjectProperties></SignedDataObjectProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties Profile="unsupported"><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningCertificate></SigningCertificate></SignedSignatureProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            ),
+        ] {
+            let err = xades_signed_signature_properties_xml(&invalid)
+                .expect_err("unsupported SignedProperties shape must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+
+        for invalid in [
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime Source="unsupported">{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime></SignedSignatureProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<Chunk></Chunk></SigningTime></SignedSignatureProperties></SignedProperties>"#
+            ),
+            format!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}<!--comment--></SigningTime></SignedSignatureProperties></SignedProperties>"#
+            ),
+        ] {
+            let err = xades_signed_properties_signing_time(&invalid)
+                .expect_err("unsupported SigningTime leaf shape must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_certificate_evaluation_time_uses_verified_signed_properties_time() {
+        let parsed =
+            parse_message("pacs.008", unsigned_pacs008_xml().as_bytes()).expect("parse pacs.008");
+        assert!(
+            xml_signature_evaluation_time(&parsed, None)
+                .expect("missing signed time and BAH creation date should be valid")
+                .is_none(),
+            "certificate evaluation time must not come from unsigned signature-local data"
+        );
+
+        let signed_properties = signed_properties_xml("signed-props-001");
+        assert!(
+            xml_signature_evaluation_time(&parsed, Some(&signed_properties))
+                .expect("verified SignedProperties SigningTime should parse")
+                .is_some()
+        );
+
+        let duplicate_signing_time = signed_properties.replacen(
+            "</SigningTime>",
+            &format!("</SigningTime><SigningTime>{XML_SIGNATURE_TEST_SIGNING_TIME}</SigningTime>"),
+            1,
+        );
+        let err = xml_signature_evaluation_time(&parsed, Some(&duplicate_signing_time))
+            .expect_err("duplicate signed SigningTime values must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_signature_shape_requires_direct_children() {
+        assert!(
+            find_first_xml_element(
+                &format!(r#"<ds:Signature xmlns:ds="{XMLDSIG_NS}"></bad:Signature>"#),
+                "Signature",
+            )
+            .is_none(),
+            "opening and closing XML element QNames must match exactly"
+        );
+
+        let payload = signed_pacs008_xml();
+        let signature_span =
+            find_first_xml_element(&payload, "Signature").expect("fixture Signature element");
+        let signature_xml = &payload[signature_span.start..signature_span.end];
+        let signature_children = xml_signature_direct_child_spans(signature_xml)
+            .expect("direct XMLDSig Signature children should be accepted");
+        let signed_info_xml = &signature_xml
+            [signature_children.signed_info.start..signature_children.signed_info.end];
+        xml_signed_info_direct_child_spans(signed_info_xml)
+            .expect("direct XMLDSig SignedInfo children should be accepted");
+
+        for invalid_payload in [
+            signed_pacs008_xml()
+                .replacen("<SignedInfo>", "<Wrapper><SignedInfo>", 1)
+                .replacen("</SignedInfo>", "</SignedInfo></Wrapper>", 1),
+            "<Signature><SignatureValue>AQ==</SignatureValue><SignedInfo></SignedInfo><KeyInfo></KeyInfo></Signature>"
+                .to_owned(),
+            "<Signature><SignedInfo></SignedInfo><KeyInfo></KeyInfo><SignatureValue>AQ==</SignatureValue></Signature>"
+                .to_owned(),
+            "<Signature><SignedInfo></SignedInfo><SignatureValue>AQ==</SignatureValue><Object></Object><KeyInfo></KeyInfo></Signature>"
+                .to_owned(),
+            signed_pacs008_xml().replacen(
+                "</SignatureValue>",
+                "</SignatureValue><SignatureValue>AQ==</SignatureValue>",
+                1,
+            ),
+            signed_pacs008_xml().replacen("<KeyInfo>", "<Manifest></Manifest><KeyInfo>", 1),
+            format!(
+                r#"<ds:Signature xmlns:ds="{XMLDSIG_NS}"><ds:SignedInfo></bad:SignedInfo><ds:SignatureValue>AQ==</ds:SignatureValue><ds:KeyInfo></ds:KeyInfo></ds:Signature>"#
+            ),
+        ] {
+            let signature_span = find_first_xml_element(&invalid_payload, "Signature")
+                .expect("invalid fixture Signature element");
+            let signature_xml = &invalid_payload[signature_span.start..signature_span.end];
+            let err = xml_signature_direct_child_spans(signature_xml)
+                .expect_err("unsupported Signature shape must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+
+        for invalid_signed_info in [
+            format!(
+                r#"<SignedInfo><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod><Reference URI=""></Reference></SignedInfo>"#
+            ),
+            format!(
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod><Reference URI=""></Reference><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod></SignedInfo>"#
+            ),
+            signed_info_xml
+                .replacen(
+                    "<CanonicalizationMethod",
+                    "<Wrapper><CanonicalizationMethod",
+                    1,
+                )
+                .replacen("</CanonicalizationMethod>", "</CanonicalizationMethod></Wrapper>", 1),
+            signed_info_xml.replacen("</SignatureMethod>", "</SignatureMethod><Object></Object>", 1),
+            signed_info_xml.replacen(
+                "</SignatureMethod>",
+                &format!(
+                    r#"</SignatureMethod><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod>"#
+                ),
+                1,
+            ),
+        ] {
+            let err = xml_signed_info_direct_child_spans(&invalid_signed_info)
+                .expect_err("unsupported SignedInfo shape must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_p256_signature_rejects_high_s() {
+        let signing_key = xml_signature_test_signing_key();
+        let signature: P256Signature = signing_key.sign(b"high-s regression");
+        let low_s = low_s_p256_signature(signature);
+        decode_p256_xmldsig_signature(low_s.to_bytes().as_slice())
+            .expect("low-S fixed-width signatures should be accepted");
+        decode_p256_xmldsig_signature(low_s.to_der().as_bytes())
+            .expect("low-S DER signatures should be accepted");
+
+        let high_s = high_s_p256_signature(low_s);
+        signing_key
+            .verifying_key()
+            .verify(b"high-s regression", &high_s)
+            .expect("high-S counterpart remains mathematically valid ECDSA");
+
+        for signature_value in [
+            high_s.to_bytes().to_vec(),
+            high_s.to_der().as_bytes().to_vec(),
+        ] {
+            let err = decode_p256_xmldsig_signature(&signature_value)
+                .expect_err("high-S P-256 signatures must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_required_base64_rejects_duplicate_children() {
+        let err = decode_required_child_base64(
+            r#"<Reference><DigestValue>AQ==</DigestValue><DigestValue>Ag==</DigestValue></Reference>"#,
+            "DigestValue",
+        )
+        .expect_err("duplicate required base64 children must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let err = decode_required_child_base64(
+            r#"<Reference><DigestValue Id="digest-001">AQ==</DigestValue></Reference>"#,
+            "DigestValue",
+        )
+        .expect_err("required base64 attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let err = decode_required_child_base64(
+            r#"<Reference><DigestValue><Chunk>AQ==</Chunk></DigestValue></Reference>"#,
+            "DigestValue",
+        )
+        .expect_err("nested required base64 markup must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let err = decode_required_child_base64(
+            r#"<Reference><DigestValue>A<!--comment-->Q==</DigestValue></Reference>"#,
+            "DigestValue",
+        )
+        .expect_err("required base64 comments must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_key_material_enforces_key_info_shape() {
+        let signing_key = xml_signature_test_signing_key();
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let valid = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        xml_signature_key_material(&valid, None)
+            .expect("structured P-256 public-key KeyInfo should decode");
+
+        let inherited_namespaces = vec![CanonicalXmlNamespaceBinding {
+            prefix: "ds".to_owned(),
+            uri: XMLDSIG_NS.to_owned(),
+        }];
+        let prefixed = format!(
+            r#"<ds:KeyInfo><ds:KeyValue><ds:ECKeyValue><ds:NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></ds:NamedCurve><ds:PublicKey>{public_key}</ds:PublicKey></ds:ECKeyValue></ds:KeyValue></ds:KeyInfo>"#
+        );
+        xml_signature_key_material_with_namespaces(&prefixed, None, &inherited_namespaces)
+            .expect("prefixed XMLDSig KeyInfo should resolve inherited namespaces");
+
+        let wrong_key_value_namespace = format!(
+            r#"<ds:KeyInfo><bad:KeyValue xmlns:bad="urn:not-xmldsig"><ds:ECKeyValue><ds:NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></ds:NamedCurve><ds:PublicKey>{public_key}</ds:PublicKey></ds:ECKeyValue></bad:KeyValue></ds:KeyInfo>"#
+        );
+        let err = xml_signature_key_material_with_namespaces(
+            &wrong_key_value_namespace,
+            None,
+            &inherited_namespaces,
+        )
+        .expect_err("KeyValue bound outside XMLDSig must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let malformed_public_key = BASE64_STANDARD.encode([1_u8, 2, 3]);
+        let malformed_public_key_xml = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{malformed_public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&malformed_public_key_xml, None)
+            .expect_err("malformed P-256 public-key bytes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let compressed_public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes(),
+        );
+        let compressed_public_key_xml = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{compressed_public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&compressed_public_key_xml, None)
+            .expect_err("compressed P-256 public-key bytes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let duplicate = format!(
+            "<Signature><KeyInfo><PublicKey>{public_key}</PublicKey><PublicKey>{public_key}</PublicKey></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(&duplicate, None)
+            .expect_err("duplicate PublicKey elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let mixed = format!(
+            "<Signature><KeyInfo><PublicKey>{public_key}</PublicKey><X509Data><X509Certificate>AQ==</X509Certificate></X509Data></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(&mixed, None)
+            .expect_err("mixed PublicKey and X509Certificate material must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let wrong_curve = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="urn:oid:1.3.132.0.34"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&wrong_curve, None)
+            .expect_err("unsupported public-key curves must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let missing_key_value = format!(
+            r#"<Signature><KeyInfo><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&missing_key_value, None)
+            .expect_err("PublicKey must be wrapped in KeyValue/ECKeyValue");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let public_key_outside_ec_key_value = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve></ECKeyValue><PublicKey>{public_key}</PublicKey></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&public_key_outside_ec_key_value, None)
+            .expect_err("PublicKey outside ECKeyValue must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let key_info_extra_child = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue><RetrievalMethod></RetrievalMethod></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&key_info_extra_child, None)
+            .expect_err("unsupported KeyInfo child elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let key_value_extra_child = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue><ECParameters></ECParameters></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&key_value_extra_child, None)
+            .expect_err("unsupported KeyValue child elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let ec_key_value_extra_child = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey><ECParameters></ECParameters></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&ec_key_value_extra_child, None)
+            .expect_err("unsupported ECKeyValue child elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let key_info_text = format!(
+            r#"<Signature><KeyInfo>text<KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&key_info_text, None)
+            .expect_err("non-whitespace KeyInfo text must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let key_info_attribute = format!(
+            r#"<Signature><KeyInfo Id="key-001"><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&key_info_attribute, None)
+            .expect_err("unsupported KeyInfo attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let key_value_attribute = format!(
+            r#"<Signature><KeyInfo><KeyValue Id="key-value-001"><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&key_value_attribute, None)
+            .expect_err("unsupported KeyValue attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let ec_key_value_attribute = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue Type="named"><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&ec_key_value_attribute, None)
+            .expect_err("unsupported ECKeyValue attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let named_curve_attribute = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}" Type="named"></NamedCurve><PublicKey>{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&named_curve_attribute, None)
+            .expect_err("unsupported NamedCurve attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let public_key_attribute = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey Encoding="base64">{public_key}</PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&public_key_attribute, None)
+            .expect_err("unsupported PublicKey attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let public_key_nested_markup = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}<Chunk></Chunk></PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&public_key_nested_markup, None)
+            .expect_err("nested PublicKey markup must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let public_key_comment = format!(
+            r#"<Signature><KeyInfo><KeyValue><ECKeyValue><NamedCurve URI="{XMLDSIG_P256_NAMED_CURVE}"></NamedCurve><PublicKey>{public_key}<!--comment--></PublicKey></ECKeyValue></KeyValue></KeyInfo></Signature>"#
+        );
+        let err = xml_signature_key_material(&public_key_comment, None)
+            .expect_err("PublicKey comments must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let certificate_without_x509_data =
+            "<Signature><KeyInfo><X509Certificate>AQ==</X509Certificate></KeyInfo></Signature>";
+        let err = xml_signature_key_material(certificate_without_x509_data, None)
+            .expect_err("X509Certificate outside X509Data must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let duplicate_x509_data = concat!(
+            "<Signature><KeyInfo><X509Data><X509Certificate>AQ==</X509Certificate></X509Data>",
+            "<X509Data><X509Certificate>Ag==</X509Certificate></X509Data></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(duplicate_x509_data, None)
+            .expect_err("duplicate X509Data wrappers must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let x509_data_extra_child = concat!(
+            "<Signature><KeyInfo><X509Data><X509Certificate>AQ==</X509Certificate>",
+            "<X509IssuerSerial></X509IssuerSerial></X509Data></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(x509_data_extra_child, None)
+            .expect_err("unsupported X509Data child elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let x509_data_attribute = concat!(
+            "<Signature><KeyInfo><X509Data Id=\"certs-001\">",
+            "<X509Certificate>AQ==</X509Certificate></X509Data></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(x509_data_attribute, None)
+            .expect_err("unsupported X509Data attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let x509_certificate_attribute = concat!(
+            "<Signature><KeyInfo><X509Data>",
+            "<X509Certificate Encoding=\"base64\">AQ==</X509Certificate>",
+            "</X509Data></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(x509_certificate_attribute, None)
+            .expect_err("unsupported X509Certificate attributes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let x509_certificate_nested_markup = concat!(
+            "<KeyInfo><X509Data><X509Certificate>AQ==<Chunk></Chunk></X509Certificate>",
+            "</X509Data></KeyInfo>"
+        );
+        let err = xml_signature_x509_certificates(x509_certificate_nested_markup)
+            .expect_err("nested X509Certificate markup must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let x509_certificate_comment = concat!(
+            "<KeyInfo><X509Data><X509Certificate>AQ==<!--comment--></X509Certificate>",
+            "</X509Data></KeyInfo>"
+        );
+        let err = xml_signature_x509_certificates(x509_certificate_comment)
+            .expect_err("X509Certificate comments must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let missing_key_info =
+            format!("<Signature><PublicKey>{public_key}</PublicKey></Signature>");
+        let err = xml_signature_key_material(&missing_key_info, None)
+            .expect_err("PublicKey outside KeyInfo must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let out_of_scope = format!(
+            "<Signature><PublicKey>{public_key}</PublicKey><KeyInfo><PublicKey>{public_key}</PublicKey></KeyInfo></Signature>"
+        );
+        let err = xml_signature_key_material(&out_of_scope, None)
+            .expect_err("key material outside KeyInfo must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_x509_certificate_chain_bounds_reject_duplicates_and_overlong_chains() {
+        let valid = (0..XML_SIGNATURE_MAX_X509_CERTIFICATES)
+            .map(|index| vec![index as u8])
+            .collect::<Vec<_>>();
+        ensure_xml_signature_certificate_chain_bounds(&valid)
+            .expect("maximum supported unique X509 chain should be accepted");
+
+        let empty = Vec::new();
+        let err = ensure_xml_signature_certificate_chain_bounds(&empty)
+            .expect_err("empty X509 chain must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let duplicate = vec![vec![1_u8], vec![1_u8]];
+        let err = ensure_xml_signature_certificate_chain_bounds(&duplicate)
+            .expect_err("duplicate X509 DER entries must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let overlong = (0..=XML_SIGNATURE_MAX_X509_CERTIFICATES)
+            .map(|index| vec![index as u8])
+            .collect::<Vec<_>>();
+        let err = ensure_xml_signature_certificate_chain_bounds(&overlong)
+            .expect_err("overlong X509 chain must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_xades_cert_digest_rejects_duplicate_methods() {
+        let digest = BASE64_STANDARD.encode([0_u8; 32]);
+        let cert_xml = format!(
+            r#"<Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod><DigestValue>{digest}</DigestValue></CertDigest></Cert>"#
+        );
+        let err = xades_cert_digest_sha256(&cert_xml)
+            .expect_err("duplicate XAdES CertDigest methods must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_accepts_prefixed_attributes() {
+        let canonical = canonicalize_supported_xml(
+            r#"<A xmlns:z="urn:z" z:flag="yes" b="2" xmlns:a="urn:a" a:flag="no"></A>"#,
+        )
+        .expect("declared prefixed attributes should canonicalize by expanded name");
+
+        assert_eq!(
+            canonical,
+            r#"<A xmlns:a="urn:a" xmlns:z="urn:z" b="2" a:flag="no" z:flag="yes"></A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_accepts_inherited_prefixed_attributes() {
+        let canonical =
+            canonicalize_supported_xml(r#"<A xmlns:p="urn:p"><B p:flag="true"></B></A>"#)
+                .expect("child attributes should resolve namespace bindings from ancestors");
+
+        assert_eq!(canonical, r#"<A xmlns:p="urn:p"><B p:flag="true"></B></A>"#);
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_strips_comments_for_no_comments_c14n() {
+        let canonical = canonicalize_supported_xml(
+            "<!--before--><A><!--inside--><B>value<!--text comment--></B><!--tail--></A><!--after-->",
+        )
+        .expect("no-comments XML canonicalization should omit comments");
+
+        assert_eq!(canonical, "<A><B>value</B></A>");
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_malformed_comments() {
+        for xml in ["<A><!--unterminated</A>", "<A><!--bad--comment--></A>"] {
+            let err = canonicalize_supported_xml(xml)
+                .expect_err("malformed XML comments must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_unsupported_entities() {
+        for xml in [
+            "<A>&custom;</A>",
+            "<A>&amp</A>",
+            "<A>&#0;</A>",
+            "<A>&#xD800;</A>",
+            "<A>&#X41;</A>",
+            "<A>&#x110000;</A>",
+            "<A>bad]]>tail</A>",
+        ] {
+            let err = canonicalize_supported_xml(xml)
+                .expect_err("unsupported or invalid XML character data must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn der_reader_rejects_noncanonical_lengths_and_integers() {
+        let mut valid_long_form = vec![0x30, 0x81, 0x80];
+        valid_long_form.extend([0_u8; 128]);
+        let element = der_expect_single(&valid_long_form, 0x30)
+            .expect("minimal DER long-form length should parse");
+        assert_eq!(element.value.len(), 128);
+
+        let mut leading_zero_length = vec![0x30, 0x82, 0x00, 0x80];
+        leading_zero_length.extend([0_u8; 128]);
+        let err = der_expect_single(&leading_zero_length, 0x30)
+            .expect_err("long-form DER length with leading zero must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let mut unnecessary_long_form = vec![0x30, 0x81, 0x7f];
+        unnecessary_long_form.extend([0_u8; 127]);
+        let err = der_expect_single(&unnecessary_long_form, 0x30)
+            .expect_err("long-form DER length below 128 must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        assert_eq!(der_integer_value(&[0]).expect("zero is canonical"), 0);
+        assert_eq!(der_integer_value(&[0x7f]).expect("127 is canonical"), 127);
+        assert_eq!(
+            der_integer_value(&[0x00, 0x80]).expect("leading zero is needed for positive 128"),
+            128
+        );
+        let err = der_integer_value(&[0x00, 0x7f])
+            .expect_err("unneeded leading zero in DER integer must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = der_integer_value(&[0x80])
+            .expect_err("negative DER integer encodings must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn ocsp_parser_rejects_unsupported_extensions() {
+        fn test_ocsp_single_response_der(include_extensions: bool) -> Vec<u8> {
+            let algorithm_identifier = der_sequence(der_tlv(0x06, OID_SHA256_DER.to_vec()));
+            let cert_id = der_sequence(
+                [
+                    algorithm_identifier,
+                    der_tlv(0x04, vec![0x11; 32]),
+                    der_tlv(0x04, vec![0x22; 32]),
+                    der_tlv(0x02, vec![0x01]),
+                ]
+                .concat(),
+            );
+            let mut content = [
+                cert_id,
+                der_tlv(0x80, Vec::new()),
+                der_tlv(0x18, b"20260601141606Z".to_vec()),
+                der_tlv(0xA0, der_tlv(0x18, b"21260508141606Z".to_vec())),
+            ]
+            .concat();
+            if include_extensions {
+                content.extend(der_tlv(0xA1, der_sequence(Vec::new())));
+            }
+            der_sequence(content)
+        }
+
+        fn test_ocsp_response_data_der(include_extensions: bool) -> Vec<u8> {
+            let mut content = [
+                der_tlv(0x82, vec![0x33; 20]),
+                der_tlv(0x18, b"20260601141606Z".to_vec()),
+                der_sequence(test_ocsp_single_response_der(false)),
+            ]
+            .concat();
+            if include_extensions {
+                content.extend(der_tlv(0xA1, der_sequence(Vec::new())));
+            }
+            der_sequence(content)
+        }
+
+        let single_response = test_ocsp_single_response_der(false);
+        let single_response = der_expect_single(&single_response, 0x30)
+            .expect("test SingleResponse")
+            .value;
+        parse_ocsp_single_response(single_response)
+            .expect("minimal SingleResponse without extensions should parse");
+
+        let single_response_with_extensions = test_ocsp_single_response_der(true);
+        let single_response_with_extensions =
+            der_expect_single(&single_response_with_extensions, 0x30)
+                .expect("test SingleResponse with extensions")
+                .value;
+        let err = match parse_ocsp_single_response(single_response_with_extensions) {
+            Ok(_) => panic!("unsupported SingleResponse extensions must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let response_data = test_ocsp_response_data_der(false);
+        let response_data = der_expect_single(&response_data, 0x30)
+            .expect("test ResponseData")
+            .value;
+        parse_ocsp_response_data(response_data)
+            .expect("minimal ResponseData without extensions should parse");
+
+        let response_data_with_extensions = test_ocsp_response_data_der(true);
+        let response_data_with_extensions = der_expect_single(&response_data_with_extensions, 0x30)
+            .expect("test ResponseData with extensions")
+            .value;
+        let err = match parse_ocsp_response_data(response_data_with_extensions) {
+            Ok(_) => panic!("unsupported ResponseData extensions must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        for response_der_base64 in [
+            TEST_X509_OCSP_GOOD_RESPONSE_DER_B64,
+            TEST_X509_OCSP_REVOKED_RESPONSE_DER_B64,
+            TEST_X509_OCSP_DELEGATED_GOOD_RESPONSE_DER_B64,
+            TEST_X509_OCSP_DELEGATED_GOOD_NO_CERTS_RESPONSE_DER_B64,
+        ] {
+            let response_der = BASE64_STANDARD
+                .decode(response_der_base64)
+                .expect("legacy OCSP fixture must decode");
+            let err = match parse_ocsp_response_der(&response_der) {
+                Ok(_) => panic!("legacy OCSP fixture with unsupported extensions must fail closed"),
+                Err(err) => err,
+            };
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_reserved_namespace_declarations() {
+        for xml in [
+            r#"<A xmlns:xml="urn:not-xml"></A>"#,
+            r#"<A xmlns="http://www.w3.org/XML/1998/namespace"></A>"#,
+            r#"<A xmlns:xmlns="http://www.w3.org/2000/xmlns/"></A>"#,
+            r#"<A xmlns:bad="http://www.w3.org/XML/1998/namespace"></A>"#,
+            r#"<A xmlns:bad="http://www.w3.org/2000/xmlns/"></A>"#,
+        ] {
+            let err = canonicalize_supported_xml(xml)
+                .expect_err("reserved namespace declarations must fail closed");
+
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_unbound_prefixed_attributes() {
+        let err = canonicalize_supported_xml(r#"<A p:id="id-1"></A>"#)
+            .expect_err("prefixed attributes without in-scope namespace bindings must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_duplicate_expanded_attributes() {
+        let err = canonicalize_supported_xml(
+            r#"<A xmlns:p="urn:same" xmlns:q="urn:same" p:id="one" q:id="two"></A>"#,
+        )
+        .expect_err("attributes with duplicate expanded names must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_accepts_locally_declared_prefixes() {
+        let canonical = canonicalize_supported_xml(r#"<ds:A xmlns:ds="urn:test"><ds:B /></ds:A>"#)
+            .expect("locally declared namespace prefixes are inside the supported subset");
+
+        assert_eq!(
+            canonical,
+            r#"<ds:A xmlns:ds="urn:test"><ds:B></ds:B></ds:A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_applies_inherited_root_namespace() {
+        let inherited_namespaces = vec![CanonicalXmlAttribute {
+            name: "xmlns:ds".to_owned(),
+            value: XMLDSIG_NS.to_owned(),
+            kind: CanonicalXmlAttributeKind::Namespace,
+        }];
+        let canonical = canonicalize_supported_xml_with_inherited_namespaces(
+            "<ds:A><ds:B /></ds:A>",
+            &inherited_namespaces,
+        )
+        .expect("root namespace inherited from the enclosing XMLDSig element should canonicalize");
+
+        assert_eq!(
+            canonical,
+            r#"<ds:A xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:B></ds:B></ds:A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_distinguishes_inclusive_and_exclusive_namespaces() {
+        let inherited_namespaces = vec![
+            CanonicalXmlAttribute {
+                name: "xmlns:ds".to_owned(),
+                value: XMLDSIG_NS.to_owned(),
+                kind: CanonicalXmlAttributeKind::Namespace,
+            },
+            CanonicalXmlAttribute {
+                name: "xmlns:unused".to_owned(),
+                value: "urn:unused".to_owned(),
+                kind: CanonicalXmlAttributeKind::Namespace,
+            },
+        ];
+        let inclusive = canonicalize_supported_xml_with_mode(
+            "<ds:A><ds:B /></ds:A>",
+            &inherited_namespaces,
+            CanonicalXmlMode::Inclusive,
+        )
+        .expect("inclusive canonicalization should carry inherited namespaces");
+        let exclusive = canonicalize_supported_xml_with_mode(
+            "<ds:A><ds:B /></ds:A>",
+            &inherited_namespaces,
+            CanonicalXmlMode::Exclusive,
+        )
+        .expect("exclusive canonicalization should carry only visibly used namespaces");
+
+        assert_eq!(
+            inclusive,
+            r#"<ds:A xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:unused="urn:unused"><ds:B></ds:B></ds:A>"#
+        );
+        assert_eq!(
+            exclusive,
+            r#"<ds:A xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:B></ds:B></ds:A>"#
+        );
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_inherited_prefix_context() {
+        let err = canonicalize_supported_xml("<ds:A></ds:A>")
+            .expect_err("inherited namespace context is outside this canonicalizer");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_canonicalizer_rejects_attribute_whitespace_rewrites() {
+        let err = canonicalize_supported_xml("<A value='line\nbreak'></A>")
+            .expect_err("attribute whitespace normalization is outside this canonicalizer");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unpinned_public_key() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.trusted_public_key_sha256 = vec!["11".repeat(32)];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("require-verified must fail closed for unpinned XMLDSig keys");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_comments_in_no_comments_c14n() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_comments();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("no-comments C14N should omit XML comments before digest and signature checks");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_character_references_in_payload_digest() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_character_reference_message_id();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("canonicalized character references should satisfy the XMLDSig digest");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig&amp;001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_xml_namespace_attribute();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("implicit xml namespace attributes should satisfy the XMLDSig digest");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_prefixed_attribute_in_payload_digest() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_prefixed_attribute();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("prefixed payload attributes should satisfy the XMLDSig digest");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_xml_namespace_attribute_in_signed_info() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signed_info_xml_namespace_attribute();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("implicit xml namespace attributes should canonicalize inside SignedInfo");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_same_document_id_reference() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_same_document_reference();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("same-document #id XMLDSig references should verify");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_same_document_reference_with_inherited_namespace() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_inherited_namespace_same_document_reference();
+        let parsed = sample_pacs008();
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("same-document references should inherit ancestor namespace context");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("m-profile"));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_same_document_reference_outside_signature_carrier() {
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_header_only_same_document_reference(),
+            "same-document payload Reference must cover the XMLDSig carrier",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_reference_c14n_transform() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_reference_c14n_transform();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("payload Reference C14N transform should drive digest canonicalization");
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_inherited_prefixed_attribute_in_signed_info() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect(
+                "exclusive C14N should inherit namespaces visibly used by SignedInfo attributes",
+            );
+
+        assert!(metadata.embedded_signature_detected());
+        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_prefixed_signed_info_with_inherited_namespace() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_prefixed_signature_namespace();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("prefixed XMLDSig SignedInfo should inherit the Signature namespace");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_sgntr_wrapped_signature_carrier() {
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_sgntr_signature_carrier(),
+            "Sgntr wrappers with one direct XMLDSig Signature must verify",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_prefixed_signature_with_wrong_namespace() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_wrong_prefixed_signature_namespace();
+        let parsed = parse_message("pacs.008", payload.as_bytes())
+            .expect("parse wrong-namespace signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("prefixed XMLDSig elements must bind to the XMLDSig namespace");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unprefixed_signature_with_wrong_default_namespace() {
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_wrong_default_signature_namespace(),
+            "unprefixed XMLDSig elements must reject wrong default namespaces",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_inclusive_unused_signature_namespace();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("inclusive XML canonicalization should carry inherited root namespaces");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_exclusive_bytes_declared_as_inclusive_c14n() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("declared inclusive C14N must not verify exclusive canonical bytes");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_fixed_width_ecdsa_signature_value() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_fixed_width_signature_value();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("XMLDSig ECDSA SignatureValue should accept fixed-width r||s bytes");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_self_closing_signed_info_methods() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_self_closing_signed_info();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("supported canonicalizer must expand self-closing SignedInfo methods");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_raw_self_closing_signed_info_signature() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_raw_self_closing_signed_info_signature();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("signature must be checked against canonical SignedInfo bytes");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_extra_sgntr_signature_carrier() {
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_extra_sgntr_carrier(),
+            "extra XMLDSig/Sgntr signature carriers must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_certificate_chain_with_pinned_issuer() {
+        assert_pinned_certificate_chain_accepted(
+            signed_pacs008_xml_with_certificate_chain(),
+            "certificate chain ending at a pinned issuer must pass",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_certificate_chain_with_path_len_permitting_intermediate() {
+        assert_pinned_certificate_chain_accepted(
+            signed_pacs008_xml_with_three_certificate_chain(1),
+            "pathLenConstraint=1 should allow one subordinate intermediate CA",
+        );
     }
 
     #[test]
@@ -8096,6 +15624,13 @@ mod tests {
 
     #[test]
     fn require_verified_profile_rejects_public_key_xades_signing_certificate_v2() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
         let signing_key = test_p256_signing_key();
         let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
             TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
@@ -8109,18 +15644,14 @@ mod tests {
             &signed_properties_reference_xml,
             &xades_object_xml,
         );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
 
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("SigningCertificateV2 cannot authorize raw public-key KeyInfo");
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SigningCertificateV2 cannot authorize raw public-key KeyInfo");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }
@@ -8255,17 +15786,21 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_rejects_trust_anchor_x509_unknown_critical_leaf() {
+    fn require_verified_profile_rejects_certificate_chain_with_revoked_issuer() {
+        let CertificateChainSignedPayload {
+            payload,
+            issuer_sha256,
+            ..
+        } = signed_pacs008_xml_with_certificate_chain();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_unknown_critical_root_certificate_pin()];
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![issuer_sha256.clone()];
+        profile.revoked_certificate_sha256 = vec![issuer_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        let payload = signed_pacs008_xml_with_unknown_critical_leaf_x509_certificate_chain(true);
         let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
         let profile = runtime
             .resolve_profile(Some("signed-pacs008-test"))
@@ -8273,25 +15808,27 @@ mod tests {
 
         let err = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err(
-                "trust-anchor chains must reject signer certs with unknown critical extensions",
-            );
+            .expect_err("revoked certificate pins must override matching trust pins");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     #[test]
-    fn require_verified_profile_rejects_x509_unknown_critical_trust_anchor() {
+    fn require_verified_profile_rejects_certificate_chain_with_revoked_leaf() {
+        let CertificateChainSignedPayload {
+            payload,
+            leaf_sha256,
+            issuer_sha256,
+        } = signed_pacs008_xml_with_certificate_chain();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_unknown_critical_bad_root_certificate_pin()];
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![issuer_sha256];
+        profile.revoked_certificate_sha256 = vec![leaf_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        let payload = signed_pacs008_xml_with_unknown_critical_root_x509_certificate_chain();
         let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
         let profile = runtime
             .resolve_profile(Some("signed-pacs008-test"))
@@ -8299,1051 +15836,187 @@ mod tests {
 
         let err = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("pinned trust anchors with unknown critical extensions must fail closed");
+            .expect_err("revoked leaf certificate pins must override matching issuer trust pins");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     #[test]
-    fn require_verified_profile_rejects_directly_pinned_x509_expired_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec![test_x509_expired_leaf_public_key_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_expired_x509_certificate_chain(false);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("direct public-key pins must not authorize expired X.509 signer leaves");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_trust_anchor_x509_expired_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_expired_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_expired_x509_certificate_chain(true);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("trust-anchor chains must not authorize expired X.509 signer leaves");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_directly_pinned_x509_code_signing_eku_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec![test_x509_eku_leaf_public_key_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
-            TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64,
-            false,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("code-signing EKU leaves should be accepted for XMLDSig signer purpose");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_trust_anchor_x509_code_signing_eku_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_eku_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
-            TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64,
-            true,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("trust-anchor code-signing EKU leaves should be accepted");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_directly_pinned_x509_incompatible_eku_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec![test_x509_eku_leaf_public_key_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
-            TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64,
-            false,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("direct public-key pins must not bypass incompatible signer EKUs");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_trust_anchor_x509_incompatible_eku_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_eku_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_eku_x509_certificate_chain(
-            TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64,
-            true,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("trust-anchor chains must reject incompatible signer EKUs");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_authority_key_identifier_match() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_aki_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_aki_x509_certificate_chain(
-            TEST_X509_AKI_GOOD_LEAF_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("matching AKI/SKI trust-anchor chain should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_authority_key_identifier_mismatch() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_aki_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_aki_x509_certificate_chain(
-            TEST_X509_AKI_MISMATCH_LEAF_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("issuer name/signature matching must not bypass AKI/SKI mismatch");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_authority_issuer_serial_match() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_aki_issuer_serial_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(
-            TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("matching AKI issuer/serial trust-anchor chain should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_authority_issuer_serial_mismatch() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_aki_issuer_serial_mismatch_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(
-            TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("issuer name/signature matching must not bypass AKI issuer serial drift");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_noncritical_basic_constraints_root_ca() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_noncritical_ca_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_noncritical_ca_root_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("trust anchors must carry critical CA BasicConstraints");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_noncritical_basic_constraints_intermediate_ca() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_noncritical_ca_critical_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_noncritical_ca_intermediate_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("intermediate CAs must carry critical CA BasicConstraints");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_ca_critical_key_usage() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ca_key_usage_critical_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
-            TEST_X509_CA_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
-            TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("trust anchors with critical CA KeyUsage should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_noncritical_ca_key_usage() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ca_key_usage_noncritical_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
-            TEST_X509_CA_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
-            TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("CA KeyUsage must be critical before issuer admission");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_path_length_allowed_intermediate() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_pathlen_root1_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_pathlen_x509_certificate_chain(
-            TEST_X509_PATHLEN_INTERMEDIATE_BY_ROOT1_CERTIFICATE_DER_B64,
-            TEST_X509_PATHLEN_ROOT1_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("pinned root with pathLen 1 should authorize one intermediate CA");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_path_length_violation() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_pathlen_root0_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_pathlen_x509_certificate_chain(
-            TEST_X509_PATHLEN_INTERMEDIATE_BY_ROOT0_CERTIFICATE_DER_B64,
-            TEST_X509_PATHLEN_ROOT0_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("pinned root with pathLen 0 must not authorize an intermediate CA");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_directly_pinned_x509_ca_signer_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec![test_x509_ca_leaf_public_key_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ca_leaf_x509_certificate_chain(false);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("direct public-key pins must not authorize CA certificates as signers");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_trust_anchor_x509_ca_signer_leaf() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_ca_leaf_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ca_leaf_x509_certificate_chain(true);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("trust-anchor chains must not authorize CA certificates as signers");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_certificate_policy_oid() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_policy_root_certificate_pin()];
-        profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_policy_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("X.509 signer certificate with the required policy OID should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_name_constraints_permitted_subtree() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_name_constraints_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_name_constrained_x509_certificate_chain(
-            TEST_X509_NAME_CONSTRAINTS_ALLOWED_LEAF_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("X.509 signer inside permitted name subtree should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_name_constraints_outside_permitted_subtree() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_name_constraints_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_name_constrained_x509_certificate_chain(
-            TEST_X509_NAME_CONSTRAINTS_OUTSIDE_LEAF_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("X.509 signer outside permitted name subtree must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_name_constraints_excluded_subtree() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_name_constraints_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_name_constrained_x509_certificate_chain(
-            TEST_X509_NAME_CONSTRAINTS_EXCLUDED_LEAF_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("X.509 signer inside excluded name subtree must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_critical_name_constraints() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_name_constraints_criticality_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
-            TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_CERTIFICATE_DER_B64,
-            TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("X.509 chain with critical NameConstraints should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_noncritical_name_constraints() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_name_constraints_noncritical_root_certificate_pin()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
-            TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
-            TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64,
-        );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("X.509 chain with non-critical NameConstraints must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn x509_name_constraint_matchers_cover_rfc822_uri_and_ip_forms() {
-        assert!(rfc822_name_matches_constraint("ops@bank.test", "bank.test").expect("email"));
-        assert!(
-            !rfc822_name_matches_constraint("ops@example.test", "bank.test").expect("email reject")
-        );
-        assert!(
-            uri_name_matches_constraint("https://signer.bank.test/path", ".bank.test")
-                .expect("uri host")
-        );
-        assert!(
-            !uri_name_matches_constraint("https://bank.test/path", ".bank.test")
-                .expect("uri host excludes root")
-        );
-        assert!(
-            ip_address_matches_constraint(&[192, 0, 2, 17], &[192, 0, 2, 0, 255, 255, 255, 0],)
-                .expect("IPv4 subnet")
-        );
-        assert!(
-            !ip_address_matches_constraint(&[192, 0, 3, 17], &[192, 0, 2, 0, 255, 255, 255, 0],)
-                .expect("IPv4 subnet reject")
+    fn require_verified_profile_rejects_certificate_chain_with_non_ca_issuer() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(false, true, true),
+            "certificate-chain issuers must be CA certificates",
         );
     }
 
     #[test]
-    fn require_verified_profile_accepts_x509_chain_with_configured_ocsp_response() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_ocsp_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_GOOD_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_x509_certificate_chain(None);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("fresh good OCSP response should satisfy revocation checking");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_chain_with_embedded_ocsp_response() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_ocsp_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_x509_certificate_chain(Some(
-            TEST_X509_OCSP_GOOD_RESPONSE_DER_B64,
-        ));
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("fresh embedded good OCSP response should satisfy revocation checking");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_chain_with_delegated_ocsp_responder() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ocsp_delegated_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_DELEGATED_GOOD_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_delegated_ocsp_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect(
-                "delegated OCSP signer with OCSPSigning EKU should satisfy revocation checking",
-            );
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_delegated_ocsp_critical_key_usage() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ocsp_key_usage_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_KEY_USAGE_CRITICAL_GOOD_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("delegated OCSP responder with critical digitalSignature should pass");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_delegated_ocsp_noncritical_key_usage() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ocsp_key_usage_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_KEY_USAGE_NONCRITICAL_GOOD_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("delegated OCSP responder KeyUsage must be critical");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn profile_x509_ocsp_response_der_base64_rejects_invalid_material() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.x509_ocsp_response_der_base64 = vec!["not-an-ocsp-response".to_owned()];
-        config.profiles.push(profile);
-
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("invalid OCSP must fail config"),
-            Err(err) => err,
-        };
-
-        assert!(
-            format!("{err:?}").contains("x509_ocsp_response_der_base64"),
-            "unexpected error: {err:?}"
+    fn require_verified_profile_rejects_certificate_chain_without_issuer_key_cert_sign() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(true, false, true),
+            "certificate-chain issuers must carry keyCertSign usage",
         );
     }
 
     #[test]
-    fn require_verified_profile_rejects_missing_x509_ocsp_when_required() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_ocsp_root_certificate_pin()];
-        profile.x509_require_ocsp_revocation_check = true;
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_x509_certificate_chain(None);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("profiles requiring OCSP revocation checking must fail without OCSP");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_x509_certificate_revoked_by_ocsp_response() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_ocsp_root_certificate_pin()];
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_REVOKED_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_ocsp_x509_certificate_chain(None);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("OCSP revoked signer certificate must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_delegated_ocsp_without_responder_certificate() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins =
-            vec![test_x509_ocsp_delegated_root_certificate_pin()];
-        profile.x509_ocsp_response_der_base64 =
-            vec![TEST_X509_OCSP_DELEGATED_GOOD_NO_CERTS_RESPONSE_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_delegated_ocsp_x509_certificate_chain();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("delegated OCSP signer without responder certificate must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_chain_with_configured_crl() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_crl_root_certificate_pin()];
-        profile.x509_require_crl_revocation_check = true;
-        profile.x509_crl_der_base64 = vec![TEST_X509_CRL_EMPTY_DER_B64.to_owned()];
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("fresh CRL with no leaf revocation should satisfy revocation checking");
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn require_verified_profile_accepts_x509_chain_with_embedded_crl() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins = vec![test_x509_crl_root_certificate_pin()];
-        profile.x509_require_crl_revocation_check = true;
-        config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload =
-            signed_pacs008_xml_with_crl_x509_certificate_chain(Some(TEST_X509_CRL_EMPTY_DER_B64));
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect(
-                "fresh embedded CRL with no leaf revocation should satisfy revocation checking",
-            );
-
-        assert!(metadata.embedded_signature_detected());
-    }
-
-    #[test]
-    fn profile_signature_public_key_pins_are_normalised_and_deduped() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        let pin = test_p256_public_key_pin();
-        profile.signature_public_key_sha256_pins =
-            vec![format!("  {}  ", pin.to_ascii_uppercase()), pin.clone()];
-        config.profiles.push(profile);
-
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        assert_eq!(profile.signature_public_key_sha256_pins, vec![pin]);
-    }
-
-    #[test]
-    fn profile_trusted_alias_pins_feed_canonical_signature_trust() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        let public_key_pin = test_p256_public_key_pin();
-        let certificate_pin = test_x509_chain_root_certificate_pin();
-        profile.signature_public_key_sha256_pins.clear();
-        profile.x509_trust_anchor_sha256_pins.clear();
-        profile.trusted_public_key_sha256 = vec![public_key_pin.clone()];
-        profile.trusted_certificate_sha256 = vec![certificate_pin.clone()];
-        config.profiles.push(profile);
-
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-
-        assert_eq!(
-            profile.signature_public_key_sha256_pins,
-            vec![public_key_pin]
-        );
-        assert_eq!(profile.x509_trust_anchor_sha256_pins, vec![certificate_pin]);
-    }
-
-    #[test]
-    fn profile_signature_public_key_pins_reject_invalid_hex() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec!["not-a-sha256-pin".to_owned()];
-        config.profiles.push(profile);
-
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("invalid signer public-key pins must reject config"),
-            Err(err) => err,
-        };
-
-        assert!(
-            format!("{err:?}").contains("signature_public_key_sha256_pins"),
-            "unexpected error: {err:?}"
+    fn certificate_chain_rejects_noncritical_issuer_basic_constraints() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_noncritical_issuer_basic_constraints(),
+            "certificate-chain issuers must carry critical CA basicConstraints",
         );
     }
 
     #[test]
-    fn profile_signature_public_key_pins_reject_zero_placeholder() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.signature_public_key_sha256_pins = vec!["00".repeat(32)];
-        config.profiles.push(profile);
-
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("all-zero signer public-key pins must reject config"),
-            Err(err) => err,
-        };
-
-        assert!(
-            format!("{err:?}").contains("all-zero"),
-            "unexpected error: {err:?}"
+    fn certificate_chain_rejects_noncritical_issuer_key_usage() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_noncritical_issuer_key_usage(),
+            "certificate-chain issuers must carry critical keyCertSign usage",
         );
     }
 
     #[test]
-    fn profile_x509_trust_anchor_pins_reject_invalid_hex() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.x509_trust_anchor_sha256_pins = vec!["not-a-sha256-pin".to_owned()];
-        config.profiles.push(profile);
-
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("invalid X.509 trust-anchor pins must reject config"),
-            Err(err) => err,
-        };
-
-        assert!(
-            format!("{err:?}").contains("x509_trust_anchor_sha256_pins"),
-            "unexpected error: {err:?}"
+    fn certificate_chain_rejects_unsupported_certificate_algorithm() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_p384_issuer_certificate_chain(),
+            "certificate chains must stay in the supported P-256/SHA-256 corridor",
         );
     }
 
     #[test]
-    fn profile_x509_required_certificate_policy_oids_reject_invalid_oid() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.x509_required_certificate_policy_oids = vec!["1.40.bad".to_owned()];
-        config.profiles.push(profile);
-
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("invalid X.509 certificate policy OIDs must reject config"),
-            Err(err) => err,
-        };
-
-        assert!(
-            format!("{err:?}").contains("x509_required_certificate_policy_oids"),
-            "unexpected error: {err:?}"
+    fn certificate_chain_rejects_compressed_leaf_spki() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_compressed_leaf_certificate_spki(),
+            "XMLDSig leaf certificate SPKI must be an uncompressed P-256 point",
         );
     }
 
     #[test]
-    fn profile_x509_crl_der_base64_rejects_invalid_material() {
-        let mut config = sample_config();
-        let mut profile = signed_message_profile("require-verified");
-        profile.x509_crl_der_base64 = vec!["not-a-crl".to_owned()];
-        config.profiles.push(profile);
+    fn certificate_chain_rejects_compressed_issuer_spki() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_compressed_issuer_certificate_spki(),
+            "XMLDSig issuer certificate SPKI must be an uncompressed P-256 point",
+        );
+    }
 
-        let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("invalid X.509 CRL material must reject config"),
-            Err(err) => err,
-        };
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_without_leaf_digital_signature() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_policy(true, true, false),
+            "XMLDSig leaf certificates must carry digitalSignature usage",
+        );
+    }
 
-        assert!(
-            format!("{err:?}").contains("x509_crl_der_base64"),
-            "unexpected error: {err:?}"
+    #[test]
+    fn certificate_chain_rejects_noncritical_leaf_key_usage() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_noncritical_leaf_key_usage(),
+            "XMLDSig leaf certificates must carry critical digitalSignature usage",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_with_leaf_ca_basic_constraints() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_leaf_ca_certificate_chain(),
+            "XMLDSig leaf certificates must not be CA certificates",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_expired_certificate_chain_leaf() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_options(
+                true,
+                true,
+                true,
+                CertificateChainValidity::ExpiredLeaf,
+                CertificateChainIssuerName::Matching,
+                false,
+            ),
+            "XMLDSig leaf certificate must be valid at signing time",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_with_future_issuer() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_options(
+                true,
+                true,
+                true,
+                CertificateChainValidity::FutureIssuer,
+                CertificateChainIssuerName::Matching,
+                false,
+            ),
+            "XMLDSig issuer certificate must be valid at signing time",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_with_issuer_name_mismatch() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_issuer_name_mismatch(),
+            "certificate-chain issuers must match child issuer distinguished names",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_path_len_violation() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_three_certificate_chain(0),
+            "pathLenConstraint=0 must reject a subordinate intermediate CA",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_leaf_with_critical_unknown_extension() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_critical_unknown_extension(
+                CertificateChainCriticalUnknownExtension::Leaf,
+            ),
+            "critical unknown leaf certificate extensions must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_issuer_with_critical_unknown_extension() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_critical_unknown_extension(
+                CertificateChainCriticalUnknownExtension::Issuer,
+            ),
+            "critical unknown issuer certificate extensions must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_leaf_with_critical_unsupported_parsed_extension() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_critical_unsupported_parsed_extension(
+                CertificateChainCriticalUnsupportedParsedExtension::Leaf,
+            ),
+            "critical parsed leaf certificate extensions outside the enforced subset must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_issuer_with_critical_unsupported_parsed_extension() {
+        assert_pinned_certificate_chain_rejected(
+            signed_pacs008_xml_with_certificate_chain_critical_unsupported_parsed_extension(
+                CertificateChainCriticalUnsupportedParsedExtension::Issuer,
+            ),
+            "critical parsed issuer certificate extensions outside the enforced subset must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_non_ascii_certificate_signing_time() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        fixture.payload = fixture.payload.replace(
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+            "\u{ff12}\u{ff10}\u{ff12}\u{ff15}-01-01T12:00:00Z",
+        );
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "XMLDSig certificate signing time parser must reject non-ASCII dates without panicking",
         );
     }
 
@@ -9370,7 +16043,91 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_rejects_wrong_x509_trust_anchor_pin() {
+    fn require_verified_profile_rejects_wrapped_signed_info() {
+        let payload = signed_pacs008_xml()
+            .replacen("<SignedInfo>", "<Wrapper><SignedInfo>", 1)
+            .replacen("</SignedInfo>", "</SignedInfo></Wrapper>", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "wrapped SignedInfo must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signature_extra_child() {
+        let payload =
+            signed_pacs008_xml().replacen("<KeyInfo>", "<Manifest></Manifest><KeyInfo>", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported direct Signature children must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_reordered_signature_children() {
+        let payload = signed_pacs008_xml();
+        let signature_value_start = payload.find("<SignatureValue>").expect("SignatureValue");
+        let signature_value_end = payload
+            .find("</SignatureValue>")
+            .expect("SignatureValue end")
+            + "</SignatureValue>".len();
+        let key_info_start = payload.find("<KeyInfo>").expect("KeyInfo");
+        let key_info_end = payload.find("</KeyInfo>").expect("KeyInfo end") + "</KeyInfo>".len();
+        let payload = format!(
+            "{}{}{}{}{}",
+            &payload[..signature_value_start],
+            &payload[key_info_start..key_info_end],
+            &payload[signature_value_start..signature_value_end],
+            &payload[signature_value_end..key_info_start],
+            &payload[key_info_end..]
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "reordered Signature children must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signed_info_extra_child() {
+        let payload = signed_pacs008_xml().replacen(
+            "</SignatureMethod>",
+            "</SignatureMethod><Object></Object>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported direct SignedInfo children must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_reordered_signed_info_children() {
+        let payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let canonicalization_method = format!(
+                r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod>"#
+            );
+            let signature_method = format!(
+                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod>"#
+            );
+            signed_info.replacen(
+                &format!("{canonicalization_method}{signature_method}"),
+                &format!("{signature_method}{canonicalization_method}"),
+                1,
+            )
+        });
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "reordered SignedInfo children must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unsupported_canonicalization_method() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
         profile.signature_public_key_sha256_pins.clear();
@@ -9441,6 +16198,77 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_x509_certificate_policy_intermediate_path() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Required,
+        );
+        assert_required_x509_policy_path_payload_accepted(fixture);
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_policy_intermediate_any_policy() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::AnyPolicy,
+        );
+        assert_required_x509_policy_path_payload_accepted(fixture);
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_policy_intermediate_gap() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Missing,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "intermediate CAs without required certificate policies must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_policy_intermediate_drift() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Wrong,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "intermediate CAs with unrelated certificate policies must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_policy_mappings_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::PolicyMappings,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 policy mappings require full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_policy_constraints_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::PolicyConstraints,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 policy constraints require full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_inhibit_any_policy_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::InhibitAnyPolicy,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 inhibit-any-policy requires full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
     fn require_verified_profile_rejects_missing_x509_crl_when_required() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -9464,6 +16292,76 @@ mod tests {
             );
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_configured_crl() {
+        assert_x509_trust_anchor_payload_accepted(
+            signed_pacs008_xml_with_crl_x509_certificate_chain(None),
+            test_x509_crl_root_certificate_pin(),
+            |profile| {
+                profile.x509_require_crl_revocation_check = true;
+                profile.x509_crl_der_base64 = vec![TEST_X509_CRL_EMPTY_DER_B64.to_owned()];
+            },
+            "configured CRL material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_embedded_crl() {
+        assert_x509_trust_anchor_payload_accepted(
+            signed_pacs008_xml_with_crl_x509_certificate_chain(Some(TEST_X509_CRL_EMPTY_DER_B64)),
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "embedded CRL material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_not_yet_fresh_at_signing_time() {
+        assert_x509_trust_anchor_payload_rejected(
+            signed_pacs008_xml_with_crl_x509_certificate_chain_at(None, "2026-05-01T12:00:00Z"),
+            test_x509_crl_root_certificate_pin(),
+            |profile| {
+                profile.x509_require_crl_revocation_check = true;
+                profile.x509_crl_der_base64 = vec![TEST_X509_CRL_EMPTY_DER_B64.to_owned()];
+            },
+            "CRLs whose lastUpdate is after the signed evaluation time must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_outside_key_info() {
+        let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None).replacen(
+            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(
+                r##"<Object><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL><QualifyingProperties Target="#sig-001">"##
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "CRL material outside signed KeyInfo/X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_in_key_info_outside_x509_data() {
+        let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None).replacen(
+            "</X509Data></KeyInfo>",
+            &format!("</X509Data><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL></KeyInfo>"),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "CRL material outside X509Data must fail closed",
+        );
     }
 
     #[test]
@@ -9538,6 +16436,164 @@ mod tests {
             .expect_err("CRLs from unrelated issuers must not satisfy signer revocation checking");
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_missing_x509_ocsp_when_required() {
+        assert_x509_trust_anchor_payload_rejected(
+            signed_pacs008_xml_with_ocsp_x509_certificate_chain(None),
+            test_x509_ocsp_root_certificate_pin(),
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "profiles requiring OCSP revocation checking must fail without OCSP material",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_configured_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "configured OCSP material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_embedded_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            true,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "embedded OCSP material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_not_yet_fresh_at_signing_time() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            "2026-05-01T12:00:00Z",
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "OCSP responses produced after the signed evaluation time must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_outside_key_info() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let payload = fixture.payload.replacen(
+            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(
+                r##"<Object><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue><QualifyingProperties Target="#sig-001">"##,
+                fixture.response_der_base64
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "OCSP material outside signed KeyInfo/X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_in_key_info_outside_x509_data() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let payload = fixture.payload.replacen(
+            "</X509Data></KeyInfo>",
+            &format!(
+                "</X509Data><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue></KeyInfo>",
+                fixture.response_der_base64
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "OCSP material outside X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_revoked_by_configured_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Revoked,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| profile.x509_ocsp_response_der_base64 = vec![response_der_base64],
+            "configured OCSP material must reject revoked signer certificates",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_delegated_x509_ocsp_responder() {
+        let fixture = signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(true);
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "delegated OCSP responders with embedded responder certificates should verify",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_delegated_x509_ocsp_without_responder_certificate() {
+        let fixture =
+            signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(false);
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "delegated OCSP responses must include a verifiable responder certificate",
+        );
     }
 
     #[test]
@@ -9619,7 +16675,7 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_rejects_unpinned_public_key() {
+    fn require_verified_profile_rejects_missing_key_pin() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
         profile.signature_public_key_sha256_pins.clear();
@@ -9685,6 +16741,90 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_rejects_canonicalization_method_parameters() {
+        let payload = signed_pacs008_xml().replace(
+            &format!(r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod>"#),
+            &format!(
+                r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}"><InclusiveNamespaces PrefixList="unused"></InclusiveNamespaces></CanonicalizationMethod>"#
+            ),
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "parameterized SignedInfo canonicalization must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signed_info_method_unsupported_attributes() {
+        let canonicalization_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let method = format!(
+                r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod>"#
+            );
+            let unsupported = format!(
+                r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}" Id="c14n-001"></CanonicalizationMethod>"#
+            );
+            signed_info.replacen(&method, &unsupported, 1)
+        });
+        let signature_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let method = format!(
+                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod>"#
+            );
+            let unsupported = format!(
+                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}" Id="signature-method-001"></SignatureMethod>"#
+            );
+            signed_info.replacen(&method, &unsupported, 1)
+        });
+
+        for payload in [canonicalization_payload, signature_payload] {
+            assert_require_verified_signed_payload_rejected(
+                payload,
+                "unsupported SignedInfo method attributes must fail closed",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_canonicalization_method() {
+        let method = format!(
+            r#"<CanonicalizationMethod Algorithm="{XML_C14N_1_0}"></CanonicalizationMethod>"#
+        );
+        let payload = signed_pacs008_xml().replace(&method, &format!("{method}{method}"));
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate SignedInfo canonicalization methods must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signature_method_parameters() {
+        let payload = signed_pacs008_xml().replace(
+            &format!(r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod>"#),
+            &format!(
+                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"><HMACOutputLength>256</HMACOutputLength></SignatureMethod>"#
+            ),
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "parameterized SignatureMethod must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_signature_method() {
+        let method =
+            format!(r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"></SignatureMethod>"#);
+        let payload = signed_pacs008_xml().replace(&method, &format!("{method}{method}"));
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate SignatureMethod elements must fail closed",
+        );
+    }
+
+    #[test]
     fn require_verified_profile_rejects_unsupported_signature_method() {
         let mut config = sample_config();
         config
@@ -9708,31 +16848,125 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_rejects_unimplemented_canonicalization_methods() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
+    fn require_verified_profile_rejects_digest_method_parameters() {
+        let payload = signed_pacs008_xml().replace(
+            &format!(r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod>"#),
+            &format!(
+                r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}"><DigestParams>not-supported</DigestParams></DigestMethod>"#
+            ),
+        );
 
-        for unsupported_c14n in [XML_C14N_1_1, XML_EXCLUSIVE_C14N_1_0] {
-            let payload = signed_pacs008_xml().replace(XML_C14N_1_0, unsupported_c14n);
-            let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-            let err = runtime
-                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-                .expect_err("unsupported canonicalization methods must fail closed");
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "parameterized DigestMethod must fail closed",
+        );
+    }
 
-            assert!(matches!(err, MsgError::ValidationFailed));
+    #[test]
+    fn require_verified_profile_rejects_duplicate_digest_method() {
+        let method = format!(r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod>"#);
+        let payload = signed_pacs008_xml().replace(&method, &format!("{method}{method}"));
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate DigestMethod elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_reference_unsupported_attributes() {
+        let reference_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            signed_info.replacen(
+                r#"<Reference URI="">"#,
+                r#"<Reference URI="" Id="payload-ref-001">"#,
+                1,
+            )
+        });
+        let transforms_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            signed_info.replacen("<Transforms>", r#"<Transforms Id="transforms-001">"#, 1)
+        });
+        let transform_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let transform =
+                format!(r#"<Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform>"#);
+            let unsupported = format!(
+                r#"<Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}" Id="transform-001"></Transform>"#
+            );
+            signed_info.replacen(&transform, &unsupported, 1)
+        });
+        let digest_method_payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let method = format!(r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod>"#);
+            let unsupported = format!(
+                r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}" Id="digest-method-001"></DigestMethod>"#
+            );
+            signed_info.replacen(&method, &unsupported, 1)
+        });
+
+        for payload in [
+            reference_payload,
+            transforms_payload,
+            transform_payload,
+            digest_method_payload,
+        ] {
+            assert_require_verified_signed_payload_rejected(
+                payload,
+                "unsupported Reference attributes must fail closed",
+            );
         }
     }
 
     #[test]
-    fn require_verified_profile_rejects_extra_reference_transforms() {
+    fn require_verified_profile_rejects_reordered_reference_children() {
+        let payload = signed_pacs008_xml_with_signed_info_rewrite(|signed_info| {
+            let transforms = format!(
+                r#"<Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms>"#
+            );
+            let digest_method =
+                format!(r#"<DigestMethod Algorithm="{XMLDSIG_SHA256}"></DigestMethod>"#);
+            signed_info.replacen(
+                &format!("{transforms}{digest_method}"),
+                &format!("{digest_method}{transforms}"),
+                1,
+            )
+        });
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "reordered Reference children must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_reference_c14n_transform_parameters() {
+        let payload = signed_pacs008_xml_with_reference_c14n_transform().replace(
+            &format!(r#"<Transform Algorithm="{XML_C14N_1_0}"></Transform>"#),
+            &format!(
+                r#"<Transform Algorithm="{XML_C14N_1_0}"><InclusiveNamespaces PrefixList="unused"></InclusiveNamespaces></Transform>"#
+            ),
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "parameterized Reference C14N transforms must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_reference_transform_without_wrapper() {
+        let wrapped = format!(
+            r#"<Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform></Transforms>"#
+        );
+        let unwrapped =
+            format!(r#"<Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"></Transform>"#);
+        let payload = signed_pacs008_xml().replace(&wrapped, &unwrapped);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "Reference transforms outside Transforms wrapper must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_extra_reference_transform() {
         let mut config = sample_config();
         config
             .profiles
@@ -9740,11 +16974,7 @@ mod tests {
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        let transform = format!(r#"<Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>"#);
-        let payload = signed_pacs008_xml().replace(
-            &transform,
-            &format!(r#"<Transform Algorithm="urn:unsupported:base64"/>{transform}"#),
-        );
+        let payload = signed_pacs008_xml_with_extra_reference_transform();
         let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
         let profile = runtime
             .resolve_profile(Some("signed-pacs008-test"))
@@ -9752,79 +16982,7 @@ mod tests {
 
         let err = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("extra reference transforms must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_duplicate_sgntr_blocks() {
-        let payload = signed_pacs008_xml()
-            .replace(r#"<Signature Id="sig-001">"#, r#"<Sgntr Id="sig-001">"#)
-            .replace("</Signature>", "</Sgntr>")
-            .replace("</FIToFICstmrCdtTrf>", "<Sgntr/></FIToFICstmrCdtTrf>");
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("duplicate Sgntr blocks must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_ambiguous_key_info_material() {
-        let payload = signed_pacs008_xml().replace(
-            "</KeyInfo>",
-            "<X509Certificate>AA==</X509Certificate></KeyInfo>",
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("ambiguous raw public-key and X.509 key material must fail closed");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
-    }
-
-    #[test]
-    fn require_verified_profile_rejects_duplicate_public_key_material() {
-        let duplicate_public_key = BASE64_STANDARD.encode(
-            test_p256_signing_key()
-                .verifying_key()
-                .to_encoded_point(false)
-                .as_bytes(),
-        );
-        let payload = signed_pacs008_xml().replace(
-            "</KeyInfo>",
-            &format!("<PublicKey>{duplicate_public_key}</PublicKey></KeyInfo>"),
-        );
-
-        let err = verify_embedded_xml_signature(
-            payload.as_bytes(),
-            &[test_p256_public_key_pin()],
-            &[],
-            &[],
-            false,
-            &[],
-            false,
-            &[],
-        )
-        .expect_err("duplicate public-key elements must fail closed");
+            .expect_err("Reference transforms outside the supported set must fail closed");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }
@@ -9852,6 +17010,111 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_rejects_signed_properties_digest_tampering() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signed_properties_reference()
+            .replace(XML_SIGNATURE_TEST_SIGNING_TIME, "2025-01-01T12:00:01Z");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SignedProperties digest tampering must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signed_properties_target_drift() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signed_properties_reference()
+            .replace(r##"Target="#sig-001""##, r##"Target="#other-sig""##);
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("QualifyingProperties Target must bind to the enclosing Signature Id");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_wrapped_qualifying_properties() {
+        let payload = signed_pacs008_xml_with_signed_properties_reference()
+            .replacen(
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                r##"<Object><Wrapper><QualifyingProperties Target="#sig-001">"##,
+                1,
+            )
+            .replacen(
+                "</QualifyingProperties></Object>",
+                "</QualifyingProperties></Wrapper></Object>",
+                1,
+            );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "wrapped QualifyingProperties must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_wrapped_xades_signed_properties() {
+        let payload = signed_pacs008_xml_with_signed_properties_reference()
+            .replacen("<SignedProperties", "<Wrapper><SignedProperties", 1)
+            .replacen("</SignedProperties>", "</SignedProperties></Wrapper>", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "wrapped XAdES SignedProperties must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signing_certificate_v2_digest_tampering() {
+        let fixture = signed_pacs008_xml_with_certificate_chain_signed_properties_reference();
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let tampered_digest = BASE64_STANDARD.encode([0u8; 32]);
+        let payload = fixture
+            .payload
+            .replace(&fixture.signing_certificate_digest, &tampered_digest);
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SigningCertificateV2 digest tampering must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_rejects_signature_value_tampering() {
         let mut config = sample_config();
         config
@@ -9871,6 +17134,374 @@ mod tests {
             .expect_err("invalid signature bytes must fail closed");
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_high_s_signature_value() {
+        let payload = signed_pacs008_xml();
+        let signature_value_start =
+            payload.find("<SignatureValue>").expect("SignatureValue") + "<SignatureValue>".len();
+        let signature_value_end = payload
+            .find("</SignatureValue>")
+            .expect("SignatureValue end");
+        let signature_value = BASE64_STANDARD
+            .decode(&payload[signature_value_start..signature_value_end])
+            .expect("fixture SignatureValue base64");
+        let signature =
+            P256Signature::from_der(&signature_value).expect("fixture DER SignatureValue");
+        let high_s = high_s_p256_signature(signature);
+        let high_s_signature_value = BASE64_STANDARD.encode(high_s.to_der().as_bytes());
+        let payload = format!(
+            "{}{}{}",
+            &payload[..signature_value_start],
+            high_s_signature_value,
+            &payload[signature_value_end..]
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "high-S SignatureValue must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_signature_value() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replacen(
+            "</SignatureValue>",
+            "</SignatureValue><SignatureValue>AA==</SignatureValue>",
+            1,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("duplicate SignatureValue elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signature_value_unsupported_attribute() {
+        let payload = signed_pacs008_xml().replacen(
+            "<SignatureValue>",
+            "<SignatureValue Id=\"signature-value-001\">",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported SignatureValue attributes must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_digest_value() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replacen(
+            "</DigestValue>",
+            "</DigestValue><DigestValue>AA==</DigestValue>",
+            1,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("duplicate DigestValue elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_public_key() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replacen(
+            "</PublicKey>",
+            "</PublicKey><PublicKey>AA==</PublicKey>",
+            1,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("duplicate PublicKey elements must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_nested_markup() {
+        let payload =
+            signed_pacs008_xml().replacen("</PublicKey>", "<Chunk></Chunk></PublicKey>", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "nested PublicKey markup must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_key_info() {
+        let payload = signed_pacs008_xml().replacen(
+            "</KeyInfo>",
+            "</KeyInfo><KeyInfo><PublicKey>AQ==</PublicKey></KeyInfo>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate KeyInfo elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_outside_key_info() {
+        let payload =
+            signed_pacs008_xml().replacen("<KeyInfo>", "<PublicKey>AQ==</PublicKey><KeyInfo>", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "PublicKey outside KeyInfo must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_wrong_named_curve() {
+        let payload =
+            signed_pacs008_xml().replace(XMLDSIG_P256_NAMED_CURVE, "urn:oid:1.3.132.0.34");
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "PublicKey must declare the supported P-256 NamedCurve",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_compressed_public_key() {
+        let signing_key = xml_signature_test_signing_key();
+        let compressed_public_key = signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .to_vec();
+        let payload =
+            signed_pacs008_xml_with_public_key(&BASE64_STANDARD.encode(&compressed_public_key));
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256 = vec![sha256_hex(&compressed_public_key)];
+        let mut config = sample_config();
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("compressed SEC1 PublicKey material must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_without_key_value_wrapper() {
+        let payload = signed_pacs008_xml()
+            .replace("<KeyInfo><KeyValue><ECKeyValue>", "<KeyInfo><ECKeyValue>")
+            .replace(
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                "</ECKeyValue></KeyInfo>",
+            );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "PublicKey must be wrapped in KeyValue/ECKeyValue",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_key_info_extra_child() {
+        let payload = signed_pacs008_xml().replacen(
+            "</KeyInfo>",
+            "<RetrievalMethod></RetrievalMethod></KeyInfo>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported KeyInfo child elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_key_value_extra_child() {
+        let payload = signed_pacs008_xml().replacen(
+            "</KeyValue>",
+            "<ECParameters></ECParameters></KeyValue>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported KeyValue child elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_ec_key_value_extra_child() {
+        let payload = signed_pacs008_xml().replacen(
+            "</ECKeyValue>",
+            "<ECParameters></ECParameters></ECKeyValue>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported ECKeyValue child elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_key_info_unsupported_attribute() {
+        let payload = signed_pacs008_xml().replacen("<KeyInfo>", "<KeyInfo Id=\"key-001\">", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported KeyInfo attributes must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_named_curve_unsupported_attribute() {
+        let payload =
+            signed_pacs008_xml().replacen("<NamedCurve URI=", "<NamedCurve Type=\"named\" URI=", 1);
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported NamedCurve attributes must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_without_x509_data_wrapper() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        fixture.payload = fixture
+            .payload
+            .replace("<X509Data>", "")
+            .replace("</X509Data>", "");
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "X509Certificate elements must be wrapped in X509Data",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_data_extra_child() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        fixture.payload = fixture.payload.replacen(
+            "</X509Data>",
+            "<X509IssuerSerial></X509IssuerSerial></X509Data>",
+            1,
+        );
+
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "unsupported X509Data child elements must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_unsupported_attribute() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        fixture.payload = fixture.payload.replacen(
+            "<X509Certificate>",
+            "<X509Certificate Encoding=\"base64\">",
+            1,
+        );
+
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "unsupported X509Certificate attributes must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_nested_markup() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        fixture.payload =
+            fixture
+                .payload
+                .replacen("</X509Certificate>", "<Chunk></Chunk></X509Certificate>", 1);
+
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "nested X509Certificate markup must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_x509_certificate_der() {
+        let mut fixture = signed_pacs008_xml_with_certificate_chain();
+        let certificate_start = fixture
+            .payload
+            .find("<X509Certificate>")
+            .expect("fixture X509Certificate start");
+        let certificate_end = fixture
+            .payload
+            .find("</X509Certificate>")
+            .map(|end| end + "</X509Certificate>".len())
+            .expect("fixture X509Certificate end");
+        let duplicate_certificate = fixture.payload[certificate_start..certificate_end].to_owned();
+        fixture
+            .payload
+            .insert_str(certificate_end, &duplicate_certificate);
+
+        assert_pinned_certificate_chain_rejected(
+            fixture,
+            "duplicate X509Certificate DER entries must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_mixed_public_key_and_certificate_material() {
+        let payload = signed_pacs008_xml().replacen(
+            "</KeyInfo>",
+            "<X509Data><X509Certificate>AQ==</X509Certificate></X509Data></KeyInfo>",
+            1,
+        );
+
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "mixed PublicKey and X509Certificate key material must fail closed",
+        );
     }
 
     #[test]
@@ -9989,6 +17620,45 @@ mod tests {
                 ),
             ),
             (
+                "swift-cbpr-plus",
+                "pacs.002",
+                "pacs.002.001.10",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "SWIFT-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "pacs.004",
+                "pacs.004.001.10",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SWIFT-PACS004-MDR-XSD-1",
+                    "pacs.004.001.10",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "camt.056",
+                "camt.056.001.08",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SWIFT-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
                 "fedwire-funds",
                 "pacs.008",
                 "pacs.008.001.08",
@@ -10002,6 +17672,32 @@ mod tests {
                     "USD",
                     "10.00",
                     "123e4567-e89b-12d3-a456-426614174401",
+                ),
+            ),
+            (
+                "fedwire-funds",
+                "pacs.002",
+                "pacs.002.001.10",
+                "fedwire.funds.01",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "FEDWIRE-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "fedwire.funds.01",
+                ),
+            ),
+            (
+                "fedwire-funds",
+                "camt.056",
+                "camt.056.001.08",
+                "fedwire.funds.01",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "FEDWIRE-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
+                    "fedwire.funds.01",
                 ),
             ),
             (
@@ -10021,6 +17717,33 @@ mod tests {
                 ),
             ),
             (
+                "sepa-sct-inst",
+                "pacs.002",
+                "pacs.002.001.10",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml("SEPA-PACS002-MDR-XSD-1", "pacs.002.001.10", "sepa.sct.inst"),
+            ),
+            (
+                "sepa-sct-inst",
+                "pacs.004",
+                "pacs.004.001.10",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml("SEPA-PACS004-MDR-XSD-1", "pacs.004.001.10", "sepa.sct.inst"),
+            ),
+            (
+                "sepa-sct-inst",
+                "camt.056",
+                "camt.056.001.08",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml("SEPA-CAMT056-MDR-XSD-1", "camt.056.001.08", "sepa.sct.inst"),
+            ),
+            (
                 "securities-csd",
                 "pacs.009",
                 "pacs.009.001.08",
@@ -10030,6 +17753,45 @@ mod tests {
                 live_pacs009_xml(
                     "SECURITIES-MDR-XSD-1",
                     "pacs.009.001.08",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.002",
+                "pacs.002.001.10",
+                "securities.csd.cash",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "SECURITIES-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.004",
+                "pacs.004.001.10",
+                "securities.csd.cash",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SECURITIES-PACS004-MDR-XSD-1",
+                    "pacs.004.001.10",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "camt.056",
+                "camt.056.001.08",
+                "securities.csd.cash",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SECURITIES-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
                     "securities.csd.cash",
                 ),
             ),
@@ -10136,6 +17898,56 @@ mod tests {
             Some("DELIVERY_THEN_PAYMENT")
         );
 
+        let status_advice_payload = data_pdu_with_app_header(
+            "SEC-STADV-BAH-1",
+            "sese.024.001.10",
+            "securities.csd.cash",
+            SESE024_FIXTURE_XML,
+        );
+        let status_advice =
+            parse_message("sese.024", status_advice_payload.as_bytes()).expect("sese.024 fixture");
+        let status_advice_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.024",
+                &status_advice,
+                status_advice_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.024 fixture validates through Torii profile");
+        let status_advice_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &status_advice)
+                .expect("sese.024 durable id");
+        assert_eq!(status_advice_id, "sese.024:DVP-FIXTURE-1");
+        assert_eq!(
+            status_advice_metadata.business_message_id(),
+            Some("SEC-STADV-BAH-1")
+        );
+        assert!(runtime.check_and_record_inbound(&status_advice_id, status_advice_metadata));
+        let status_advice_outcome = runtime
+            .apply_inbound_lifecycle_message(&status_advice_id, "sese.024", &status_advice)
+            .expect("apply BAH-wrapped sese.024 fixture");
+        assert_eq!(
+            status_advice_outcome.referenced_message_id(),
+            Some("sese.023:DVP-FIXTURE-1")
+        );
+        assert_eq!(status_advice_outcome.lifecycle_status_code(), Some("PEND"));
+        assert_eq!(status_advice_outcome.lifecycle_reason_code(), Some("NORE"));
+        assert_eq!(status_advice_outcome.action(), "marked_pending");
+        let pending_instruction = runtime
+            .message_status(&instruction_id)
+            .expect("pending instruction status");
+        assert_eq!(pending_instruction.status_label(), "Pending");
+        assert_eq!(pending_instruction.pacs002_code(), "PDNG");
+        assert_eq!(pending_instruction.hold_reason_code(), Some("NORE"));
+        let status_advice_record = runtime
+            .message_status(&status_advice_id)
+            .expect("status-advice lifecycle status");
+        assert_eq!(status_advice_record.status_label(), "Accepted");
+        assert_eq!(
+            status_advice_record.detail(),
+            Some("recorded inbound ISO 20022 sese.024 lifecycle message")
+        );
+
         let confirmation_payload = data_pdu_with_app_header(
             "SEC-CONF-BAH-1",
             "sese.025.001.11",
@@ -10186,6 +17998,289 @@ mod tests {
     }
 
     #[test]
+    fn securities_profile_rejects_unknown_reference_crosswalk_values() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let cases = [
+            (
+                "unknown instrument",
+                SESE023_FIXTURE_XML.replace("US0378331005", "US5949181045"),
+                "SctiesLeg/FinInstrmId",
+                IdentifierKind::Isin,
+            ),
+            (
+                "unknown venue MIC",
+                SESE023_FIXTURE_XML.replace("XNAS", "XNYS"),
+                "PlcOfSttlm/MktId",
+                IdentifierKind::Mic,
+            ),
+            (
+                "unknown settlement-party BIC",
+                SESE023_FIXTURE_XML.replacen("DEUTDEFF", "TESTUS33", 1),
+                "DlvrgSttlmPties/Pty/Bic",
+                IdentifierKind::Bic,
+            ),
+        ];
+
+        for (label, document, expected_field, expected_kind) in cases {
+            let business_id = format!("SEC-INSTR-{}", label.replace(' ', "-"));
+            let payload = data_pdu_with_app_header(
+                &business_id,
+                "sese.023.001.11",
+                "securities.csd.cash",
+                &document,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse before lookup: {err:?}"));
+            let err = match runtime.validate_profile_submission(
+                profile,
+                "sese.023",
+                &parsed,
+                payload.as_bytes(),
+            ) {
+                Ok(_) => panic!("{label} must fail reference-data validation"),
+                Err(err) => err,
+            };
+            match err {
+                MsgError::InvalidIdentifier { field, kind } => {
+                    assert_eq!(field, expected_field, "{label} field");
+                    assert_eq!(kind, expected_kind, "{label} kind");
+                }
+                other => panic!("{label} produced unexpected error: {other:?}"),
+            }
+        }
+
+        assert!(
+            runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+            "rejected reference-data drift must not create a settlement record"
+        );
+    }
+
+    #[test]
+    fn securities_profile_requires_sese023_ledger_crosswalk_snapshots() {
+        let missing_cases = ["csd_venue_path", "securities_account_path", "cash_leg_path"];
+
+        for missing in missing_cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            match missing {
+                "csd_venue_path" => config.reference_data.csd_venue_path = None,
+                "securities_account_path" => config.reference_data.securities_account_path = None,
+                "cash_leg_path" => config.reference_data.cash_leg_path = None,
+                _ => unreachable!(),
+            }
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-MISSING-{missing}"),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                SESE023_FIXTURE_XML,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .expect("sese.023 fixture parses before ledger gate");
+
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "{missing} should fail closed, got {err:?}"
+            );
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "missing {missing} must not create a settlement record"
+            );
+        }
+    }
+
+    #[test]
+    fn securities_profile_rejects_incomplete_sese023_ledger_crosswalk_rows() {
+        let cases = [
+            (
+                "instrument asset mapping",
+                "isin_crosswalk_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"ANNA DSB sample",
+                    "entries":[{"isin":"US0378331005","cusip":"037833100"}]
+                }"#,
+            ),
+            (
+                "CSD ledger domain",
+                "csd_venue_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD sample",
+                    "entries":[{"mic":"XNAS","csd_id":"DTC"}]
+                }"#,
+            ),
+            (
+                "settlement account",
+                "securities_account_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD account sample",
+                    "entries":[
+                        {"settlement_account":"DLVRY-ACC","bic":"DEUTDEFF"},
+                        {"settlement_account":"RCVG-ACC","bic":"MARKDEFF","account_id":"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"}
+                    ]
+                }"#,
+            ),
+            (
+                "cash-leg asset",
+                "cash_leg_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD cash-leg sample",
+                    "entries":[{"currency":"USD","payment_type":"APMT"}]
+                }"#,
+            ),
+        ];
+
+        for (label, path_name, snapshot) in cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            let replacement = write_snapshot(snapshot);
+            match path_name {
+                "isin_crosswalk_path" => {
+                    config.reference_data.isin_crosswalk_path =
+                        Some(replacement.path().to_path_buf());
+                }
+                "csd_venue_path" => {
+                    config.reference_data.csd_venue_path = Some(replacement.path().to_path_buf());
+                }
+                "securities_account_path" => {
+                    config.reference_data.securities_account_path =
+                        Some(replacement.path().to_path_buf());
+                }
+                "cash_leg_path" => {
+                    config.reference_data.cash_leg_path = Some(replacement.path().to_path_buf());
+                }
+                _ => unreachable!(),
+            }
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-INCOMPLETE-{}", label.replace(' ', "-")),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                SESE023_FIXTURE_XML,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse: {err:?}"));
+
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "{label} should fail closed, got {err:?}"
+            );
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "incomplete {label} mapping must not create a settlement record"
+            );
+        }
+    }
+
+    #[test]
+    fn securities_profile_rejects_sese023_ledger_crosswalk_value_mismatches() {
+        let cases = [
+            (
+                "unknown delivery account",
+                SESE023_FIXTURE_XML.replace("DLVRY-ACC", "UNKNOWN-ACC"),
+                "DlvrgSttlmPties/Acct",
+                InvalidValueKind::Enum,
+            ),
+            (
+                "wrong party for account",
+                SESE023_FIXTURE_XML.replace("DEUTDEFF", "MARKDEFF"),
+                "DlvrgSttlmPties/Acct",
+                InvalidValueKind::Enum,
+            ),
+        ];
+
+        for (label, document, expected_field, expected_kind) in cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-MISMATCH-{}", label.replace(' ', "-")),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                &document,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse: {err:?}"));
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            match err {
+                MsgError::InvalidValue { field, kind } => {
+                    assert_eq!(field, expected_field, "{label} field");
+                    assert_eq!(kind, expected_kind, "{label} kind");
+                }
+                other => panic!("{label} produced unexpected error: {other:?}"),
+            }
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "mismatched {label} must not create a settlement record"
+            );
+        }
+
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+        let payload = data_pdu_with_app_header(
+            "SEC-INSTR-MISMATCH-CURRENCY",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("Ccy=\"USD\"", "Ccy=\"EUR\""),
+        );
+        let parsed = parse_message("sese.023", payload.as_bytes())
+            .expect("cash-leg mismatch fixture must parse");
+        let err = runtime
+            .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+            .unwrap_err();
+        match err {
+            MsgError::InvalidIdentifier { field, kind } => {
+                assert_eq!(field, "CashLeg/Ccy");
+                assert_eq!(kind, IdentifierKind::Currency);
+            }
+            other => panic!("cash-leg mismatch produced unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn checked_in_securities_fixtures_reject_profile_version_and_root_drift() {
         let (mut config, _reference_files) = sample_config_with_live_reference_data();
         config.profiles.push(live_securities_lifecycle_profile());
@@ -10228,6 +18323,63 @@ mod tests {
             runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
             "negative fixture drift must not create a securities settlement record"
         );
+    }
+
+    #[test]
+    fn checked_in_colr012_fixture_records_collateral_context() {
+        let config = sample_config();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime.default_profile();
+        let parsed =
+            parse_message("colr.012", COLR012_FIXTURE_XML.as_bytes()).expect("colr.012 fixture");
+        let metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "colr.012",
+                &parsed,
+                COLR012_FIXTURE_XML.as_bytes(),
+            )
+            .expect("generic profile accepts colr.012 fixture");
+        assert_eq!(metadata.profile_id(), Some("generic-iso20022"));
+        assert_eq!(metadata.message_type(), Some("colr.012"));
+        assert_eq!(metadata.business_message_id(), None);
+
+        let message_id = Iso20022BridgeRuntime::lifecycle_message_id("colr.012", &parsed)
+            .expect("colr.012 durable id");
+        assert_eq!(message_id, "colr.012:COLR-FIXTURE-1");
+        assert!(runtime.check_and_record_inbound(&message_id, metadata));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&message_id, "colr.012", &parsed)
+            .expect("record colr.012 lifecycle");
+        assert_eq!(outcome.action(), "recorded");
+        assert_eq!(outcome.lifecycle_status_code(), Some("ACSC"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("MARGIN"));
+        assert_eq!(outcome.referenced_message_id(), None);
+
+        let status = runtime
+            .message_status(&message_id)
+            .expect("colr.012 durable status");
+        assert_eq!(status.status_label(), "Accepted");
+        assert_eq!(status.pacs002_code(), "ACSP");
+        assert_eq!(status.collateral_obligation_id(), Some("REPO-123"));
+        assert_eq!(status.collateral_original_amount(), Some("1000000"));
+        assert_eq!(status.collateral_original_currency(), Some("USD"));
+        assert_eq!(
+            status.collateral_original_instrument_id(),
+            Some("US0378331005")
+        );
+        assert_eq!(status.collateral_substitute_amount(), Some("1002000"));
+        assert_eq!(status.collateral_substitute_currency(), Some("USD"));
+        assert_eq!(
+            status.collateral_substitute_instrument_id(),
+            Some("US5949181045")
+        );
+        assert_eq!(status.collateral_effective_date(), Some("2024-04-05"));
+        assert_eq!(status.collateral_substitution_type(), Some("PARTIAL"));
+        assert_eq!(status.collateral_haircut(), Some("50"));
+        assert_eq!(status.collateral_reason_code(), Some("MARGIN"));
     }
 
     #[test]
@@ -10790,42 +18942,53 @@ mod tests {
     }
 
     #[test]
-    fn durable_store_reloads_business_message_id_index() {
-        let store = TempDir::new().expect("tempdir");
-        let mut config = sample_config();
-        config.store_dir = Some(store.path().to_path_buf());
-
-        {
-            let runtime = Iso20022BridgeRuntime::from_config(&config)
-                .expect("cfg")
-                .expect("enabled");
-            let first = IsoMessageMetadata::inbound(
-                "generic-iso20022",
-                "pacs.008",
-                None,
-                Some("biz-persisted".to_owned()),
-                Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
-                "hash-1".to_owned(),
-                "snapshot".to_owned(),
-                false,
-            );
-            assert!(runtime.check_and_record_inbound("msg-1", first));
-        }
-
-        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+    fn retry_replacement_rejects_conflicting_business_message_id() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
             .expect("enabled");
-        let replay = IsoMessageMetadata::inbound(
+        let first = IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
             None,
-            Some("biz-persisted".to_owned()),
-            Some("123e4567-e89b-12d3-a456-426614174001".to_owned()),
+            Some("biz-1".to_owned()),
+            None,
+            "hash-1".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let second = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("biz-2".to_owned()),
+            None,
             "hash-2".to_owned(),
             "snapshot".to_owned(),
             false,
         );
-        assert!(!reloaded.check_and_record_inbound("msg-2", replay));
+        let conflicting_retry = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some(" biz-2 ".to_owned()),
+            None,
+            "hash-3".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+
+        assert!(runtime.check_and_record_inbound("msg-1", first));
+        assert!(runtime.check_and_record_inbound("msg-2", second));
+        runtime.mark_rejected("msg-1", Some("retry allowed".to_owned()), Some("ED05"));
+
+        assert!(!runtime.check_and_record_inbound("msg-1", conflicting_retry));
+        assert_eq!(
+            runtime
+                .business_message_id_index
+                .get(&normalise_business_message_id("biz-2").expect("non-empty business id"))
+                .map(|entry| entry.clone()),
+            Some("msg-2".to_owned())
+        );
     }
 
     #[test]
@@ -10837,7 +19000,17 @@ mod tests {
             let runtime = Iso20022BridgeRuntime::from_config(&config)
                 .expect("cfg")
                 .expect("enabled");
-            assert!(runtime.check_and_record_message("persisted-msg"));
+            let metadata = IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("persisted-biz".to_owned()),
+                None,
+                "persisted-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            );
+            assert!(runtime.check_and_record_inbound("persisted-msg", metadata));
             runtime.update_message_context(
                 "persisted-msg",
                 IsoMessageContext {
@@ -10859,6 +19032,662 @@ mod tests {
         assert_eq!(status.settlement_amount(), Some("99.50"));
         assert_eq!(status.settlement_currency(), Some("USD"));
         assert!(!status.status_history().is_empty());
+        let persisted_path = store
+            .path()
+            .join("messages")
+            .join(message_filename("persisted-msg"));
+        let persisted = fs::read_to_string(persisted_path).expect("persisted JSON");
+        let persisted_value =
+            norito::json::from_json::<JsonValue>(&persisted).expect("persisted JSON parses");
+        assert!(persisted_record_from_value(&persisted_value).is_some());
+        assert!(
+            persisted_value
+                .as_object()
+                .and_then(|obj| obj.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
+                .and_then(JsonValue::as_str)
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        let replay = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("persisted-biz".to_owned()),
+            None,
+            "replay-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
+    }
+
+    fn read_audit_index(store: &TempDir) -> JsonValue {
+        let index_path = store
+            .path()
+            .join(ISO_PERSISTED_AUDIT_DIR)
+            .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        let index = fs::read_to_string(index_path).expect("audit index JSON");
+        norito::json::from_json::<JsonValue>(&index).expect("audit index parses")
+    }
+
+    fn read_external_audit_index(export: &TempDir) -> JsonValue {
+        let index_path = export.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        let index = fs::read_to_string(index_path).expect("external audit index JSON");
+        norito::json::from_json::<JsonValue>(&index).expect("external audit index parses")
+    }
+
+    fn read_latest_audit_anchor(export: &TempDir) -> JsonValue {
+        let anchor_path = export.path().join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE);
+        let anchor = fs::read_to_string(anchor_path).expect("external audit anchor JSON");
+        norito::json::from_json::<JsonValue>(&anchor).expect("external audit anchor parses")
+    }
+
+    #[test]
+    fn durable_store_retention_is_independent_from_dedupe_ttl() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.dedupe_ttl_secs = 0;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "ttl-kept-a",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("ttl-kept-a-biz".to_owned()),
+                None,
+                "ttl-kept-a-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("ttl-kept-a", "tx-ttl-kept-a");
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(runtime.check_and_record_inbound(
+            "ttl-kept-b",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("ttl-kept-b-biz".to_owned()),
+                None,
+                "ttl-kept-b-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(runtime.message_status("ttl-kept-a").is_some());
+        assert!(runtime.message_status("ttl-kept-b").is_some());
+        let index_value = read_audit_index(&store);
+        assert_eq!(
+            index_value
+                .as_object()
+                .and_then(|obj| obj.get("record_count"))
+                .and_then(JsonValue::as_u64),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.store_max_records = 1;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "compact-old",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("compact-old-biz".to_owned()),
+                None,
+                "compact-old-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("compact-old", "tx-compact-old");
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(runtime.check_and_record_inbound(
+            "compact-new",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("compact-new-biz".to_owned()),
+                None,
+                "compact-new-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(runtime.message_status("compact-old").is_none());
+        assert!(runtime.message_status("compact-new").is_some());
+        assert!(
+            runtime
+                .business_message_id_index
+                .get(&normalise_business_message_id("compact-old-biz").expect("business id"))
+                .is_none()
+        );
+        assert!(
+            !store
+                .path()
+                .join("messages")
+                .join(message_filename("compact-old"))
+                .exists()
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            index_obj
+                .get("records")
+                .and_then(JsonValue::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(JsonValue::as_object)
+                .and_then(|entry| entry.get("message_id"))
+                .and_then(JsonValue::as_str),
+            Some("compact-new")
+        );
+    }
+
+    #[test]
+    fn durable_store_compacts_records_older_than_retention_window() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.store_retention_secs = 1;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "age-expired",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("age-expired-biz".to_owned()),
+                None,
+                "age-expired-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("age-expired", "tx-age-expired");
+        {
+            let mut record = runtime.records.get_mut("age-expired").expect("record");
+            record.updated_at = SystemTime::UNIX_EPOCH;
+        }
+        runtime.persist_message("age-expired");
+
+        assert!(runtime.message_status("age-expired").is_none());
+        assert!(
+            !store
+                .path()
+                .join("messages")
+                .join(message_filename("age-expired"))
+                .exists()
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn durable_store_writes_tamper_evident_audit_index() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        for (message_id, business_id, payload_hash, tx_hash) in [
+            ("audit-b", "audit-biz-b", "audit-hash-b", "tx-b"),
+            ("audit-a", "audit-biz-a", "audit-hash-a", "tx-a"),
+        ] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(business_id.to_owned()),
+                    None,
+                    payload_hash.to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted(message_id, tx_hash);
+        }
+
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert_eq!(
+            index_obj.get("version").and_then(JsonValue::as_u64),
+            Some(ISO_PERSISTED_AUDIT_INDEX_VERSION)
+        );
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(2)
+        );
+        assert!(
+            index_obj
+                .get(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
+                .and_then(JsonValue::as_str)
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        let entries = index_obj
+            .get("records")
+            .and_then(JsonValue::as_array)
+            .expect("audit records");
+        let message_ids = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|obj| obj.get("message_id"))
+                    .and_then(JsonValue::as_str)
+                    .expect("message_id")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(message_ids, vec!["audit-a", "audit-b"]);
+
+        for entry in entries {
+            let entry = entry.as_object().expect("audit entry object");
+            let filename = entry
+                .get("filename")
+                .and_then(JsonValue::as_str)
+                .expect("record filename");
+            let entry_digest = entry
+                .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+                .and_then(JsonValue::as_str)
+                .expect("record digest");
+            let record_path = store.path().join("messages").join(filename);
+            let record = fs::read_to_string(record_path).expect("record JSON");
+            let record_value =
+                norito::json::from_json::<JsonValue>(&record).expect("record JSON parses");
+            let record_obj = record_value.as_object().expect("record object");
+            assert!(persisted_record_digest_matches(record_obj));
+            assert_eq!(
+                record_obj
+                    .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+                    .and_then(JsonValue::as_str),
+                Some(entry_digest)
+            );
+        }
+
+        let mut tampered_index = index_value.clone();
+        tampered_index
+            .as_object_mut()
+            .expect("audit index object")
+            .insert("record_count".to_owned(), JsonValue::from(3_u64));
+        assert!(!persisted_audit_index_digest_matches(
+            tampered_index.as_object().expect("audit index object")
+        ));
+    }
+
+    #[test]
+    fn durable_store_exports_external_audit_notary_spool() {
+        let store = TempDir::new().expect("store tempdir");
+        let export = TempDir::new().expect("export tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.audit_export_dir = Some(export.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "external-audit-msg",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("external-audit-biz".to_owned()),
+                None,
+                "external-audit-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("external-audit-msg", "tx-external-audit");
+
+        let local = read_audit_index(&store);
+        let external = read_external_audit_index(&export);
+        assert_eq!(external, local);
+        let index_digest = audit_index_digest(&external).expect("index digest");
+        let anchor = read_latest_audit_anchor(&export);
+        let anchor_obj = anchor.as_object().expect("anchor object");
+        assert!(audit_export_anchor_digest_matches(anchor_obj));
+        assert_eq!(
+            anchor_obj.get("index_sha256").and_then(JsonValue::as_str),
+            Some(index_digest)
+        );
+        assert_eq!(
+            anchor_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            anchor_obj.get("audit_index").and_then(JsonValue::as_object),
+            external.as_object()
+        );
+        assert!(
+            export
+                .path()
+                .join(ISO_AUDIT_EXPORT_ANCHOR_DIR)
+                .join(format!("{index_digest}.notary.json"))
+                .exists(),
+            "digest-addressed notary preimage missing"
+        );
+
+        let mut tampered = anchor.clone();
+        tampered
+            .as_object_mut()
+            .expect("tampered anchor object")
+            .insert("record_count".to_owned(), JsonValue::from(2_u64));
+        assert!(!audit_export_anchor_digest_matches(
+            tampered.as_object().expect("tampered anchor")
+        ));
+    }
+
+    #[test]
+    fn durable_store_exports_audit_index_matching_persisted_manifest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "audit-export",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-export-biz".to_owned()),
+                None,
+                "audit-export-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("audit-export", "tx-export");
+
+        let exported = runtime.audit_index();
+        let persisted = read_audit_index(&store);
+        assert_eq!(exported, persisted);
+        let exported_obj = exported.as_object().expect("exported audit index object");
+        assert!(persisted_audit_index_digest_matches(exported_obj));
+
+        let mut tampered = exported.clone();
+        tampered
+            .as_object_mut()
+            .expect("tampered audit index object")
+            .insert("record_count".to_owned(), JsonValue::from(2_u64));
+        assert!(!persisted_audit_index_digest_matches(
+            tampered.as_object().expect("tampered audit index object")
+        ));
+    }
+
+    #[test]
+    fn durable_store_audit_index_excludes_tampered_record_on_reload() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            for (message_id, business_id, payload_hash, tx_hash) in [
+                (
+                    "audit-clean",
+                    "audit-clean-biz",
+                    "audit-clean-hash",
+                    "tx-clean",
+                ),
+                (
+                    "audit-tampered",
+                    "audit-tampered-biz",
+                    "audit-tampered-hash",
+                    "tx-tampered",
+                ),
+            ] {
+                assert!(runtime.check_and_record_inbound(
+                    message_id,
+                    IsoMessageMetadata::inbound(
+                        "generic-iso20022",
+                        "pacs.008",
+                        None,
+                        Some(business_id.to_owned()),
+                        None,
+                        payload_hash.to_owned(),
+                        "snapshot".to_owned(),
+                        false,
+                    ),
+                ));
+                runtime.mark_accepted(message_id, tx_hash);
+            }
+        }
+        let tampered_path = store
+            .path()
+            .join("messages")
+            .join(message_filename("audit-tampered"));
+        let original = fs::read_to_string(&tampered_path).expect("persisted JSON");
+        assert!(original.contains("tx-tampered"));
+        fs::write(&tampered_path, original.replace("tx-tampered", "tx-forged"))
+            .expect("tamper record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("audit-clean").is_some());
+        assert!(reloaded.message_status("audit-tampered").is_none());
+
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        let entries = index_obj
+            .get("records")
+            .and_then(JsonValue::as_array)
+            .expect("audit records");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]
+                .as_object()
+                .and_then(|obj| obj.get("message_id"))
+                .and_then(JsonValue::as_str),
+            Some("audit-clean")
+        );
+        assert!(reloaded.check_and_record_inbound(
+            "audit-replacement",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-tampered-biz".to_owned()),
+                None,
+                "audit-replacement-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+
+    #[test]
+    fn durable_store_rejects_tampered_record_body() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "tamper-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("tamper-biz".to_owned()),
+                    None,
+                    "tamper-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted("tamper-msg", "tx-original");
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("tamper-msg"));
+        let original = fs::read_to_string(&path).expect("persisted JSON");
+        assert!(original.contains("tx-original"));
+        fs::write(&path, original.replace("tx-original", "tx-forged")).expect("tamper record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("tamper-msg").is_none(),
+            "tampered persisted records must not rebuild durable status"
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+        assert!(reloaded.check_and_record_inbound(
+            "fresh-msg",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("tamper-biz".to_owned()),
+                None,
+                "fresh-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+
+    #[test]
+    fn durable_store_rejects_missing_record_digest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "missing-digest-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("missing-digest-biz".to_owned()),
+                    None,
+                    "missing-digest-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("missing-digest-msg"));
+        let text = fs::read_to_string(&path).expect("persisted JSON");
+        let mut value = norito::json::from_json::<JsonValue>(&text).expect("persisted JSON parses");
+        let obj = value.as_object_mut().expect("persisted object");
+        assert!(obj.remove(ISO_PERSISTED_RECORD_DIGEST_FIELD).is_some());
+        fs::write(
+            &path,
+            norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
+        )
+        .expect("write tampered JSON");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("missing-digest-msg").is_none(),
+            "legacy or stripped records without a digest must fail closed"
+        );
+    }
+
+    #[test]
+    fn durable_store_rejects_malformed_record_digest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "bad-digest-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("bad-digest-biz".to_owned()),
+                    None,
+                    "bad-digest-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("bad-digest-msg"));
+        let text = fs::read_to_string(&path).expect("persisted JSON");
+        let mut value = norito::json::from_json::<JsonValue>(&text).expect("persisted JSON parses");
+        let obj = value.as_object_mut().expect("persisted object");
+        obj.insert(
+            ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+            JsonValue::from("not-a-canonical-sha256"),
+        );
+        fs::write(
+            &path,
+            norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
+        )
+        .expect("write tampered JSON");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("bad-digest-msg").is_none(),
+            "malformed record digests must not be accepted"
+        );
     }
 
     #[test]
@@ -11718,6 +20547,107 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_pacs002_fixture_settles_known_original() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "STATUS-ORIG-1", "pacs.008");
+        runtime.mark_accepted("STATUS-ORIG-1", "tx-status-orig-1");
+        let parsed =
+            parse_message("pacs.002", PACS002_FIXTURE_XML.as_bytes()).expect("pacs.002 fixture");
+        let metadata = runtime
+            .validate_profile_submission(
+                runtime.default_profile(),
+                "pacs.002",
+                &parsed,
+                PACS002_FIXTURE_XML.as_bytes(),
+            )
+            .expect("profile accepts pacs.002 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "STATUS-FIXTURE-1");
+        assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("STATUS-ORIG-1"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("ACSC"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("STATUS-ORIG-1")
+                .expect("original status")
+                .pacs002_code(),
+            "ACSC"
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_pacs002_uses_group_header_msgid_not_transaction_status_id() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "orig-status-shadow", "pacs.008");
+        runtime.mark_accepted("orig-status-shadow", "tx-status-shadow");
+        let payload = br#"
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <pacs:FIToFIPmtStsRpt>
+    <pacs:GrpHdr>
+      <pacs:MsgId>status-group-id</pacs:MsgId>
+      <pacs:CreDtTm>2025-01-01T00:10:00Z</pacs:CreDtTm>
+    </pacs:GrpHdr>
+    <pacs:OrgnlGrpInfAndSts>
+      <pacs:OrgnlMsgId>orig-status-shadow</pacs:OrgnlMsgId>
+      <pacs:OrgnlMsgNmId>pacs.008.001.08</pacs:OrgnlMsgNmId>
+    </pacs:OrgnlGrpInfAndSts>
+    <pacs:TxInfAndSts>
+      <pacs:StsId>status-transaction-shadow</pacs:StsId>
+      <pacs:TxSts>ACSC</pacs:TxSts>
+    </pacs:TxInfAndSts>
+  </pacs:FIToFIPmtStsRpt>
+</pacs:Document>
+"#;
+        let parsed = parse_message("pacs.002", payload).expect("pacs.002 parsed");
+        let metadata = runtime
+            .validate_profile_submission(runtime.default_profile(), "pacs.002", &parsed, payload)
+            .expect("profile accepts pacs.002");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
+
+        assert_eq!(metadata.business_message_id(), Some("status-group-id"));
+        assert_eq!(
+            parsed.field_text("StsId"),
+            Some("status-transaction-shadow")
+        );
+        assert_eq!(lifecycle_id, "status-group-id");
+        assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+        assert!(!runtime.check_and_record_message("status-group-id"));
+        assert!(runtime.check_and_record_message("status-transaction-shadow"));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("orig-status-shadow"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("orig-status-shadow")
+                .expect("original status")
+                .pacs002_code(),
+            "ACSC"
+        );
+    }
+
+    #[test]
     fn lifecycle_pacs002_ignores_non_payment_original() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -11778,6 +20708,154 @@ mod tests {
             .expect("original status");
         assert_eq!(original.status_label(), "Rejected");
         assert_eq!(original.rejection_reason_code(), Some("AC01"));
+        assert_eq!(
+            original.detail(),
+            Some("payment returned by inbound pacs.004")
+        );
+        let lifecycle = runtime
+            .message_status("return-1")
+            .expect("lifecycle status");
+        assert_eq!(lifecycle.status_label(), "Accepted");
+        assert_eq!(lifecycle.pacs002_code(), "ACSP");
+        assert_eq!(
+            lifecycle.detail(),
+            Some("recorded inbound ISO 20022 pacs.004 lifecycle message")
+        );
+    }
+
+    #[test]
+    fn checked_in_pacs004_fixture_marks_original_returned() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "ORIGINAL-008", "pacs.008");
+        runtime.mark_accepted("ORIGINAL-008", "tx-original-008");
+        let parsed =
+            parse_message("pacs.004", PACS004_FIXTURE_XML.as_bytes()).expect("pacs.004 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "RETURN-FIXTURE-1");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("ORIGINAL-008"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("RJCT"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("AC01"));
+        assert_eq!(outcome.action(), "marked_returned");
+        let original = runtime
+            .message_status("ORIGINAL-008")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Rejected");
+        assert_eq!(original.pacs002_code(), "RJCT");
+        assert_eq!(original.rejection_reason_code(), Some("AC01"));
+        assert_eq!(
+            original.detail(),
+            Some("payment returned by inbound pacs.004")
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_camt056_marks_known_original_pending_cancellation() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("orig-cancel"));
+        runtime.mark_accepted("orig-cancel", "tx-cancel");
+        let parsed = parse_message(
+            "camt.056",
+            b"Assgnmt/Id=cancel-2\nAssgnmt/CreDtTm=2025-01-01T00:00:00Z\nUndrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId=orig-cancel\nUndrlyg/TxInf/CxlRsnInf/Rsn/Cd=CUST\nUndrlyg/TxInf/CxlRsnInf/AddtlInf=customer requested recall",
+        )
+        .expect("camt.056 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "cancel-2");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("orig-cancel"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("PDNG"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("CUST"));
+        assert_eq!(outcome.action(), "marked_cancellation_requested");
+        let original = runtime
+            .message_status("orig-cancel")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Pending");
+        assert_eq!(original.pacs002_code(), "PDNG");
+        assert_eq!(original.hold_reason_code(), Some("CUST"));
+        assert!(
+            original
+                .change_reason_codes()
+                .iter()
+                .any(|code| code == "CANCELLATION_REQUESTED"),
+            "expected cancellation reason to be recorded: {:?}",
+            original.change_reason_codes()
+        );
+        let lifecycle = runtime
+            .message_status("cancel-2")
+            .expect("lifecycle status");
+        assert_eq!(lifecycle.status_label(), "Accepted");
+        assert_eq!(
+            lifecycle.detail(),
+            Some("recorded inbound ISO 20022 camt.056 lifecycle message")
+        );
+    }
+
+    #[test]
+    fn checked_in_camt056_fixture_marks_original_pending_cancellation() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "CANCEL-ORIG-1", "pacs.008");
+        runtime.mark_accepted("CANCEL-ORIG-1", "tx-cancel-orig-1");
+        let parsed =
+            parse_message("camt.056", CAMT056_FIXTURE_XML.as_bytes()).expect("camt.056 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "CANCEL-FIXTURE-1");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("CANCEL-ORIG-1"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("PDNG"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("CUST"));
+        assert_eq!(outcome.action(), "marked_cancellation_requested");
+        let original = runtime
+            .message_status("CANCEL-ORIG-1")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Pending");
+        assert_eq!(original.pacs002_code(), "PDNG");
+        assert_eq!(original.hold_reason_code(), Some("CUST"));
+        assert!(
+            original
+                .change_reason_codes()
+                .iter()
+                .any(|code| code == "CANCELLATION_REQUESTED"),
+            "expected cancellation reason to be recorded: {:?}",
+            original.change_reason_codes()
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
     }
 
     #[test]
@@ -11938,6 +21016,146 @@ mod tests {
             assert_eq!(status.pacs002_code(), "ACSP");
             assert_eq!(status.hold_reason_code(), None);
             assert!(status.change_reason_codes().is_empty());
+        }
+    }
+
+    #[test]
+    fn lifecycle_sese024_marks_prefixed_settlement_instruction_pending() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "sese.023:settle-status", "sese.023");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status\nSttlmDt=2025-01-02\nSttlmSts=PEND\nRsnCd=NORE\nAddtlInf=awaiting matching",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "sese.024:settle-status");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:settle-status")
+        );
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("PEND"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("NORE"));
+        assert_eq!(outcome.action(), "marked_pending");
+        let original = runtime
+            .message_status("sese.023:settle-status")
+            .expect("settlement instruction status");
+        assert_eq!(original.status_label(), "Pending");
+        assert_eq!(original.pacs002_code(), "PDNG");
+        assert_eq!(original.hold_reason_code(), Some("NORE"));
+        let lifecycle = runtime
+            .message_status(&lifecycle_id)
+            .expect("lifecycle status");
+        assert_eq!(lifecycle.status_label(), "Accepted");
+        assert_eq!(
+            lifecycle.detail(),
+            Some("recorded inbound ISO 20022 sese.024 lifecycle message")
+        );
+    }
+
+    #[test]
+    fn lifecycle_sese024_records_unknown_original_without_creating_it() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=missing-status\nSttlmSts=PART\nRsnCd=NARR",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "sese.024:missing-status");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:missing-status")
+        );
+        assert!(!outcome.referenced_message_known());
+        assert_eq!(outcome.action(), "recorded");
+        assert!(runtime.message_status("sese.023:missing-status").is_none());
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_sese024_ignores_non_settlement_original() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "sese.023:settle-status-wrong-family", "pacs.008");
+        runtime.mark_accepted("sese.023:settle-status-wrong-family", "tx-wrong-family");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status-wrong-family\nSttlmSts=PEND\nRsnCd=NORE",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:settle-status-wrong-family")
+        );
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.action(), "ignored_profile_mismatch");
+        let original = runtime
+            .message_status("sese.023:settle-status-wrong-family")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Accepted");
+        assert_eq!(original.pacs002_code(), "ACSP");
+        assert_eq!(original.hold_reason_code(), None);
+    }
+
+    #[test]
+    fn lifecycle_sese024_rejects_conflicting_settlement_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["sese.023:settle-status-a", "sese.023:settle-status-b"] {
+            record_original(&runtime, original_id, "sese.023");
+        }
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status-a\nSttlmTx/TxId=settle-status-b\nSttlmSts=PEND\nRsnCd=NORE",
+        )
+        .expect("conflicting sese.024 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed)
+            .expect_err("conflicting sese.024 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("sese.024:settle-status-a", "sese.024", &parsed)
+            .expect_err("conflicting sese.024 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["sese.023:settle-status-a", "sese.023:settle-status-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate settlement remains recorded");
+            assert_eq!(status.pacs002_code(), "ACTC");
+            assert_eq!(status.hold_reason_code(), None);
         }
     }
 

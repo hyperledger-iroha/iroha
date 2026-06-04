@@ -328,6 +328,7 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_bsc_source_bridge_evidence_test.py
     pytests/scripts/sccp_evm_destination_evidence_test.py
     pytests/scripts/sccp_evm_live_evidence_test.py
+    pytests/scripts/sccp_evm_receipt_proof_evidence_test.py
     pytests/scripts/sccp_evm_source_live_evidence_test.py
     pytests/scripts/sccp_solana_destination_evidence_test.py
     pytests/scripts/sccp_solana_live_evidence_test.py
@@ -412,7 +413,8 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
-  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
+  run_cmd node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
+  run_cmd node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }
 

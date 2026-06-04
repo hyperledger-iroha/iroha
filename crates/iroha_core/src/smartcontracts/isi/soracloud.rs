@@ -17475,7 +17475,7 @@ mod tests {
 
         deploy_uploaded_model_service(&mut stx)?;
 
-        let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 10] = [
+        let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 12] = [
             |bundle| {
                 bundle.upload_recipient.schema_version =
                     iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1
@@ -17488,6 +17488,11 @@ mod tests {
                 bundle.upload_recipient.public_key_bytes.clear();
             },
             |bundle| {
+                bundle.upload_recipient.public_key_bytes = vec![0u8; 32];
+                bundle.upload_recipient.public_key_fingerprint =
+                    Hash::new(bundle.upload_recipient.public_key_bytes.as_slice());
+            },
+            |bundle| {
                 bundle.upload_recipient.public_key_fingerprint = Hash::new(b"wrong-recipient-key");
             },
             |bundle| {
@@ -17496,6 +17501,9 @@ mod tests {
             },
             |bundle| {
                 bundle.wrapped_bundle_key.ephemeral_public_key.clear();
+            },
+            |bundle| {
+                bundle.wrapped_bundle_key.ephemeral_public_key = vec![0u8; 32];
             },
             |bundle| {
                 bundle.wrapped_bundle_key.nonce.clear();

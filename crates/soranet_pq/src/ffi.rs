@@ -31,7 +31,7 @@ fn mldsa_suite_from_id(id: c_uint) -> Result<MlDsaSuite, c_int> {
 
 fn map_mldsa_error(err: &MlDsaError) -> c_int {
     match err {
-        MlDsaError::BadEncoding(_) => ERR_ENCODING,
+        MlDsaError::BadEncoding(_) | MlDsaError::SecretKeyMismatch { .. } => ERR_ENCODING,
         MlDsaError::ContextTooLong { .. } => ERR_LENGTH_MISMATCH,
         MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
         MlDsaError::KeyGenerationFailed { .. } | MlDsaError::Rng(_) => ERR_KEYGEN,
@@ -161,7 +161,12 @@ pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
             secret_buf.copy_from_slice(pair.secret_key());
             0
         }
-        Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(
+            MlKemError::BadEncoding { .. }
+            | MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. },
+        ) => ERR_ENCODING,
         Err(MlKemError::Rng(_)) => ERR_KEYGEN,
     }
 }
@@ -207,7 +212,12 @@ pub unsafe extern "C" fn soranet_mlkem_encapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(
+            MlKemError::BadEncoding { .. }
+            | MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. },
+        ) => ERR_ENCODING,
         Err(MlKemError::Rng(_)) => ERR_KEYGEN,
     }
 }
@@ -251,7 +261,12 @@ pub unsafe extern "C" fn soranet_mlkem_decapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(
+            MlKemError::BadEncoding { .. }
+            | MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. },
+        ) => ERR_ENCODING,
         Err(MlKemError::Rng(_)) => ERR_KEYGEN,
     }
 }
@@ -467,6 +482,15 @@ mod tests {
         (ciphertext, shared_secret)
     }
 
+    fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
+        bytes[0] = 0xFF;
+        bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
+    fn set_first_mlkem_public_key_coefficient_noncanonical(public_key: &mut [u8]) {
+        set_first_mlkem_12_bit_coefficient_noncanonical(public_key);
+    }
+
     #[test]
     fn ffi_suite_converters_reject_overflow_identifiers() {
         let overflow = c_uint::from(u8::MAX) + 1;
@@ -590,6 +614,56 @@ mod tests {
         };
         assert_eq!(rc, 0);
         assert_eq!(shared_sender, shared_receiver);
+    }
+
+    #[test]
+    fn ffi_mlkem_encapsulate_rejects_noncanonical_public_key() {
+        let suite = MlKemSuite::MlKem768;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let (mut public_key, _) = ffi_mlkem_keypair(suite);
+        set_first_mlkem_public_key_coefficient_noncanonical(&mut public_key);
+        let mut ciphertext = vec![0u8; params.ciphertext];
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_encapsulate(
+                suite_id,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                ciphertext.as_mut_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
+    fn ffi_mlkem_decapsulate_rejects_noncanonical_secret_key_private_component() {
+        let suite = MlKemSuite::MlKem768;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let (public_key, mut secret_key) = ffi_mlkem_keypair(suite);
+        let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
+        set_first_mlkem_12_bit_coefficient_noncanonical(&mut secret_key);
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_decapsulate(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
     }
 
     #[test]
@@ -1321,6 +1395,12 @@ mod tests {
         let bad_encoding = sign_mldsa(MlDsaSuite::MlDsa44, &[], &[], b"message", &mut rng)
             .expect_err("empty secret key must fail");
         assert_eq!(map_mldsa_error(&bad_encoding), ERR_ENCODING);
+
+        let secret_mismatch = MlDsaError::SecretKeyMismatch {
+            suite: MlDsaSuite::MlDsa44,
+            kind: "test",
+        };
+        assert_eq!(map_mldsa_error(&secret_mismatch), ERR_ENCODING);
 
         let keygen = MlDsaError::KeyGenerationFailed {
             suite: MlDsaSuite::MlDsa44,

@@ -22,6 +22,12 @@ KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 = (
 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 = (
     "kagemusha-recursive-spend-lineage-v1"
 )
+KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 = (
+    "kagemusha-recursive-spend-lineage-onehop-v1"
+)
+KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 = (
+    "kagemusha-recursive-spend-lineage-append-v1"
+)
 KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64
 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64
 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True
@@ -62,6 +68,8 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
@@ -77,6 +85,8 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
     "KagemushaOfflineSpendMode",
     "can_redeem_kagemusha_recursive_spend_witnessless",
+    "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
+    "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
     "requires_kagemusha_recursive_spend_lineage_witness_for_redeem",
     "can_append_kagemusha_recursive_spend_witnessless_lineage",
     "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
@@ -309,10 +319,33 @@ def can_redeem_kagemusha_recursive_spend_witnessless(
 
     return (
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        and is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)
         and isinstance(hop_count, int)
         and not isinstance(hop_count, bool)
         and 1 <= hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+    )
+
+
+def is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+    proof_circuit_id: str | None,
+) -> bool:
+    """Return whether a circuit id is any Reserved-lineage spend profile."""
+
+    return proof_circuit_id in (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    )
+
+
+def is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+    output_proof_circuit_id: str | None,
+) -> bool:
+    """Return whether a circuit id selects Reserved-lineage append output."""
+
+    return output_proof_circuit_id in (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
 
 
@@ -348,6 +381,8 @@ def normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
 
     if output_proof_circuit_id in (None, ""):
         return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    if output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
+        return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     return output_proof_circuit_id
 
 
@@ -361,7 +396,7 @@ def is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
     )
     return normalized in (
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
 
 
@@ -372,8 +407,7 @@ def is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
 
     return previous_proof_circuit_id in (
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-    )
+    ) or is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
 
 
 def requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
@@ -381,7 +415,7 @@ def requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_appe
 ) -> bool:
     """Return whether append requests need the previous lineage verifier record."""
 
-    return previous_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    return is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
 
 
 def is_supported_kagemusha_recursive_spend_append_proof_transition(
@@ -398,12 +432,11 @@ def is_supported_kagemusha_recursive_spend_append_proof_transition(
         == KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
         and normalized_output == KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
     ) or (
-        previous_proof_circuit_id
-        == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        is_kagemusha_recursive_spend_lineage_proof_circuit_id(previous_proof_circuit_id)
         and normalized_output
         in (
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
         )
     )
 
@@ -414,7 +447,7 @@ def preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
     """Return the preferred append output proof circuit for this release."""
 
     if can_append_kagemusha_recursive_spend_witnessless_lineage(previous_hop_count):
-        return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
 
 
@@ -434,7 +467,7 @@ def can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
     )
     if normalized == KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
         return previous_hop_count < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
-    if normalized == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
+    if normalized == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1:
         return can_append_kagemusha_recursive_spend_witnessless_lineage(
             previous_hop_count,
         )
@@ -473,7 +506,7 @@ def requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
         output_proof_circuit_id,
     )
     return (
-        normalized == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        is_kagemusha_recursive_spend_lineage_append_output_circuit_id(normalized)
         and isinstance(previous_hop_count, int)
         and not isinstance(previous_hop_count, bool)
         and previous_hop_count >= 1

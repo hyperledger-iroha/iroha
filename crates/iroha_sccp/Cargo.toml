@@ -13,6 +13,7 @@ default = ["std", "bls"]
 std = []
 serde = ["dep:serde"]
 bls = ["iroha_crypto/bls"]
+test-fixtures = []
 
 [dependencies]
 blake3 = { workspace = true }

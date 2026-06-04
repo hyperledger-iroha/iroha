@@ -19,6 +19,11 @@ from iroha_python import (
     TransactionConfig,
     TransactionDraft,
 )
+from iroha_python._privacy_backends import (
+    _is_pending_production_backend_label,
+    _is_production_verify_backend_label,
+    _require_production_verify_backend_label,
+)
 from iroha_python.repo import RepoAgreementListPage
 
 
@@ -59,6 +64,111 @@ def response(
         result._content = json.dumps(payload).encode("utf-8")
         result.headers["Content-Type"] = "application/json"
     return result
+
+
+def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> None:
+    for label in (
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+    ):
+        assert _is_pending_production_backend_label(label)
+
+    for label in (
+        "halo2/ipa/orchard/dev-fixture",
+        "stark/fri/miden/claimed-production",
+        "anonymous-pgc-k-out-of-n-v1-production",
+        "sis-hints-anoncred-pq-v0-devfixture",
+        "groth16/bls12-377/../../prod",
+        "post-quantum-masp/audit-claimed",
+    ):
+        assert not _is_pending_production_backend_label(label)
+
+
+def test_privacy_backend_production_verify_classifier_parity() -> None:
+    supported = (
+        "halo2/ipa",
+        "halo2/ipa:ivm-execution-v1",
+        "halo2/pasta/ivm-execution-v1",
+        "halo2/pasta/kagemusha-folded-v1",
+        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "stark/fri",
+        "stark/fri/sha256-goldilocks",
+    )
+    for backend in supported:
+        assert _is_production_verify_backend_label(backend), backend
+        assert _require_production_verify_backend_label(backend, "backend") == backend
+
+    unsupported = (
+        "",
+        "unknown/privacy/backend",
+        "halo2/unknown-native-v1",
+        "halo2/ipa:unknown-native-v1",
+        "stark/unknown-native-v1",
+        "halo2/bn254",
+        "groth16",
+        "groth16/bls12-377",
+        " halo2/ipa",
+        "halo2/ipa ",
+        "\thalo2/ipa",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "halo2/ipa\0",
+        "../halo2/ipa",
+        "halo2/ipa/orchard",
+        "halo2-ipa-orchard",
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+        "halo2/pasta/tiny-add",
+        "halo2/ipa/tiny-add",
+        "halo2/ipa:tiny-add",
+        "halo2/pasta/asset-hidden-transfer-public-test",
+        "halo2/ipa/asset-hidden-transfer-public-test",
+        "halo2/ipa:asset-hidden-transfer-public-test",
+        "stark/fri/miden",
+        "stark/fri/miden/claimed-production",
+        "stark/fri/latest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "stark/fri/sha256 goldilocks",
+        "stark/fri/sha256+goldilocks",
+        "halo2/ipa+mock",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:claimed-production",
+        "halo2/ipa:mainnet-ready",
+        "stark/fri/audit-signoff",
+        "stark/fri/externally-audited",
+        "stark/fri/security-review-passed",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        "stark/fri/dev-fixture",
+        "stark/fri/d-e-v-f-i-x-t-u-r-e",
+        "stark/fri/test",
+        "stark/fri/t-e-s-t",
+        "halo2/ipa:dev-fixture",
+        "halo2/ipa:dummy",
+        "halo2/ipa:f-a-k-e",
+        "halo2/ipa:stub",
+        "halo2/kzg",
+        "halo2/pasta/mock",
+        "kzg/powersoftau",
+    )
+    for backend in unsupported:
+        assert not _is_production_verify_backend_label(backend), backend
+        expected_error = (
+            "non-empty string"
+            if not isinstance(backend, str) or not backend.strip()
+            else "unsupported production verifier backend"
+        )
+        with pytest.raises(ValueError, match=expected_error):
+            _require_production_verify_backend_label(backend, "backend")
 
 
 def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:

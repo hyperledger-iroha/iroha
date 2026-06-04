@@ -83,6 +83,7 @@ impl Default for MockToriiData {
 
         let status = TelemetryStatus {
             build: Default::default(),
+            observed_at_ms: 0,
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,
@@ -95,6 +96,12 @@ impl Default for MockToriiData {
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,
+            queue_queued: 4,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: false,
@@ -105,6 +112,7 @@ impl Default for MockToriiData {
             governance,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot::default(),
             sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),

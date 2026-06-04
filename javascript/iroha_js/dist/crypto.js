@@ -33,21 +33,12 @@ const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE = 0x50;
 const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE = 0x42;
 const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE = 0x56;
 const PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
-const PRIVACY_NATIVE_PROBE_PAYLOAD = Buffer.from([0xa5, 0x5a, 0x11]);
-const PRIVACY_NATIVE_PROBE_PAYLOAD_CRC64 = Buffer.from([
-  0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24,
-]);
 const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE = (() => {
-  const archive = Buffer.alloc(
-    PRIVACY_NORITO_HEADER_BYTES + PRIVACY_NATIVE_PROBE_PAYLOAD.length,
-  );
+  const archive = Buffer.alloc(PRIVACY_NORITO_HEADER_BYTES);
   archive.write("NRT0", 0, "ascii");
   archive.fill(PRIVACY_REQUEST_SCHEMA_BYTE, 6, 22);
-  archive.writeBigUInt64LE(BigInt(PRIVACY_NATIVE_PROBE_PAYLOAD.length), 23);
-  PRIVACY_NATIVE_PROBE_PAYLOAD_CRC64.copy(archive, 31);
-  PRIVACY_NATIVE_PROBE_PAYLOAD.copy(archive, PRIVACY_NORITO_HEADER_BYTES);
   return archive;
 })();
 const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
@@ -856,6 +847,10 @@ export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
@@ -888,10 +883,25 @@ export function preferredKagemushaOfflineSpendMode(
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
   return (
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
-    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) &&
     Number.isInteger(hopCount) &&
     hopCount >= 1 &&
     hopCount <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
+  return (
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
+  return (
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
 }
 
@@ -915,6 +925,9 @@ export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outpu
   if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
     return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
   }
+  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  }
   return outputProofCircuitId;
 }
 
@@ -922,13 +935,13 @@ export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(out
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
 }
 
 export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(previousHopCount) {
   return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount)
-    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     : KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
 }
 
@@ -943,7 +956,7 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
   if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
     return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
   }
-  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
     return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount);
   }
   return false;
@@ -952,14 +965,14 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
 export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId) {
   return (
     previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-    previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId)
   );
 }
 
 export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
   previousProofCircuitId,
 ) {
-  return previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1;
+  return isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId);
 }
 
 export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -971,9 +984,9 @@ export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
   return (
     (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
       normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
-    (previousProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
       (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1))
+        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
   );
 }
 
@@ -999,8 +1012,9 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
   previousHopCount,
 ) {
   return (
-    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) ===
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
+    ) &&
     Number.isInteger(previousHopCount) &&
     previousHopCount >= 1
   );
@@ -1237,7 +1251,21 @@ function toPrivacyArchiveBuffer(value, name) {
   if (typeof value === "string") {
     throw new TypeError(`${name} must be Norito V1 bytes, not a string`);
   }
-  return toBuffer(value, name);
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (value instanceof Uint8Array || value instanceof DataView) {
+    if (!(value.buffer instanceof ArrayBuffer)) {
+      throw new TypeError(`${name} must not use shared memory`);
+    }
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+  throw new TypeError(
+    `${name} must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer`,
+  );
 }
 
 function toPrivacyRequestArchiveBuffer(value, name) {

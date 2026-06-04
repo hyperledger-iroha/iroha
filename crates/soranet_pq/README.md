@@ -43,6 +43,13 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
 ## Notes
 
 - Secrets are wrapped in `Zeroizing` containers so memory is scrubbed on drop.
+- ML-KEM validation rejects noncanonical 12-bit polynomial coefficients
+  (values outside `q = 3329`) in public keys and in the secret-key private
+  component, and secret-key validation applies the same check to the embedded
+  public key before verifying `H(ek)`.
+- ML-DSA secret-key validation reconstructs the committed public key, verifies
+  the embedded `tr = H(pk)` value, and rejects noncanonical or internally
+  inconsistent secret material before signing draws randomness.
 - ML-KEM and ML-DSA entry points now require explicit hedged RNG objects or the
   fallible `_from_os` convenience helpers.
 - The current backend uses the pqcrypto/PQClean FIPS implementations and calls

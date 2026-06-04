@@ -3,6 +3,7 @@ use core::{fmt, str::FromStr};
 use pqcrypto_mlkem as _;
 use pqcrypto_traits::Error as PqError;
 use rand_core::RngCore;
+use sha3::{Digest, Sha3_256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -25,6 +26,9 @@ const MLKEM1024_PUBLIC_KEY_BYTES: usize = 1568;
 const MLKEM1024_SECRET_KEY_BYTES: usize = 3168;
 const MLKEM1024_CIPHERTEXT_BYTES: usize = 1568;
 const MLKEM1024_SHARED_SECRET_BYTES: usize = 32;
+const MLKEM_PUBLIC_KEY_HASH_BYTES: usize = 32;
+const MLKEM_PUBLIC_KEY_SEED_BYTES: usize = 32;
+const MLKEM_FIELD_MODULUS: u16 = 3329;
 
 /// Supported ML-KEM parameter sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,7 +68,7 @@ impl MlKemSuite {
 
     /// Return the public key length in bytes for this parameter set.
     #[must_use]
-    pub fn public_key_len(self) -> usize {
+    pub const fn public_key_len(self) -> usize {
         match self {
             MlKemSuite::MlKem512 => MLKEM512_PUBLIC_KEY_BYTES,
             MlKemSuite::MlKem768 => MLKEM768_PUBLIC_KEY_BYTES,
@@ -74,7 +78,7 @@ impl MlKemSuite {
 
     /// Return the secret key length in bytes for this parameter set.
     #[must_use]
-    pub fn secret_key_len(self) -> usize {
+    pub const fn secret_key_len(self) -> usize {
         match self {
             MlKemSuite::MlKem512 => MLKEM512_SECRET_KEY_BYTES,
             MlKemSuite::MlKem768 => MLKEM768_SECRET_KEY_BYTES,
@@ -84,7 +88,7 @@ impl MlKemSuite {
 
     /// Return the ciphertext length in bytes for this parameter set.
     #[must_use]
-    pub fn ciphertext_len(self) -> usize {
+    pub const fn ciphertext_len(self) -> usize {
         match self {
             MlKemSuite::MlKem512 => MLKEM512_CIPHERTEXT_BYTES,
             MlKemSuite::MlKem768 => MLKEM768_CIPHERTEXT_BYTES,
@@ -145,17 +149,25 @@ impl MlKemSuite {
     /// Validate a public key encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string cannot be decoded.
+    /// Returns an error when the byte string has the wrong length or contains
+    /// noncanonical polynomial coefficients.
     pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
-        validate_len(self.public_key_kind(), bytes.len(), self.public_key_len())
+        validate_len(self.public_key_kind(), bytes.len(), self.public_key_len())?;
+        self.validate_public_key_canonical(bytes)
     }
 
     /// Validate a secret key encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string cannot be decoded.
+    /// Returns an error when the byte string has the wrong length, its private
+    /// component is noncanonical, or its embedded public key is noncanonical or
+    /// inconsistent with its `H(ek)` hash.
     pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
-        validate_len(self.secret_key_kind(), bytes.len(), self.secret_key_len())
+        self.validate_secret_key_len(bytes)?;
+        self.validate_secret_key_private_component(bytes)?;
+        let embedded_public = self.public_key_from_validated_secret_key(bytes);
+        self.validate_public_key_canonical(embedded_public)?;
+        self.validate_secret_key_public_hash(bytes)
     }
 
     /// Validate a ciphertext encoding for this suite.
@@ -164,6 +176,62 @@ impl MlKemSuite {
     /// Returns an error when the byte string cannot be decoded.
     pub fn validate_ciphertext(self, bytes: &[u8]) -> Result<(), MlKemError> {
         validate_len(self.ciphertext_kind(), bytes.len(), self.ciphertext_len())
+    }
+
+    /// Return the public key embedded in a FIPS 203 decapsulation key.
+    ///
+    /// ML-KEM decapsulation keys contain the matching encapsulation key near the
+    /// end of the secret-key byte string, followed by `H(ek)` and the implicit
+    /// rejection seed. This helper lets callers fail closed on mismatched
+    /// public/secret material before implicit rejection produces a traffic-key
+    /// mismatch at runtime.
+    ///
+    /// # Errors
+    /// Returns an error when the secret-key byte string has the wrong length or
+    /// its private component or embedded public key/hash fields are
+    /// noncanonical or internally inconsistent.
+    pub fn public_key_from_secret_key(self, secret_key: &[u8]) -> Result<&[u8], MlKemError> {
+        self.validate_secret_key(secret_key)?;
+        Ok(self.public_key_from_validated_secret_key(secret_key))
+    }
+
+    /// Return the public-key hash embedded in a FIPS 203 decapsulation key.
+    ///
+    /// # Errors
+    /// Returns an error when the secret-key byte string has the wrong length or
+    /// its private component or embedded public key/hash fields are
+    /// noncanonical or internally inconsistent.
+    pub fn public_key_hash_from_secret_key(self, secret_key: &[u8]) -> Result<&[u8], MlKemError> {
+        self.validate_secret_key(secret_key)?;
+        Ok(self.public_key_hash_from_validated_secret_key(secret_key))
+    }
+
+    /// Validate that a public key and secret key belong to the same ML-KEM key pair.
+    ///
+    /// # Errors
+    /// Returns [`MlKemError::BadEncoding`] for malformed lengths and
+    /// [`MlKemError::NonCanonicalEncoding`] for noncanonical public-key field
+    /// coefficients, [`MlKemError::KeyPairMismatch`] when the secret key embeds
+    /// a different public key, or [`MlKemError::KeyPairPublicHashMismatch`]
+    /// when its embedded `H(ek)` value does not match the public key.
+    pub fn validate_key_pair(self, public_key: &[u8], secret_key: &[u8]) -> Result<(), MlKemError> {
+        self.validate_public_key(public_key)?;
+        self.validate_secret_key(secret_key)?;
+        let embedded_public = self.public_key_from_validated_secret_key(secret_key);
+        if embedded_public != public_key {
+            return Err(MlKemError::KeyPairMismatch {
+                suite: self,
+                kind: self.key_pair_kind(),
+            });
+        }
+        let embedded_public_hash = self.public_key_hash_from_validated_secret_key(secret_key);
+        if embedded_public_hash != mlkem_public_key_hash(public_key).as_slice() {
+            return Err(MlKemError::KeyPairPublicHashMismatch {
+                suite: self,
+                kind: self.key_pair_hash_kind(),
+            });
+        }
+        Ok(())
     }
 
     const fn public_key_kind(self) -> &'static str {
@@ -189,6 +257,128 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 ciphertext",
         }
     }
+
+    const fn key_pair_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 key pair",
+            MlKemSuite::MlKem768 => "ML-KEM-768 key pair",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 key pair",
+        }
+    }
+
+    const fn key_pair_hash_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 key pair public hash",
+            MlKemSuite::MlKem768 => "ML-KEM-768 key pair public hash",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 key pair public hash",
+        }
+    }
+
+    const fn secret_key_private_component_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 secret key private component",
+            MlKemSuite::MlKem768 => "ML-KEM-768 secret key private component",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key private component",
+        }
+    }
+
+    const fn secret_key_public_key_offset(self) -> usize {
+        self.secret_key_public_key_hash_offset() - self.public_key_len()
+    }
+
+    const fn secret_key_public_key_hash_offset(self) -> usize {
+        self.secret_key_len() - 2 * MLKEM_PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn validate_secret_key_len(self, bytes: &[u8]) -> Result<(), MlKemError> {
+        validate_len(self.secret_key_kind(), bytes.len(), self.secret_key_len())
+    }
+
+    fn validate_secret_key_private_component(self, secret_key: &[u8]) -> Result<(), MlKemError> {
+        self.validate_12_bit_coefficients(
+            self.secret_key_private_component_kind(),
+            self.secret_key_private_component_from_validated_secret_key(secret_key),
+        )
+    }
+
+    fn validate_public_key_canonical(self, public_key: &[u8]) -> Result<(), MlKemError> {
+        let polynomial_bytes = public_key
+            .len()
+            .checked_sub(MLKEM_PUBLIC_KEY_SEED_BYTES)
+            .ok_or_else(|| {
+                MlKemError::bad_encoding(
+                    self.public_key_kind(),
+                    PqError::BadLength {
+                        name: self.public_key_kind(),
+                        actual: public_key.len(),
+                        expected: self.public_key_len(),
+                    },
+                )
+            })?;
+        self.validate_12_bit_coefficients(self.public_key_kind(), &public_key[..polynomial_bytes])
+    }
+
+    fn validate_12_bit_coefficients(
+        self,
+        kind: &'static str,
+        bytes: &[u8],
+    ) -> Result<(), MlKemError> {
+        debug_assert_eq!(bytes.len() % 3, 0);
+        for (pair_index, chunk) in bytes.chunks_exact(3).enumerate() {
+            let first = u16::from(chunk[0]) | (u16::from(chunk[1] & 0x0F) << 8);
+            if first >= MLKEM_FIELD_MODULUS {
+                return Err(MlKemError::NonCanonicalEncoding {
+                    suite: self,
+                    kind,
+                    coefficient_index: pair_index * 2,
+                    value: first,
+                });
+            }
+            let second = (u16::from(chunk[1]) >> 4) | (u16::from(chunk[2]) << 4);
+            if second >= MLKEM_FIELD_MODULUS {
+                return Err(MlKemError::NonCanonicalEncoding {
+                    suite: self,
+                    kind,
+                    coefficient_index: pair_index * 2 + 1,
+                    value: second,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_secret_key_public_hash(self, secret_key: &[u8]) -> Result<(), MlKemError> {
+        let embedded_public = self.public_key_from_validated_secret_key(secret_key);
+        let embedded_public_hash = self.public_key_hash_from_validated_secret_key(secret_key);
+        if embedded_public_hash != mlkem_public_key_hash(embedded_public).as_slice() {
+            return Err(MlKemError::KeyPairPublicHashMismatch {
+                suite: self,
+                kind: self.key_pair_hash_kind(),
+            });
+        }
+        Ok(())
+    }
+
+    fn secret_key_private_component_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
+        &secret_key[..self.secret_key_public_key_offset()]
+    }
+
+    fn public_key_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
+        let start = self.secret_key_public_key_offset();
+        &secret_key[start..start + self.public_key_len()]
+    }
+
+    fn public_key_hash_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
+        let start = self.secret_key_public_key_hash_offset();
+        &secret_key[start..start + MLKEM_PUBLIC_KEY_HASH_BYTES]
+    }
+}
+
+fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; MLKEM_PUBLIC_KEY_HASH_BYTES] {
+    let digest = Sha3_256::digest(public_key);
+    let mut out = [0u8; MLKEM_PUBLIC_KEY_HASH_BYTES];
+    out.copy_from_slice(&digest);
+    out
 }
 
 /// Errors produced when parsing an [`MlKemSuite`] from text.
@@ -401,7 +591,7 @@ impl MlKemSharedSecret {
 }
 
 /// Errors that can arise while working with ML-KEM wrappers.
-#[derive(Clone, Copy, Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum MlKemError {
     /// Input byte string had an unexpected length.
     #[error("invalid {kind} encoding: {source}")]
@@ -410,7 +600,35 @@ pub enum MlKemError {
         kind: &'static str,
         /// Original `PQClean` error.
         #[source]
-        source: PqError,
+        source: Box<PqError>,
+    },
+    /// Public key and secret key encodings were individually well-formed but not paired.
+    #[error("{suite} public key does not match secret key")]
+    KeyPairMismatch {
+        /// ML-KEM parameter set being validated.
+        suite: MlKemSuite,
+        /// Identifier of the key-pair material that failed to match.
+        kind: &'static str,
+    },
+    /// Secret key embeds the expected public key but an inconsistent `H(ek)` hash.
+    #[error("{suite} secret key public hash does not match public key")]
+    KeyPairPublicHashMismatch {
+        /// ML-KEM parameter set being validated.
+        suite: MlKemSuite,
+        /// Identifier of the key-pair material that failed to match.
+        kind: &'static str,
+    },
+    /// Encoded field elements are outside the canonical ML-KEM range.
+    #[error("{suite} {kind} is not canonical: coefficient {coefficient_index} has value {value}")]
+    NonCanonicalEncoding {
+        /// ML-KEM parameter set being validated.
+        suite: MlKemSuite,
+        /// Identifier of the key material that failed to decode canonically.
+        kind: &'static str,
+        /// Zero-based coefficient index in the decoded polynomial vector.
+        coefficient_index: usize,
+        /// Rejected 12-bit value.
+        value: u16,
     },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
@@ -419,7 +637,10 @@ pub enum MlKemError {
 
 impl MlKemError {
     fn bad_encoding(kind: &'static str, source: PqError) -> Self {
-        MlKemError::BadEncoding { kind, source }
+        MlKemError::BadEncoding {
+            kind,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -480,12 +701,14 @@ fn generate_mlkem_keypair_from_coins(suite: MlKemSuite, coins: &[u8; 64]) -> MlK
 /// Encapsulate against a provided public key.
 ///
 /// # Errors
-/// Returns an error when the public key encoding is invalid.
+/// Returns an error when the public key length is invalid or its field
+/// coefficients are noncanonical.
 pub fn encapsulate_mlkem(
     suite: MlKemSuite,
     public_key: &[u8],
     rng: &mut HedgedChaCha20Rng,
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
     encapsulate_mlkem_from_coins(suite, public_key, &coins)
@@ -495,11 +718,13 @@ pub fn encapsulate_mlkem(
 ///
 /// # Errors
 /// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or
-/// [`MlKemError::BadEncoding`] when the public key encoding is invalid.
+/// [`MlKemError::BadEncoding`] or [`MlKemError::NonCanonicalEncoding`] when the
+/// public key encoding is invalid.
 pub fn encapsulate_mlkem_from_os(
     suite: MlKemSuite,
     public_key: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:encapsulate")?;
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
@@ -507,13 +732,15 @@ pub fn encapsulate_mlkem_from_os(
 /// Deterministically encapsulate from explicit seed material.
 ///
 /// # Errors
-/// Returns an error when the public key encoding is invalid.
+/// Returns an error when the public key length is invalid or its field
+/// coefficients are noncanonical.
 pub fn encapsulate_mlkem_from_seed(
     suite: MlKemSuite,
     public_key: &[u8],
     seed: HedgedRngSeed,
     personalization: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
@@ -536,7 +763,8 @@ fn encapsulate_mlkem_from_coins(
 /// Decapsulate a ciphertext with the provided secret key.
 ///
 /// # Errors
-/// Returns an error when the secret key or ciphertext encoding is invalid.
+/// Returns an error when the secret key, embedded public key, or ciphertext
+/// encoding is invalid.
 pub fn decapsulate_mlkem(
     suite: MlKemSuite,
     secret_key: &[u8],
@@ -564,7 +792,8 @@ pub fn mlkem_metadata(suite: MlKemSuite) -> MlKemMetadata {
 /// Validate the encoding of an ML-KEM public key.
 ///
 /// # Errors
-/// Returns an error when the public key encoding is invalid.
+/// Returns an error when the public key length is invalid or its field
+/// coefficients are noncanonical.
 pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_public_key(bytes)
 }
@@ -572,7 +801,9 @@ pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 /// Validate the encoding of an ML-KEM secret key.
 ///
 /// # Errors
-/// Returns an error when the secret key encoding is invalid.
+/// Returns an error when the secret key length is invalid, its private
+/// component or embedded public key is noncanonical, or its embedded public-key
+/// hash is inconsistent.
 pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_secret_key(bytes)
 }
@@ -583,6 +814,23 @@ pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 /// Returns an error when the ciphertext encoding is invalid.
 pub fn validate_mlkem_ciphertext(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_ciphertext(bytes)
+}
+
+/// Validate that public and secret ML-KEM keys belong to the same key pair.
+///
+/// # Errors
+/// Returns [`MlKemError::BadEncoding`] for malformed lengths and
+/// [`MlKemError::NonCanonicalEncoding`] for noncanonical public-key field
+/// coefficients, [`MlKemError::KeyPairMismatch`] when the keys are
+/// individually well-formed but not paired, or
+/// [`MlKemError::KeyPairPublicHashMismatch`] when the secret key's embedded
+/// `H(ek)` value does not match its embedded public key.
+pub fn validate_mlkem_key_pair(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    secret_key: &[u8],
+) -> Result<(), MlKemError> {
+    suite.validate_key_pair(public_key, secret_key)
 }
 
 #[allow(unsafe_code)]
@@ -739,6 +987,39 @@ mod tests {
 
     use super::*;
 
+    fn set_first_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
+        bytes[0] = 0xFF;
+        bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
+    fn set_first_public_key_coefficient_noncanonical(public_key: &mut [u8]) {
+        set_first_12_bit_coefficient_noncanonical(public_key);
+    }
+
+    fn assert_noncanonical_encoding(
+        err: MlKemError,
+        suite: MlKemSuite,
+        expected_kind_fragment: &str,
+    ) {
+        match err {
+            MlKemError::NonCanonicalEncoding {
+                suite: found_suite,
+                kind,
+                coefficient_index: 0,
+                value,
+            } => {
+                assert_eq!(found_suite, suite);
+                assert!(kind.contains(expected_kind_fragment));
+                assert!(value >= MLKEM_FIELD_MODULUS);
+            }
+            other => panic!("expected noncanonical {expected_kind_fragment} error, got {other:?}"),
+        }
+    }
+
+    fn assert_noncanonical_public_key(err: MlKemError, suite: MlKemSuite) {
+        assert_noncanonical_encoding(err, suite, "public key");
+    }
+
     fn roundtrip(suite: MlKemSuite) {
         let mut rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([suite.kem_id(); 32]),
@@ -852,7 +1133,47 @@ mod tests {
         let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8], &mut rng).unwrap_err();
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. } => {
+                panic!("unexpected key-pair mismatch")
+            }
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn encapsulation_helpers_reject_invalid_public_key_before_entropy() {
+        let suite = MlKemSuite::MlKem512;
+        let short_public_key = [0u8; 8];
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF1; 32]),
+            b"mlkem-invalid-public-key-preflight",
+        );
+
+        for (label, result) in [
+            (
+                "direct",
+                encapsulate_mlkem(suite, &short_public_key, &mut rng),
+            ),
+            (
+                "seeded",
+                encapsulate_mlkem_from_seed(
+                    suite,
+                    &short_public_key,
+                    HedgedRngSeed::from_entropy([0xF2; 32]),
+                    b"invalid-public-key",
+                ),
+            ),
+            ("os", encapsulate_mlkem_from_os(suite, &short_public_key)),
+        ] {
+            match result {
+                Err(MlKemError::BadEncoding { kind, .. }) => assert!(
+                    kind.contains("public key"),
+                    "{label} helper should reject the public key length"
+                ),
+                other => panic!("unexpected {label} result: {other:?}"),
+            }
         }
     }
 
@@ -877,6 +1198,11 @@ mod tests {
             decapsulate_mlkem(suite, short_secret, ciphertext.as_bytes()).expect_err("bad secret");
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("secret key")),
+            MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. } => {
+                panic!("unexpected key-pair mismatch")
+            }
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
 
@@ -885,6 +1211,11 @@ mod tests {
             decapsulate_mlkem(suite, keys.secret_key(), short_ciphertext).expect_err("bad ct");
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("ciphertext")),
+            MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. } => {
+                panic!("unexpected key-pair mismatch")
+            }
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
@@ -956,6 +1287,11 @@ mod tests {
 
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::KeyPairMismatch { .. }
+            | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::NonCanonicalEncoding { .. } => {
+                panic!("unexpected key-pair mismatch")
+            }
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
@@ -980,6 +1316,220 @@ mod tests {
             validate_mlkem_secret_key(suite, keys.secret_key()).expect("secret key validates");
             validate_mlkem_ciphertext(suite, ciphertext.as_bytes()).expect("ciphertext validates");
         }
+    }
+
+    #[test]
+    fn validation_rejects_noncanonical_public_key_coefficients() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xDA); 32]),
+                b"noncanonical-public-key",
+            );
+            let mut public_key = keys.public_key().to_vec();
+            set_first_public_key_coefficient_noncanonical(&mut public_key);
+
+            let err = validate_mlkem_public_key(suite, public_key.as_slice())
+                .expect_err("noncanonical public key must fail validation");
+            assert_noncanonical_public_key(err, suite);
+
+            let err = encapsulate_mlkem_from_seed(
+                suite,
+                public_key.as_slice(),
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xDB); 32]),
+                b"noncanonical-public-encapsulation",
+            )
+            .expect_err("noncanonical public key must fail before encapsulation");
+            assert_noncanonical_public_key(err, suite);
+        }
+    }
+
+    #[test]
+    fn secret_key_embeds_generated_public_key_for_each_suite() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xF0); 32]),
+                b"embedded-public-key",
+            );
+
+            assert_eq!(
+                suite
+                    .public_key_from_secret_key(keys.secret_key())
+                    .expect("secret key embeds public key"),
+                keys.public_key()
+            );
+            assert_eq!(
+                suite
+                    .public_key_hash_from_secret_key(keys.secret_key())
+                    .expect("secret key embeds public-key hash"),
+                mlkem_public_key_hash(keys.public_key()).as_slice()
+            );
+            validate_mlkem_key_pair(suite, keys.public_key(), keys.secret_key())
+                .expect("generated ML-KEM key pair validates");
+        }
+    }
+
+    #[test]
+    fn validation_rejects_mismatched_key_pair() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF4; 32]),
+            b"keypair-mismatch-a",
+        );
+        let other = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF5; 32]),
+            b"keypair-mismatch-b",
+        );
+
+        let err = validate_mlkem_key_pair(suite, keys.public_key(), other.secret_key())
+            .expect_err("mismatched ML-KEM key pair must fail");
+        assert!(matches!(
+            err,
+            MlKemError::KeyPairMismatch {
+                suite: MlKemSuite::MlKem768,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_secret_key_public_hash_drift() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF6; 32]),
+            b"keypair-hash-drift",
+        );
+        let mut secret_key = keys.secret_key().to_vec();
+        secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x80;
+
+        let err = validate_mlkem_key_pair(suite, keys.public_key(), secret_key.as_slice())
+            .expect_err("secret-key embedded public hash drift must fail");
+        assert!(matches!(
+            err,
+            MlKemError::KeyPairPublicHashMismatch {
+                suite: MlKemSuite::MlKem768,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn secret_key_validation_rejects_public_hash_drift() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF7; 32]),
+            b"secret-hash-drift",
+        );
+        let mut secret_key = keys.secret_key().to_vec();
+        secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x40;
+
+        let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
+            .expect_err("standalone secret-key hash drift must fail");
+        assert!(matches!(
+            err,
+            MlKemError::KeyPairPublicHashMismatch {
+                suite: MlKemSuite::MlKem768,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn secret_key_validation_rejects_noncanonical_embedded_public_key() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xFA; 32]),
+            b"secret-noncanonical-public",
+        );
+        let mut secret_key = keys.secret_key().to_vec();
+        let public_start = suite.secret_key_public_key_offset();
+        set_first_public_key_coefficient_noncanonical(
+            &mut secret_key[public_start..public_start + suite.public_key_len()],
+        );
+        let public_hash =
+            mlkem_public_key_hash(&secret_key[public_start..public_start + suite.public_key_len()]);
+        let public_hash_start = suite.secret_key_public_key_hash_offset();
+        secret_key[public_hash_start..public_hash_start + MLKEM_PUBLIC_KEY_HASH_BYTES]
+            .copy_from_slice(&public_hash);
+
+        let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
+            .expect_err("secret-key embedded public key must be canonical");
+        assert_noncanonical_public_key(err, suite);
+    }
+
+    #[test]
+    fn secret_key_validation_rejects_noncanonical_private_component() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xFC); 32]),
+                b"secret-noncanonical-private",
+            );
+            let mut secret_key = keys.secret_key().to_vec();
+            set_first_12_bit_coefficient_noncanonical(&mut secret_key);
+
+            let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
+                .expect_err("secret-key private component must be canonical");
+            assert_noncanonical_encoding(err, suite, "private component");
+        }
+    }
+
+    #[test]
+    fn decapsulation_rejects_secret_key_public_hash_drift() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF8; 32]),
+            b"decap-secret-hash-drift",
+        );
+        let (_, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            keys.public_key(),
+            HedgedRngSeed::from_entropy([0xF9; 32]),
+            b"decap-secret-hash-drift-enc",
+        )
+        .expect("encapsulation succeeds");
+        let mut secret_key = keys.secret_key().to_vec();
+        secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x20;
+
+        let err = decapsulate_mlkem(suite, secret_key.as_slice(), ciphertext.as_bytes())
+            .expect_err("corrupted secret-key hash must fail before decapsulation");
+        assert!(matches!(
+            err,
+            MlKemError::KeyPairPublicHashMismatch {
+                suite: MlKemSuite::MlKem768,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn decapsulation_rejects_noncanonical_secret_key_private_component() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xFD; 32]),
+            b"decap-secret-noncanonical-private",
+        );
+        let (_, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            keys.public_key(),
+            HedgedRngSeed::from_entropy([0xFE; 32]),
+            b"decap-secret-noncanonical-private-enc",
+        )
+        .expect("encapsulation succeeds");
+        let mut secret_key = keys.secret_key().to_vec();
+        set_first_12_bit_coefficient_noncanonical(&mut secret_key);
+
+        let err = decapsulate_mlkem(suite, secret_key.as_slice(), ciphertext.as_bytes())
+            .expect_err("noncanonical secret-key private component must fail before decapsulation");
+        assert_noncanonical_encoding(err, suite, "private component");
     }
 
     #[test]

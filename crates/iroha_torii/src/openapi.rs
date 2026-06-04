@@ -1590,6 +1590,11 @@ fn transaction_paths() -> Map {
             "sese.025",
             "Submit ISO 20022 sese.025 settlement confirmation payload.",
         ),
+        (
+            "/v1/iso20022/colr012",
+            "colr.012",
+            "Submit ISO 20022 colr.012 collateral substitution confirmation payload.",
+        ),
     ] {
         paths.insert(
             path.to_owned(),
@@ -1621,6 +1626,16 @@ fn transaction_paths() -> Map {
             "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("msg_id", "ISO 20022 message id.")],
+        )),
+    );
+    paths.insert(
+        "/v1/iso20022/audit/messages".to_owned(),
+        Value::Object(json_get_operation(
+            "ISO20022",
+            "Fetch ISO 20022 durable audit index.",
+            "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
+            "#/components/schemas/JsonValue",
+            vec![],
         )),
     );
     paths.insert(

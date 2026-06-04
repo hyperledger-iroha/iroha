@@ -311,6 +311,7 @@ object ConnectEnvelopeCodec {
 
             override fun decode(decoder: NoritoDecoder): EnvelopeValue {
                 val sequence = decodeField(decoder, UINT64, "envelope.seq")
+                requireNonNegativeSequence(sequence)
                 val payload = decodeField(decoder, PAYLOAD_ADAPTER, "envelope.payload")
                 return EnvelopeValue(sequence, payload)
             }
@@ -383,6 +384,7 @@ object ConnectEnvelopeCodec {
     @Throws(ConnectProtocolException::class)
     private fun encodeEnvelope(value: EnvelopeValue): ByteArray {
         try {
+            requireNonNegativeSequence(value.sequence)
             return NoritoCodec.encode(
                 value,
                 ENVELOPE_SCHEMA_PATH,
@@ -391,6 +393,12 @@ object ConnectEnvelopeCodec {
             )
         } catch (ex: RuntimeException) {
             throw ConnectProtocolException("Failed to encode Connect envelope", ex)
+        }
+    }
+
+    private fun requireNonNegativeSequence(sequence: Long) {
+        if (sequence < 0L) {
+            throw IllegalArgumentException("sequence must be non-negative")
         }
     }
 

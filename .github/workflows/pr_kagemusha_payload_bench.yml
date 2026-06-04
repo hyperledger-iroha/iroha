@@ -259,6 +259,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-append-cap-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-isi-workflow
@@ -280,6 +281,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-abi-entry-count
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-abi-surface
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-isi
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-multi-hop-redeem-success
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-hop-proof
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-order
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-early-mint

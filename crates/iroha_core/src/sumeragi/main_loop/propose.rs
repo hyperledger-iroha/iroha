@@ -1708,12 +1708,15 @@ impl Actor {
         });
         let local_vote_blocks = local_vote.as_ref().is_some_and(|vote| {
             !local_vote_new_view_qc_supersedes
+                && !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
         let local_commit_vote_blocks_yield = local_vote.as_ref().is_some_and(|vote| {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
+                && (!missing_qc_liveness_active
+                    || self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view))
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
@@ -2101,7 +2104,6 @@ impl Actor {
             )
             || proposal_view <= existing_vote.view
             || proposal_height != self.committed_height_snapshot().saturating_add(1)
-            || !self.frontier_missing_qc_liveness_active(proposal_height, proposal_view)
             || highest_qc.height.saturating_add(1) != proposal_height
             || !self.highest_qc_is_canonical_committed_tip(highest_qc)
         {
@@ -2144,7 +2146,8 @@ impl Actor {
             .known_block_commit_qc_recovery_view_change_window()
             .max(self.quorum_timeout(self.runtime_da_enabled()))
             .max(Duration::from_millis(1));
-        self.pending
+        let pending_allows_stale_branch_rotation = self
+            .pending
             .pending_blocks
             .get(&existing_vote.block_hash)
             .filter(|pending| {
@@ -2159,7 +2162,9 @@ impl Actor {
                             .progress_age(now)
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
-            })
+            });
+        self.frontier_missing_qc_liveness_active(proposal_height, proposal_view)
+            && pending_allows_stale_branch_rotation
     }
 
     pub(super) fn local_same_height_vote_is_committed_parent_marker(
@@ -4629,10 +4634,13 @@ impl Actor {
             now,
             ingress_grace,
         );
+        let payload_or_block_ingress_queued = queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0;
         let frontier_proposal_ingress_deferring = self.config.resilience.enabled
             && tracked_height == committed_height.saturating_add(1)
             && tracked_view > 0
-            && !frontier_recovery_ingress_override
+            && (!frontier_recovery_ingress_override || payload_or_block_ingress_queued)
             && self.frontier_proposal_ingress_defer_active(
                 tracked_height,
                 tracked_view,
@@ -4648,6 +4656,20 @@ impl Actor {
                 .proposal_cache
                 .get_proposal(tracked_height, tracked_view)
                 .is_some();
+        if frontier_proposal_ingress_deferring && !active_cached_frontier_slot {
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                .unwrap_or(now);
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "deferring proposal while frontier payload ingress drains"
+            );
+            return false;
+        }
         if self.proposal_gated_by_missing_dependencies(tracked_height)
             && !allow_dependency_gated_reproposal
             && !active_cached_frontier_slot
@@ -5789,14 +5811,19 @@ impl Actor {
             let selected_frontier_recovery_candidate = self.config.resilience.enabled
                 && highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
                 && highest_qc.height.saturating_add(1) == height;
+            let vote_ingress_starvation_override = selected_frontier_recovery_candidate
+                && queue_depths.vote_rx > 0
+                && queue_depths.block_payload_rx == 0
+                && queue_depths.rbc_chunk_rx == 0
+                && queue_depths.block_rx == 0
+                && self.frontier_proposal_or_view_starved_past_ingress_grace(
+                    height,
+                    now,
+                    ingress_grace,
+                );
             let frontier_recovery_ingress_override = self
                 .frontier_recovery_ingress_override_active(height, view_idx, now, ingress_grace)
-                || (selected_frontier_recovery_candidate
-                    && self.frontier_proposal_or_view_starved_past_ingress_grace(
-                        height,
-                        now,
-                        ingress_grace,
-                    ));
+                || vote_ingress_starvation_override;
             if Self::frontier_consensus_ingress_queued(queue_depths) {
                 if !frontier_recovery_ingress_override
                     && self.frontier_proposal_ingress_defer_active(
@@ -6445,12 +6472,14 @@ impl Actor {
         };
         if local_pos != leader_index {
             let leader_peer = topology.iter().next().cloned();
-            if self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
-                height,
-                view_idx,
-                pending_queue_len,
-                now,
-            ) {
+            if self.frontier_missing_qc_liveness_active(height, view_idx)
+                && self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+                    height,
+                    view_idx,
+                    pending_queue_len,
+                    now,
+                )
+            {
                 self.warn_resilience_frontier_proposal_deferred(
                     height,
                     view_idx,

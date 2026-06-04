@@ -28,6 +28,10 @@ public enum KagemushaRecursiveSpendProver {
     public static let requiredBridgeAbiVersion: UInt32 = 6
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1"
+    public static let recursiveSpendLineageOneHopProofCircuitIdV1 =
+        "kagemusha-recursive-spend-lineage-onehop-v1"
+    public static let recursiveSpendLineageAppendProofCircuitIdV1 =
+        "kagemusha-recursive-spend-lineage-append-v1"
     public static let compactTokenMaxHops: UInt32 = 64
     public static let recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64
     public static let recursiveSpendLineageTransitionCircuitWiredV1 = true
@@ -63,9 +67,20 @@ public enum KagemushaRecursiveSpendProver {
 
     public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {
         recursiveSpendLineageTransitionCircuitWiredV1
-            && circuitId == recursiveSpendLineageProofCircuitIdV1
+            && isLineageProofCircuitId(circuitId)
             && hopCount >= 1
             && hopCount <= recursiveSpendLineageWitnesslessMaxHopsV1
+    }
+
+    public static func isLineageProofCircuitId(_ circuitId: String?) -> Bool {
+        circuitId == recursiveSpendLineageProofCircuitIdV1
+            || circuitId == recursiveSpendLineageOneHopProofCircuitIdV1
+            || circuitId == recursiveSpendLineageAppendProofCircuitIdV1
+    }
+
+    public static func isLineageAppendOutputCircuitId(_ outputCircuitId: String?) -> Bool {
+        outputCircuitId == recursiveSpendLineageProofCircuitIdV1
+            || outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
     }
 
     public static func requiresLineageWitnessForRedeem(circuitId: String, hopCount: UInt32) -> Bool {
@@ -82,24 +97,27 @@ public enum KagemushaRecursiveSpendProver {
         guard let outputCircuitId, !outputCircuitId.isEmpty else {
             return recursiveAggregationProofCircuitIdV1
         }
+        if outputCircuitId == recursiveSpendLineageProofCircuitIdV1 {
+            return recursiveSpendLineageAppendProofCircuitIdV1
+        }
         return outputCircuitId
     }
 
     public static func isSupportedAppendOutputCircuitId(_ outputCircuitId: String?) -> Bool {
         let normalized = normalizedAppendOutputCircuitId(outputCircuitId)
         return normalized == recursiveAggregationProofCircuitIdV1
-            || normalized == recursiveSpendLineageProofCircuitIdV1
+            || normalized == recursiveSpendLineageAppendProofCircuitIdV1
     }
 
     public static func isSupportedPreviousProofCircuitId(_ previousProofCircuitId: String?) -> Bool {
         previousProofCircuitId == recursiveAggregationProofCircuitIdV1
-            || previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+            || isLineageProofCircuitId(previousProofCircuitId)
     }
 
     public static func requiresPreviousLineageVerifierRecordForAppend(
         previousProofCircuitId: String?
     ) -> Bool {
-        previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+        isLineageProofCircuitId(previousProofCircuitId)
     }
 
     public static func isSupportedAppendProofTransition(
@@ -109,16 +127,16 @@ public enum KagemushaRecursiveSpendProver {
         let normalizedOutput = normalizedAppendOutputCircuitId(outputCircuitId)
         return (previousProofCircuitId == recursiveAggregationProofCircuitIdV1
             && normalizedOutput == recursiveAggregationProofCircuitIdV1)
-            || (previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+            || (isLineageProofCircuitId(previousProofCircuitId)
                 && (
                     normalizedOutput == recursiveAggregationProofCircuitIdV1
-                        || normalizedOutput == recursiveSpendLineageProofCircuitIdV1
+                        || normalizedOutput == recursiveSpendLineageAppendProofCircuitIdV1
                 ))
     }
 
     public static func preferredAppendOutputCircuitId(previousHopCount: UInt32) -> String {
         canAppendWitnesslessLineage(previousHopCount: previousHopCount)
-            ? recursiveSpendLineageProofCircuitIdV1
+            ? recursiveSpendLineageAppendProofCircuitIdV1
             : recursiveAggregationProofCircuitIdV1
     }
 
@@ -132,7 +150,7 @@ public enum KagemushaRecursiveSpendProver {
         switch normalizedAppendOutputCircuitId(outputCircuitId) {
         case recursiveAggregationProofCircuitIdV1:
             return previousHopCount < compactTokenMaxHops
-        case recursiveSpendLineageProofCircuitIdV1:
+        case recursiveSpendLineageAppendProofCircuitIdV1:
             return canAppendWitnesslessLineage(previousHopCount: previousHopCount)
         default:
             return false
@@ -160,7 +178,7 @@ public enum KagemushaRecursiveSpendProver {
         outputCircuitId: String?,
         previousHopCount: UInt32
     ) -> Bool {
-        normalizedAppendOutputCircuitId(outputCircuitId) == recursiveSpendLineageProofCircuitIdV1
+        isLineageAppendOutputCircuitId(normalizedAppendOutputCircuitId(outputCircuitId))
             && previousHopCount >= 1
     }
 

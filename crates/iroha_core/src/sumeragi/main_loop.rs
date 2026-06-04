@@ -6487,13 +6487,17 @@ impl Actor {
                 slot.mode,
                 FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
             )
-            && slot.repair_state.last_reason != Some("missing_qc")
+            && slot
+                .repair_state
+                .last_reason
+                .is_some_and(|reason| !matches!(reason, "missing_qc" | "frontier_stall"))
         {
             return slot.repair_state.last_reason;
         }
         self.frontier_recovery.as_ref().and_then(|state| {
-            (state.frontier_height == frontier_height && state.last_cause != "missing_qc")
-                .then_some(state.last_cause)
+            (state.frontier_height == frontier_height
+                && !matches!(state.last_cause, "missing_qc" | "frontier_stall"))
+            .then_some(state.last_cause)
         })
     }
 
@@ -29494,11 +29498,14 @@ impl Actor {
         active_height: u64,
         now: Instant,
     ) -> Option<MissingQcHeightStallSnapshot> {
-        if self.active_consensus_round_height() != active_height {
+        let committed_height = self.committed_height_snapshot();
+        let active_round_height = self
+            .active_consensus_round_height()
+            .min(committed_height.saturating_add(1));
+        if active_round_height != active_height {
             self.missing_qc_height_stall = None;
             return None;
         }
-        let committed_height = self.committed_height_snapshot();
         let Some(mut dependency_height) =
             self.missing_qc_dependency_height_for_active_round(active_height, committed_height)
         else {
@@ -38198,7 +38205,6 @@ impl Actor {
             now,
         );
         let commit_pipeline_has_recovery_evidence = pending.commit_qc_observed()
-            || pending.local_commit_vote_emitted()
             || pending.validated_commit_artifact.is_some()
             || near_commit_quorum
             || commit_qc_repair_active;
@@ -38632,6 +38638,7 @@ impl Actor {
                     current_view,
                     now,
                 )
+                && !self.frontier_recovery_exists_at_height(height)
                 && !self.frontier_slot_passive_catchup_owns_height(height)
                 && !self.committed_edge_conflict_owner_blocks_height(height)
                 && !self.has_commit_phase_missing_qc_dependency_for_height(height)
@@ -38655,6 +38662,7 @@ impl Actor {
                     current_view,
                     now,
                 )
+                && !self.frontier_recovery_exists_at_height(height)
                 && !self.frontier_slot_passive_catchup_owns_height(height)
                 && !self.committed_edge_conflict_owner_blocks_height(height)
                 && !self.has_commit_phase_missing_qc_dependency_for_height(height)
@@ -38829,9 +38837,37 @@ impl Actor {
                 contiguous_frontier_height_for_reset,
                 now,
             );
+        let direct_missing_qc_candidate =
+            !frontier_slot_vote_backed_evidence && !authoritative_frontier_payload_present;
+        if height == contiguous_frontier_height_for_reset && direct_missing_qc_candidate {
+            if pre_reset_frontier_reanchor_unresolved_in_window
+                && !self
+                    .missing_qc_height_stall_snapshot(height, now)
+                    .is_some_and(|stall| stall.mode_active && stall.height == height)
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                );
+                return false;
+            }
+            if pre_reset_frontier_reanchor_stride_blocked {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change until canonical frontier reanchor stride window is eligible"
+                );
+                return false;
+            }
+        }
         let pre_reset_passive_frontier_slot_without_external_dependency = height
             == contiguous_frontier_height_for_reset
             && self.frontier_slot_passive_catchup_active_at_height(height);
+        let lock_lag_catchup_frontier_active =
+            self.lock_lag_catchup_frontier_height() == Some(height);
         let reset_stalled_frontier_state =
             self.maybe_reset_stalled_frontier_state(committed_height, now);
         let pruned_lock_lag_future_state =
@@ -38839,12 +38875,15 @@ impl Actor {
         let lock_lag_prune_cooldown_active = height == contiguous_frontier_height
             && self.lock_lag_prune_cooldown_active_for_height(height, now);
         if height == contiguous_frontier_height
-            && (pruned_lock_lag_future_state || lock_lag_prune_cooldown_active)
+            && ((reset_stalled_frontier_state && lock_lag_catchup_frontier_active)
+                || pruned_lock_lag_future_state
+                || lock_lag_prune_cooldown_active)
         {
             debug!(
                 height,
                 view = current_view,
                 committed_height,
+                reset_stalled_frontier_state,
                 pruned_lock_lag_future_state,
                 lock_lag_prune_cooldown_active,
                 "deferred contiguous-frontier idle view-change after lock-lag catch-up pruning"
@@ -39338,6 +39377,27 @@ impl Actor {
                     );
                     return false;
                 }
+                if let Some(reason) = frontier_non_missing_qc_recovery_cause {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        reason,
+                        "deferring empty-frontier missing_qc rotation while a prior frontier recovery window remains reserved"
+                    );
+                    return matches!(
+                        self.advance_frontier_recovery(
+                            reason,
+                            height,
+                            current_view,
+                            proposal_seen,
+                            false,
+                            true,
+                            now,
+                        ),
+                        FrontierRecoveryAdvance::Rotate
+                    );
+                }
                 let direct_cause = if frontier_slot_vote_backed_evidence
                     || authoritative_frontier_payload_present
                 {
@@ -39627,6 +39687,27 @@ impl Actor {
                     "suppressing contiguous-frontier idle rotation while local slot state is still active"
                 );
                 return false;
+            }
+            if let Some(reason) = frontier_non_missing_qc_recovery_cause {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    reason,
+                    "deferring contiguous-frontier dependency timeout while a prior frontier recovery window remains reserved"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        reason,
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
             }
             let direct_cause =
                 if frontier_slot_vote_backed_evidence || authoritative_frontier_payload_present {

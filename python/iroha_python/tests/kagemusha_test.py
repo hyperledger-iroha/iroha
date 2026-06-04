@@ -279,6 +279,14 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
         == "kagemusha-recursive-spend-lineage-v1"
     )
+    assert (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+        == "kagemusha-recursive-spend-lineage-onehop-v1"
+    )
+    assert (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        == "kagemusha-recursive-spend-lineage-append-v1"
+    )
     assert kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS == 64
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 == 64
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
@@ -338,7 +346,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
             kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         )
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
     assert (
         kagemusha.normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -351,6 +359,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         "",
         kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ):
         assert (
             kagemusha.is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -359,14 +368,39 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         )
     assert not (
         kagemusha.is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        )
+    )
+    assert not (
+        kagemusha.is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
             "unknown-kagemusha-recursive-spend-circuit",
         )
+    )
+    for lineage_circuit_id in (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    ):
+        assert kagemusha.is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            lineage_circuit_id,
+        )
+    assert not kagemusha.is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    )
+    assert kagemusha.is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
     assert kagemusha.is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
         kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     )
     assert kagemusha.is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    )
+    assert kagemusha.is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    )
+    assert kagemusha.is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
     for previous_circuit_id in (
         "unknown-kagemusha-recursive-spend-circuit",
@@ -416,6 +450,16 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
             kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         )
     )
+    assert (
+        kagemusha.requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        )
+    )
+    assert (
+        kagemusha.requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        )
+    )
     for previous_circuit_id in (
         "unknown-kagemusha-recursive-spend-circuit",
         None,
@@ -429,6 +473,14 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.can_redeem_kagemusha_recursive_spend_witnessless(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         1,
+    )
+    assert kagemusha.can_redeem_kagemusha_recursive_spend_witnessless(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        1,
+    )
+    assert kagemusha.can_redeem_kagemusha_recursive_spend_witnessless(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        2,
     )
     assert not kagemusha.requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -489,13 +541,13 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
             1,
         )
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
     assert (
         kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
             63,
         )
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
     assert (
         kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -523,6 +575,14 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     )
     assert kagemusha.can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        1,
+    )
+    assert kagemusha.can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        1,
+    )
+    assert not kagemusha.can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
         1,
     )
     assert kagemusha.can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -563,6 +623,11 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        1,
+    )
+    assert kagemusha.can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
         1,
     )
     assert not (
@@ -629,6 +694,12 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert (
         kagemusha.requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
             kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            1,
+        )
+    )
+    assert (
+        kagemusha.requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             1,
         )
     )

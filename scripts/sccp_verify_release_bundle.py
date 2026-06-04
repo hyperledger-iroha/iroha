@@ -34,7 +34,7 @@ CORRIDOR_PHASES = (
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
-        "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
         "pytests/scripts/sccp_release_bundle_test.py",
         "pytests/scripts/sccp_release_readiness_report_test.py",
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -42,6 +42,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
         "pytests/scripts/sccp_evm_destination_evidence_test.py",
         "pytests/scripts/sccp_evm_live_evidence_test.py",
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
@@ -98,6 +99,7 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pass ",
         "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
         "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "package declarations expose Ethereum mainnet SCCP facade methods",
         "package declarations expose BSC mainnet Parlia finality evidence hooks",
     ),
     "python-sdk": (" passed in ",),
@@ -117,10 +119,10 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
-ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_BSC
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
@@ -150,6 +152,10 @@ ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
     SCCP_DOMAIN_SORA_KUSAMA: "sccp:sora-kusama:route-allowlist:runtime:v1",
     SCCP_DOMAIN_SORA_POLKADOT: "sccp:sora-polkadot:route-allowlist:runtime:v1",
     SCCP_DOMAIN_SORA2: "sccp:sora2:route-allowlist:runtime:v1",
+}
+EVM_EXPECTED_RPC_CHAIN_IDS = {
+    SCCP_DOMAIN_ETH: 1,
+    SCCP_DOMAIN_BSC: 56,
 }
 SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 SOLANA_BASE58_INDEX = {
@@ -198,12 +204,18 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "user-prover helper surface",
     "JavaScript/web source",
     f"{ACTIVE_LAUNCH_DISPLAY} launch-lane evidence",
+    "eth_chainId == 1",
+    "finalized` block tag",
     "Governed live deployment evidence",
     "Public release notes",
 )
 CRYPTOGRAPHIC_EVIDENCE_KEYS = {
     "domain",
     "chain",
+    "evm_source_rpc_chain_id",
+    "evm_source_block_tag",
+    "evm_destination_rpc_chain_id",
+    "evm_destination_block_tag",
     "source_verifier_material_hash",
     "source_adapter_engine_deployment_hash",
     "destination_binding_hash",
@@ -247,6 +259,371 @@ USER_PROVER_SDK_PHASES = (
     "swift-sdk",
     "kotlin-sdk",
     "java-android",
+)
+ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "EthereumMainnetSccp rejects failed or drifted receipt evidence before proving",
+            "receipt status must be 0x1",
+            "beaconFinality.executionReceiptsRoot",
+            "EthereumMainnetSccp validates source bridge logs in receipt evidence",
+            "sourceEventLog(), sourceEventLog()",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            'invalidPublicInputs("receipt.status")',
+            'invalidPublicInputs("beaconFinality.executionReceiptsRoot")',
+            "wrongTopicReceipt",
+            "duplicateLogReceipt",
+            'invalidPublicInputs("receipt.logs")',
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            'receipt + ("status" to "0x0")',
+            'beaconFinality + ("executionReceiptsRoot"',
+            '"logs" to listOf(sourceEventLog, sourceEventLog)',
+            "SccpEthereumMainnet.sourceEventTopic()",
+            "receiptProof.executionReceiptsRoot",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "Ethereum inbound collection must reject failed receipts",
+            "beaconFinality.executionReceiptsRoot",
+            'duplicateReceipt.put("logs"',
+            "source-event validation must reject duplicate matching events",
+            "EthereumMainnetSccp.sourceEventTopic()",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "failedReceipt",
+            "receiptProof.executionReceiptsRoot",
+            "driftedFinalityReceiptsRoot",
+            "wrongTopicLog",
+            "duplicateReceipt",
+        ),
+    ),
+)
+ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "assert.equal(outboundProverCalled, false)",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "XCTAssertFalse(outboundProverCalled)",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "outboundProverCalled",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "assert !outboundProverCalled[0]",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "Assert.Null(guardedProver.Request)",
+        ),
+    ),
+)
+ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS = (
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "export function canonicalEvmReceiptRootMptValue(receiptRoot)",
+            'const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");',
+        ),
+    ),
+    (
+        "javascript/iroha_js/dist/sccp.js",
+        (
+            "export function canonicalEvmReceiptRootMptValue(receiptRoot)",
+            'const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");',
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        (
+            "canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1)",
+            "must not be zero",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            'canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`)',
+            "must not be zero",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift",
+        (
+            "public func canonicalEvmReceiptRootMptValue(receiptRoot: String)",
+            'sourceProofNonZeroBytesFromHex32(receiptRoot, field: "receiptRoot")',
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "canonicalEvmReceiptRootMptValue(receiptRoot: zeroHash)",
+            "XCTAssertThrowsError",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
+        (
+            "fun canonicalEvmReceiptRootMptValue(receiptRoot: String)",
+            'rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot"))',
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
+        (
+            "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+            "assertFailsWith<IllegalArgumentException>",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
+        (
+            "public static byte[] canonicalEvmReceiptRootMptValue(final String receiptRoot)",
+            'fields.add(rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")))',
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
+        (
+            "SourceSccpProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+            "expectThrows",
+        ),
+    ),
+    (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
+        (
+            "public static byte[] CanonicalEvmSccpReceiptProofBytes",
+            "payload.Write(RpcHexToBytes(executionReceiptsRoot, nameof(executionReceiptsRoot), 32));",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "BuildBytes(executionReceiptsRoot: zeroRoot)",
+            "BuildBytes(syncCommitteeRoot: zeroRoot)",
+        ),
+    ),
+)
+ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS = (
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "`receipt.logs[${index}].topics[${topicIndex}]`",
+            "{ nonzero: false }",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "zeroTopicReceiptTrieProof",
+            "topics: [hex32(\"00\")]",
+        ),
+    ),
+    (
+        "scripts/sccp_evm_receipt_proof_evidence.py",
+        (
+            "method=f\"receipt.logs[{log_index}].topics[{topic_index}]\"",
+            "nonzero=False",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+        (
+            "test_collect_receipt_proof_accepts_zero_log_topic_in_receipt_rlp",
+            '"topics": ["0x" + "00" * 32]',
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift",
+        (
+            'field: "receipt.logs[\\(index)].topics[\\(topicIndex)]"',
+            "nonzero: false",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "zeroTopicProof",
+            '"topics": ["0x" + String(repeating: "00", count: 32)]',
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
+        (
+            '"receipt.logs[$index].topics[$topicIndex]"',
+            "nonzero = false",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            "zeroTopicProof",
+            '"topics" to listOf("0x" + "00".repeat(32))',
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
+        (
+            '"receipt.logs[" + index + "].topics[" + topicIndex + "]"',
+            "false,\n                    false)))",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "zeroTopicProof",
+            "generic Ethereum receipt RLP must allow zero log topics",
+        ),
+    ),
+    (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
+        (
+            '$"receipt.logs[{index}].topics[{topicIndex}]"',
+            "nonZero: false",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "zeroTopicProof",
+            '["topics"] = new object?[] { "0x" + new string(\'0\', 64) }',
+        ),
+    ),
+)
+ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS = (
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "`receipt.logs[${index}].address`",
+            "{ nonzero: false }",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "zeroAddressReceiptTrieProof",
+            'address: `0x${"00".repeat(20)}`',
+        ),
+    ),
+    (
+        "scripts/sccp_evm_receipt_proof_evidence.py",
+        (
+            "method=f\"receipt.logs[{log_index}].address\"",
+            "nonzero=False",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+        (
+            "test_collect_receipt_proof_accepts_zero_log_address_in_receipt_rlp",
+            '"address": "0x" + "00" * 20',
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift",
+        (
+            'field: "receipt.logs[\\(index)].address"',
+            "nonzero: false",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "zeroAddressProof",
+            '"address": "0x" + String(repeating: "00", count: 20)',
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
+        (
+            '"receipt.logs[$index].address"',
+            "nonzero = false",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            "zeroAddressProof",
+            '"address" to "0x" + "00".repeat(20)',
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
+        (
+            '"receipt.logs[" + index + "].address"',
+            "false,\n                          false))",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "zeroAddressProof",
+            "generic Ethereum receipt RLP must allow zero log addresses",
+        ),
+    ),
+    (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
+        (
+            '$"receipt.logs[{index}].address"',
+            "nonZero: false",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "zeroAddressProof",
+            '["address"] = "0x" + new string(\'0\', 40)',
+        ),
+    ),
+)
+ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
+    (
+        "scripts/sccp_evm_receipt_proof_evidence.py",
+        (
+            "log_transaction_hash = _rpc_fixed_hex_data(",
+            "log_block_hash = _rpc_fixed_hex_data(",
+            "log_block_number = _rpc_quantity(",
+            "source event log transactionHash does not match receipt",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+        (
+            "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+            'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+    ),
 )
 
 
@@ -306,15 +683,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "buildEthereumMainnetSccpLocalAdmissionSubmission",
             "consensusProvider",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "buildBscMainnetSccpDestinationSubmission",
+            "buildBscMainnetSccpLocalAdmissionSubmission",
             "EvmSccpProver",
             "witnessProvider",
             "proveFn",
@@ -337,15 +718,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collect_inbound_evidence_from_receipt",
             "EthereumMainnetSccp.prove_inbound_to_sora",
             "EthereumMainnetSccp.submit_inbound_to_iroha",
+            "EthereumMainnetSccp.build_local_admission_submission",
+            "build_ethereum_mainnet_sccp_local_admission_submission",
             "consensus_provider",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collect_inbound_evidence_from_receipt",
             "BscMainnetSccp.prove_inbound_to_sora",
             "BscMainnetSccp.submit_inbound_to_iroha",
+            "BscMainnetSccp.build_local_admission_submission",
             "BscMainnetSccp.build_bsc_calldata",
             "BscMainnetSccp.submit_outbound_to_bsc",
             "build_bsc_mainnet_sccp_destination_submission",
+            "build_bsc_mainnet_sccp_local_admission_submission",
             "EvmSccpProver",
             "witness_provider",
             "prove",
@@ -364,16 +749,23 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "buildEthereumMainnetSccpLocalAdmissionSubmission",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.OutboundSubmitFunction",
             "EthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetInboundEvidence.init(beaconFinalityEvidence:)",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetSccp.OutboundSubmitFunction",
@@ -381,6 +773,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetParliaFinalityEvidence",
             "BscMainnetInboundEvidence.init(parliaFinalityEvidence:)",
             "buildBscMainnetSccpDestinationSubmission",
+            "buildBscMainnetSccpLocalAdmissionSubmission",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProver.ProveFunction",
@@ -398,16 +791,23 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetInboundEvidence.withBeaconFinalityEvidence",
             "EthereumMainnetOutboundSubmitter",
+            "SccpEthereumMainnet.buildLocalAdmissionSubmission",
+            "EthereumMainnetLocalAdmissionSubmissionInput",
             "BscSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetConsensusProvider",
@@ -415,6 +815,8 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetInboundEvidence.withParliaFinalityEvidence",
             "BscMainnetOutboundSubmitter",
             "SccpBsc.buildSubmission",
+            "SccpBsc.buildLocalAdmissionSubmission",
+            "BscMainnetLocalAdmissionSubmissionInput",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProofEngine",
@@ -432,16 +834,25 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "EthereumMainnetSccp.buildLocalAdmission",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.ConsensusProvider",
             "EthereumMainnetSccp.BeaconFinalityEvidence",
+            "EthereumMainnetSccp.ReceiptProof",
             "InboundEvidence.withBeaconFinalityEvidence",
             "EthereumMainnetSccp.OutboundSubmitter",
+            "EthereumMainnetSccp.LocalAdmissionSubmissionInput",
             "BscSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
+            "BscMainnetSccp.buildLocalAdmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetSccp.ConsensusProvider",
@@ -449,6 +860,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "InboundEvidence.withParliaFinalityEvidence",
             "BscMainnetSccp.OutboundSubmitter",
             "BscSccpProver.buildSubmission",
+            "BscMainnetSccp.LocalAdmissionSubmissionInput",
             "EvmSccpProver",
             "EvmSccpProver.WitnessProvider",
             "EvmSccpProver.ProofEngine",
@@ -464,16 +876,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
             "EthereumMainnetSccp.BuildEthereumCalldata",
             "EthereumMainnetSccp.SubmitOutboundToEthereumAsync",
+            "EthereumMainnetSccp.BuildLocalAdmissionSubmission",
             "EthereumMainnetSccp.DestinationBinding",
             "EthereumMainnetSccp.DestinationBindingHash",
             "IEthereumMainnetExecutionProvider",
             "IEthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetTransparentPublicInputs",
             "EthereumMainnetOutboundProofRequestInput",
             "EthereumMainnetOutboundProofRequest",
             "EthereumMainnetOutboundProofResult",
             "EthereumMainnetSccpSubmission",
+            "EthereumMainnetLocalAdmissionSubmissionInput",
             "EthereumMainnetInboundEvidence.WithBeaconFinalityEvidence",
             "IEthereumMainnetInboundProver",
             "IEthereumMainnetInboundSubmitter",
@@ -483,6 +898,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
             "BscMainnetSccp.ProveInboundToSoraAsync",
             "BscMainnetSccp.SubmitInboundToIrohaAsync",
+            "BscMainnetSccp.BuildLocalAdmissionSubmission",
             "BscMainnetSccp.BuildOutboundProofRequest",
             "BscMainnetSccp.ProveOutboundToBscAsync",
             "BscMainnetSccp.BuildBscCalldata",
@@ -497,6 +913,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetOutboundProofRequest",
             "BscMainnetOutboundProofResult",
             "BscMainnetSccpSubmission",
+            "BscMainnetLocalAdmissionSubmissionInput",
             "BscMainnetInboundEvidence.WithParliaFinalityEvidence",
             "IBscMainnetInboundProver",
             "IBscMainnetInboundSubmitter",
@@ -778,6 +1195,7 @@ ALL_LANES_LANE_KEYS = {
     "production_ready",
     "source_record_hashes",
     "source_adapter_gate",
+    "evm_live_metadata",
     "destination_binding",
     "route_allowlist",
     "blockers",
@@ -798,6 +1216,14 @@ ALL_LANES_SOURCE_ADAPTER_GATE_KEYS = {
     "gate_hash",
     "audit_hashes",
     "blockers",
+}
+ALL_LANES_EVM_LIVE_METADATA_KEYS = {
+    "required",
+    "ready",
+    "source_rpc_chain_id",
+    "source_block_tag",
+    "destination_rpc_chain_id",
+    "destination_block_tag",
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: {
@@ -1284,7 +1710,10 @@ def _phase_transcript_errors(
         errors.append(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
-    elif CORRIDOR_COMPLETION_SENTINEL not in phase_block:
+    elif (
+        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
         errors.append(
             "readiness report phase "
             f"{phase} evidence artifact is missing the phase-block completion sentinel"
@@ -1320,6 +1749,121 @@ def _phase_transcript_errors(
     return errors
 
 
+def _sdk_test_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
+    *,
+    label: str,
+) -> list[str]:
+    """Return source-inventory errors for SDK test marker scans."""
+
+    errors: list[str] = []
+    for raw_path, markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            errors.append(
+                f"{label} SDK test inventory {display_path} is not UTF-8 "
+                f"text: {exc}"
+            )
+            continue
+        except OSError as exc:
+            errors.append(
+                f"{label} SDK test inventory {display_path} cannot be read: "
+                f"{exc}"
+            )
+            continue
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{label} SDK test inventory {display_path} missing "
+                    f"marker: {marker}"
+                )
+    return errors
+
+
+def _ethereum_inbound_adversarial_sdk_test_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum inbound adversarial SDK tests."""
+
+    if inventory is None:
+        inventory = ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet inbound adversarial",
+    )
+
+
+def _ethereum_outbound_precallback_sdk_test_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for ETH outbound pre-callback SDK tests."""
+
+    if inventory is None:
+        inventory = ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet outbound pre-callback",
+    )
+
+
+def _ethereum_receipt_root_zero_sdk_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for ETH receipt-root zero SDK guards."""
+
+    if inventory is None:
+        inventory = ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet receipt-root zero rejection",
+    )
+
+
+def _ethereum_receipt_rlp_zero_topic_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for ETH receipt RLP zero-topic guards."""
+
+    if inventory is None:
+        inventory = ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet receipt RLP zero-topic",
+    )
+
+
+def _ethereum_receipt_rlp_zero_address_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for ETH receipt RLP zero-address guards."""
+
+    if inventory is None:
+        inventory = ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet receipt RLP zero-address",
+    )
+
+
+def _ethereum_receipt_source_event_context_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for ETH source-event log context guards."""
+
+    if inventory is None:
+        inventory = ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="Ethereum mainnet source-event context",
+    )
+
+
 def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
     lines = transcript.splitlines()
@@ -1336,6 +1880,25 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
             end = index
             break
     return "\n".join(lines[start:end])
+
+
+def _transcript_has_full_corridor_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    marker_positions: list[int] = []
+    for phase in CORRIDOR_PHASES:
+        marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+        try:
+            marker_positions.append(lines.index(marker))
+        except ValueError:
+            return False
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if CORRIDOR_COMPLETION_SENTINEL in line
+    ]
+    return bool(completion_positions) and max(completion_positions) > max(
+        marker_positions
+    )
 
 
 def _phase_command_lines(phase_block: str) -> list[str]:
@@ -1381,10 +1944,26 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
         source_gate_audit_hashes = source_gate.get("audit_hashes")
         if not isinstance(source_gate_audit_hashes, dict):
             source_gate_audit_hashes = {}
+        evm_live_metadata = lane.get("evm_live_metadata")
+        if not isinstance(evm_live_metadata, dict):
+            evm_live_metadata = {}
         rows.append(
             {
                 "domain": lane.get("domain"),
                 "chain": lane.get("chain"),
+                "evm_source_rpc_chain_id": evm_live_metadata.get(
+                    "source_rpc_chain_id",
+                    "",
+                ),
+                "evm_source_block_tag": evm_live_metadata.get("source_block_tag", ""),
+                "evm_destination_rpc_chain_id": evm_live_metadata.get(
+                    "destination_rpc_chain_id",
+                    "",
+                ),
+                "evm_destination_block_tag": evm_live_metadata.get(
+                    "destination_block_tag",
+                    "",
+                ),
                 "source_verifier_material_hash": source_hashes.get(
                     "source_verifier_material_hash"
                 ),
@@ -1646,13 +2225,15 @@ def _render_readiness_markdown(
 
     lines.extend(["", "## Cryptographic Evidence", ""])
     lines.append(
-        "| Domain | Chain | Source Material | Source Deployment | "
+        "| Domain | Chain | EVM Source Chain ID | EVM Source Tag | "
+        "EVM Destination Chain ID | EVM Destination Tag | "
+        "Source Material | Source Deployment | "
         "Destination Binding | Source Gate | Source Gate Audits | "
         "Route Allowlist | Route Canary | Canary Source | Canary Block | "
         "Canary Timestamp |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
     for row in report["cryptographic_evidence"]:
         canary_source = row["route_canary_evidence_source"] or "-"
@@ -1662,11 +2243,18 @@ def _render_readiness_markdown(
         if not row["source_adapter_gate_required"] and source_gate == "-":
             source_gate = "not required"
         lines.append(
-            "| {domain} | `{chain}` | {source} | {deploy} | {dest} | "
+            "| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
+            "`{evm_source_tag}` | `{evm_dest_rpc_chain_id}` | "
+            "`{evm_dest_tag}` | "
+            "{source} | {deploy} | {dest} | "
             "{source_gate} | {source_gate_audits} | {route} | {canary} | "
             "`{canary_source}` | {canary_block} | {canary_timestamp} |".format(
                 domain=row["domain"],
                 chain=row["chain"],
+                evm_source_rpc_chain_id=row["evm_source_rpc_chain_id"] or "-",
+                evm_source_tag=row["evm_source_block_tag"] or "-",
+                evm_dest_rpc_chain_id=row["evm_destination_rpc_chain_id"] or "-",
+                evm_dest_tag=row["evm_destination_block_tag"] or "-",
                 source=_readiness_markdown_hash_cell(
                     row["source_verifier_material_hash"]
                 ),
@@ -1752,6 +2340,7 @@ def _render_readiness_markdown(
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
+            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 1` and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -2017,6 +2606,8 @@ def _readiness_markdown_invariant_errors(
                 )
             )
             for field in (
+                "evm_source_block_tag",
+                "evm_destination_block_tag",
                 "source_verifier_material_hash",
                 "source_adapter_engine_deployment_hash",
                 "destination_binding_hash",
@@ -2481,7 +3072,11 @@ def _true_field_errors(
     return []
 
 
-def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
+def _cryptographic_evidence_row_schema_errors(
+    row: dict[str, Any],
+    *,
+    enforce_evm_live_tags: bool = True,
+) -> list[str]:
     errors: list[str] = []
     for key in sorted(CRYPTOGRAPHIC_EVIDENCE_KEYS - set(row)):
         errors.append(f"readiness report cryptographic evidence row missing field: {key}")
@@ -2493,6 +3088,94 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
         errors.append(
             "readiness report cryptographic evidence row chain must be a non-empty string"
         )
+    for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+        if field in row and not isinstance(row.get(field), str):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                f"{field} must be a string"
+            )
+    for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+        if field in row and not isinstance(row.get(field), str):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                f"{field} must be a string"
+            )
+    domain = row.get("domain")
+    if domain == SCCP_DOMAIN_ETH:
+        for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            if (
+                enforce_evm_live_tags
+                and isinstance(row.get(field), str)
+                and (
+                    not _is_canonical_decimal_text(row.get(field), positive=True)
+                    or int(row[field], 10)
+                    != EVM_EXPECTED_RPC_CHAIN_IDS[SCCP_DOMAIN_ETH]
+                )
+            ):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be Ethereum mainnet chain id 1"
+                )
+        for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            if (
+                enforce_evm_live_tags
+                and isinstance(row.get(field), str)
+                and row.get(field) != "finalized"
+            ):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be finalized for Ethereum mainnet"
+                )
+    elif domain == SCCP_DOMAIN_BSC:
+        bsc_has_evm_evidence = any(
+            row.get(field)
+            for field in (
+                "source_verifier_material_hash",
+                "source_adapter_engine_deployment_hash",
+                "destination_binding_hash",
+                "route_allowlist_hash",
+                "route_canary_evidence_hash",
+            )
+        )
+        for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            if (
+                enforce_evm_live_tags
+                and bsc_has_evm_evidence
+                and isinstance(row.get(field), str)
+                and (
+                    not _is_canonical_decimal_text(row.get(field), positive=True)
+                    or int(row[field], 10)
+                    != EVM_EXPECTED_RPC_CHAIN_IDS[SCCP_DOMAIN_BSC]
+                )
+            ):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be BSC mainnet chain id 56"
+                )
+        for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            if (
+                enforce_evm_live_tags
+                and bsc_has_evm_evidence
+                and isinstance(row.get(field), str)
+                and not row.get(field)
+            ):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be non-empty for BSC mainnet"
+                )
+    elif domain in ALL_LANES_CHAIN_BY_DOMAIN:
+        for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            if isinstance(row.get(field), str) and row.get(field):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be empty for non-EVM lanes"
+                )
+        for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            if isinstance(row.get(field), str) and row.get(field):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be empty for non-EVM lanes"
+                )
     if "route_canary_evidence_bound" in row and (
         type(row.get("route_canary_evidence_bound")) is not bool
     ):
@@ -2726,6 +3409,19 @@ def _cryptographic_evidence_lane_binding_errors(
                 f"{index} chain must match lane chain"
             )
         field_bindings = (
+            (
+                "evm_source_rpc_chain_id",
+                ("evm_live_metadata", "source_rpc_chain_id"),
+            ),
+            ("evm_source_block_tag", ("evm_live_metadata", "source_block_tag")),
+            (
+                "evm_destination_rpc_chain_id",
+                ("evm_live_metadata", "destination_rpc_chain_id"),
+            ),
+            (
+                "evm_destination_block_tag",
+                ("evm_live_metadata", "destination_block_tag"),
+            ),
             (
                 "source_verifier_material_hash",
                 ("source_record_hashes", "source_verifier_material_hash"),
@@ -4083,6 +4779,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             "records",
             "source_record_hashes",
             "source_adapter_gate",
+            "evm_live_metadata",
             "destination_binding",
             "route_allowlist",
         ):
@@ -4229,6 +4926,80 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     source_gate,
                 )
             )
+        evm_metadata = lane.get("evm_live_metadata")
+        if isinstance(evm_metadata, dict):
+            metadata_label = f"{lane_label} evm_live_metadata"
+            errors.extend(
+                _exact_object_key_errors(
+                    metadata_label,
+                    evm_metadata,
+                    ALL_LANES_EVM_LIVE_METADATA_KEYS,
+                )
+            )
+            errors.extend(
+                _boolean_field_errors(metadata_label, evm_metadata, "required")
+            )
+            errors.extend(_boolean_field_errors(metadata_label, evm_metadata, "ready"))
+            for field in (
+                "source_rpc_chain_id",
+                "source_block_tag",
+                "destination_rpc_chain_id",
+                "destination_block_tag",
+            ):
+                if field in evm_metadata and not isinstance(
+                    evm_metadata.get(field),
+                    str,
+                ):
+                    errors.append(f"{metadata_label} {field} must be a string")
+            if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+                errors.extend(_true_field_errors(metadata_label, evm_metadata, "required"))
+                if domain == ACTIVE_LAUNCH_DOMAIN:
+                    errors.extend(_true_field_errors(metadata_label, evm_metadata, "ready"))
+                for field in (
+                    "source_rpc_chain_id",
+                    "source_block_tag",
+                    "destination_rpc_chain_id",
+                    "destination_block_tag",
+                ):
+                    if not evm_metadata.get(field):
+                        errors.append(f"{metadata_label} {field} must be present")
+                expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[domain]
+                for field in ("source_rpc_chain_id", "destination_rpc_chain_id"):
+                    value = evm_metadata.get(field)
+                    if isinstance(value, str) and (
+                        not _is_canonical_decimal_text(value, positive=True)
+                        or int(value, 10) != expected_chain_id
+                    ):
+                        errors.append(
+                            f"{metadata_label} {field} must be canonical chain id "
+                            f"{expected_chain_id}"
+                        )
+                if domain == SCCP_DOMAIN_ETH:
+                    for field in ("source_block_tag", "destination_block_tag"):
+                        if evm_metadata.get(field) != "finalized":
+                            errors.append(
+                                f"{metadata_label} {field} must be finalized "
+                                "for Ethereum mainnet"
+                            )
+            else:
+                if evm_metadata.get("required") is not False:
+                    errors.append(
+                        f"{metadata_label} required must be false for non-EVM lanes"
+                    )
+                if evm_metadata.get("ready") is not True:
+                    errors.append(
+                        f"{metadata_label} ready must be true for non-EVM lanes"
+                    )
+                for field in (
+                    "source_rpc_chain_id",
+                    "source_block_tag",
+                    "destination_rpc_chain_id",
+                    "destination_block_tag",
+                ):
+                    if evm_metadata.get(field) not in ("", None):
+                        errors.append(
+                            f"{metadata_label} {field} must be empty for non-EVM lanes"
+                        )
         destination_binding = lane.get("destination_binding")
         if isinstance(destination_binding, dict):
             destination_label = f"{lane_label} destination_binding"
@@ -4952,6 +5723,12 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         errors.append("readiness report does not require hashed phase evidence")
     if report:
         errors.extend(_corridor_phase_errors(report_corridor))
+    errors.extend(_ethereum_inbound_adversarial_sdk_test_inventory_errors())
+    errors.extend(_ethereum_outbound_precallback_sdk_test_inventory_errors())
+    errors.extend(_ethereum_receipt_root_zero_sdk_inventory_errors())
+    errors.extend(_ethereum_receipt_rlp_zero_topic_inventory_errors())
+    errors.extend(_ethereum_receipt_rlp_zero_address_inventory_errors())
+    errors.extend(_ethereum_receipt_source_event_context_inventory_errors())
     if summary and _active_launch_blockers(summary):
         errors.append(f"all-lanes summary has active {ACTIVE_LAUNCH_DISPLAY} launch blockers")
     if summary and not _active_launch_release_checklist(summary).get("ready"):
@@ -5067,6 +5844,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                         "readiness report user_prover_submission_surfaces "
                         "does not match corridor phases"
                     )
+        lane_by_domain: dict[int, dict[str, Any]] = {}
+        if isinstance(lanes, list):
+            lane_by_domain = {
+                lane["domain"]: lane
+                for lane in lanes
+                if isinstance(lane, dict) and type(lane.get("domain")) is int
+            }
         if isinstance(crypto, list):
             for row in crypto:
                 if not isinstance(row, dict):
@@ -5077,8 +5861,19 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                         "readiness report cryptographic evidence row contains "
                         f"unknown field: {key}"
                     )
-                errors.extend(_cryptographic_evidence_row_schema_errors(row))
-                if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
+                domain = row.get("domain")
+                lane = lane_by_domain.get(domain)
+                enforce_evm_live_tags = (
+                    domain == ACTIVE_LAUNCH_DOMAIN
+                    or (isinstance(lane, dict) and lane.get("production_ready") is True)
+                )
+                errors.extend(
+                    _cryptographic_evidence_row_schema_errors(
+                        row,
+                        enforce_evm_live_tags=enforce_evm_live_tags,
+                    )
+                )
+                if domain != ACTIVE_LAUNCH_DOMAIN:
                     continue
                 if row.get("route_canary_evidence_bound") is not True:
                     errors.append(

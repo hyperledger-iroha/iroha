@@ -121,62 +121,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
             return
         }
         let compact = Self.compactAscii(label)
-
-        if label == "unsupported" || compact == "unsupported" {
-            self = .unsupported
-        } else if compact.contains("pqmasp") || compact.contains("postquantummasp") {
-            self = .pqMaspStarkFri
-        } else if compact.contains("anonymouspgc") || compact.contains("pgckoutofn") {
-            self = .anonymousPgc
-        } else if compact.contains("verange") {
-            self = .veRange
-        } else if compact.contains("zkat") || compact.contains("policyprivateauthenticator") {
-            self = .zkAt
-        } else if compact.contains("zkams") || compact.contains("recursiveanonymousadmission") {
-            self = .recursiveAnonymousAdmission
-        } else if compact.contains("vega") || compact.contains("existingcredentialzk") {
-            self = .vegaExistingCredentialZk
-        } else if compact.contains("silentthreshold") || compact.contains("thresholdanonymouscredential") {
-            self = .silentThresholdAnoncred
-        } else if compact.contains("zkx509") || compact.contains("x509") || compact.contains("zkvmx509") {
-            self = .zkX509
-        } else if compact.contains("siswithhints")
-                    || compact.contains("sishints")
-                    || compact.contains("latticeanonymouscredentials") {
-            self = .sisWithHints
-        } else if compact.contains("orchard") || compact.contains("zcashorchard") {
-            self = .halo2IpaOrchard
-        } else if compact.contains("penumbra")
-                    || compact.contains("masp")
-                    || compact.contains("bls12377")
-                    || compact.contains("decaf377") {
-            self = .groth16Bls12377
-        } else if compact.contains("fcmp")
-                    || compact.contains("monero")
-                    || compact.contains("curvetree") {
-            self = .fcmpPlusPlusCurveTree
-        } else if compact.contains("lattice")
-                    || compact.contains("pcssis")
-                    || compact.contains("jindo") {
-            self = .latticePcsSis
-        } else if compact.contains("miden") {
-            self = .midenStark
-        } else if compact.contains("aztec") {
-            self = .aztecPlonkishPrivateKernel
-        } else if compact.contains("halo2") && compact.contains("bn254") {
-            self = .halo2Bn254
-        } else if compact.contains("groth16") {
-            self = .groth16
-        } else if compact.contains("stark") {
-            self = .stark
-        } else if compact == "halo2ipa"
-                    || compact == "halo2ipapasta"
-                    || compact == "halo2pasta"
-                    || (compact.contains("halo2") && (compact.contains("ipa") || compact.contains("pasta"))) {
-            self = .halo2IpaPasta
-        } else {
-            self = .unsupported
-        }
+        self = Self.catalogBackendAliases[compact] ?? .unsupported
     }
 
     public static func isPendingProductionBackendLabel(_ raw: String) -> Bool {
@@ -228,9 +173,86 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kagemusha-recursive-aggregation-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+        "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+        "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
         "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified"
+    ]
+
+    private static let catalogBackendAliases: [String: VerifyingKeyBackendTag] = [
+        "unsupported": .unsupported,
+        "halo2ipa": .halo2IpaPasta,
+        "halo2ipapasta": .halo2IpaPasta,
+        "halo2pasta": .halo2IpaPasta,
+        "halo2pastaipavotebool": .halo2IpaPasta,
+        "halo2bn254": .halo2Bn254,
+        "groth16": .groth16,
+        "groth16bn254": .groth16,
+        "stark": .stark,
+        "starkfri": .stark,
+        "starkfrisha256goldilocks": .stark,
+        "halo2ipaorchard": .halo2IpaOrchard,
+        "orchard": .halo2IpaOrchard,
+        "zcashorchard": .halo2IpaOrchard,
+        "groth16bls12377": .groth16Bls12377,
+        "groth16bls12377decaf377": .groth16Bls12377,
+        "bls12377": .groth16Bls12377,
+        "decaf377": .groth16Bls12377,
+        "masp": .groth16Bls12377,
+        "penumbra": .groth16Bls12377,
+        "penumbramasp": .groth16Bls12377,
+        "halo2ipapenumbra": .groth16Bls12377,
+        "halo2ipamasp": .groth16Bls12377,
+        "fcmppluspluscurvetree": .fcmpPlusPlusCurveTree,
+        "fcmp": .fcmpPlusPlusCurveTree,
+        "monero": .fcmpPlusPlusCurveTree,
+        "monerofcmp": .fcmpPlusPlusCurveTree,
+        "monerofcmpplusplus": .fcmpPlusPlusCurveTree,
+        "curvetree": .fcmpPlusPlusCurveTree,
+        "halo2ipamonero": .fcmpPlusPlusCurveTree,
+        "halo2ipacurvetree": .fcmpPlusPlusCurveTree,
+        "latticepcssis": .latticePcsSis,
+        "latticepcszk": .latticePcsSis,
+        "jindo": .latticePcsSis,
+        "jindolatticepcszk": .latticePcsSis,
+        "jindolatticepcszkv0": .latticePcsSis,
+        "jindolatticepcssis": .latticePcsSis,
+        "starkfrimiden": .midenStark,
+        "midenstark": .midenStark,
+        "aztecplonkishprivatekernel": .aztecPlonkishPrivateKernel,
+        "aztecprivatekernel": .aztecPlonkishPrivateKernel,
+        "pqmaspstarkfri": .pqMaspStarkFri,
+        "pqmaspstark": .pqMaspStarkFri,
+        "starkfripqmaspstarkfri": .pqMaspStarkFri,
+        "postquantummasp": .pqMaspStarkFri,
+        "anonymouspgc": .anonymousPgc,
+        "anonymouspgckoutofn": .anonymousPgc,
+        "anonymouspgckoutofnv1": .anonymousPgc,
+        "verange": .veRange,
+        "verangetransparentrange": .veRange,
+        "verangetransparentrangev1": .veRange,
+        "zkat": .zkAt,
+        "zkatpolicyprivateauthenticator": .zkAt,
+        "zkatpolicyprivateauthv1": .zkAt,
+        "recursiveanonymousadmission": .recursiveAnonymousAdmission,
+        "recursiveanonymousadmissionv0": .recursiveAnonymousAdmission,
+        "zkamsrecursiveadmission": .recursiveAnonymousAdmission,
+        "zkamsrecursiveadmissionv0": .recursiveAnonymousAdmission,
+        "vegaexistingcredentialzk": .vegaExistingCredentialZk,
+        "vegaexistingcredentialzkv0": .vegaExistingCredentialZk,
+        "silentthresholdanoncred": .silentThresholdAnoncred,
+        "silentthresholdanoncredv0": .silentThresholdAnoncred,
+        "silentthresholdanonymouscredential": .silentThresholdAnoncred,
+        "thresholdanonymouscredentials": .silentThresholdAnoncred,
+        "zkx509": .zkX509,
+        "zkvmx509identity": .zkX509,
+        "zkx509onchainidentity": .zkX509,
+        "zkx509onchainidentityv0": .zkX509,
+        "siswithhints": .sisWithHints,
+        "sishints": .sisWithHints,
+        "sishintsanoncredpqv0": .sisWithHints,
+        "latticeanonymouscredentials": .sisWithHints
     ]
 
     private static let starkFriProductionBackends: Set<String> = [

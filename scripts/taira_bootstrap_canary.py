@@ -658,6 +658,52 @@ def resolve_alias_account_id(torii_root: str, alias: str) -> str:
     raise RuntimeError(f"alias resolve failed: status={status} body={payload!r}")
 
 
+def transaction_status_kind(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("status")
+    if isinstance(status, str) and status:
+        return status
+    if isinstance(status, dict):
+        kind = status.get("kind")
+        if isinstance(kind, str) and kind:
+            return kind
+    summary = payload.get("summary")
+    if isinstance(summary, str) and summary:
+        return summary
+    return None
+
+
+def wait_for_transaction_status(
+    torii_root: str,
+    tx_hash_hex: str,
+    *,
+    timeout_ms: int,
+    poll_interval_ms: int = 1_000,
+) -> dict[str, Any] | None:
+    deadline = time.monotonic() + max(timeout_ms, 0) / 1000.0
+    last_payload: Any = None
+    while time.monotonic() < deadline:
+        status, payload = _http_json(
+            "GET",
+            (
+                f"{torii_root.rstrip('/')}/v1/pipeline/transactions/status"
+                f"?hash={tx_hash_hex}&scope=global"
+            ),
+        )
+        if status == 404:
+            time.sleep(poll_interval_ms / 1000.0)
+            continue
+        last_payload = payload
+        kind = transaction_status_kind(payload)
+        if status in (200, 202) and kind in {"Applied", "Committed"}:
+            return payload if isinstance(payload, dict) else None
+        if kind in {"Rejected", "Expired"}:
+            return payload if isinstance(payload, dict) else None
+        time.sleep(poll_interval_ms / 1000.0)
+    return last_payload if isinstance(last_payload, dict) else None
+
+
 def attempt_faucet(
     account_id: str,
     torii_root: str,
@@ -666,6 +712,7 @@ def attempt_faucet(
     gas_limit: int | None = None,
     chain_discriminant: int = DEFAULT_CHAIN_DISCRIMINANT,
     iroha_bin: str | None = None,
+    status_timeout_ms: int = DEFAULT_STATUS_TIMEOUT_MS,
 ) -> dict[str, Any]:
     puzzle_status, puzzle = _http_json(
         "GET",
@@ -687,6 +734,23 @@ def attempt_faucet(
     if claim_status in (200, 202):
         status = faucet_claim_status_kind(claim)
         if status != "Applied":
+            tx_hash_hex = claim.get("tx_hash_hex") if isinstance(claim, dict) else None
+            if isinstance(tx_hash_hex, str) and tx_hash_hex:
+                final_status = wait_for_transaction_status(
+                    torii_root,
+                    tx_hash_hex,
+                    timeout_ms=status_timeout_ms,
+                )
+                final_kind = transaction_status_kind(final_status)
+                if final_kind in {"Applied", "Committed"}:
+                    return {
+                        "status": "claimed",
+                        "response_status": claim_status,
+                        "request": claim_body,
+                        "response": claim,
+                        "final_status": final_status,
+                    }
+                status = final_kind or status
             return {
                 "status": "failed",
                 "response_status": claim_status,
@@ -921,6 +985,7 @@ def main(argv: list[str] | None = None) -> int:
             gas_limit=args.gas_limit,
             chain_discriminant=chain_discriminant,
             iroha_bin=args.iroha_bin,
+            status_timeout_ms=args.status_timeout_ms,
         )
     )
     if not args.skip_faucet and faucet.get("status") != "claimed":

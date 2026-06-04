@@ -227,7 +227,7 @@ fn main() -> Result<(), HarnessError> {
                 handshake_suite,
                 resume_hash: resume_hash.as_deref(),
             };
-            let hash = transcript.compute_hash();
+            let hash = transcript.compute_hash()?;
             println!("Transcript hash: 0x{}", hex::encode(hash));
             println!("Transcript handshake suite: {handshake_suite}");
             println!(

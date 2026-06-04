@@ -77,6 +77,7 @@ fn zk_config_with_root_history_cap(
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),
         sccp_route_allowlists: Vec::new(),
+        sccp_route_manifests: Vec::new(),
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,

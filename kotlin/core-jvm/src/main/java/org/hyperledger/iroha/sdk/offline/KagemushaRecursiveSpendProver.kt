@@ -13,6 +13,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-spend-lineage-v1"
+        const val RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-spend-lineage-onehop-v1"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-spend-lineage-append-v1"
         const val COMPACT_TOKEN_MAX_HOPS: Int = 64
         const val RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: Int = 64
         const val RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: Boolean = true
@@ -50,9 +54,20 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun canRedeemWitnessless(circuitId: String?, hopCount: Int): Boolean =
             RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
-                circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+                isLineageProofCircuitId(circuitId) &&
                 hopCount >= 1 &&
                 hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+
+        @JvmStatic
+        fun isLineageProofCircuitId(circuitId: String?): Boolean =
+            circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+                circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+                circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+
+        @JvmStatic
+        fun isLineageAppendOutputCircuitId(outputCircuitId: String?): Boolean =
+            outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+                outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 
         @JvmStatic
         fun requiresLineageWitnessForRedeem(circuitId: String?, hopCount: Int): Boolean =
@@ -68,6 +83,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun normalizeAppendOutputCircuitId(outputCircuitId: String?): String =
             if (outputCircuitId.isNullOrEmpty()) {
                 RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            } else if (outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
             } else {
                 outputCircuitId
             }
@@ -76,7 +93,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun isSupportedAppendOutputCircuitId(outputCircuitId: String?): Boolean =
             when (normalizeAppendOutputCircuitId(outputCircuitId)) {
                 RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-                RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 -> true
                 else -> false
             }
@@ -84,11 +101,11 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun isSupportedPreviousProofCircuitId(previousProofCircuitId: String?): Boolean =
             previousProofCircuitId == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-                previousProofCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                isLineageProofCircuitId(previousProofCircuitId)
 
         @JvmStatic
         fun requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId: String?): Boolean =
-            previousProofCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            isLineageProofCircuitId(previousProofCircuitId)
 
         @JvmStatic
         fun isSupportedAppendProofTransition(
@@ -98,17 +115,17 @@ class KagemushaRecursiveSpendProver private constructor() {
             val normalizedOutput = normalizeAppendOutputCircuitId(outputCircuitId)
             return previousProofCircuitId == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
                 normalizedOutput == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-                previousProofCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+                isLineageProofCircuitId(previousProofCircuitId) &&
                     (
                         normalizedOutput == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
-                            normalizedOutput == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                            normalizedOutput == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
                     )
         }
 
         @JvmStatic
         fun preferredAppendOutputCircuitId(previousHopCount: Int): String =
             if (canAppendWitnesslessLineage(previousHopCount)) {
-                RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
             } else {
                 RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             }
@@ -121,7 +138,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             return when (normalizeAppendOutputCircuitId(outputCircuitId)) {
                 RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ->
                     previousHopCount < COMPACT_TOKEN_MAX_HOPS
-                RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ->
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 ->
                     canAppendWitnesslessLineage(previousHopCount)
                 else -> false
             }
@@ -147,7 +164,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             outputCircuitId: String?,
             previousHopCount: Int,
         ): Boolean =
-            normalizeAppendOutputCircuitId(outputCircuitId) == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&
+            isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId)) &&
                 previousHopCount >= 1
 
         @JvmStatic

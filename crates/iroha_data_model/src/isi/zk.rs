@@ -381,6 +381,7 @@ isi! {
 impl crate::seal::Instruction for RotateZkAceIdentityCommitment {}
 impl RotateZkAceIdentityCommitment {
     /// Construct a new identity-commitment rotation.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         asset: AssetDefinitionId,
         old_identity_commitment: [u8; 32],
@@ -913,6 +914,8 @@ impl_zk_decode_from_slice!(FinalizeElection {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::too_many_lines)]
+
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};

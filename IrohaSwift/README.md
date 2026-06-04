@@ -828,9 +828,11 @@ let noritoBytes = try payload.serializedPayload()      // bare Norito struct byt
 let envelope = try payload.noritoEnvelope()            // header + CRC64-XZ
 ```
 
-Each initializer validates the X25519 public key (32 bytes) and XChaCha20-Poly1305 nonce
-(24 bytes). Use `ConfidentialEncryptedPayload.deserialize(from:)` to parse existing Norito
-bytes and `asHexDictionary()` when logging or exporting the fields.
+Each initializer validates the X25519 public key length and rejects low-order
+public keys, enforces the XChaCha20-Poly1305 nonce length (24 bytes), and
+requires non-empty ciphertext. Use `ConfidentialEncryptedPayload.deserialize(from:)`
+to parse existing Norito bytes and `asHexDictionary()` when logging or exporting
+the fields.
 
 ### Confidential gas schedule
 

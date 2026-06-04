@@ -84,6 +84,40 @@ impl MlDsaSuite {
         }
     }
 
+    /// Validate a public key encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length.
+    pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_public_key_len(self, bytes)
+    }
+
+    /// Validate a secret key encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length or
+    /// internally inconsistent public material.
+    pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        backend::validate_secret_key(self, bytes)
+    }
+
+    /// Reconstruct the public key committed by a secret key.
+    ///
+    /// # Errors
+    /// Returns an error when the secret key is malformed or internally
+    /// inconsistent.
+    pub fn public_key_from_secret_key(self, bytes: &[u8]) -> Result<Vec<u8>, MlDsaError> {
+        backend::public_key_from_secret_key(self, bytes)
+    }
+
+    /// Validate a detached signature encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length.
+    pub fn validate_signature(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_signature_len(self, bytes)
+    }
+
     const fn public_key_kind(self) -> &'static str {
         match self {
             MlDsaSuite::MlDsa44 => "ML-DSA-44 public key",
@@ -172,6 +206,14 @@ pub enum MlDsaError {
     ContextTooLong {
         /// Actual context length in bytes.
         len: usize,
+    },
+    /// Secret key fields are length-valid but internally inconsistent.
+    #[error("{suite:?} secret key is internally inconsistent: {kind}")]
+    SecretKeyMismatch {
+        /// Suite identifier.
+        suite: MlDsaSuite,
+        /// Identifier of the malformed secret-key component.
+        kind: &'static str,
     },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
@@ -274,6 +316,10 @@ pub fn sign_mldsa(
     message: &[u8],
     rng: &mut HedgedChaCha20Rng,
 ) -> Result<MlDsaSignature, MlDsaError> {
+    if context.len() > ML_DSA_CONTEXT_MAX_LEN {
+        return Err(MlDsaError::ContextTooLong { len: context.len() });
+    }
+    suite.validate_secret_key(secret_key)?;
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
     backend::sign(suite, secret_key, context, message, &coins).map(MlDsaSignature::new)
@@ -290,6 +336,10 @@ pub fn sign_mldsa_from_os(
     context: &[u8],
     message: &[u8],
 ) -> Result<MlDsaSignature, MlDsaError> {
+    if context.len() > ML_DSA_CONTEXT_MAX_LEN {
+        return Err(MlDsaError::ContextTooLong { len: context.len() });
+    }
+    suite.validate_secret_key(secret_key)?;
     let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:sign")?;
     sign_mldsa(suite, secret_key, context, message, &mut rng)
 }
@@ -338,11 +388,66 @@ pub fn verify_mldsa(
     }
 }
 
+/// Validate the encoding of an ML-DSA public key.
+///
+/// # Errors
+/// Returns an error when the public-key byte string has the wrong encoded length.
+pub fn validate_mldsa_public_key(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_public_key(bytes)
+}
+
+/// Validate the encoding of an ML-DSA secret key.
+///
+/// # Errors
+/// Returns an error when the secret-key byte string has the wrong encoded
+/// length or internally inconsistent public material.
+pub fn validate_mldsa_secret_key(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_secret_key(bytes)
+}
+
+/// Reconstruct the public key committed by an ML-DSA secret key.
+///
+/// # Errors
+/// Returns an error when the secret key is malformed or internally
+/// inconsistent.
+pub fn mldsa_public_key_from_secret_key(
+    suite: MlDsaSuite,
+    bytes: &[u8],
+) -> Result<Vec<u8>, MlDsaError> {
+    suite.public_key_from_secret_key(bytes)
+}
+
+/// Validate the encoding of an ML-DSA detached signature.
+///
+/// # Errors
+/// Returns an error when the signature byte string has the wrong encoded length.
+pub fn validate_mldsa_signature(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_signature(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
 
     use super::*;
+
+    const ML_DSA_SECRET_TR_OFFSET: usize = 64;
+
+    fn seeded_keypair(suite: MlDsaSuite, seed: u8, personalization: &'static [u8]) -> MlDsaKeyPair {
+        generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([seed; 32]),
+            personalization,
+        )
+        .expect("seeded keypair generation should succeed")
+    }
+
+    fn assert_secret_key_mismatch(err: MlDsaError) {
+        match err {
+            MlDsaError::SecretKeyMismatch { .. } => {}
+            other => panic!("expected secret-key mismatch, got {other:?}"),
+        }
+    }
 
     fn signed_roundtrip(suite: MlDsaSuite) {
         let mut rng = hedged_chacha20_rng(
@@ -585,6 +690,55 @@ mod tests {
     }
 
     #[test]
+    fn sign_helpers_reject_invalid_inputs_before_entropy() {
+        let suite = MlDsaSuite::MlDsa44;
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE7; 32]),
+            b"invalid-sign-preflight",
+        );
+        let short_secret = [0u8; 8];
+        let oversized_context = vec![0xA5; ML_DSA_CONTEXT_MAX_LEN + 1];
+
+        let err = sign_mldsa(suite, &short_secret, b"", b"message", &mut rng)
+            .expect_err("short direct secret must fail before signing coins are used");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
+            other => panic!("unexpected direct secret result: {other:?}"),
+        }
+
+        let err = sign_mldsa_from_os(suite, &short_secret, b"", b"message")
+            .expect_err("short OS helper secret must fail before OS entropy");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
+            other => panic!("unexpected OS helper secret result: {other:?}"),
+        }
+
+        let err = sign_mldsa(
+            suite,
+            &short_secret,
+            &oversized_context,
+            b"message",
+            &mut rng,
+        )
+        .expect_err("oversized context must fail before secret decoding");
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+
+        let err = sign_mldsa_from_os(suite, &short_secret, &oversized_context, b"message")
+            .expect_err("oversized OS helper context must fail before OS entropy");
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+    }
+
+    #[test]
     fn verify_rejects_invalid_public_key_and_signature_lengths() {
         let suite = MlDsaSuite::MlDsa44;
         let keypair = generate_mldsa_keypair_from_seed(
@@ -607,6 +761,121 @@ mod tests {
             MlDsaError::BadEncoding(err) => assert!(err.kind.contains("signature")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn suite_validation_helpers_reject_wrong_lengths() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = seeded_keypair(suite, 0xD5, b"validation-helper-keygen");
+
+        for (label, err) in [
+            (
+                "public key",
+                suite.validate_public_key(&vec![0u8; suite.public_key_len() - 1]),
+            ),
+            (
+                "secret key",
+                suite.validate_secret_key(&vec![0u8; suite.secret_key_len() - 1]),
+            ),
+            (
+                "signature",
+                suite.validate_signature(&vec![0u8; suite.signature_len() - 1]),
+            ),
+        ] {
+            let err = err.expect_err("short ML-DSA material must fail");
+            match err {
+                MlDsaError::BadEncoding(err) => assert!(err.to_string().contains(label)),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        validate_mldsa_public_key(suite, &vec![0u8; suite.public_key_len()])
+            .expect("canonical public key length");
+        validate_mldsa_secret_key(suite, keypair.secret_key()).expect("generated secret key");
+        validate_mldsa_signature(suite, &vec![0u8; suite.signature_len()])
+            .expect("canonical signature length");
+
+        let err = validate_mldsa_secret_key(suite, &vec![0u8; suite.secret_key_len()])
+            .expect_err("length-valid but inconsistent secret key must fail");
+        assert_secret_key_mismatch(err);
+    }
+
+    #[test]
+    fn secret_key_reconstruction_matches_generated_public_key() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let keypair = seeded_keypair(
+                suite,
+                suite.suite_id().wrapping_add(0x70),
+                b"secret-reconstruction",
+            );
+            suite
+                .validate_secret_key(keypair.secret_key())
+                .expect("generated secret key validates");
+            assert_eq!(
+                suite
+                    .public_key_from_secret_key(keypair.secret_key())
+                    .expect("public key reconstructs"),
+                keypair.public_key()
+            );
+            assert_eq!(
+                mldsa_public_key_from_secret_key(suite, keypair.secret_key())
+                    .expect("free helper reconstructs public key"),
+                keypair.public_key()
+            );
+        }
+    }
+
+    #[test]
+    fn secret_key_validation_rejects_tr_drift() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = seeded_keypair(suite, 0xD6, b"secret-tr-drift");
+        let mut secret_key = keypair.secret_key().to_vec();
+        secret_key[ML_DSA_SECRET_TR_OFFSET] ^= 0x01;
+
+        let err = suite
+            .validate_secret_key(&secret_key)
+            .expect_err("corrupted tr must fail secret-key validation");
+        assert_secret_key_mismatch(err);
+    }
+
+    #[test]
+    fn secret_key_validation_rejects_t0_drift() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = seeded_keypair(suite, 0xD7, b"secret-t0-drift");
+        let mut secret_key = keypair.secret_key().to_vec();
+        let last = secret_key
+            .last_mut()
+            .expect("generated secret key is nonempty");
+        *last ^= 0x01;
+
+        let err = suite
+            .validate_secret_key(&secret_key)
+            .expect_err("corrupted t0 must fail secret-key validation");
+        assert_secret_key_mismatch(err);
+    }
+
+    #[test]
+    fn signing_rejects_secret_key_tr_drift() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xD8, b"sign-secret-tr-drift");
+        let mut secret_key = keypair.secret_key().to_vec();
+        secret_key[ML_DSA_SECRET_TR_OFFSET] ^= 0x80;
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xD9; 32]),
+            b"sign-secret-tr-drift-rng",
+        );
+
+        let err = sign_mldsa(suite, &secret_key, b"", b"message", &mut rng)
+            .expect_err("direct signing must reject corrupted secret key");
+        assert_secret_key_mismatch(err);
+
+        let err = sign_mldsa_from_os(suite, &secret_key, b"", b"message")
+            .expect_err("OS-backed signing must reject corrupted secret key");
+        assert_secret_key_mismatch(err);
     }
 
     #[test]

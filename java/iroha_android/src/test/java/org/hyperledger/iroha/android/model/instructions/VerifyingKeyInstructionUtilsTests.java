@@ -88,8 +88,12 @@ public final class VerifyingKeyInstructionUtilsTests {
       {"zcash-orchard", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
       {"groth16/bls12-377", VerifyingKeyBackendTag.GROTH16_BLS12_377},
       {"penumbra-masp", VerifyingKeyBackendTag.GROTH16_BLS12_377},
+      {"halo2/ipa/penumbra", VerifyingKeyBackendTag.GROTH16_BLS12_377},
+      {"halo2/ipa/masp", VerifyingKeyBackendTag.GROTH16_BLS12_377},
       {"monero-fcmp++", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
       {"fcmp-plus-plus-curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
+      {"halo2/ipa/monero", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
+      {"halo2/ipa/curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
       {"jindo-lattice-pcs-zk", VerifyingKeyBackendTag.LATTICE_PCS_SIS},
       {"verange-transparent-range", VerifyingKeyBackendTag.VERANGE},
       {"anonymous-pgc-k-out-of-n", VerifyingKeyBackendTag.ANONYMOUS_PGC},
@@ -120,26 +124,20 @@ public final class VerifyingKeyInstructionUtilsTests {
   }
 
   private static void adversarialPendingBackendAliasesStayFailClosed() {
-    final Object[][] cases = {
-      {"halo2/ipa/orchard/dev-fixture", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
-      {"stark/fri/miden/claimed-production", VerifyingKeyBackendTag.MIDEN_STARK},
-      {"anonymous-pgc-k-out-of-n-v1-production", VerifyingKeyBackendTag.ANONYMOUS_PGC},
-      {"sis-hints-anoncred-pq-v0-devfixture", VerifyingKeyBackendTag.SIS_WITH_HINTS},
-      {"groth16/bls12-377/../../prod", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"post-quantum-masp/audit-claimed", VerifyingKeyBackendTag.PQ_MASP_STARK_FRI},
-      {"halo2/ipa/penumbra", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"halo2/ipa/masp", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"halo2/ipa/monero", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"halo2/ipa/curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE}
+    final String[] cases = {
+      "halo2/ipa/orchard/dev-fixture",
+      "stark/fri/miden/claimed-production",
+      "anonymous-pgc-k-out-of-n-v1-production",
+      "sis-hints-anoncred-pq-v0-devfixture",
+      "groth16/bls12-377/../../prod",
+      "post-quantum-masp/audit-claimed"
     };
 
-    for (final Object[] entry : cases) {
-      final String label = (String) entry[0];
-      final VerifyingKeyBackendTag expected = (VerifyingKeyBackendTag) entry[1];
-      assert expected == VerifyingKeyBackendTag.fromCatalogLabel(label)
-          : label + " should classify to the exact pending backend tag";
-      assert VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
-          : label + " should remain pending production";
+    for (final String label : cases) {
+      assert VerifyingKeyBackendTag.UNSUPPORTED == VerifyingKeyBackendTag.fromCatalogLabel(label)
+          : label + " should stay unsupported";
+      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
+          : label + " must not classify as pending production";
       assertThrows(
           () -> VerifyingKeyBackendTag.parse(label),
           label + " must not parse as a canonical Norito backend tag");
@@ -257,6 +255,9 @@ public final class VerifyingKeyInstructionUtilsTests {
       "stark/fri/random-profile",
       "stark/fri/sha512-goldilocks",
       "stark/fri/audit-proof-v1",
+      "stark/fri/sha256 goldilocks",
+      "stark/fri/sha256+goldilocks",
+      "halo2/ipa+mock",
       "halo2/ipa:production-ready",
       "halo2/ipa:claimed-production",
       "halo2/ipa:mainnet-ready",
@@ -461,6 +462,9 @@ public final class VerifyingKeyInstructionUtilsTests {
       "stark/fri/latest",
       "stark/fri/attestation",
       "stark/fri/contest",
+      "stark/fri/sha256 goldilocks",
+      "stark/fri/sha256+goldilocks",
+      "halo2/ipa+mock",
       "stark/fri/dev-fixture",
       "stark/fri/d-e-v-f-i-x-t-u-r-e",
       "stark/fri/dev",

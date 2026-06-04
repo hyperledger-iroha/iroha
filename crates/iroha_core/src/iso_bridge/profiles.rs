@@ -132,6 +132,18 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "structured_address_mode": "permissive",
         "supplementary_data_max_bytes": 16384,
         "amount_minor_units": []
+      },
+      {
+        "message_type": "colr.012",
+        "direction": "inbound",
+        "versions": ["colr.012", "colr.012.001.05"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
       }
     ]
   },
@@ -448,6 +460,18 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "amount_minor_units": []
       },
       {
+        "message_type": "colr.012",
+        "direction": "inbound",
+        "versions": ["colr.012.001.05"],
+        "business_services": ["securities.csd.collateral"],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
         "message_type": "sese.025",
         "direction": "follow-up",
         "versions": ["sese.025.001.10"],
@@ -721,6 +745,8 @@ pub struct TradfiRailProfile {
     pub trusted_public_key_sha256: Vec<String>,
     /// Backward-compatible accepted SHA-256 pins of DER-encoded XMLDSig X.509 trust anchors.
     pub trusted_certificate_sha256: Vec<String>,
+    /// Denied SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
+    pub revoked_certificate_sha256: Vec<String>,
     /// Datasets that must be loaded before accepting live-profile messages.
     pub required_reference_datasets: Vec<ReferenceDatasetRequirement>,
     /// Message profiles supported by this rail profile.
@@ -763,6 +789,19 @@ impl TradfiRailProfile {
         public_key_sha256: &str,
         certificate_sha256: &[String],
     ) -> bool {
+        if certificate_sha256.iter().any(|digest| {
+            self.revoked_certificate_sha256
+                .iter()
+                .any(|pin| pin == digest)
+        }) {
+            return false;
+        }
+        let terminal_certificate_sha256 = certificate_sha256.last();
+        let linked_trust_anchor_sha256 = if certificate_sha256.len() > 1 {
+            terminal_certificate_sha256
+        } else {
+            None
+        };
         self.signature_public_key_sha256_pins
             .iter()
             .any(|pin| pin == public_key_sha256)
@@ -770,7 +809,7 @@ impl TradfiRailProfile {
                 .trusted_public_key_sha256
                 .iter()
                 .any(|pin| pin == public_key_sha256)
-            || certificate_sha256.iter().any(|digest| {
+            || linked_trust_anchor_sha256.is_some_and(|digest| {
                 self.x509_trust_anchor_sha256_pins
                     .iter()
                     .any(|pin| pin == digest)
@@ -842,6 +881,8 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         canonical_sha256_pins(optional_string_array(obj, "trusted_public_key_sha256")?)?;
     let trusted_certificate_sha256 =
         canonical_sha256_pins(optional_string_array(obj, "trusted_certificate_sha256")?)?;
+    let revoked_certificate_sha256 =
+        canonical_sha256_pins(optional_string_array(obj, "revoked_certificate_sha256")?)?;
     let required_reference_datasets = optional_string_array(obj, "required_reference_datasets")?
         .into_iter()
         .map(|raw| {
@@ -891,6 +932,7 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         x509_ocsp_response_der_base64,
         trusted_public_key_sha256,
         trusted_certificate_sha256,
+        revoked_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
@@ -900,22 +942,15 @@ fn canonical_sha256_pins(values: Vec<String>) -> Result<Vec<String>, String> {
     values
         .into_iter()
         .map(|value| {
-            let trimmed = value.trim();
-            if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            if value.len() != 64 || !value.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f')) {
                 return Err(format!(
-                    "XMLDSig trust pin `{value}` must be a SHA-256 hex string"
+                    "XMLDSig trust pin `{value}` must be a canonical lowercase SHA-256 hex string"
                 ));
             }
-            let canonical = trimmed.to_ascii_lowercase();
-            if trimmed != canonical {
-                return Err(format!(
-                    "XMLDSig trust pin `{value}` must use lowercase canonical hex"
-                ));
-            }
-            if canonical.chars().all(|ch| ch == '0') {
+            if value.chars().all(|ch| ch == '0') {
                 return Err("XMLDSig trust pin must not be all zero".to_owned());
             }
-            Ok(canonical)
+            Ok(value)
         })
         .collect()
 }
@@ -1013,18 +1048,19 @@ fn optional_sha256_pin_array(
     optional_string_array(obj, key)?
         .into_iter()
         .map(|pin| {
-            let normalized = pin.trim().to_ascii_lowercase();
-            if normalized.len() != 64 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            if pin.len() != 64
+                || !pin.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+            {
                 return Err(format!(
-                    "profile `{profile_id}` field `{key}` entries must be 64-character SHA-256 hex pins"
+                    "profile `{profile_id}` field `{key}` entries must be canonical lowercase 64-character SHA-256 hex pins"
                 ));
             }
-            if normalized.chars().all(|ch| ch == '0') {
+            if pin.chars().all(|ch| ch == '0') {
                 return Err(format!(
                     "profile `{profile_id}` field `{key}` must not contain the all-zero placeholder"
                 ));
             }
-            Ok(normalized)
+            Ok(pin)
         })
         .collect()
 }
@@ -1136,17 +1172,73 @@ mod tests {
     }
 
     #[test]
-    fn xml_signature_key_pins_accept_any_verified_certificate_digest() {
+    fn xml_signature_sha256_pin_parsers_require_canonical_lowercase() {
+        assert!(canonical_sha256_pins(vec!["ab".repeat(32)]).is_ok());
+        for pin in ["AB".repeat(32), format!(" {}", "ab".repeat(32))] {
+            let err = canonical_sha256_pins(vec![pin.clone()])
+                .expect_err("legacy XMLDSig trust pins must be canonical lowercase");
+            assert!(
+                err.contains("canonical lowercase"),
+                "unexpected legacy pin error for {pin:?}: {err}"
+            );
+        }
+
+        let profile_json = format!(
+            r#"{{"signature_public_key_sha256_pins":["{}"]}}"#,
+            "ab".repeat(32)
+        );
+        let value: Value = json::from_json(&profile_json).expect("profile pin JSON");
+        let obj = value.as_object().expect("profile pin object");
+        assert!(optional_sha256_pin_array(obj, "signature_public_key_sha256_pins", "test").is_ok());
+
+        for pin in ["AB".repeat(32), format!("{} ", "ab".repeat(32))] {
+            let profile_json = format!(r#"{{"x509_trust_anchor_sha256_pins":["{pin}"]}}"#);
+            let value: Value = json::from_json(&profile_json).expect("profile pin JSON");
+            let obj = value.as_object().expect("profile pin object");
+            let err = optional_sha256_pin_array(obj, "x509_trust_anchor_sha256_pins", "test")
+                .expect_err("profile XMLDSig pin fields must be canonical lowercase");
+            assert!(
+                err.contains("canonical lowercase"),
+                "unexpected profile pin error for {pin:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_signature_key_pins_accept_terminal_certificate_digest() {
         let mut profile = default_profile("generic-iso20022").expect("profile");
         profile.trusted_public_key_sha256 = vec!["aa".repeat(32)];
+        profile.x509_trust_anchor_sha256_pins = vec!["ee".repeat(32)];
         profile.trusted_certificate_sha256 = vec!["bb".repeat(32)];
+        profile.revoked_certificate_sha256 = vec!["dd".repeat(32)];
 
         assert!(profile.accepts_xml_signature_key(&"aa".repeat(32), &[]));
         assert!(
             profile
+                .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "ee".repeat(32)])
+        );
+        assert!(
+            profile
                 .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "bb".repeat(32)])
         );
+        assert!(
+            !profile.accepts_xml_signature_key(&"11".repeat(32), &["ee".repeat(32)]),
+            "X.509 trust-anchor pins require a linked issuer certificate beyond the leaf"
+        );
+        assert!(
+            !profile.accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32)]),
+            "legacy certificate pins also require a linked terminal trust anchor"
+        );
+        assert!(
+            !profile
+                .accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32), "cc".repeat(32)])
+        );
         assert!(!profile.accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32)]));
+        assert!(!profile.accepts_xml_signature_key(&"aa".repeat(32), &["dd".repeat(32)]));
+        assert!(
+            !profile
+                .accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32), "dd".repeat(32)])
+        );
     }
 
     #[test]
@@ -1181,7 +1273,7 @@ mod tests {
         let catalog = default_profile_catalog();
         let generic = &catalog["generic-iso20022"];
         for message_type in [
-            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025",
+            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025", "colr.012",
         ] {
             assert!(
                 generic
@@ -1200,6 +1292,16 @@ mod tests {
             securities
                 .message_profile("sese.025", MessageDirection::Inbound)
                 .is_some()
+        );
+        assert!(
+            securities
+                .message_profile("colr.012", MessageDirection::Inbound)
+                .is_some()
+        );
+        assert!(
+            generic
+                .message_profile("colr.007", MessageDirection::Inbound)
+                .is_none()
         );
     }
 }

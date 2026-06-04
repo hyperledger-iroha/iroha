@@ -823,10 +823,10 @@ impl core::str::FromStr for ProofId {
 
     /// Parse a stable string form produced by Display: `"<backend>:<hex32bytes>"`.
     ///
-    /// - `backend` is parsed as `iroha_schema::Ident` (verbatim substring before the first ':').
+    /// - `backend` is parsed as `iroha_schema::Ident` (verbatim substring before the last ':').
     /// - `hex32bytes` must be exactly 64 hex chars (case-insensitive). Optional `0x` prefix is allowed.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (backend_str, hex_str) = s.split_once(':').ok_or("missing ':'")?;
+        let (backend_str, hex_str) = s.rsplit_once(':').ok_or("missing ':'")?;
         if backend_str.is_empty() {
             return Err("empty backend");
         }
@@ -890,6 +890,17 @@ mod parse_tests {
         let with0x = format!("{}:0x{}", id.backend, hex_lower);
         let parsed3 = with0x.parse::<ProofId>().expect("parse 0x");
         assert_eq!(parsed3, id);
+    }
+
+    #[test]
+    fn proof_id_parse_roundtrips_backend_labels_with_colons() {
+        let id = ProofId {
+            backend: "halo2/ipa:kagemusha-folded-v1".into(),
+            proof_hash: [0xCD; 32],
+        };
+
+        let parsed = id.to_string().parse::<ProofId>().expect("parse");
+        assert_eq!(parsed, id);
     }
 }
 

@@ -241,6 +241,7 @@ object ConnectFrameCodec {
         val sid = decodeLengthPrefixedField(frameCursor, FIXED_ARRAY_U8_32, "sid")
         val direction = decodeLengthPrefixedField(frameCursor, DIRECTION_ADAPTER, "direction")
         val sequence = decodeLengthPrefixedField(frameCursor, UINT64, "sequence")
+        requireNonNegativeSequence(sequence)
 
         val kindLength = frameCursor.readU64()
         val kindBytes = frameCursor.readBytes(asInt(kindLength, "kind length"))
@@ -399,6 +400,7 @@ object ConnectFrameCodec {
         sequence: Long,
         kindPayload: ByteArray,
     ): ByteArray {
+        requireNonNegativeSequence(sequence)
         val sidField = encodeField(sessionId, FIXED_ARRAY_U8_32, "sid")
         val directionField = encodeField(direction, DIRECTION_ADAPTER, "direction")
         val sequenceField = encodeField(sequence, UINT64, "sequence")
@@ -409,6 +411,12 @@ object ConnectFrameCodec {
         writeLengthPrefixed(frame, sequenceField)
         writeLengthPrefixed(frame, kindPayload)
         return frame.toByteArray()
+    }
+
+    private fun requireNonNegativeSequence(sequence: Long) {
+        if (sequence < 0L) {
+            throw ConnectProtocolException("sequence must be non-negative")
+        }
     }
 
     private fun wrapTaggedPayload(tag: Int, payload: ByteArray): ByteArray {

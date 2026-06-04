@@ -52,7 +52,8 @@ mod tests {
     ) -> (Vec<u8>, Vec<u8>) {
         let input = crate::governance::parliament::build_input(seed, account);
         let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
-        let (_, proof) = prove_normal_with_chain(&sk, chain_id.as_str().as_bytes(), &input);
+        let (_, proof) = prove_normal_with_chain(&sk, chain_id.as_str().as_bytes(), &input)
+            .expect("deterministic normal VRF proof");
         let key_pair = KeyPair::from((pk_raw, sk));
         let (public_key, _) = key_pair.into_parts();
         let (algo, pk_payload) = public_key.to_bytes();
