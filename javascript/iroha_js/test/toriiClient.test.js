@@ -549,7 +549,7 @@ function sampleVerifyingKeyRegisterPayload() {
     name: "vk_main",
     version: 1,
     circuit_id: "halo2/ipa::transfer_v1",
-    public_inputs_schema_hash_hex: "0xdeadbeef",
+    public_inputs_schema_hex: "0xdeadbeef",
     gas_schedule_id: "default",
   };
 }
@@ -1273,7 +1273,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
     name: "vk_main",
     version: 3,
     circuit_id: "halo2/ipa::transfer_v3",
-    public_inputs_schema_hash_hex: "0xfeed",
+    public_inputs_schema_hex: "0xfeed",
     gas_schedule_id: "halo2_default",
     vk_bytes: Buffer.from("abc"),
     status: "withdrawn",
@@ -1294,12 +1294,30 @@ test("registerVerifyingKey canonicalizes payload", async () => {
   assert.equal(body.name, "vk_main");
   assert.equal(body.version, 3);
   assert.equal(body.circuit_id, "halo2/ipa::transfer_v3");
-  assert.equal(body.public_inputs_schema_hash_hex, "0xfeed");
+  assert.equal(body.public_inputs_schema_hex, "0xfeed");
+  assert.equal(body.public_inputs_schema_hash_hex, undefined);
   assert.equal(body.gas_schedule_id, "halo2_default");
   assert.equal(body.vk_bytes, Buffer.from("abc").toString("base64"));
   assert.equal(body.vk_len, 3);
   assert.equal(body.status, "Withdrawn");
   assert.equal(body.activation_height, 0);
+});
+
+test("registerVerifyingKey accepts legacy schema hash aliases but posts Torii DTO field", async () => {
+  let captured;
+  const fetchImpl = async (_url, init) => {
+    captured = JSON.parse(init.body);
+    return createResponse({ status: 202 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.registerVerifyingKey({
+    ...sampleVerifyingKeyRegisterPayload(),
+    public_inputs_schema_hex: undefined,
+    public_inputs_schema_hash_hex: "0xfeed",
+  });
+
+  assert.equal(captured.public_inputs_schema_hex, "0xfeed");
+  assert.equal(captured.public_inputs_schema_hash_hex, undefined);
 });
 
 test("registerVerifyingKey rejects mismatched vk_len", async () => {
@@ -6990,6 +7008,7 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
         },
       },
     },
+    routes: [],
   });
 });
 
@@ -10188,6 +10207,36 @@ test("getSccpCapabilities normalizes discovery response", async () => {
   });
 });
 
+test("getSccpCapabilities accepts live legacy burn registry backend field", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
+        message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
+        message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
+        message_job_path: "/v1/sccp/jobs/message/{message_id}",
+        recent_messages_path: "/v1/sccp/messages/recent",
+        proof_manifest_path: "/v1/sccp/manifests",
+        legacy_burn_registry_backend: "bridge/sccp/burn-v1",
+        proof_submit_path: "/v1/bridge/proofs/submit",
+        message_submit_path: "/v1/bridge/messages",
+        message_payload_kinds: ["transfer"],
+        codecs: [],
+        counterparties: [],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpCapabilities();
+  assert.equal(result.burnRegistryBackend, "bridge/sccp/burn-v1");
+});
+
 test("getSccpProofManifests normalizes typed manifest response", async () => {
   const fetchImpl = async (url) => {
     assert.equal(url, `${BASE_URL}/v1/sccp/manifests`);
@@ -10301,6 +10350,7 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
     localDomain: 0,
     localChain: "sora",
     proofFamily: "stark-fri-v1",
+    routes: [],
     manifests: [
       {
         version: 1,
@@ -11235,8 +11285,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           submission_kind: "internal_message",
           verifier_entrypoint: "op::submit_sccp_message_proof",
           platform_payload: {
-            platform: "ton_internal_message",
-            payload: {
+            TonInternalMessage: {
               message_body_boc: "b5ee9c72",
               query_id: "7",
               destination_binding: {

@@ -7875,7 +7875,11 @@ export interface ToriiVerifyingKeyRegisterPayload {
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hash_hex: string;
+  public_inputs_schema_hex?: string;
+  public_inputs_schema_hash_hex?: string;
+  public_inputs_schema_hash?: string;
+  publicInputsSchemaHashHex?: string;
+  publicInputsSchemaHash?: string;
   gas_schedule_id: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -7896,7 +7900,11 @@ export interface ToriiVerifyingKeyUpdatePayload {
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hash_hex: string;
+  public_inputs_schema_hex?: string;
+  public_inputs_schema_hash_hex?: string;
+  public_inputs_schema_hash?: string;
+  publicInputsSchemaHashHex?: string;
+  publicInputsSchemaHash?: string;
   gas_schedule_id?: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -10468,6 +10476,7 @@ export interface ToriiSccpProofManifestSet {
   localChain: string;
   proofFamily: string;
   manifests: ReadonlyArray<ToriiSccpProofManifest>;
+  routes: ReadonlyArray<Record<string, unknown>>;
 }
 
 export type ToriiSccpHubMessageKind =

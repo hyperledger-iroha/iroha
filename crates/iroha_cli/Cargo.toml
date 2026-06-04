@@ -50,6 +50,11 @@ name = "iroha"
 path = "src/bin/iroha.rs"
 required-features = ["build-i3"]
 
+[[bin]]
+name = "ivm_execution_keygen"
+path = "src/bin/ivm_execution_keygen.rs"
+required-features = ["build-i3"]
+
 [dependencies]
 iroha = { workspace = true }
 iroha_sccp = { workspace = true }

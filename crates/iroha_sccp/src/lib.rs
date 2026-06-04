@@ -20120,6 +20120,27 @@ pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
     out
 }
 
+pub fn decode_canonical_transfer_payload_bytes(payload_bytes: &[u8]) -> Option<TransferPayloadV1> {
+    let mut cursor = PayloadCursor::new(payload_bytes);
+    let payload = TransferPayloadV1 {
+        version: cursor.take_u8()?,
+        source_domain: cursor.take_u32()?,
+        dest_domain: cursor.take_u32()?,
+        nonce: cursor.take_u64()?,
+        asset_home_domain: cursor.take_u32()?,
+        asset_id_codec: cursor.take_u8()?,
+        asset_id: cursor.take_vec()?,
+        amount: cursor.take_u128()?,
+        sender_codec: cursor.take_u8()?,
+        sender: cursor.take_vec()?,
+        recipient_codec: cursor.take_u8()?,
+        recipient: cursor.take_vec()?,
+        route_id_codec: cursor.take_u8()?,
+        route_id: cursor.take_vec()?,
+    };
+    cursor.is_finished().then_some(payload)
+}
+
 struct PayloadCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -20196,22 +20217,11 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
                 route_id: cursor.take_vec()?,
             })
         }
-        SccpPayloadV1::TRANSFER_DISCRIMINANT => SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: cursor.take_u8()?,
-            source_domain: cursor.take_u32()?,
-            dest_domain: cursor.take_u32()?,
-            nonce: cursor.take_u64()?,
-            asset_home_domain: cursor.take_u32()?,
-            asset_id_codec: cursor.take_u8()?,
-            asset_id: cursor.take_vec()?,
-            amount: cursor.take_u128()?,
-            sender_codec: cursor.take_u8()?,
-            sender: cursor.take_vec()?,
-            recipient_codec: cursor.take_u8()?,
-            recipient: cursor.take_vec()?,
-            route_id_codec: cursor.take_u8()?,
-            route_id: cursor.take_vec()?,
-        }),
+        SccpPayloadV1::TRANSFER_DISCRIMINANT => {
+            let payload = decode_canonical_transfer_payload_bytes(&cursor.bytes[cursor.offset..])?;
+            cursor.offset = cursor.bytes.len();
+            SccpPayloadV1::Transfer(payload)
+        }
         SccpPayloadV1::TOKEN_ADD_DISCRIMINANT => SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
             version: cursor.take_u8()?,
             target_domain: cursor.take_u32()?,
@@ -62967,6 +62977,33 @@ mod tests {
         let decoded = decode_canonical_sccp_payload_bytes(&encoded).expect("decode payload");
         assert_eq!(decoded, payload);
         assert!(verify_sccp_payload_structure(&decoded));
+    }
+
+    #[test]
+    fn canonical_transfer_payload_roundtrips_without_message_discriminant() {
+        let payload = TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TRON,
+            nonce: 11,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor".to_vec(),
+            amount: 1,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:alice".to_vec(),
+            recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"taira_tron_xor".to_vec(),
+        };
+        let encoded = canonical_transfer_payload_bytes(&payload);
+        let decoded =
+            decode_canonical_transfer_payload_bytes(&encoded).expect("decode transfer payload");
+        assert_eq!(decoded, payload);
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::Transfer(
+            decoded
+        )));
     }
 
     #[test]

@@ -8815,7 +8815,7 @@ pub mod isi {
                 ));
             }
             let Some(payload) =
-                iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
+                crate::bridge::decode_recorded_sccp_payload_bytes(&self.payload_bytes)
             else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(

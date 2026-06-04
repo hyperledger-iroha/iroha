@@ -9903,7 +9903,9 @@ mod sccp_message_backend_tests {
             sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
             sender: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"alice@universal".to_vec(),
+            recipient: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+                .as_bytes()
+                .to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
                 .as_bytes()
@@ -11984,6 +11986,34 @@ mod sccp_message_backend_tests {
         assert!(
             conversion_message(&err)
                 .is_some_and(|message| { message.contains("failed structural verification") })
+        );
+    }
+
+    #[test]
+    fn finalize_inbound_settlement_instruction_mints_taira_xor_to_proof_recipient() {
+        let bundle = sample_taira_tron_xor_diagnostic_message_bundle(52);
+        let (recipient, amount, instruction) =
+            default_finalize_inbound_settlement_instruction(&bundle)
+                .expect("settlement instruction");
+
+        assert_eq!(
+            recipient.to_string(),
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+        );
+        assert_eq!(amount, 17);
+
+        let mint_box = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::MintBox>()
+            .expect("settlement instruction should mint");
+        let iroha_data_model::isi::MintBox::Asset(mint) = mint_box else {
+            panic!("settlement instruction should mint an asset");
+        };
+        assert_eq!(mint.object.to_string(), "17");
+        assert_eq!(mint.destination.account(), &recipient);
+        assert_eq!(
+            mint.destination.definition().to_string(),
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         );
     }
 
@@ -20763,6 +20793,22 @@ fn default_finalize_inbound_settlement_payload(
     bundle: &NexusSccpMessageProofV1,
     route: &Name,
 ) -> Result<IrohaJson> {
+    let (recipient, amount, _) = default_finalize_inbound_settlement_instruction(bundle)?;
+    let mut object = Map::new();
+    object.insert("route".into(), Value::from(route.as_ref()));
+    object.insert("recipient".into(), Value::from(recipient.to_string()));
+    object.insert("amount".into(), Value::from(amount));
+    Ok(IrohaJson::new(Value::Object(object)))
+}
+
+#[cfg(feature = "app_api")]
+fn default_finalize_inbound_settlement_instruction(
+    bundle: &NexusSccpMessageProofV1,
+) -> Result<(
+    iroha_data_model::account::AccountId,
+    i64,
+    iroha_data_model::isi::InstructionBox,
+)> {
     let SccpPayloadV1::Transfer(payload) = &bundle.payload else {
         return Err(conversion_error(
             "automatic bridge settlement payload generation is only supported for transfer messages"
@@ -20776,15 +20822,21 @@ fn default_finalize_inbound_settlement_payload(
                 .to_owned(),
         )
     })?;
-    let mut object = Map::new();
-    object.insert("route".into(), Value::from(route.as_ref()));
-    object.insert(
-        "message_id".into(),
-        Value::from(hex::encode(bundle.commitment.message_id)),
+    let settlement_asset_definition = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse::<iroha_data_model::asset::AssetDefinitionId>()
+        .map_err(|err| {
+            conversion_error(format!(
+                "configured taira_tron_xor settlement asset definition is invalid: {err}"
+            ))
+        })?;
+    let settlement_asset_id =
+        iroha_data_model::asset::AssetId::of(settlement_asset_definition, recipient.clone());
+    let settlement_instruction =
+        iroha_data_model::isi::mint_burn::Mint::asset_numeric(amount, settlement_asset_id);
+    let settlement_instruction = iroha_data_model::isi::InstructionBox::from(
+        iroha_data_model::isi::mint_burn::MintBox::from(settlement_instruction),
     );
-    object.insert("recipient".into(), Value::from(recipient.to_string()));
-    object.insert("amount".into(), Value::from(amount));
-    Ok(IrohaJson::new(Value::Object(object)))
+    Ok((recipient, amount, settlement_instruction))
 }
 
 #[cfg(feature = "app_api")]
@@ -20898,6 +20950,13 @@ fn prepare_bridge_message_settlement(
     let descriptor = ensure_public_contract_entrypoint(&manifest, entrypoint)?;
 
     let mut resolved_route = settlement.route.clone();
+    let mut native_finalize_instruction = None;
+    if entrypoint == "finalize_inbound" {
+        let route = derive_finalize_inbound_settlement_route(bundle, settlement.route.as_ref())?;
+        resolved_route = Some(route);
+        native_finalize_instruction =
+            Some(default_finalize_inbound_settlement_instruction(bundle)?.2);
+    }
     let payload = if let Some(payload) = settlement.payload.as_ref() {
         if bridge_settlement_entrypoint_requires_generated_payload(entrypoint) {
             return Err(conversion_error(format!(
@@ -20910,9 +20969,14 @@ fn prepare_bridge_message_settlement(
     } else {
         let generated_payload = match entrypoint {
             "finalize_inbound" => {
-                let route =
-                    derive_finalize_inbound_settlement_route(bundle, settlement.route.as_ref())?;
-                resolved_route = Some(route.clone());
+                let route = resolved_route
+                    .as_ref()
+                    .ok_or_else(|| {
+                        conversion_error(
+                            "failed to derive finalize_inbound settlement route".to_owned(),
+                        )
+                    })?
+                    .clone();
                 default_finalize_inbound_settlement_payload(bundle, &route)?
             }
             "activate_route_governed" => {
@@ -20936,7 +21000,7 @@ fn prepare_bridge_message_settlement(
         entrypoint,
         bundle.commitment.message_id,
     )?;
-    let instructions = build_ephemeral_contract_call_instructions(
+    let mut instructions = build_ephemeral_contract_call_instructions(
         authority,
         trigger_id,
         &contract_address,
@@ -20952,6 +21016,9 @@ fn prepare_bridge_message_settlement(
         gas_limit,
         &manifest,
     );
+    if let Some(instruction) = native_finalize_instruction {
+        instructions.push(instruction);
+    }
     Ok(Some(PreparedBridgeMessageSettlement {
         instructions,
         contract_address,
