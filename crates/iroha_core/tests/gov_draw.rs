@@ -30,7 +30,9 @@ fn make_candidate(
                 prove_normal_with_chain(&sk, chain_bytes, &input).expect("normal VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
-            let (algo, pk_payload) = public_key.to_bytes();
+            let (algo, pk_payload) = public_key
+                .try_to_bytes()
+                .expect("fixture BLS public key must be well-formed");
             assert_eq!(algo, Algorithm::BlsNormal);
             let proof_bytes = match proof {
                 VrfProof::SigInG2(bytes) => bytes.to_vec(),
@@ -45,7 +47,9 @@ fn make_candidate(
                 prove_small_with_chain(&sk, chain_bytes, &input).expect("small VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
-            let (algo, pk_payload) = public_key.to_bytes();
+            let (algo, pk_payload) = public_key
+                .try_to_bytes()
+                .expect("fixture BLS public key must be well-formed");
             assert_eq!(algo, Algorithm::BlsSmall);
             let proof_bytes = match proof {
                 VrfProof::SigInG1(bytes) => bytes.to_vec(),

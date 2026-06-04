@@ -3507,6 +3507,7 @@ public final class HttpClientTransportTests {
         : "operation vector set mismatch";
     final Map<String, Object> publicParameters = object(operationVectors, "public_parameters");
     final long publicDegree = number(publicParameters, "polynomial_degree").longValue();
+    assertBfvRnsModulusChainFixture(operationVectors, publicDegree);
     final Map<String, Object> evaluationKey = object(operationVectors, "evaluation_key_bundle");
     assert number(publicParameters, "decomposition_base_log").longValue()
             == number(evaluationKey, "decomposition_base_log").longValue()
@@ -3526,6 +3527,97 @@ public final class HttpClientTransportTests {
           : "relinearization entry coefficient count mismatch";
       assertBfvComponentDigest("relinearization entry " + index + " b", string(entry, "b_sha256"), componentDigests);
       assertBfvComponentDigest("relinearization entry " + index + " a", string(entry, "a_sha256"), componentDigests);
+    }
+    final List<Map<String, Object>> galoisKeys = objectList(operationVectors, "galois_keys");
+    assert galoisKeys.size() == number(evaluationKey, "galois_key_count").intValue()
+        : "Galois key count mismatch";
+    for (final Map<String, Object> key : galoisKeys) {
+      final long power = number(key, "automorphism_power").longValue();
+      final List<Map<String, Object>> galoisEntries = objectList(key, "entries");
+      assert galoisEntries.size() == number(key, "entry_count").intValue()
+          : "Galois key entry count mismatch";
+      for (int index = 0; index < galoisEntries.size(); index++) {
+        final Map<String, Object> entry = galoisEntries.get(index);
+        assert number(entry, "index").intValue() == index : "Galois entry index mismatch";
+        assert number(entry, "coefficient_count").longValue() == publicDegree
+            : "Galois entry coefficient count mismatch";
+        assertBfvComponentDigest("Galois key " + power + " entry " + index + " b", string(entry, "b_sha256"), componentDigests);
+        assertBfvComponentDigest("Galois key " + power + " entry " + index + " a", string(entry, "a_sha256"), componentDigests);
+      }
+    }
+    final List<Map<String, Object>> galoisSwitchVectors =
+        objectList(operationVectors, "galois_switch_vectors");
+    assert !galoisSwitchVectors.isEmpty() : "Galois switch vectors must not be empty";
+    for (final Map<String, Object> vector : galoisSwitchVectors) {
+      final String name = string(vector, "name");
+      final long power = number(vector, "automorphism_power").longValue();
+      boolean hasMatchingKey = false;
+      for (final Map<String, Object> key : galoisKeys) {
+        if (number(key, "automorphism_power").longValue() == power) {
+          hasMatchingKey = true;
+          break;
+        }
+      }
+      assert hasMatchingKey : "Galois switch vector has no matching key: " + name;
+      final List<Long> plaintextSlots = longList(vector, "input_plaintext_slots");
+      assert !plaintextSlots.isEmpty() : "Galois switch vector plaintext slots empty";
+      for (final long slot : plaintextSlots) {
+        assert slot >= 0 : "Galois switch vector plaintext slot negative";
+      }
+      assert number(vector, "expected_input_ciphertext_bytes").longValue() > 0
+          : "Galois switch vector input bytes must be positive";
+      assert number(vector, "expected_output_ciphertext_bytes").longValue() > 0
+          : "Galois switch vector output bytes must be positive";
+      assertBfvUpperSha256("Galois switch vector " + name + " input", string(vector, "expected_input_ciphertext_sha256"));
+      assertBfvUpperSha256("Galois switch vector " + name + " output", string(vector, "expected_output_ciphertext_sha256"));
+      assertBfvUpperSha256("Galois switch vector " + name + " plaintext", string(vector, "expected_plaintext_sha256"));
+      final Map<String, Object> components = object(vector, "output_components");
+      assert number(components, "coefficient_count").longValue() == publicDegree
+          : "Galois switch vector coefficient count mismatch";
+      assertBfvComponentDigest("Galois switch vector " + name + " c0", string(components, "c0_sha256"), componentDigests);
+      assertBfvComponentDigest("Galois switch vector " + name + " c1", string(components, "c1_sha256"), componentDigests);
+    }
+    final List<Map<String, Object>> packedGaloisSwitchVectors =
+        objectList(operationVectors, "packed_galois_switch_vectors");
+    assert !packedGaloisSwitchVectors.isEmpty() : "packed Galois switch vectors must not be empty";
+    for (final Map<String, Object> vector : packedGaloisSwitchVectors) {
+      final String name = string(vector, "name");
+      final long power = number(vector, "automorphism_power").longValue();
+      boolean hasMatchingKey = false;
+      for (final Map<String, Object> key : galoisKeys) {
+        if (number(key, "automorphism_power").longValue() == power) {
+          hasMatchingKey = true;
+          break;
+        }
+      }
+      assert hasMatchingKey : "packed Galois switch vector has no matching key: " + name;
+      final List<Long> inputSlots = longList(vector, "input_packed_slots");
+      final List<Long> permutation = longList(vector, "expected_slot_permutation");
+      final List<Long> outputSlots = longList(vector, "expected_packed_slots");
+      assert inputSlots.size() == publicDegree
+          : "packed Galois switch vector input slot count mismatch";
+      assert permutation.size() == publicDegree
+          : "packed Galois switch vector permutation count mismatch";
+      assert outputSlots.size() == publicDegree
+          : "packed Galois switch vector output slot count mismatch";
+      for (final long slot : inputSlots) {
+        assert slot >= 0 : "packed Galois switch vector input slot negative";
+      }
+      for (final long slot : permutation) {
+        assert slot >= 0 : "packed Galois switch vector permutation slot negative";
+      }
+      for (final long slot : outputSlots) {
+        assert slot >= 0 : "packed Galois switch vector output slot negative";
+      }
+      assertBfvUpperSha256("packed Galois switch vector " + name + " packed plaintext", string(vector, "expected_packed_plaintext_sha256"));
+      assertBfvUpperSha256("packed Galois switch vector " + name + " input", string(vector, "expected_input_ciphertext_sha256"));
+      assertBfvUpperSha256("packed Galois switch vector " + name + " output", string(vector, "expected_output_ciphertext_sha256"));
+      assertBfvUpperSha256("packed Galois switch vector " + name + " plaintext", string(vector, "expected_plaintext_coefficients_sha256"));
+      final Map<String, Object> components = object(vector, "output_components");
+      assert number(components, "coefficient_count").longValue() == publicDegree
+          : "packed Galois switch vector coefficient count mismatch";
+      assertBfvComponentDigest("packed Galois switch vector " + name + " c0", string(components, "c0_sha256"), componentDigests);
+      assertBfvComponentDigest("packed Galois switch vector " + name + " c1", string(components, "c1_sha256"), componentDigests);
     }
     final List<Map<String, Object>> rotationKeys = objectList(operationVectors, "rotation_keys");
     assert rotationKeys.size() == number(evaluationKey, "rotation_key_count").intValue()
@@ -3548,12 +3640,56 @@ public final class HttpClientTransportTests {
     assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests);
   }
 
+  private static void assertBfvRnsModulusChainFixture(
+      final Map<String, Object> operationVectors, final long publicDegree) {
+    final Map<String, Object> rns = object(operationVectors, "rns_modulus_chain");
+    final List<Long> moduli = longList(rns, "moduli");
+    assert moduli.equals(java.util.Arrays.asList(358273L, 448769L, 449921L))
+        : "RNS modulus-chain limbs mismatch";
+    assert string(rns, "product").equals("72339115408190977")
+        : "RNS modulus-chain product mismatch";
+    assertBfvLowerDigest("RNS modulus-chain digest", string(rns, "expected_digest_hex"));
+
+    final Map<String, Object> samples = object(rns, "sample_polynomials");
+    assert longList(samples, "lhs_coefficients").size() == (int) publicDegree
+        : "RNS lhs coefficient count mismatch";
+    assert longList(samples, "rhs_coefficients").size() == (int) publicDegree
+        : "RNS rhs coefficient count mismatch";
+    for (final String label : java.util.Arrays.asList("lhs", "rhs", "sum", "negacyclic_product")) {
+      assertBfvRnsPolynomialFixture(label, object(samples, label), publicDegree, moduli.size());
+    }
+  }
+
+  private static void assertBfvRnsPolynomialFixture(
+      final String label,
+      final Map<String, Object> polynomial,
+      final long publicDegree,
+      final int limbCount) {
+    assert number(polynomial, "coefficient_count").longValue() == publicDegree
+        : label + " RNS coefficient count mismatch";
+    final List<String> limbHashes = stringList(polynomial, "residue_limb_sha256");
+    assert limbHashes.size() == limbCount : label + " RNS residue limb count mismatch";
+    assertBfvUpperSha256(label + " RNS reconstructed coefficients", string(polynomial, "reconstructed_sha256"));
+    for (int index = 0; index < limbHashes.size(); index++) {
+      assertBfvUpperSha256(label + " RNS residue limb " + index, limbHashes.get(index));
+    }
+  }
+
   private static void assertBfvComponentDigest(
       final String label, final String value, final List<String> seen) {
-    assert value.matches("[0-9A-F]{64}") : label + " must be canonical uppercase SHA-256";
-    assert !value.equals("0".repeat(64)) : label + " must not be zero";
+    assertBfvUpperSha256(label, value);
     assert !seen.contains(value) : label + " must be unique";
     seen.add(value);
+  }
+
+  private static void assertBfvUpperSha256(final String label, final String value) {
+    assert value.matches("[0-9A-F]{64}") : label + " must be canonical uppercase SHA-256";
+    assert !value.equals("0".repeat(64)) : label + " must not be zero";
+  }
+
+  private static void assertBfvLowerDigest(final String label, final String value) {
+    assert value.matches("[0-9a-f]{64}") : label + " must be canonical lowercase hex";
+    assert !value.equals("0".repeat(64)) : label + " must not be zero";
   }
 
   @SuppressWarnings("unchecked")
@@ -3592,6 +3728,22 @@ public final class HttpClientTransportTests {
       throw new IllegalArgumentException(key + " must be a string");
     }
     return (String) value;
+  }
+
+  private static List<String> stringList(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof List)) {
+      throw new IllegalArgumentException(key + " must be a list");
+    }
+    final List<?> raw = (List<?>) value;
+    final List<String> out = new ArrayList<>();
+    for (final Object entry : raw) {
+      if (!(entry instanceof String)) {
+        throw new IllegalArgumentException(key + " entries must be strings");
+      }
+      out.add((String) entry);
+    }
+    return out;
   }
 
   private static Number number(final Map<String, Object> root, final String key) {

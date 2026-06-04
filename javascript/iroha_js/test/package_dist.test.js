@@ -875,15 +875,15 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
 test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;/,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;[\s\S]*syncCommitteeBits\?: string;[\s\S]*syncCommitteeSignature\?: string;[\s\S]*syncSignatureSlot\?: string \| number \| bigint;[\s\S]*signatureSlot\?: string \| number \| bigint;[\s\S]*syncCommitteeParticipation\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;[\s\S]*readonly syncCommitteeBits\?: string;[\s\S]*readonly syncCommitteeSignature\?: string;[\s\S]*readonly syncSignatureSlot\?: string;[\s\S]*readonly syncCommitteeParticipation\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetConsensusProviderInput[\s\S]*readonly receipt\?: Record<string, unknown>;[\s\S]*readonly block\?: Record<string, unknown>;[\s\S]*readonly transactionHash\?: string;/,
+    /export interface EthereumMainnetConsensusProviderInput[\s\S]*readonly receipt\?: Record<string, unknown>;[\s\S]*readonly block\?: Record<string, unknown>;[\s\S]*readonly transactionHash\?: string;[\s\S]*readonly beaconBlockId\?: string \| number \| bigint;[\s\S]*readonly targetBeaconBlockRoot\?: string;[\s\S]*readonly beaconSlot\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -895,7 +895,7 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
+    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*beaconBlockId\?: string \| number \| bigint;[\s\S]*targetBeaconBlockRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,

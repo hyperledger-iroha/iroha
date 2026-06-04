@@ -723,6 +723,18 @@ LiveNewViewVotesStayInHandoff ==
     /\ ~committed
     /\ (phase = "Propose" => viewEvidenceVotes >= ViewQuorum)
 
+NewViewVoteGateMatchesFreshViewEvidence ==
+  HonestNewViewVoteEnabled <=>
+    /\ phase = "NewView"
+    /\ view > 0
+    /\ viewEvidenceVotes = 0
+    /\ newViewVotes < ViewQuorum
+    /\ newViewVotes < N - F
+    /\ prepareVotes = 0
+    /\ commitVotesHonest = 0
+    /\ commitVotesByz = 0
+    /\ stakeSigned = 0
+
 ViewEvidenceIsCompleteOrEmpty ==
   viewEvidenceVotes = 0 \/ viewEvidenceVotes >= ViewQuorum
 
@@ -812,6 +824,41 @@ RbcProgressEvidenceMatchesState ==
   /\ (rbcState \in RbcReadyQuorumStates =>
         readyVotes >= CommitQuorum)
 
+RbcChunkGateMatchesHeaderDigestEvidence ==
+  RbcChunkGoodEnabled <=>
+    /\ rbcState \in {"Init", "Chunking", "Withheld"}
+    /\ headerSeen
+    /\ (rbcState # "Withheld" => digestValid)
+    /\ (rbcState = "Chunking" => chunkCount < MaxChunks)
+    /\ (rbcState = "Withheld" => gst)
+
+RbcReadyGateMatchesChunkEvidence ==
+  RbcReadyGoodEnabled <=>
+    /\ rbcState \in {"ChunksComplete", "ReadyPartial", "ReadyQuorum"}
+    /\ chunkCount >= MaxChunks
+    /\ headerSeen
+    /\ digestValid
+    /\ readyVotes < N
+
+RbcDeliverGateMatchesCompleteEvidence ==
+  RbcDeliverGoodEnabled <=>
+    /\ rbcState = "ReadyQuorum"
+    /\ readyVotes >= CommitQuorum
+    /\ chunkCount >= MaxChunks
+    /\ headerSeen
+    /\ digestValid
+
+LiveHeaderDigestEvidenceStayInRbcHandoff ==
+  /\ (digestValid =>
+        /\ headerSeen
+        /\ rbcState \in RbcInitializedStates)
+  /\ (headerSeen =>
+        \/ /\ rbcState \in RbcInitializedStates
+           /\ digestValid
+        \/ /\ rbcState \in {"Corrupted", "Withheld"}
+           /\ ~digestValid)
+  /\ (rbcState = "Corrupted" => ~digestValid)
+
 LiveChunkEvidenceStayInRbcHandoff ==
   chunkCount > 0 =>
     \/ /\ rbcState = "Corrupted"
@@ -868,6 +915,9 @@ NewViewQuorumHandoffNeverStalls ==
 
 LiveNewViewVotesNeverLeakPastHandoff ==
   [] LiveNewViewVotesStayInHandoff
+
+NewViewVoteGateNeverBypassesFreshViewEvidence ==
+  [] NewViewVoteGateMatchesFreshViewEvidence
 
 ViewEvidenceNeverPartial ==
   [] ViewEvidenceIsCompleteOrEmpty
@@ -953,6 +1003,18 @@ RbcDeliveryNeverLost ==
 
 RbcProgressEvidenceNeverDiverges ==
   [] RbcProgressEvidenceMatchesState
+
+RbcChunkGateNeverBypassesHeaderDigestEvidence ==
+  [] RbcChunkGateMatchesHeaderDigestEvidence
+
+RbcReadyGateNeverBypassesChunkEvidence ==
+  [] RbcReadyGateMatchesChunkEvidence
+
+RbcDeliverGateNeverBypassesCompleteEvidence ==
+  [] RbcDeliverGateMatchesCompleteEvidence
+
+LiveHeaderDigestEvidenceNeverBypassRbcHandoff ==
+  [] LiveHeaderDigestEvidenceStayInRbcHandoff
 
 LiveChunkEvidenceNeverBypassRbcHandoff ==
   [] LiveChunkEvidenceStayInRbcHandoff

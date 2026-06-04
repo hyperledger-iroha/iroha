@@ -7964,7 +7964,7 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
     let public_key_hex = hex_encode(public_key_bytes);
 
     let public_key_multihash = PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
-        .map(|key| key.to_prefixed_string())
+        .and_then(|key| key.try_to_prefixed_string())
         .map_err(|err| format!("failed to format public key multihash: {err}"))?;
 
     let issued_at = issued_at_unix.unwrap_or_else(|| {

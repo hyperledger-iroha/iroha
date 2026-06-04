@@ -319,7 +319,10 @@ fn sign_payload(
         .try_into()
         .map_err(|_| "expected 64-byte Ed25519 signature payload")?;
 
-    let (alg, public_bytes) = key_pair.public_key().to_bytes();
+    let (alg, public_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| format!("signing public key is malformed: {err}"))?;
     if alg != Algorithm::Ed25519 {
         return Err("only Ed25519 signing keys are supported".into());
     }

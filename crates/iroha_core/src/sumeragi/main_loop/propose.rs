@@ -1715,7 +1715,6 @@ impl Actor {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
-                && self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view)
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot

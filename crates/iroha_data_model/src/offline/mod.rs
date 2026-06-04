@@ -5217,6 +5217,8 @@ pub fn derive_offline_note_payment_token_id(
 
 #[cfg(test)]
 mod offline_note_tests {
+    #![allow(clippy::too_many_lines)]
+
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 
     use super::*;
@@ -5509,7 +5511,10 @@ mod offline_note_tests {
         );
         let asset = AssetId::new(definition, account_id.clone());
         let note_public_key = sample_public_key(0xA8);
-        let (_algorithm, note_key) = note_public_key.to_bytes();
+        let (algorithm, note_key) = note_public_key
+            .try_to_bytes()
+            .expect("fixture note public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::Ed25519);
         let certificate = OfflineNoteKeyCertificate {
             version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -8303,19 +8308,21 @@ mod offline_note_tests {
                 step,
                 format!("recursive-spend-size-witness-{hop_index}").as_bytes(),
             );
-            let accumulator = match previous.as_ref() {
-                Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                    previous,
-                    previous_proof.as_ref().expect("previous recursive proof"),
-                    &evidence,
-                    &note,
-                )
-                .expect("append size accumulator"),
-                None => {
+            let accumulator = previous.as_ref().map_or_else(
+                || {
                     kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
                         .expect("initial size accumulator")
-                }
-            };
+                },
+                |previous| {
+                    kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof.as_ref().expect("previous recursive proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append size accumulator")
+                },
+            );
             let hop_count = usize::try_from(accumulator.hop_count).expect("hop count fits");
             if target_hops.contains(&hop_count) {
                 let bundle = kagemusha_recursive_spend_bundle(accumulator.clone());
@@ -8399,19 +8406,21 @@ mod offline_note_tests {
                 step,
                 format!("recursive-spend-cap-witness-{hop_index}").as_bytes(),
             );
-            let accumulator = match previous.as_ref() {
-                Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                    previous,
-                    previous_proof.as_ref().expect("previous recursive proof"),
-                    &evidence,
-                    &note,
-                )
-                .expect("append capped accumulator"),
-                None => {
+            let accumulator = previous.as_ref().map_or_else(
+                || {
                     kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
                         .expect("initial capped accumulator")
-                }
-            };
+                },
+                |previous| {
+                    kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof.as_ref().expect("previous recursive proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append capped accumulator")
+                },
+            );
             previous_proof = Some(kagemusha_recursive_spend_proof(&accumulator));
             previous = Some(accumulator);
         }
@@ -9174,11 +9183,10 @@ mod offline_note_tests {
         record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("vk length fits");
         record.max_proof_bytes = 4096;
         record.key = Some(verifier_key);
-        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+        KagemushaVerifiedFoldRecordBundle {
             bundle,
             verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id: vk_id, record }],
-        };
-        record_bundle
+        }
     }
 
     #[test]

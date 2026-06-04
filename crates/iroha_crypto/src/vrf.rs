@@ -25,23 +25,27 @@
 
 #![allow(clippy::size_of_ref)]
 use core::convert::TryInto;
+#[cfg(test)]
 use std::vec::Vec;
 
-use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
-};
+use blake2::Digest;
 use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 
-use crate::signature::bls::{
-    BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
+use crate::{
+    Blake2b256,
+    signature::bls::{
+        BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
+    },
 };
 
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
 const DST_G1: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
+const VRF_INPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:input|";
+const VRF_INPUT_HASH_SEPARATOR: &[u8] = b"|";
+const VRF_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:output";
 
 /// VRF proof: variant-tagged, fixed-size BLS signature bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
@@ -82,29 +86,30 @@ pub enum VrfBlsVariant {
     Small,
 }
 
-fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> Vec<u8> {
-    // DS: "iroha:vrf:v1:input|<chain_id>|<input>"
-    let mut buf =
-        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
-    buf.extend_from_slice(b"iroha:vrf:v1:input|");
-    buf.extend_from_slice(chain_id);
-    buf.push(b'|');
-    buf.extend_from_slice(input);
-    blake2b_256(&buf).to_vec()
+fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> [u8; 32] {
+    blake2b_256_chunks(&[
+        VRF_INPUT_HASH_DOMAIN,
+        chain_id,
+        VRF_INPUT_HASH_SEPARATOR,
+        input,
+    ])
 }
 
 fn output_from_sigma(sigma: &[u8]) -> VrfOutput {
-    let mut buf = Vec::with_capacity(b"iroha:vrf:v1:output".len() + sigma.len());
-    buf.extend_from_slice(b"iroha:vrf:v1:output");
-    buf.extend_from_slice(sigma);
-    VrfOutput(blake2b_256(&buf))
+    VrfOutput(blake2b_256_chunks(&[VRF_OUTPUT_HASH_DOMAIN, sigma]))
 }
 
+#[cfg(test)]
 fn blake2b_256(bytes: &[u8]) -> [u8; 32] {
-    let vec_hash = Blake2bVar::new(32)
-        .expect("Failed to initialize variable size hash")
-        .chain(bytes)
-        .finalize_boxed();
+    blake2b_256_chunks(&[bytes])
+}
+
+fn blake2b_256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Blake2b256::new();
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    let vec_hash = hasher.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&vec_hash);
     out
@@ -527,6 +532,31 @@ mod tests {
     }
 
     #[test]
+    fn vrf_hash_helpers_match_legacy_contiguous_layout() {
+        let chain_id = b"chain|with|separator";
+        let input = b"input\x00with|separator";
+        let mut legacy_input =
+            Vec::with_capacity(VRF_INPUT_HASH_DOMAIN.len() + chain_id.len() + 1 + input.len());
+        legacy_input.extend_from_slice(VRF_INPUT_HASH_DOMAIN);
+        legacy_input.extend_from_slice(chain_id);
+        legacy_input.extend_from_slice(VRF_INPUT_HASH_SEPARATOR);
+        legacy_input.extend_from_slice(input);
+        assert_eq!(
+            prehash_input_with_chain(chain_id, input),
+            blake2b_256(&legacy_input)
+        );
+
+        let mut sigma = [0u8; 96];
+        for (index, byte) in sigma.iter_mut().enumerate() {
+            *byte = u8::try_from(index).expect("sigma fixture index fits in u8");
+        }
+        let mut legacy_output = Vec::with_capacity(VRF_OUTPUT_HASH_DOMAIN.len() + sigma.len());
+        legacy_output.extend_from_slice(VRF_OUTPUT_HASH_DOMAIN);
+        legacy_output.extend_from_slice(&sigma);
+        assert_eq!(output_from_sigma(&sigma).0, blake2b_256(&legacy_output));
+    }
+
+    #[test]
     fn vrf_prehash_uses_raw_blake2b() {
         let chain_id = b"chain-vrf";
         let mut input = vec![0u8];
@@ -547,7 +577,7 @@ mod tests {
             assert!(tries < 256, "failed to find raw digest with LSB=0");
         };
         let prehashed = prehash_input_with_chain(chain_id, &input);
-        assert_eq!(prehashed, expected.to_vec());
+        assert_eq!(prehashed, expected);
         assert_eq!(prehashed[31] & 1, 0);
     }
 

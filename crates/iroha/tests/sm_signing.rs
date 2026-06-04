@@ -90,11 +90,17 @@ fn sm2_signatures_are_deterministic() {
     let raw_signature = private.sign(&payload);
     assert_eq!(signature_a.payload(), raw_signature.as_bytes());
     assert_eq!(
-        key_pair.public_key().to_string(),
+        key_pair
+            .public_key()
+            .try_to_multihash_string()
+            .expect("SM2 public key must format as multihash"),
         fixture.public_key_multihash
     );
     assert_eq!(
-        key_pair.public_key().to_prefixed_string(),
+        key_pair
+            .public_key()
+            .try_to_prefixed_string()
+            .expect("SM2 public key must format as prefixed multihash"),
         fixture.public_key_prefixed
     );
 

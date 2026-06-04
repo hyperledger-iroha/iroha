@@ -521,9 +521,11 @@ fn parse_metering_public_key(raw: &str) -> Result<PublicKey, Error> {
     })
 }
 
-fn public_key_payload_hex(public_key: &PublicKey) -> String {
-    let (_, payload) = public_key.to_bytes();
-    hex::encode(payload)
+fn public_key_payload_hex(public_key: &PublicKey) -> Result<String, Error> {
+    let (_, payload) = public_key
+        .try_to_bytes()
+        .map_err(|err| conversion_error(format!("metering public key is malformed: {err}")))?;
+    Ok(hex::encode(payload))
 }
 
 fn xor_asset_definition_id() -> AssetDefinitionId {
@@ -578,7 +580,7 @@ fn build_helper_ticket_hex(
     let secret = secret.ok_or_else(|| {
         not_permitted_error("vpn helper ticket secret is not configured on this Torii node")
     })?;
-    Ok(VpnHelperTicketV1 {
+    VpnHelperTicketV1 {
         session_id: relay_session_id_from_session_id(&record.session_id),
         quote_id: decode_hex_32(&record.quote_id, "quote_id")?,
         account_hash: account_hash(&record.account_id),
@@ -588,7 +590,8 @@ fn build_helper_ticket_hex(
         tariff: record.tariff,
         expires_at_ms,
     }
-    .to_hex(secret))
+    .try_to_hex(secret)
+    .map_err(|err| conversion_error(format!("invalid vpn helper ticket: {err}")))
 }
 
 fn build_quote_id(
@@ -724,7 +727,7 @@ fn quote_response_from_record(record: &VpnQuoteRecord) -> Result<VpnQuoteRespons
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
         relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
-        metering_public_key_hex: public_key_payload_hex(&record.metering_public_key),
+        metering_public_key_hex: public_key_payload_hex(&record.metering_public_key)?,
         open_lease_instruction: Some(open_lease_instruction),
         tx_instructions,
     })
@@ -1743,8 +1746,24 @@ mod tests {
     }
 
     fn metering_public_key_hex(key_pair: &KeyPair) -> String {
-        let (_, payload) = key_pair.public_key().to_bytes();
+        let (_, payload) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("test metering key is valid");
         hex::encode(payload)
+    }
+
+    #[test]
+    fn public_key_payload_hex_matches_checked_payload() {
+        let key_pair = KeyPair::random();
+        let (_, payload) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("test key is valid");
+
+        let encoded = public_key_payload_hex(key_pair.public_key()).expect("payload hex");
+
+        assert_eq!(encoded, hex::encode(payload));
     }
 
     async fn create_quote_for_account(

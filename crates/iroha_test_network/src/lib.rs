@@ -12299,14 +12299,22 @@ exit 0
     fn peer_id_uses_bls() {
         let env = Environment::new();
         let peer = NetworkPeerBuilder::new().build(&env);
-        assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(
+            peer.id()
+                .public_key()
+                .try_algorithm()
+                .expect("fixture peer public key must be well-formed"),
+            Algorithm::BlsNormal
+        );
         assert_eq!(
             peer.account_id(),
             AccountId::new(peer.streaming_public_key().clone()),
             "runtime account identity should use the streaming key"
         );
         assert_eq!(
-            peer.streaming_public_key().algorithm(),
+            peer.streaming_public_key()
+                .try_algorithm()
+                .expect("fixture streaming public key must be well-formed"),
             Algorithm::Ed25519,
             "streaming identity should remain Ed25519 even with BLS peers"
         );

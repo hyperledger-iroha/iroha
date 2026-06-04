@@ -117,10 +117,18 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
-ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_BSC
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = "BSC mainnet"
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
+ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
+    "eth": "`eth_chainId == 0x1` (1)",
+    "bsc": "`eth_chainId == 0x38` (56)",
+}.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+ACTIVE_LAUNCH_EVM_CHAIN_ID_MARKER = {
+    "eth": "eth_chainId == 0x1",
+    "bsc": "eth_chainId == 0x38",
+}.get(ACTIVE_LAUNCH_CHAIN, "eth_chainId")
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
@@ -202,7 +210,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "user-prover helper surface",
     "JavaScript/web source",
     f"{ACTIVE_LAUNCH_DISPLAY} launch-lane evidence",
-    "eth_chainId == 0x38",
+    ACTIVE_LAUNCH_EVM_CHAIN_ID_MARKER,
     "finalized` block tag",
     "Governed live deployment evidence",
     "Public release notes",
@@ -292,6 +300,8 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             '["executionReceiptsRoot", /executionReceiptsRoot must not be zero/u]',
             '["beaconFinalizedRoot", /beaconFinalizedRoot must not be zero/u]',
             '["syncCommitteeRoot", /syncCommitteeRoot must not be zero/u]',
+            "SAMPLE_SYNC_COMMITTEE_BITS",
+            "/beaconFinality\\.syncCommitteeBits/u",
             "Ethereum receipt-proof transcript rejects empty trie and finality branches",
             "receiptTrieProofNodes: []",
             "inclusionBranch: []",
@@ -314,6 +324,13 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'XCTFail("prover callback must not run without receiptProof")',
             'XCTFail("prover callback must not run without source event validation")',
             'invalidPublicInputs("receiptProof")',
+            'invalidPublicInputs("beaconFinality.syncCommitteeBits")',
+            '"finalized_header_root", "0x" + String(repeating: "13", count: 32)',
+            '"sync_committee_root", "0x" + String(repeating: "14", count: 32)',
+            '"beacon_slot", "33", "beaconFinality.beaconSlot"',
+            '"transaction_hash", "0x" + String(repeating: "ab", count: 32)',
+            '"block_hash", "0x" + String(repeating: "ac", count: 32)',
+            '"block_number", "0x1235", "receipt.logs[0].blockNumber"',
             'receiptTrieProofNodes: []',
             '.invalidValidatorSet("receiptTrieProofNodes")',
             'inclusionBranch: []',
@@ -351,6 +368,13 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'receiptProofHash + " "',
             "val missingReceiptProof = assertFailsWith<IllegalArgumentException>",
             'missingReceiptProof.message?.contains("receiptProof")',
+            'missingSyncBits.message?.contains("beaconFinality.syncCommitteeBits")',
+            'Triple("finalized_header_root", "0x" + "13".repeat(32), "beaconFinality.finalizedHeaderRoot")',
+            'Triple("sync_committee_root", "0x" + "14".repeat(32), "beaconFinality.syncCommitteeRoot")',
+            'Triple("beacon_slot", "33", "beaconFinality.beaconSlot")',
+            'Triple("transaction_hash", "0x" + "ab".repeat(32), "receipt.logs[0].transactionHash")',
+            'Triple("block_hash", "0x" + "ac".repeat(32), "receipt.logs[0].blockHash")',
+            'Triple("block_number", "0x1235", "receipt.logs[0].blockNumber")',
         ),
     ),
     (
@@ -367,6 +391,13 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'receiptProofHash + " "',
             "Ethereum inbound proving must reject hash-only receipt proof evidence",
             "Ethereum inbound prover must not run without receipt proof material",
+            "Ethereum inbound proving must reject missing sync-committee bits",
+            "final Object[][] conflictingFinalityAliases",
+            '"finalized_header_root", "0x" + repeat("13", 32), "beaconFinality.finalizedHeaderRoot"',
+            '"sync_committee_root", "0x" + repeat("14", 32), "beaconFinality.syncCommitteeRoot"',
+            "final Object[][] conflictingLogAliases",
+            '"transaction_hash", "0x" + repeat("ab", 32), "receipt.logs[0].transactionHash"',
+            '"block_hash", "0x" + repeat("ac", 32), "receipt.logs[0].blockHash"',
             "Ethereum receipt-proof transcript must reject empty receiptTrieProofNodes",
             "Ethereum receipt-proof transcript must reject empty inclusionBranch",
             "Ethereum receipt-proof transcript must reject BSC sourceDomain",
@@ -389,6 +420,13 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'Assert.Contains("receiptProof", missingReceiptProof.Message)',
             "unanchoredReceiptProofProver",
             'Assert.Contains("receipt source event validation", unanchoredReceiptProof.Message)',
+            'Assert.Contains("beaconFinality.syncCommitteeBits", missingSyncBits.Message)',
+            '("finalized_header_root", "0x" + string.Concat(Enumerable.Repeat("13", 32)), "beaconFinality.finalizedHeaderRoot")',
+            '("sync_committee_root", "0x" + string.Concat(Enumerable.Repeat("14", 32)), "beaconFinality.syncCommitteeRoot")',
+            '("beacon_slot", "33", "beaconFinality.beaconSlot")',
+            '("transaction_hash", "0x" + new string(\'d\', 64), "receipt.logs[0].transactionHash")',
+            '("block_hash", "0x" + new string(\'a\', 64), "receipt.logs[0].blockHash")',
+            '("block_number", "0x1235", "receipt.logs[0].blockNumber")',
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
@@ -927,16 +965,16 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "javascript/iroha_js/src/sccp.js",
         (
             'for (const field of ["parent_root", "state_root", "body_root"])',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.${field}",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            "`${label}.data.header.message.${field}`",
+            "`${label}.data.header.signature`",
         ),
     ),
     (
         "javascript/iroha_js/dist/sccp.js",
         (
             'for (const field of ["parent_root", "state_root", "body_root"])',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.${field}",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            "`${label}.data.header.message.${field}`",
+            "`${label}.data.header.signature`",
         ),
     ),
     (
@@ -951,8 +989,8 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
         (
             'for field in ["parent_root", "state_root", "body_root"]',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.\\(field)",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            '"\\(label).data.header.message.\\(field)"',
+            '"\\(label).data.header.signature"',
         ),
     ),
     (
@@ -967,8 +1005,8 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
         (
             'for (field in listOf("parent_root", "state_root", "body_root"))',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.$field",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            '"$label.data.header.message.$field"',
+            '"$label.data.header.signature"',
         ),
     ),
     (
@@ -983,8 +1021,8 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java",
         (
             'Arrays.asList("parent_root", "state_root", "body_root")',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            'label + ".data.header.message." + field',
+            'label + ".data.header.signature"',
         ),
     ),
     (
@@ -999,8 +1037,8 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
         (
             'foreach (var field in new[] { "parent_root", "state_root", "body_root" })',
-            "Ethereum mainnet Beacon REST finalized header.data.header.message.{field}",
-            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            '"{label}.data.header.message.{field}"',
+            '"{label}.data.header.signature"',
         ),
     ),
     (
@@ -1016,15 +1054,23 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "javascript/iroha_js/src/sccp.js",
         (
-            "/eth/v1/beacon/blocks/finalized/root",
-            "/eth/v2/beacon/blocks/finalized",
+            "ethereumMainnetBeaconRestBlockIdForTarget",
+            "/eth/v1/beacon/headers/${encodeURIComponent(targetBlockId.id)}",
+            "/eth/v1/beacon/blocks/${encodeURIComponent(targetBlockId.id)}/root",
+            "/eth/v2/beacon/blocks/${encodeURIComponent(targetBlockId.id)}",
             "execution_payload",
             "const executionBlockHash = requireEthereumRpcHexData(",
             "const executionReceiptsRoot = requireEthereumRpcHexData(",
-            "const finalizedHeaderRoot = requireEthereumRpcHexData(",
             "const finalizedBlockRoot = requireEthereumRpcHexData(",
             "const finalizedCheckpointRoot = requireEthereumRpcHexData(",
             "const syncCommitteeRoot = requireEthereumRpcHexData(",
+            "/eth/v1/beacon/light_client/finality_update",
+            "ethereumMainnetBeaconRestFinalityUpdateSummary",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "must contain at least one participant",
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -1033,15 +1079,23 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "javascript/iroha_js/dist/sccp.js",
         (
-            "/eth/v1/beacon/blocks/finalized/root",
-            "/eth/v2/beacon/blocks/finalized",
+            "ethereumMainnetBeaconRestBlockIdForTarget",
+            "/eth/v1/beacon/headers/${encodeURIComponent(targetBlockId.id)}",
+            "/eth/v1/beacon/blocks/${encodeURIComponent(targetBlockId.id)}/root",
+            "/eth/v2/beacon/blocks/${encodeURIComponent(targetBlockId.id)}",
             "execution_payload",
             "const executionBlockHash = requireEthereumRpcHexData(",
             "const executionReceiptsRoot = requireEthereumRpcHexData(",
-            "const finalizedHeaderRoot = requireEthereumRpcHexData(",
             "const finalizedBlockRoot = requireEthereumRpcHexData(",
             "const finalizedCheckpointRoot = requireEthereumRpcHexData(",
             "const syncCommitteeRoot = requireEthereumRpcHexData(",
+            "/eth/v1/beacon/light_client/finality_update",
+            "ethereumMainnetBeaconRestFinalityUpdateSummary",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "must contain at least one participant",
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -1050,12 +1104,20 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
         (
-            "/eth/v1/beacon/blocks/finalized/root",
-            "/eth/v2/beacon/blocks/finalized",
+            "/eth/v1/beacon/genesis",
+            "/eth/v1/beacon/headers/64",
+            "/eth/v1/beacon/blocks/64/root",
+            "/eth/v2/beacon/blocks/64",
+            "/eth/v1/beacon/light_client/finality_update",
+            "validFinalityUpdate",
+            "syncCommitteeParticipation",
+            "/sync_committee_bits must contain at least one participant/u",
             "/finalizedHeaderRoot must not be zero/u",
             "/finalizedBlockRoot must not be zero/u",
             "/finalizedCheckpointRoot must not be zero/u",
             "/syncCommitteeRoot must not be zero/u",
+            "/requires beaconSlot, beaconBlockRoot, or block\\.timestamp/u",
+            "/finalized target header must be finalized/u",
             "/beaconFinality\\.executionBlockHash must not be zero/u",
             "/beaconFinality\\.executionReceiptsRoot must not be zero/u",
             "/beaconFinality\\.finalizedHeaderRoot must not be zero/u",
@@ -1067,11 +1129,46 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
         ),
     ),
     (
+        "javascript/iroha_js/index.d.ts",
+        (
+            "syncCommitteeBits?: string;",
+            "syncCommitteeSignature?: string;",
+            "syncSignatureSlot?: string | number | bigint;",
+            "signatureSlot?: string | number | bigint;",
+            "syncCommitteeParticipation?: string | number | bigint;",
+            "readonly syncCommitteeBits?: string;",
+            "readonly syncCommitteeSignature?: string;",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "syncCommitteeBits\\?: string;",
+            "syncCommitteeSignature\\?: string;",
+            "syncSignatureSlot\\?: string \\| number \\| bigint;",
+            "syncCommitteeParticipation\\?: string \\| number \\| bigint;",
+            "readonly syncCommitteeBits\\?: string;",
+        ),
+    ),
+    (
         "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
         (
-            'path: "/eth/v1/beacon/blocks/finalized/root"',
-            'path: "/eth/v2/beacon/blocks/finalized"',
+            "beaconRestBlockIdForTarget",
+            'path: "/eth/v1/beacon/headers/\\(targetBlockId.id)"',
+            'path: "/eth/v1/beacon/blocks/\\(targetBlockId.id)/root"',
+            'path: "/eth/v2/beacon/blocks/\\(targetBlockId.id)"',
+            'path: "/eth/v1/beacon/light_client/finality_update"',
+            "BeaconRestFinalityUpdateSummary",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
+            "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "syncCommitteeParticipation",
+            "public let syncCommitteeBits: String?",
+            'value["syncCommitteeBits"] = syncCommitteeBits',
+            "strictFirstPresent(",
+            "normalizeFinalitySyncCommitteeBits(",
             "execution_payload",
+            'invalidPublicInputs("beaconRest.targetHeader.slot")',
+            'invalidPublicInputs("beaconRest.targetHeader.finalizedSlot")',
             'invalidPublicInputs("beaconRest.finalizedBlockRoot")',
             'invalidPublicInputs("beaconRest.executionPayload.blockHash")',
             'invalidPublicInputs("beaconRest.executionPayload.receiptsRoot")',
@@ -1080,6 +1177,20 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
         (
+            "testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence",
+            "testEthereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
+            "/eth/v1/beacon/genesis",
+            "/eth/v1/beacon/headers/32",
+            "/eth/v1/beacon/blocks/32/root",
+            "/eth/v2/beacon/blocks/32",
+            "/eth/v1/beacon/light_client/finality_update",
+            "ethereumBeaconFinalityUpdateJson(",
+            "syncCommitteeParticipation",
+            'syncCommitteeBits: "0x01" + String(repeating: "00", count: 63)',
+            'conflictingSyncBitsFinality["sync_committee_bits"]',
+            '"finalized_header_root", "0x" + String(repeating: "13", count: 32)',
+            '.zeroField("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits")',
+            '"timestamp": "0x1e4"',
             "ethereumBeaconBlockRootJson(",
             "ethereumBeaconBlockJson(",
             'invalidPublicInputs("beaconRest.finalizedBlockRoot")',
@@ -1090,9 +1201,22 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
         (
-            '"/eth/v1/beacon/blocks/finalized/root"',
-            '"/eth/v2/beacon/blocks/finalized"',
+            "beaconRestBlockIdForTarget",
+            '"/eth/v1/beacon/headers/${targetBlockId.id}"',
+            '"/eth/v1/beacon/blocks/${targetBlockId.id}/root"',
+            '"/eth/v2/beacon/blocks/${targetBlockId.id}"',
+            '"/eth/v1/beacon/light_client/finality_update"',
+            "ethereumBeaconRestFinalityUpdateSummary",
+            "sync_aggregate",
+            "sync_committee_bits",
+            "sync_committee_signature",
+            "ethereumBeaconRestSyncCommitteeParticipation",
+            "val syncCommitteeBits: String? = null",
+            'syncCommitteeBits?.let { "syncCommitteeBits" to it }',
+            "strictFirstPresent(",
             "execution_payload",
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -1101,6 +1225,20 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
         (
+            "ethereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence",
+            "ethereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
+            "https://beacon.example/eth/v1/beacon/genesis",
+            "https://beacon.example/eth/v1/beacon/headers/32",
+            "https://beacon.example/eth/v1/beacon/blocks/32/root",
+            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/light_client/finality_update",
+            "beaconFinalityUpdateJson(",
+            "syncCommitteeParticipation",
+            'syncCommitteeBits = "0x01" + "00".repeat(63)',
+            '"sync_committee_bits" to ("0x02" + "00".repeat(63))',
+            'Triple("finalized_header_root", "0x" + "13".repeat(32), "beaconFinality.finalizedHeaderRoot")',
+            "sync_committee_bits must contain at least one participant",
+            '"timestamp" to "0x1e4"',
             "beaconBlockRootJson(",
             "beaconBlockJson(",
             "finalized block root must match finalized header root",
@@ -1111,9 +1249,23 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java",
         (
-            '"/eth/v1/beacon/blocks/finalized/root"',
-            '"/eth/v2/beacon/blocks/finalized"',
+            "beaconRestBlockIdForTarget",
+            '"/eth/v1/beacon/headers/" + targetBlockId.id',
+            '"/eth/v1/beacon/blocks/" + targetBlockId.id + "/root"',
+            '"/eth/v2/beacon/blocks/" + targetBlockId.id',
+            '"/eth/v1/beacon/light_client/finality_update"',
+            "beaconRestFinalityUpdateSummary",
+            "sync_aggregate",
+            "sync_committee_bits",
+            "sync_committee_signature",
+            "beaconRestSyncCommitteeParticipation",
+            "String syncCommitteeBits,",
+            'value.put("syncCommitteeBits", syncCommitteeBits)',
+            "strictFirstPresent(",
+            "normalizeFinalitySyncCommitteeBits(",
             "execution_payload",
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -1122,6 +1274,20 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
         (
+            "ethereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence",
+            "ethereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
+            "https://beacon.example/eth/v1/beacon/genesis",
+            "https://beacon.example/eth/v1/beacon/headers/32",
+            "https://beacon.example/eth/v1/beacon/blocks/32/root",
+            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/light_client/finality_update",
+            "beaconFinalityUpdateJson(",
+            "syncCommitteeParticipation",
+            '"0x01" + repeat("00", 63),',
+            'conflictingSyncBitsFinality.put("sync_committee_bits"',
+            "final Object[][] conflictingFinalityAliases",
+            "sync_committee_bits must contain at least one participant",
+            '"timestamp", "0x1e4"',
             "beaconBlockRootJson(",
             "beaconBlockJson(",
             "finalized block root must match finalized header root",
@@ -1132,9 +1298,23 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
         (
-            '"/eth/v1/beacon/blocks/finalized/root"',
-            '"/eth/v2/beacon/blocks/finalized"',
+            "BeaconRestBlockIdForTargetAsync",
+            '$"/eth/v1/beacon/headers/{targetBlockId.Id}"',
+            '$"/eth/v1/beacon/blocks/{targetBlockId.Id}/root"',
+            '$"/eth/v2/beacon/blocks/{targetBlockId.Id}"',
+            '"/eth/v1/beacon/light_client/finality_update"',
+            "BeaconRestFinalityUpdateSummary",
+            "sync_aggregate",
+            "sync_committee_bits",
+            "sync_committee_signature",
+            "SyncCommitteeParticipation",
+            "string? SyncCommitteeBits = null",
+            'value["syncCommitteeBits"] = SyncCommitteeBits',
+            "StrictFirstPresent(",
+            "NormalizeFinalitySyncCommitteeBits(",
             "execution_payload",
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -1143,6 +1323,19 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
         (
+            "BeaconRestConsensusProviderCollectsFinalizedTargetEvidence",
+            "BeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
+            "https://beacon.example/eth/v1/beacon/genesis",
+            "https://beacon.example/eth/v1/beacon/headers/32",
+            "https://beacon.example/eth/v1/beacon/blocks/32/root",
+            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/light_client/finality_update",
+            "BeaconFinalityUpdateJson(",
+            "syncCommitteeParticipation",
+            'SyncCommitteeBits: "0x01" + new string(\'0\', 126)',
+            '["sync_committee_bits"] = "0x02" + string.Concat(Enumerable.Repeat("00", 63))',
+            "sync_committee_bits must contain at least one participant",
+            '["timestamp"] = "0x1e4"',
             "BeaconBlockRootJson(",
             "BeaconBlockJson(",
             "finalized block root must match finalized header root",
@@ -1263,6 +1456,7 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
             "route-canary receipt block hash does not match the finalized execution block",
             '"receipt_block_finalized": True',
             'and transaction.get("receipt_block_finalized") is True',
+            'route_canary_transaction.get("receipt_block_finalized") is True',
         ),
     ),
     (
@@ -1289,8 +1483,10 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
             "route_canary_finalized_block_number",
             'params[0] == "finalized"',
             '"receipt_block_finalized"] is True',
+            '"receipt_block_finalized"] is False',
             "evm_route_canary_receipt_block_finalized = true",
             'block_tag="finalized" if finality_expected else "latest"',
+            "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
             "receipt block is newer than the finalized execution block",
             "receipt block hash does not match the finalized execution block",
         ),
@@ -1301,6 +1497,17 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
             "test_all_lanes_rejects_evm_route_canary_missing_finalized_receipt_state",
             "_comment_evm_route_canary_receipt_block_finalized",
             "receipt block finalized metadata must be true",
+        ),
+    ),
+)
+CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
+    (
+        "contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        (
+            "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
+            "networkId = ethMainnetNetworkId",
+            "const networkId = ethMainnetNetworkId;",
+            "assert.equal(acceptedGroth16Logs[0].args.networkId, networkId);",
         ),
     ),
 )
@@ -1331,6 +1538,12 @@ BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "calledWithHashOnly",
             "/requires receiptProof/u",
             "callbackEvidence.receiptProof.blockHash",
+            "callbackEvidence.sourceEventDigest",
+            "/requires receipt source event validation/u",
+            "/receiptProof\\.sourceEventDigest must match receipt source event/u",
+            "malformedSourceLogCases",
+            "SCCP source event log must contain exactly 2 topics",
+            "missingTransactionHashLog",
         ),
     ),
     (
@@ -1340,6 +1553,75 @@ BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'match="requires receiptProof"',
             'evidence["receipt_proof"]["block_hash"]',
             'receipt_proof_evidence["receipt_proof"]["block_hash"]',
+            'evidence["source_event_digest"]',
+            "called_without_source_event",
+            'match="requires receipt source event validation"',
+            'match="receiptProof.sourceEventDigest"',
+            "malformed_source_log_cases",
+            "exactly 2 topics",
+            "missing_transaction_hash_log",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            "BscMainnetReceiptProof(",
+            "calledWithHashOnly",
+            'hashOnly.message?.contains("receiptProof")',
+            "assertEquals(receiptProofHash, evidence.receiptProofHash)",
+            "calledWithoutSourceEvent",
+            'noSourceEvent.message?.contains("receipt source event validation")',
+            'driftedSourceEvent.message?.contains("receiptProof.sourceEventDigest")',
+            "extraTopicBscSourceLog",
+            "nonEmptyDataBscSourceLog",
+            "missingBscSourceContextLog",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "BscMainnetReceiptProof(",
+            "calledWithHashOnly",
+            "XCTAssertFalse(calledWithHashOnly)",
+            "XCTAssertEqual(evidence.receiptProofHash, receiptProofHash)",
+            "missingSourceEventCallbackCalled",
+            '.invalidPublicInputs("receipt.sourceEvent")',
+            '.invalidPublicInputs("receiptProof.sourceEventDigest")',
+            "extraTopicBscSourceReceipt",
+            "nonEmptyDataBscSourceReceipt",
+            "missingBscSourceContextLog",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "BscMainnetSccp.ReceiptProof",
+            "calledWithHashOnly",
+            "BSC inbound proving must reject hash-only receipt proof evidence",
+            "receiptProofHash.equals(evidence.receiptProofHash())",
+            "calledWithoutSourceEvent",
+            "receipt source event validation",
+            "receiptProof.sourceEventDigest",
+            "sourceEventDigest.equals(evidence.sourceEventDigest())",
+            "extraTopicBscSourceLog",
+            "nonEmptyDataBscSourceLog",
+            "missingBscSourceContextLog",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs",
+        (
+            "BscMainnetReceiptProof",
+            "hashOnlyProver.Calls",
+            "BscSccpReceiptProofHash",
+            "Assert.Equal(0, hashOnlyProver.Calls)",
+            "Assert.Equal(receiptProofHash, evidence.ReceiptProofHash)",
+            "Assert.Equal(sourceEventDigest, evidence.SourceEventDigest)",
+            "Assert.Equal(0, noSourceEventProver.Calls)",
+            "Assert.Equal(0, driftedSourceProver.Calls)",
+            "extraTopicBscSourceReceipt",
+            "nonEmptyDataBscSourceReceipt",
+            "missingBscSourceContextLog",
         ),
     ),
 )
@@ -2700,6 +2982,19 @@ def _ethereum_route_canary_finalized_receipt_block_inventory_errors(
     )
 
 
+def _contract_smoke_eth_mainnet_network_id_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for the EVM smoke ETH mainnet network id vector."""
+
+    if inventory is None:
+        inventory = CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS
+    return _sdk_test_inventory_errors(
+        inventory,
+        label="EVM contract smoke Ethereum mainnet network id",
+    )
+
+
 def _native_sccp_no_wasm_readiness_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -3285,7 +3580,7 @@ def _render_readiness_markdown(
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
-            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 0x38` (56) and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
+            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -6626,6 +6921,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     report_release_checklist: dict[str, Any] = {}
     report_corridor: dict[str, Any] = {}
     summary_release_checklist: dict[str, Any] = {}
+    report_evidence_schema_valid = False
+    report_release_checklist_schema_valid = False
     if report:
         errors.extend(
             _boolean_field_errors("readiness report", report, "production_ready")
@@ -6643,23 +6940,23 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append("readiness report evidence is not an object")
         else:
             report_evidence = raw_evidence
-            errors.extend(
-                _all_lanes_summary_schema_errors(
-                    "readiness report embedded evidence",
-                    report_evidence,
-                )
+            evidence_schema_errors = _all_lanes_summary_schema_errors(
+                "readiness report embedded evidence",
+                report_evidence,
             )
+            errors.extend(evidence_schema_errors)
+            report_evidence_schema_valid = not evidence_schema_errors
         raw_release_checklist = report.get("release_checklist")
         if not isinstance(raw_release_checklist, dict):
             errors.append("readiness report release_checklist is not an object")
         else:
             report_release_checklist = raw_release_checklist
-            errors.extend(
-                _release_checklist_schema_errors(
-                    "readiness report",
-                    report_release_checklist,
-                )
+            release_checklist_schema_errors = _release_checklist_schema_errors(
+                "readiness report",
+                report_release_checklist,
             )
+            errors.extend(release_checklist_schema_errors)
+            report_release_checklist_schema_valid = not release_checklist_schema_errors
         raw_corridor = report.get("corridor")
         if not isinstance(raw_corridor, dict):
             errors.append("readiness report corridor is not an object")
@@ -6742,7 +7039,12 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         )
     if report and not report_release_checklist.get("ready"):
         errors.append("readiness report release_checklist is not ready")
-    if report and report_release_checklist != _expected_release_checklist(report):
+    if (
+        report
+        and report_evidence_schema_valid
+        and report_release_checklist_schema_valid
+        and report_release_checklist != _expected_release_checklist(report)
+    ):
         errors.append(
             "readiness report release_checklist does not match embedded evidence"
         )
@@ -6767,6 +7069,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_beacon_rest_execution_payload_binding_inventory_errors())
     errors.extend(_ethereum_source_bridge_config_inventory_errors())
     errors.extend(_ethereum_route_canary_finalized_receipt_block_inventory_errors())
+    errors.extend(_contract_smoke_eth_mainnet_network_id_inventory_errors())
     errors.extend(_native_sccp_no_wasm_readiness_inventory_errors())
     errors.extend(_bsc_inbound_adversarial_sdk_test_inventory_errors())
     if summary and _active_launch_blockers(summary):

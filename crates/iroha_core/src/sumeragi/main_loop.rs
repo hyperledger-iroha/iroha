@@ -39374,12 +39374,6 @@ impl Actor {
 
         let track_missing_qc_timeout =
             !proposal_seen || proposal_seen_missing_qc_dependency_signals;
-        let same_view_missing_qc_timeout_recorded = track_missing_qc_timeout
-            && self
-                .subsystems
-                .propose
-                .last_missing_qc_timeout_trigger
-                .is_some_and(|last| last.height == height && last.view == current_view);
         let tx_backlog_reacquire_exhausted_for_rotation = queue_active_backlog
             && self.recovery_rotate_after_reacquire_exhausted()
             && self
@@ -39631,8 +39625,7 @@ impl Actor {
                     .local_is_round_leader(height, current_view)
                     && !Self::frontier_consensus_ingress_queued(queue_depths)
                     && (missing_qc_frontier_recovery_owner
-                        || (!self.frontier_recovery_exists_at_height(height)
-                            && !same_view_missing_qc_timeout_recorded));
+                        || !self.frontier_recovery_exists_at_height(height));
                 let empty_frontier_missing_qc_recovery_first = !proposal_seen
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
                     && (current_view == 0 || nonleader_empty_frontier_missing_qc_recovery)

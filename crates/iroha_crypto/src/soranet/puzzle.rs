@@ -13,12 +13,14 @@ use std::{
 };
 
 use argon2::{Algorithm, Argon2, Params, Version};
+use blake3::Hasher;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 
 const OUTPUT_LEN: usize = 32;
+const SOLUTION_SALT_LEN: usize = SOLUTION_DOMAIN.len() + OUTPUT_LEN;
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
 
@@ -424,24 +426,16 @@ fn derive_challenge(
     client_nonce: [u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
-    let relay_len = binding.relay_id.len();
-    let mut input = Vec::with_capacity(
-        CHALLENGE_DOMAIN.len()
-            + binding.descriptor_commit.len()
-            + relay_len
-            + binding.transcript_hash.map_or(0, <[u8]>::len)
-            + client_nonce.len()
-            + 8,
-    );
-    input.extend_from_slice(CHALLENGE_DOMAIN);
-    input.extend_from_slice(binding.descriptor_commit);
-    input.extend_from_slice(binding.relay_id);
+    let mut hasher = Hasher::new();
+    hasher.update(CHALLENGE_DOMAIN);
+    hasher.update(binding.descriptor_commit);
+    hasher.update(binding.relay_id);
     if let Some(transcript) = binding.transcript_hash {
-        input.extend_from_slice(transcript);
+        hasher.update(transcript);
     }
-    input.extend_from_slice(&client_nonce);
-    input.extend_from_slice(&expires_at.to_be_bytes());
-    blake3::hash(&input)
+    hasher.update(&client_nonce);
+    hasher.update(&expires_at.to_be_bytes());
+    hasher.finalize()
 }
 
 fn derive_solution_digest(
@@ -458,15 +452,21 @@ fn derive_solution_digest(
     .map_err(|err| DigestError::Parameters(err.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
 
-    let mut input = Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
-    input.extend_from_slice(SOLUTION_DOMAIN);
-    input.extend_from_slice(challenge.as_bytes());
+    let salt = derive_solution_salt(challenge);
 
     let mut output = [0u8; OUTPUT_LEN];
     argon2
-        .hash_password_into(solution, &input, &mut output)
+        .hash_password_into(solution, &salt, &mut output)
         .map_err(|err| DigestError::Hash(err.to_string()))?;
     Ok(output)
+}
+
+fn derive_solution_salt(challenge: &blake3::Hash) -> [u8; SOLUTION_SALT_LEN] {
+    let mut salt = [0u8; SOLUTION_SALT_LEN];
+    let (domain, challenge_bytes) = salt.split_at_mut(SOLUTION_DOMAIN.len());
+    domain.copy_from_slice(SOLUTION_DOMAIN);
+    challenge_bytes.copy_from_slice(challenge.as_bytes());
+    salt
 }
 
 fn leading_zero_bits_at_least(bytes: &[u8], bits: u8) -> bool {
@@ -635,6 +635,70 @@ mod tests {
 
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
+    }
+
+    #[test]
+    fn transcript_hashes_match_legacy_contiguous_layout() {
+        let transcript = [0x33; 32];
+        let client_nonce = [0x44; 32];
+        let expires_at = 1_700_000_123_u64;
+
+        for transcript_hash in [None, Some(transcript.as_slice())] {
+            let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, transcript_hash);
+            let mut legacy = Vec::with_capacity(
+                CHALLENGE_DOMAIN.len()
+                    + DESCRIPTOR.len()
+                    + RELAY.len()
+                    + transcript_hash.map_or(0, <[u8]>::len)
+                    + client_nonce.len()
+                    + 8,
+            );
+            legacy.extend_from_slice(CHALLENGE_DOMAIN);
+            legacy.extend_from_slice(&DESCRIPTOR);
+            legacy.extend_from_slice(&RELAY);
+            if let Some(transcript_hash) = transcript_hash {
+                legacy.extend_from_slice(transcript_hash);
+            }
+            legacy.extend_from_slice(&client_nonce);
+            legacy.extend_from_slice(&expires_at.to_be_bytes());
+
+            assert_eq!(
+                derive_challenge(&binding, client_nonce, expires_at),
+                blake3::hash(&legacy)
+            );
+        }
+
+        let params = test_parameters();
+        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript));
+        let challenge = derive_challenge(&binding, client_nonce, expires_at);
+        let mut legacy_salt =
+            Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
+        legacy_salt.extend_from_slice(SOLUTION_DOMAIN);
+        legacy_salt.extend_from_slice(challenge.as_bytes());
+        assert_eq!(
+            derive_solution_salt(&challenge).as_slice(),
+            legacy_salt.as_slice()
+        );
+
+        let solution = [0x55; 32];
+        let argon_params = Params::new(
+            params.memory_kib.get(),
+            params.time_cost.get(),
+            params.lanes.get(),
+            Some(OUTPUT_LEN),
+        )
+        .expect("valid argon parameters");
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
+        let mut expected = [0u8; OUTPUT_LEN];
+        argon2
+            .hash_password_into(&solution, &legacy_salt, &mut expected)
+            .expect("legacy argon2 digest");
+
+        assert_eq!(
+            derive_solution_digest(&challenge, &solution, &params)
+                .expect("derive puzzle solution digest"),
+            expected
+        );
     }
 
     fn first_invalid_solution(

@@ -57,7 +57,9 @@ mod tests {
             .expect("deterministic normal VRF proof");
         let key_pair = KeyPair::from((pk_raw, sk));
         let (public_key, _) = key_pair.into_parts();
-        let (algo, pk_payload) = public_key.to_bytes();
+        let (algo, pk_payload) = public_key
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         assert_eq!(algo, Algorithm::BlsNormal);
         let proof_vec = match proof {
             VrfProof::SigInG2(arr) => arr.to_vec(),

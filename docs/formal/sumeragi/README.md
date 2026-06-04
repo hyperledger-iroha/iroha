@@ -7758,6 +7758,7 @@ Invariants:
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
 - `LiveNewViewVotesStayInHandoff`
+- `NewViewVoteGateMatchesFreshViewEvidence`
 - `ViewEvidenceIsCompleteOrEmpty`
 - `PreCommitPhasesHaveNoCommitVotes`
 - `PrePreparePhasesHaveNoPrepareVotes`
@@ -7776,6 +7777,10 @@ Invariants:
 - `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
 - `RbcProgressEvidenceMatchesState`
+- `RbcChunkGateMatchesHeaderDigestEvidence`
+- `RbcReadyGateMatchesChunkEvidence`
+- `RbcDeliverGateMatchesCompleteEvidence`
+- `LiveHeaderDigestEvidenceStayInRbcHandoff`
 - `LiveChunkEvidenceStayInRbcHandoff`
 - `LiveReadyVotesStayInRbcHandoff`
 
@@ -8687,6 +8692,10 @@ Temporal properties:
   remain confined to the NewView collection phase or the immediate proposal
   handoff with quorum evidence, and never leak into prepare, commit-vote, or
   committed execution.
+- `NewViewVoteGateNeverBypassesFreshViewEvidence` proves that the live NewView
+  vote gate is enabled exactly while a nonzero view is collecting fresh
+  view-change votes with no installed view evidence, below quorum and roster
+  budgets, and with prepare/commit vote state reset before the next proposal.
 - `ViewEvidenceNeverPartial` proves that the latched view-change witness is
   either absent or quorum-complete, never a partial vote count.
 - `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
@@ -8754,6 +8763,25 @@ Temporal properties:
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
   coverage, and ready/delivered states keep ready quorum.
+- `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
+  CHUNK transition is enabled exactly when the session is in an INIT,
+  CHUNKING, or post-GST withheld recovery state carrying header evidence,
+  validated digest evidence for non-withheld paths, and incomplete chunk
+  progress while chunking, so CHUNK cannot bypass header/digest causality.
+- `RbcReadyGateNeverBypassesChunkEvidence` proves that the live RBC READY
+  transition is enabled exactly when the session is chunk-complete or already
+  in a READY handoff state with full chunk coverage, header evidence, a valid
+  digest, and remaining READY vote capacity, so READY cannot bypass chunk
+  completion.
+- `RbcDeliverGateNeverBypassesCompleteEvidence` proves that the live RBC
+  DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
+  with READY quorum, full chunk coverage, header evidence, and a valid digest,
+  so DELIVER cannot bypass complete RBC evidence.
+- `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
+  and digest evidence remains confined to initialized, withheld, corrupted, or
+  delivered handoff states; digest evidence always implies a seen header and an
+  initialized-or-later RBC state; and corrupted or withheld retained header
+  evidence is explicitly marked by an invalid digest flag.
 - `LiveChunkEvidenceNeverBypassRbcHandoff` proves that live RBC chunk counters
   stay confined to chunking, chunk-complete, ready, or delivered handoff states;
   chunking remains below full chunk coverage; chunk-complete, ready, and

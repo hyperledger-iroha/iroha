@@ -3027,6 +3027,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1")
         let publicParameters = try object(operationVectors, "public_parameters")
         let publicDegree = try int(publicParameters, "polynomial_degree")
+        try assertBfvRnsModulusChainFixture(operationVectors, publicDegree: publicDegree)
         let evaluationKey = try object(operationVectors, "evaluation_key_bundle")
         XCTAssertEqual(try int(evaluationKey, "decomposition_base_log"), try int(publicParameters, "decomposition_base_log"))
         XCTAssertEqual(try int(evaluationKey, "decomposition_digit_count"), try int(evaluationKey, "relinearization_entry_count"))
@@ -3038,6 +3039,70 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(try int(entry, "coefficient_count"), publicDegree)
             assertBfvComponentDigest("relinearization entry \(index) b", try string(entry, "b_sha256"), seen: &componentDigests)
             assertBfvComponentDigest("relinearization entry \(index) a", try string(entry, "a_sha256"), seen: &componentDigests)
+        }
+        let galoisKeys = try objectArray(operationVectors, "galois_keys")
+        XCTAssertEqual(galoisKeys.count, try int(evaluationKey, "galois_key_count"))
+        for key in galoisKeys {
+            let power = try int(key, "automorphism_power")
+            let keyEntries = try objectArray(key, "entries")
+            XCTAssertEqual(keyEntries.count, try int(key, "entry_count"))
+            for (index, entry) in keyEntries.enumerated() {
+                XCTAssertEqual(try int(entry, "index"), index)
+                XCTAssertEqual(try int(entry, "coefficient_count"), publicDegree)
+                assertBfvComponentDigest("Galois key \(power) entry \(index) b", try string(entry, "b_sha256"), seen: &componentDigests)
+                assertBfvComponentDigest("Galois key \(power) entry \(index) a", try string(entry, "a_sha256"), seen: &componentDigests)
+            }
+        }
+        let galoisSwitchVectors = try objectArray(operationVectors, "galois_switch_vectors")
+        XCTAssertFalse(galoisSwitchVectors.isEmpty)
+        for vector in galoisSwitchVectors {
+            let name = try string(vector, "name")
+            let power = try int(vector, "automorphism_power")
+            XCTAssertTrue(try galoisKeys.contains { try int($0, "automorphism_power") == power })
+            guard let plaintextSlots = vector["input_plaintext_slots"] as? [Int] else {
+                throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "input_plaintext_slots must be an integer array"])
+            }
+            XCTAssertFalse(plaintextSlots.isEmpty)
+            XCTAssertTrue(plaintextSlots.allSatisfy { $0 >= 0 })
+            XCTAssertGreaterThan(try int(vector, "expected_input_ciphertext_bytes"), 0)
+            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
+            assertBfvUpperSha256("Galois switch vector \(name) input", try string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("Galois switch vector \(name) output", try string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("Galois switch vector \(name) plaintext", try string(vector, "expected_plaintext_sha256"))
+            let components = try object(vector, "output_components")
+            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
+            assertBfvComponentDigest("Galois switch vector \(name) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+            assertBfvComponentDigest("Galois switch vector \(name) c1", try string(components, "c1_sha256"), seen: &componentDigests)
+        }
+        let packedGaloisSwitchVectors = try objectArray(operationVectors, "packed_galois_switch_vectors")
+        XCTAssertFalse(packedGaloisSwitchVectors.isEmpty)
+        for vector in packedGaloisSwitchVectors {
+            let name = try string(vector, "name")
+            let power = try int(vector, "automorphism_power")
+            XCTAssertTrue(try galoisKeys.contains { try int($0, "automorphism_power") == power })
+            guard let inputSlots = vector["input_packed_slots"] as? [Int] else {
+                throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "input_packed_slots must be an integer array"])
+            }
+            guard let permutation = vector["expected_slot_permutation"] as? [Int] else {
+                throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "expected_slot_permutation must be an integer array"])
+            }
+            guard let outputSlots = vector["expected_packed_slots"] as? [Int] else {
+                throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "expected_packed_slots must be an integer array"])
+            }
+            XCTAssertEqual(inputSlots.count, publicDegree)
+            XCTAssertEqual(permutation.count, publicDegree)
+            XCTAssertEqual(outputSlots.count, publicDegree)
+            XCTAssertTrue(inputSlots.allSatisfy { $0 >= 0 })
+            XCTAssertTrue(permutation.allSatisfy { $0 >= 0 })
+            XCTAssertTrue(outputSlots.allSatisfy { $0 >= 0 })
+            assertBfvUpperSha256("packed Galois switch vector \(name) packed plaintext", try string(vector, "expected_packed_plaintext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector \(name) input", try string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector \(name) output", try string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector \(name) plaintext", try string(vector, "expected_plaintext_coefficients_sha256"))
+            let components = try object(vector, "output_components")
+            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
+            assertBfvComponentDigest("packed Galois switch vector \(name) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+            assertBfvComponentDigest("packed Galois switch vector \(name) c1", try string(components, "c1_sha256"), seen: &componentDigests)
         }
         let rotationKeys = try objectArray(operationVectors, "rotation_keys")
         XCTAssertEqual(rotationKeys.count, try int(evaluationKey, "rotation_key_count"))
@@ -3056,11 +3121,56 @@ final class ToriiClientTests: XCTestCase {
         assertBfvComponentDigest("bootstrap c1", try string(bootstrapComponents, "c1_sha256"), seen: &componentDigests)
     }
 
+    private func assertBfvRnsModulusChainFixture(_ operationVectors: [String: Any], publicDegree: Int) throws {
+        let rns = try object(operationVectors, "rns_modulus_chain")
+        let moduli = try uint64Array(rns, "moduli")
+        XCTAssertEqual(moduli, [358273, 448769, 449921])
+        XCTAssertEqual(try string(rns, "product"), "72339115408190977")
+        assertBfvLowerDigest("RNS modulus-chain digest", try string(rns, "expected_digest_hex"))
+
+        let samples = try object(rns, "sample_polynomials")
+        XCTAssertEqual(try uint64Array(samples, "lhs_coefficients").count, publicDegree)
+        XCTAssertEqual(try uint64Array(samples, "rhs_coefficients").count, publicDegree)
+        for label in ["lhs", "rhs", "sum", "negacyclic_product"] {
+            try assertBfvRnsPolynomialFixture(
+                label,
+                try object(samples, label),
+                publicDegree: publicDegree,
+                limbCount: moduli.count
+            )
+        }
+    }
+
+    private func assertBfvRnsPolynomialFixture(
+        _ label: String,
+        _ polynomial: [String: Any],
+        publicDegree: Int,
+        limbCount: Int
+    ) throws {
+        XCTAssertEqual(try int(polynomial, "coefficient_count"), publicDegree)
+        let limbHashes = try stringArray(polynomial, "residue_limb_sha256")
+        XCTAssertEqual(limbHashes.count, limbCount)
+        assertBfvUpperSha256("\(label) RNS reconstructed coefficients", try string(polynomial, "reconstructed_sha256"))
+        for (index, digest) in limbHashes.enumerated() {
+            assertBfvUpperSha256("\(label) RNS residue limb \(index)", digest)
+        }
+    }
+
     private func assertBfvComponentDigest(_ label: String, _ value: String, seen: inout Set<String>) {
+        assertBfvUpperSha256(label, value)
+        XCTAssertTrue(seen.insert(value).inserted, "\(label) must be unique")
+    }
+
+    private func assertBfvUpperSha256(_ label: String, _ value: String) {
         XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
         XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789ABCDEF").inverted), "\(label) must be uppercase hex")
         XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
-        XCTAssertTrue(seen.insert(value).inserted, "\(label) must be unique")
+    }
+
+    private func assertBfvLowerDigest(_ label: String, _ value: String) {
+        XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
+        XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789abcdef").inverted), "\(label) must be lowercase hex")
+        XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
     }
 
     private func bool(_ root: [String: Any], _ key: String) throws -> Bool {
@@ -3082,6 +3192,13 @@ final class ToriiClientTests: XCTestCase {
             throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a number array"])
         }
         return values.map { UInt64(truncating: $0) }
+    }
+
+    private func stringArray(_ root: [String: Any], _ key: String) throws -> [String] {
+        guard let values = root[key] as? [String] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a string array"])
+        }
+        return values
     }
 
     private func sccpSampleProofHex(messageId: String = String(repeating: "11", count: 32),

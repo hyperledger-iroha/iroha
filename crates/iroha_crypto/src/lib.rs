@@ -63,7 +63,7 @@ use std::sync::Arc;
 #[cfg(feature = "bls")]
 use std::sync::{Mutex, OnceLock};
 use std::{
-    borrow::ToOwned as _,
+    borrow::{Cow, ToOwned as _},
     boxed::Box,
     format,
     string::{String, ToString as _},
@@ -485,7 +485,7 @@ impl From<(bls::BlsNormalPublicKey, bls::BlsNormalPrivateKey)> for KeyPair {
         (public_key, private_key): (bls::BlsNormalPublicKey, bls::BlsNormalPrivateKey),
     ) -> Self {
         Self {
-            public_key: PublicKey::new(PublicKeyFull::BlsNormal(public_key)),
+            public_key: PublicKey::new(PublicKeyFull::from_bls_normal_key(public_key)),
             private_key: PrivateKey(Box::new(Secret::new(PrivateKeyInner::BlsNormal(
                 private_key,
             )))),
@@ -497,7 +497,7 @@ impl From<(bls::BlsNormalPublicKey, bls::BlsNormalPrivateKey)> for KeyPair {
 impl From<(bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)> for KeyPair {
     fn from((public_key, private_key): (bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)) -> Self {
         Self {
-            public_key: PublicKey::new(PublicKeyFull::BlsSmall(public_key)),
+            public_key: PublicKey::new(PublicKeyFull::from_bls_small_key(&public_key)),
             private_key: PrivateKey(Box::new(Secret::new(PrivateKeyInner::BlsSmall(
                 private_key,
             )))),
@@ -517,9 +517,19 @@ enum PublicKeyFull {
         algorithm: Algorithm,
         key: signature::gost::PublicKey,
     },
-    #[cfg(feature = "bls")]
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    BlsNormal {
+        key: bls::BlsNormalPublicKey,
+        bytes: Vec<u8>,
+    },
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    BlsSmall {
+        key: bls::BlsSmallPublicKey,
+        bytes: Vec<u8>,
+    },
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     BlsNormal(bls::BlsNormalPublicKey),
-    #[cfg(feature = "bls")]
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     BlsSmall(bls::BlsSmallPublicKey),
     #[cfg(feature = "sm")]
     Sm2(Sm2PublicKey),
@@ -554,40 +564,72 @@ impl PublicKeyFull {
             }
             #[cfg(feature = "bls")]
             Algorithm::BlsNormal => {
-                bls::BlsNormal::parse_public_key(payload).map(PublicKeyFull::BlsNormal)
+                bls::BlsNormal::parse_public_key(payload).map(Self::from_bls_normal_key)
             }
             #[cfg(feature = "bls")]
             Algorithm::BlsSmall => {
-                bls::BlsSmall::parse_public_key(payload).map(PublicKeyFull::BlsSmall)
+                bls::BlsSmall::parse_public_key(payload).map(|key| Self::from_bls_small_key(&key))
             }
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => sm::decode_sm2_public_key_payload(payload).map(PublicKeyFull::Sm2),
         }
     }
 
-    /// Key payload
-    fn payload(&self) -> ConstVec<u8> {
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    fn from_bls_normal_key(key: bls::BlsNormalPublicKey) -> Self {
+        let bytes = key.to_bytes();
+        Self::BlsNormal { key, bytes }
+    }
+
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+    fn from_bls_normal_key(key: bls::BlsNormalPublicKey) -> Self {
+        Self::BlsNormal(key)
+    }
+
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    fn from_bls_small_key(key: &bls::BlsSmallPublicKey) -> Self {
+        let bytes = key.to_bytes();
+        Self::BlsSmall { key: *key, bytes }
+    }
+
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+    fn from_bls_small_key(key: &bls::BlsSmallPublicKey) -> Self {
+        Self::BlsSmall(key.clone())
+    }
+
+    /// Key payload in canonical form.
+    // SM2 payload encoding is fallible under `feature = "sm"`; keep one
+    // feature-independent signature for callers that canonicalize public keys.
+    #[allow(clippy::unnecessary_wraps)]
+    fn try_payload(&self) -> Result<Cow<'_, [u8]>, ParseError> {
         match self {
-            Self::Ed25519(key) => key.as_bytes().to_const_vec(),
-            Self::Secp256k1(key) => key.to_sec1_bytes().to_const_vec(),
-            Self::MlDsa(key) => key.clone().to_const_vec(),
+            Self::Ed25519(key) => Ok(Cow::Borrowed(key.as_bytes())),
+            Self::Secp256k1(key) => Ok(Cow::Owned(key.to_sec1_bytes().to_vec())),
+            Self::MlDsa(key) => Ok(Cow::Borrowed(key.as_slice())),
             #[cfg(feature = "gost")]
-            Self::Gost { key, .. } => key.as_bytes().to_const_vec(),
+            Self::Gost { key, .. } => Ok(Cow::Borrowed(key.as_bytes())),
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            Self::BlsNormal(key) => key.to_bytes().to_const_vec(),
+            Self::BlsNormal { bytes, .. } => Ok(Cow::Borrowed(bytes.as_slice())),
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            Self::BlsSmall(key) => key.to_bytes().to_const_vec(),
+            Self::BlsSmall { bytes, .. } => Ok(Cow::Borrowed(bytes.as_slice())),
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsNormal(key) => key.to_bytes().to_const_vec(),
+            Self::BlsNormal(key) => Ok(Cow::Borrowed(key.as_bytes())),
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsSmall(key) => key.to_bytes().to_const_vec(),
+            Self::BlsSmall(key) => Ok(Cow::Borrowed(key.as_bytes())),
             #[cfg(feature = "sm")]
             Self::Sm2(key) => {
                 sm::encode_sm2_public_key_payload(key.distid(), &key.to_sec1_bytes(false))
-                    .expect("SM2 public key payload must be encodable")
-                    .to_const_vec()
+                    .map(Cow::Owned)
             }
         }
+    }
+
+    /// Key payload.
+    fn payload(&self) -> ConstVec<u8> {
+        self.try_payload()
+            .expect("validated public key payload must be encodable")
+            .as_ref()
+            .to_const_vec()
     }
 
     fn algorithm(&self) -> Algorithm {
@@ -597,9 +639,13 @@ impl PublicKeyFull {
             Self::MlDsa(_) => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             Self::Gost { algorithm, .. } => *algorithm,
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            Self::BlsNormal { .. } => Algorithm::BlsNormal,
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            Self::BlsSmall { .. } => Algorithm::BlsSmall,
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             Self::BlsNormal(_) => Algorithm::BlsNormal,
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             Self::BlsSmall(_) => Algorithm::BlsSmall,
             #[cfg(feature = "sm")]
             Self::Sm2(_) => Algorithm::Sm2,
@@ -1044,13 +1090,6 @@ fn bls_collect_pks_with_pop<'a>(
 ) -> Result<Vec<&'a [u8]>, Error> {
     use std::collections::BTreeSet;
 
-    fn pop_cache_key(pk_bytes: &[u8], pop: &[u8]) -> Hash {
-        let mut buf = Vec::with_capacity(pk_bytes.len() + pop.len());
-        buf.extend_from_slice(pk_bytes);
-        buf.extend_from_slice(pop);
-        Hash::new(&buf)
-    }
-
     fn pop_cache() -> &'static Mutex<std::collections::BTreeSet<Hash>> {
         static CACHE: OnceLock<Mutex<std::collections::BTreeSet<Hash>>> = OnceLock::new();
         CACHE.get_or_init(|| Mutex::new(std::collections::BTreeSet::new()))
@@ -1066,7 +1105,7 @@ fn bls_collect_pks_with_pop<'a>(
         if !seen.insert(bytes) {
             return Err(Error::BadSignature);
         }
-        let cache_key = pop_cache_key(bytes, pop);
+        let cache_key = bls_pop_cache_key(bytes, pop);
         let cached = pop_cache()
             .lock()
             .ok()
@@ -1092,11 +1131,13 @@ fn bls_public_key_payload(pk: &PublicKey, expected: Algorithm) -> Result<&[u8], 
 }
 
 #[cfg(feature = "bls")]
+fn bls_pop_cache_key(pk_bytes: &[u8], pop: &[u8]) -> Hash {
+    Hash::new_from_chunks(&[pk_bytes, pop])
+}
+
+#[cfg(feature = "bls")]
 fn bls_pop_message_hash(pk_bytes: &[u8]) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-    buf.extend_from_slice(POP_DST.as_bytes());
-    buf.extend_from_slice(pk_bytes);
-    Hash::new(&buf).into()
+    Hash::new_from_chunks(&[POP_DST.as_bytes(), pk_bytes]).into()
 }
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
@@ -1569,11 +1610,6 @@ impl PublicKeyCompact {
             .map_err(|()| ParseError(format!("invalid public key algorithm tag {algorithm}")))
     }
 
-    fn algorithm(&self) -> Algorithm {
-        self.try_algorithm()
-            .expect("Invalid PublicKeyCompact::algorithm_and_payload")
-    }
-
     fn try_payload(&self) -> Result<&[u8], ParseError> {
         if self.algorithm_and_payload.is_empty() {
             return Err(ParseError("missing public key payload".to_owned()));
@@ -1759,13 +1795,13 @@ impl PublicKey {
                 }
             }
             #[cfg(feature = "bls")]
-            PrivateKeyInner::BlsNormal(secret) => PublicKeyFull::BlsNormal(
+            PrivateKeyInner::BlsNormal(secret) => PublicKeyFull::from_bls_normal_key(
                 bls::BlsNormal::derive_public_key(secret)
                     .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
             #[cfg(feature = "bls")]
-            PrivateKeyInner::BlsSmall(secret) => PublicKeyFull::BlsSmall(
-                bls::BlsSmall::derive_public_key(secret)
+            PrivateKeyInner::BlsSmall(secret) => PublicKeyFull::from_bls_small_key(
+                &bls::BlsSmall::derive_public_key(secret)
                     .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
             #[cfg(feature = "sm")]
@@ -1817,9 +1853,24 @@ impl PublicKey {
         Self::from_bytes(algorithm, &payload)
     }
 
-    /// Get the digital signature algorithm of the public key
+    /// Fallibly get the digital signature algorithm of the public key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the compact public-key state is missing its
+    /// algorithm tag or contains an unknown tag.
+    pub fn try_algorithm(&self) -> Result<Algorithm, ParseError> {
+        self.0.try_algorithm()
+    }
+
+    /// Get the digital signature algorithm of the public key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the compact public-key state is malformed. Use
+    /// [`Self::try_algorithm`] in fallible paths.
     pub fn algorithm(&self) -> Algorithm {
-        self.0.algorithm()
+        self.try_algorithm().expect("Invalid PublicKey::algorithm")
     }
 }
 
@@ -1834,16 +1885,23 @@ impl PublicKey {
     pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
         let full = self.validated_full()?;
         let algorithm = full.algorithm();
-        let canonical_payload = full.payload();
+        let canonical_payload = full.try_payload()?;
         let bytes = multihash::encode_public_key(algorithm, canonical_payload.as_ref())
             .map_err(|err| ParseError(err.to_string()))?;
 
         multihash::multihash_to_hex_string(&bytes)
     }
 
-    fn normalize(&self) -> String {
+    fn malformed_compact_marker(&self) -> String {
+        format!(
+            "invalid-public-key:{}",
+            hex::encode(self.0.algorithm_and_payload.as_ref())
+        )
+    }
+
+    fn normalize_lossy(&self) -> String {
         self.try_to_multihash_string()
-            .expect("public key must encode to a canonical multihash string")
+            .unwrap_or_else(|_| self.malformed_compact_marker())
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -1856,7 +1914,7 @@ impl PublicKey {
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
         let full = self.validated_full()?;
         let algorithm = full.algorithm();
-        let canonical_payload = full.payload();
+        let canonical_payload = full.try_payload()?;
         multihash::encode_public_key_prefixed(algorithm, canonical_payload.as_ref())
             .map_err(|err| ParseError(err.to_string()))
     }
@@ -1872,7 +1930,10 @@ impl PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl core::hash::Hash for PublicKey {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        (self.to_bytes()).hash(state)
+        match self.try_to_bytes() {
+            Ok(bytes) => bytes.hash(state),
+            Err(_) => self.0.algorithm_and_payload.hash(state),
+        }
     }
 }
 
@@ -1884,7 +1945,15 @@ impl PartialOrd for PublicKey {
 
 impl Ord for PublicKey {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.to_bytes().cmp(&other.to_bytes())
+        match (self.try_to_bytes(), other.try_to_bytes()) {
+            (Ok(left), Ok(right)) => left.cmp(&right),
+            (Err(_), Err(_)) => self
+                .0
+                .algorithm_and_payload
+                .cmp(&other.0.algorithm_and_payload),
+            (Ok(_), Err(_)) => core::cmp::Ordering::Less,
+            (Err(_), Ok(_)) => core::cmp::Ordering::Greater,
+        }
     }
 }
 
@@ -1914,25 +1983,37 @@ impl fmt::Debug for PublicKey {
             }
         }
 
-        let helper = Helper {
-            algorithm: self.algorithm(),
-            normalized: self.normalize(),
-        };
-        f.debug_tuple("PublicKey").field(&helper).finish()
+        match self.try_algorithm() {
+            Ok(algorithm) => {
+                let helper = Helper {
+                    algorithm,
+                    normalized: self.normalize_lossy(),
+                };
+                f.debug_tuple("PublicKey").field(&helper).finish()
+            }
+            Err(err) => f
+                .debug_struct("PublicKey")
+                .field("invalid", &err.to_string())
+                .field(
+                    "raw_compact",
+                    &hex::encode(self.0.algorithm_and_payload.as_ref()),
+                )
+                .finish(),
+        }
     }
 }
 
 #[cfg(not(feature = "ffi_import"))]
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.normalize())
+        f.write_str(&self.normalize_lossy())
     }
 }
 
 #[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonSerialize for PublicKey {
     fn json_serialize(&self, out: &mut String) {
-        let normalized = self.normalize();
+        let normalized = self.normalize_lossy();
         norito::json::JsonSerialize::json_serialize(&normalized, out);
     }
 }
@@ -3151,6 +3232,27 @@ mod tests {
 
     #[test]
     #[cfg(feature = "bls")]
+    fn bls_pop_hashes_match_legacy_contiguous_layout() {
+        let pk_bytes = [0x42; 96];
+        let pop = [0xA5; 48];
+
+        let mut legacy_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
+        legacy_message.extend_from_slice(POP_DST.as_bytes());
+        legacy_message.extend_from_slice(&pk_bytes);
+        let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&legacy_message).into();
+        assert_eq!(bls_pop_message_hash(&pk_bytes), expected_message_hash);
+
+        let mut legacy_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
+        legacy_cache_key.extend_from_slice(&pk_bytes);
+        legacy_cache_key.extend_from_slice(&pop);
+        assert_eq!(
+            bls_pop_cache_key(&pk_bytes, &pop),
+            Hash::new(&legacy_cache_key)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "bls")]
     fn bls_pop_prove_and_verify_roundtrip() {
         // Generate a BLS-normal key pair
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -3170,7 +3272,11 @@ mod tests {
 
         // PoP signed over POP_DST || pk (unhashed) must be rejected.
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let (_alg, pk_bytes) = kp.public_key().to_bytes();
+        let (algorithm, pk_bytes) = kp
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture BLS public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::BlsNormal);
         let mut unhashed_msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
         unhashed_msg.extend_from_slice(POP_DST.as_bytes());
         unhashed_msg.extend_from_slice(pk_bytes);
@@ -3401,7 +3507,9 @@ mod tests {
         let payload = sm::encode_sm2_public_key_payload(sm2_pk.distid(), &sec1).expect("payload");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct SM2 key");
 
-        let canonical = pk.to_string();
+        let canonical = pk
+            .try_to_multihash_string()
+            .expect("checked SM2 multihash formatting");
         let payload_hex = hex::encode_upper(&payload);
         assert!(
             canonical.starts_with("8626"),
@@ -3412,7 +3520,9 @@ mod tests {
             "SM2 multihash should embed payload bytes"
         );
 
-        let prefixed = pk.to_prefixed_string();
+        let prefixed = pk
+            .try_to_prefixed_string()
+            .expect("checked SM2 prefixed formatting");
         assert_eq!(prefixed, format!("sm2:{canonical}"));
 
         let parsed_prefixed: PublicKey = prefixed.parse().expect("parse prefixed key");
@@ -3515,6 +3625,69 @@ mod tests {
     }
 
     #[test]
+    fn public_key_full_try_payload_borrows_ed25519_payload() {
+        let public_key = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let (algorithm, payload) = public_key
+            .try_to_bytes()
+            .expect("generated public key must be well-formed");
+        let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+
+        match full
+            .try_payload()
+            .expect("validated public key payload is encodable")
+        {
+            Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
+            Cow::Owned(_) => panic!("Ed25519 full public key payload should borrow"),
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+    fn public_key_full_try_payload_borrows_blstrs_bls_payloads() {
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            let public_key = KeyPair::from_seed(vec![0x42; 32], algorithm)
+                .public_key()
+                .clone();
+            let (algorithm, payload) = public_key
+                .try_to_bytes()
+                .expect("generated BLS public key must be well-formed");
+            let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+
+            match full
+                .try_payload()
+                .expect("validated BLS public key payload is encodable")
+            {
+                Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
+                Cow::Owned(_) => panic!("blstrs BLS full public key payload should borrow"),
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    fn public_key_full_try_payload_borrows_w3f_bls_payloads() {
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            let public_key = KeyPair::from_seed(vec![0x42; 32], algorithm)
+                .public_key()
+                .clone();
+            let (algorithm, payload) = public_key
+                .try_to_bytes()
+                .expect("generated BLS public key must be well-formed");
+            let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+
+            match full
+                .try_payload()
+                .expect("validated BLS public key payload is encodable")
+            {
+                Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
+                Cow::Owned(_) => panic!("w3f BLS full public key payload should borrow"),
+            }
+        }
+    }
+
+    #[test]
     fn public_key_norito_golden_archive() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -3558,13 +3731,60 @@ mod tests {
 
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
+        let valid = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone();
         let missing_tag = PublicKey(PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         });
+        let invalid_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(vec![0xff]),
+        });
 
+        assert_eq!(
+            valid.try_algorithm().expect("valid algorithm"),
+            Algorithm::Ed25519
+        );
+        missing_tag
+            .try_algorithm()
+            .expect_err("missing compact algorithm tag must fail closed");
         missing_tag
             .try_to_bytes()
             .expect_err("missing compact algorithm tag must fail closed");
+        invalid_tag
+            .try_algorithm()
+            .expect_err("invalid compact algorithm tag must fail closed");
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_hash_and_ord_handle_malformed_compact_state_without_panic() {
+        let valid = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let missing_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(Vec::new()),
+        });
+        let invalid_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(vec![0xff]),
+        });
+
+        let mut hashed = std::collections::HashSet::new();
+        hashed.insert(valid.clone());
+        hashed.insert(missing_tag.clone());
+        hashed.insert(invalid_tag.clone());
+        assert_eq!(hashed.len(), 3);
+
+        let mut sorted = std::collections::BTreeSet::new();
+        sorted.insert(valid.clone());
+        sorted.insert(missing_tag.clone());
+        sorted.insert(invalid_tag);
+        assert_eq!(sorted.len(), 3);
+        assert!(
+            sorted.iter().next().is_some_and(|key| key == &valid),
+            "valid public keys should keep the existing order before malformed fallback keys"
+        );
+        assert!(valid < missing_tag);
     }
 
     #[test]
@@ -3578,6 +3798,28 @@ mod tests {
         malformed
             .try_to_prefixed_string()
             .expect_err("malformed public key must not format as prefixed multihash");
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_infallible_formatters_handle_malformed_compact_state_without_panic() {
+        let missing_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(Vec::new()),
+        });
+        let malformed_payload = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+
+        let missing_display = missing_tag.to_string();
+        assert_eq!(missing_display, "invalid-public-key:");
+        assert!(format!("{missing_tag:?}").contains("missing public key algorithm tag"));
+
+        let payload_display = malformed_payload.to_string();
+        assert_eq!(payload_display, "invalid-public-key:00");
+        assert!(format!("{malformed_payload:?}").contains("invalid-public-key:00"));
+
+        let json = norito::json::to_json(&missing_tag).expect("serialize malformed key marker");
+        assert_eq!(json, r#""invalid-public-key:""#);
+        norito::json::from_json::<PublicKey>(&json)
+            .expect_err("malformed marker must not deserialize as a public key");
     }
 
     #[test]
@@ -3598,7 +3840,9 @@ mod tests {
     fn public_key_from_bytes_roundtrip() {
         let key_pair = KeyPair::random();
         let (public_key, _) = key_pair.into_parts();
-        let (alg, bytes) = public_key.to_bytes();
+        let (alg, bytes) = public_key
+            .try_to_bytes()
+            .expect("generated public key must be well-formed");
         let reconstructed = PublicKey::from_bytes(alg, bytes).expect("Should decode");
         assert_eq!(public_key, reconstructed);
     }

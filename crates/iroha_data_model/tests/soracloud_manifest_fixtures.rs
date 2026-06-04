@@ -10,7 +10,10 @@ use std::{
 
 use iroha_crypto::{
     Hash,
-    fhe_bfv::{ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest},
+    fhe_bfv::{
+        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
+        registered_bfv_rns_modulus_chain_digest,
+    },
 };
 #[cfg(feature = "json")]
 use iroha_data_model::soracloud::SoraInrouManifestV1;
@@ -410,6 +413,8 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
     let registered_params = ram_lfe_bfv_parameters_v1();
     let parameter_digest =
         registered_bfv_parameter_digest(&registered_params).expect("registered BFV digest");
+    let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
+        .expect("registered BFV RNS digest");
     FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
         param_set: "bfv-default".parse().expect("valid name"),
@@ -432,6 +437,7 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         deprecation_height: None,
         withdraw_height: None,
         parameter_digest,
+        rns_modulus_chain_digest,
     }
 }
 

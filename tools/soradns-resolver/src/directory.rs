@@ -45,8 +45,11 @@ pub fn parse_directory_listing(bytes: &[u8]) -> Result<(DirectoryListing, [u8; 3
 }
 
 /// Build the canonical signing payload used for directory record signatures.
-pub fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, json::Error> {
-    let (_, public_key_bytes) = record.builder_public_key.to_bytes();
+pub fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>> {
+    let (_, public_key_bytes) = record
+        .builder_public_key
+        .try_to_bytes()
+        .wrap_err("directory builder public key is malformed")?;
     let payload = SigningPayload {
         record_version: record.record_version,
         created_at_ms: record.created_at_ms,
@@ -57,7 +60,7 @@ pub fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u
         proof_manifest_cid: record.proof_manifest_cid.to_string(),
         builder_public_key_hex: hex_encode(public_key_bytes),
     };
-    json::to_vec(&payload)
+    json::to_vec(&payload).wrap_err("failed to encode directory signing payload")
 }
 
 #[derive(Debug, JsonSerialize)]

@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-03
+Last updated: 2026-06-04
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -17,10 +17,41 @@ track detailed unfinished engineering work.
   secret-key free. Soracloud RotateLeft now requires public rotation-key
   refresh material for the outer ciphertext-slot envelope, and Bootstrap
   applies a validated public encrypted-zero refresh key. BFV evaluation-key
-  metadata now caps rotation-key bundles and requires canonical bounded
-  bootstrap key ids. Those refresh paths are still not a complete BFV-RNS
-  bootstrap or packed-polynomial
-  Galois-switching circuit.
+  metadata now caps rotation-key and Galois key bundles, rejects duplicate
+  Galois automorphism powers, and requires canonical bounded bootstrap key ids.
+  The crypto layer now also exposes and validates a
+  registered RAM-LFE v1 BFV RNS coefficient-modulus chain with bounded,
+  strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs and a
+  checked product that covers the current ciphertext modulus, plus a stable
+  domain-separated chain digest for governance and release-vector binding. The
+  same chain now supports checked limb-major polynomial decomposition and CRT
+  reconstruction, rejecting malformed limb counts, limb lengths, unreduced
+  residues, and source coefficients outside the ciphertext modulus; it also
+  has deterministic scalar residue addition and per-limb NTT-backed
+  negacyclic multiplication with a scalar fallback in `Z_Q[x] / (x^n + 1)`.
+  The shared Soracloud operation fixture now binds the registered RNS
+  descriptor/digest plus sample
+  decomposition/reconstruction, residue addition, and negacyclic
+  multiplication hashes across Rust and lightweight SDK shape checks. The RNS
+  chain now also exposes guarded exact ciphertext-modulus polynomial addition
+  and negacyclic multiplication for sufficiently wide chains, plus exact
+  RNS-backed ciphertext addition, multiplication, relinearization, and Galois
+  key-switch bridges that match the scalar evaluator on small wide-chain
+  profiles. The registered RAM-LFE chain still rejects treating product-ring
+  fixture arithmetic as ciphertext-modulus `Z_q` arithmetic unless the full
+  unreduced exact-lift bounds are satisfied. The deterministic BFV baseline now
+  also has packed-polynomial Galois automorphism keys that switch `sigma_k(s)`
+  ciphertexts back to the original secret key after applying `x -> x^k`, with
+  regressions covering canonical odd powers, malformed key rejection, and
+  plaintext automorphism parity; the exact-RNS Galois bridge now fails closed
+  under the registered production chain with the same coverage guard as
+  ciphertext multiplication. The shared Soracloud fixture now binds a canonical
+  Galois key-switching bundle shape, SDK-visible component hashes, a scalar
+  Galois switch output vector, and a packed Galois slot-permutation execution
+  vector backed by deterministic packed plaintext CRT slot encoding/decoding,
+  but those refresh paths, modulus-chain descriptors, residue arithmetic
+  helpers, and Galois key-switching primitives are still not a complete
+  BFV-RNS evaluator, bootstrap circuit, or runtime packed-slot RotateLeft path.
 - Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
   Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
   claim/resolve helpers, and a shared Soracloud BFV identifier-envelope fixture
@@ -31,12 +62,24 @@ track detailed unfinished engineering work.
   key/public-parameter byte lengths and SHA-256 digests, evaluation-key bundle
   byte length, SHA-256 digest, domain-separated digest, decomposition metadata,
   relinearization entry count, per-relinearization-entry `b`/`a`
-  coefficient-vector digests, rotation key count, bootstrap key id,
-  rotation/bootstrap encrypted-zero refresh digests, and refresh `c0`/`c1`
-  coefficient-vector digests. JavaScript, Swift, Kotlin/JVM, and Java Android
-  now validate those component-vector fields from the shared fixture, and the
-  JavaScript lane also carries adversarial fixture mutations for missing,
-  duplicate, zeroed, and count-drifted component metadata. A shared
+  coefficient-vector digests, Galois key count, Galois automorphism powers,
+  per-Galois-entry `b`/`a` coefficient-vector digests, rotation key count,
+  bootstrap key id, rotation/bootstrap encrypted-zero refresh digests, and
+  refresh `c0`/`c1` coefficient-vector digests. The fixture now also pins a
+  scalar Galois switch vector with deterministic input/output ciphertext and
+  plaintext coefficient digests, plus a packed Galois switch vector with input
+  slots, the induced slot permutation, output slots, packed plaintext
+  coefficient digest, ciphertext digests, and output component digests. The
+  same shared operation fixture now pins the
+  registered RNS chain descriptor/digest, deterministic sample coefficients,
+  per-limb residue hashes, and reconstructed hashes for RNS decomposition,
+  addition, and negacyclic multiplication; Rust recomputes those fields from
+  the registered chain, while JavaScript, Swift, Kotlin/JVM, and Java Android
+  validate the descriptor and residue-hash shape. JavaScript, Swift,
+  Kotlin/JVM, and Java Android now validate those component-vector fields from
+  the shared fixture, and the JavaScript lane also carries adversarial fixture
+  mutations for missing, duplicate, zeroed, count-drifted, and malformed RNS
+  metadata. A shared
   signed/proof-attestation identifier receipt fixture now pins canonical payload
   bytes, Iroha prehash, resolver signature, signed/proof attestation bytes, and
   adversarial receipt/policy mutations across the Rust data model, JavaScript,
@@ -44,12 +87,14 @@ track detailed unfinished engineering work.
   The Soracloud FHE governance fixtures now bind the canonical parameter set,
   execution policy, governance bundle, and job spec to the registered
   `bfv-default` RAM-LFE BFV runtime descriptor and reject descriptor drift in
-  core admission. The execution policy now also carries the canonical
-  evaluation-key bundle digest from the shared operation fixture, and
-  `RunSoracloudFheJob` rejects structurally valid but ungoverned key material
-  before output state is emitted. Shared release vectors still need to cover
-  the full BFV-RNS modulus-chain, packed Galois-switching, and bootstrapping
-  key bundle.
+  core admission. Parameter-set descriptors now also carry the canonical
+  domain-separated registered BFV RNS modulus-chain digest, and core admission
+  rejects RNS descriptor drift before FHE jobs can run. The execution policy now
+  also carries the canonical evaluation-key bundle digest from the shared
+  operation fixture, and `RunSoracloudFheJob` rejects structurally valid but
+  ungoverned key material before output state is emitted. Shared release
+  vectors still need to cover the full BFV-RNS evaluator, runtime packed slot
+  rotation backed by Galois key-switching, and bootstrapping key bundles.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
   checks into the next full workspace and SDK corridor. The `iroha_cli
   --all-targets` strict clippy gate now covers the governance-instruction, IVM
@@ -63,12 +108,18 @@ track detailed unfinished engineering work.
   --all-targets` clippy and focused library tests, with SM acceleration and
   OpenSSL preview tests serialized around their test-only runtime dispatch
   overrides. The combined `iroha_crypto --all-features` all-targets clippy,
-  library, and integration-test corridors are also green; the all-features pass
-  fixed SM dispatch precedence so `sm-neon-force` force-enables only the `Auto`
-  policy and explicit `force-disable` still pins the scalar fallback. The
-  `iroha_data_model --lib` strict clippy gate is green after clearing the
-  Kagemusha/ZK-ACE lint surface, and the full `soranet-relay` strict clippy
-  gate now reaches and passes relay diagnostics without `--no-deps`. Focused
+  library, and integration-test corridors are also green after keeping the BFV
+  adversarial evaluation-key metadata coverage below strict test-target line
+  limits and serializing forced-NEON SM acceleration tests around their shared
+  runtime override state; the all-features pass fixed SM dispatch precedence so
+  `sm-neon-force` force-enables only the `Auto` policy and explicit
+  `force-disable` still pins the scalar fallback. The
+  `iroha_data_model --all-targets` strict clippy gate is green after clearing
+  the Kagemusha/ZK-ACE test/bench lint surface, and the touched-package
+  all-target gate for `iroha_data_model`, `connect_norito_bridge`,
+  `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
+  with `--no-deps`. The full `soranet-relay` strict clippy gate now reaches and
+  passes relay diagnostics without `--no-deps`. Focused
   adversarial tests now cover malformed/truncated ciphertext envelopes,
   hidden-program shape/overflow rejection,
   replayed/tampered/future/expired/wrong-verifier openings,
@@ -110,8 +161,15 @@ track detailed unfinished engineering work.
   uses profile-sized `u16` constants instead of runtime `usize`-to-`u16`
   conversion assumptions; programmed BFV memory RNG transcript derivation now
   binds `u64` step values directly instead of converting through a panic-only
-  `expect`; the feature-gated BFV acceleration selector now falls back to
-  deterministic scalar schoolbook multiplication for zero or overflowed derived
+  `expect`; BFV/RAM-LFE domain-separated digest, receipt, and RNG-seed
+  transcripts now stream hash chunks directly while preserving the previous
+  contiguous byte layout; BFV `RotateLeft` outer-slot step normalization now also uses `u64`
+  modulo arithmetic before converting back to `usize`, avoiding
+  target-width-dependent behavior for large public rotation-key step counts;
+  programmed RAM-LFE BFV hidden-program admission now caps v1 instruction tapes
+  at the canonical 64-slot, four-instruction shape before execution; the
+  feature-gated BFV acceleration selector now falls back to deterministic scalar
+  schoolbook multiplication for zero or overflowed derived
   convolution lengths, and the CRT-NTT helper path now rejects invalid operand
   lengths, unsupported NTT lengths, and CRT reconstruction overflow before
   using that same fallback instead of panicking on degree or NTT arithmetic;
@@ -147,11 +205,18 @@ track detailed unfinished engineering work.
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
   ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
   the existing `Result` path instead of relying on a panic-only assertion;
+  GOST deterministic nonce generation now feeds the domain tag, private scalar,
+  message scalar, and optional extra entropy into HMAC-Streebog as separate
+  components and streams the HMAC inner hash directly while preserving the
+  previous contiguous seed transcript;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
   public/private key formatting, `Signature::try_new` now routes SM2 through
   checked private-key rebuild/signing helpers, and ML-DSA import plus
   `Signature::try_new` reject secrets whose recomputed public material or
-  embedded `tr = H(pk)` public hash is inconsistent before signing;
+  embedded `tr = H(pk)` public hash is inconsistent before signing; SoraNet PQ
+  labeled-HKDF derivation now streams the namespace, separator, label,
+  separator, and context components through `expand_multi_info`, preserving the
+  previous contiguous info layout without manual capacity arithmetic;
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, and expose fallible public-key
   reconstruction from secret material;
@@ -237,9 +302,141 @@ track detailed unfinished engineering work.
 	  `PublicKey::to_bytes()` helper after compact parsing has succeeded;
 	  `PublicKey::try_to_bytes()` is now public, giving downstream
 	  `Result`-returning paths a checked algorithm/payload accessor without
-	  relying on the infallible compatibility wrapper;
-	  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
-	  keys, and the standalone key-exchange surface now reject low-order encodings
+	  relying on the infallible compatibility wrapper; the legacy signer-backed
+	  SCCP EVM submission helper now uses it when deriving Secp256k1 signer
+	  public-key bytes, so malformed or non-Secp256k1 signer state fails closed
+	  before address derivation; `PublicKey` hashing and ordering now also use
+	  checked tag/payload extraction with a deterministic raw compact fallback
+	  for malformed in-memory envelopes, so peer maps and sorted target sets no
+	  longer reach the infallible compatibility accessor; `PublicKey::try_algorithm()`
+	  now exposes checked tag access, while infallible `Display`, `Debug`, and
+	  Norito JSON formatting emit a deterministic invalid-public-key marker for
+	  malformed in-memory compact envelopes instead of panicking; the `iroha_core`
+	  single-Ed25519 admission precheck, parsed-key cache, and allowed-signing
+	  admission gate now use checked public-key accessors for fast-path
+	  eligibility and signing algorithm checks, so malformed in-memory compact
+	  public-key state misses the optimization or returns a structured
+	  malformed-signature rejection instead of touching unchecked key invariant
+	  accessors; Sumeragi vote-verifier workers now also prepare peer key
+	  algorithms and aggregate-verification public-key bytes through the checked
+	  accessor, so malformed in-memory consensus peer keys are reported through
+	  `VoteSignatureError::SignatureInvalid` before BLS aggregate grouping or
+	  raw key-byte collection; block commit/signature subset validation, native
+	  AMX attestation signer checks, vNext aggregate-certificate signer
+	  classification, lane-relay QC key collection, consensus peer
+	  registration, consensus-key registration policy checks, active-roster
+	  filtering, and admission-time signature batch prechecks now share checked
+	  algorithm/payload extraction for consensus and transaction signer keys, so
+	  malformed in-memory keys are rejected through existing signature and policy
+	  error surfaces before BLS role checks, PoP lookup, or batch key-byte
+	  collection; account/domain controller capability
+	  gates now also pass multisig members through their checked public-key
+	  accessors instead of the infallible member convenience methods; account
+	  controller multisig policy construction, canonical member sorting, CTAP2
+	  policy encoding/digesting, and account-address controller encoding now
+	  extract compact public-key payloads through checked accessors, so malformed
+	  in-memory controller keys return `MalformedPublicKey` or
+	  `InvalidPublicKey` on result-returning paths instead of reaching
+	  compatibility invariant accessors; trusted-peer PoP config parsing,
+	  trusted-roster validation, daemon NPoS validator status counting, genesis
+	  trusted-peer PoP verification, and Torii Sumeragi BLS-key operator views
+	  now also classify BLS-normal keys through checked accessors, turning
+	  malformed in-memory keys into config errors or non-BLS status entries
+	  instead of compatibility accessor panics; SCCP Nexus BLS commit-QC
+	  verification and fraud assessment attester preflights now also classify
+	  public keys through checked accessors before PoP verification, aggregate
+	  signature verification, or Ed25519 signature-shape checks; restricted
+		  transaction-gossip target scoring and NPoS validator-election tie-break
+		  scoring now also read peer public-key bytes through checked accessors,
+		  falling back to the deterministic invalid-key marker for malformed
+		  in-memory peer keys while preserving valid-peer score inputs; JDG
+		  committee manifest validation, attestation signer membership checks, and
+		  BLS aggregate PoP lookup now also canonicalize committee and signer keys
+		  through checked accessors before duplicate detection, threshold
+		  membership checks, or aggregate verification; SoraFS GAR verification now
+		  also classifies registered gateway signer keys through checked accessors
+			  before Ed25519 JWS signature verification; SoraDNS resolver-directory
+			  signing payloads and Torii VPN quote response metering-key hex rendering
+			  now also extract public-key payloads through checked accessors, returning
+				  existing invalid-parameter/conversion-error surfaces for malformed
+				  in-memory keys; SCCP EVM digest signing and Torii SCCP proof-build
+				  diagnostics now also require checked Secp256k1 public-key
+				  classification before EVM address/signature handling; config
+				  parsing for streaming identity, Torii receipt signer, and Torii
+				  offline issuer public keys now also uses checked algorithm access
+				  before allow-list decisions; the Nexus app
+				  facade now classifies selected signing keys through checked
+					  accessors before transfer draft construction,
+					  Connect approval resolution, or wallet-signature requests; SoraFS
+					  gateway PoR proof construction now also extracts the embedded proof
+					  signer payload through checked accessors and rejects non-Ed25519
+					  gateway signing keys before emitting Ed25519-labelled proof
+					  envelopes; native Connect/Norito bridge C ABI and Java/JNI
+					  public-key export helpers now also copy public-key payloads only
+					  after checked extraction from derived or seeded keypairs; the JS
+					  host native binding now also exports generated/derived keypair and
+					  alias-proof signer payloads only after checked public-key
+						  extraction; reusable core/Torii/config/client/SoraFS Rust fixtures
+						  now also use checked public-key payload/algorithm accessors, leaving
+						  the targeted compatibility-accessor scan clean across those source
+						  roots; operator tooling and daemon paths for SoraDNS resolver signing
+						  payloads, SoraNet relay/puzzle identity derivation, Kagami PoP/genesis
+						  helpers, Taira canaries, Soracloud release governance proofs, CLI
+						  governance/account controller display, and ephemeral Torii receipt-signer
+						  logging now also use checked public-key accessors and propagate their
+						  existing error surfaces; P2P handshake hello construction now also
+						  extracts local peer key metadata through checked accessors and reports
+						  malformed local keys through a dedicated handshake error, while multisig
+						  members expose a fallible checked algorithm accessor for result-returning
+							  callers; Python native bridge keypair export, account public-key hex,
+							  transaction envelope public-key embedding, public-key multihash parsing,
+							  public/private multihash formatting, SM2 fixture public-key formatting,
+							  and SoraFS alias-proof fixture signer extraction now also use checked
+							  public-key payload/formatting access and return Python errors on
+							  malformed compact key state; SM2 typed formatter export, Connect C
+							  SM2 prefixed formatting, JavaScript native generic/SM2 multihash
+							  helpers, Kagami prefixed key JSON output, SoraFS manifest-sign key
+							  formatting, and ADDR-2 fixture multihash/prefixed fields now also
+							  use checked formatter APIs before emitting operator or SDK-facing
+							  strings; xtask SoraNet drill bundles, FastPQ manifests, Taikai anchor
+						  summaries, OpenAPI manifests, SoraNet rollout captures, SoraDNS release
+						  signing payloads, SoraFS admission/pin fixture generators, and SoraFS
+						  gateway token-signing key rotation now also extract embedded Ed25519
+						  public-key payloads through checked accessors before writing operator
+						  artifacts; offline note tests, ADDR-2 compliance
+						  vectors, and Offline V1/V2 interop vector generators now also extract
+						  fixture public-key payloads through checked accessors before embedding
+						  certificate, address, or offline FI public-key fields; the remaining
+						  SoraFS conformance/chunker/pin/discovery fixtures, gov draw fixtures,
+						  bridge proof vectors, config/test-network assertions, dev key example,
+						  Swift parity generator, and offline-note integration certificate helpers
+						  now also use checked public-key accessors, leaving the compatibility-accessor
+						  scan confined to `iroha_crypto` internals, tests, and benches; inside
+						  `iroha_crypto`, BLS PoP fixtures, generated public-key roundtrips,
+						  Ed25519 aggregate/batch fixtures, ML-DSA/PQC fixtures, and the Ed25519
+						  hot-path benchmark setup now also use checked public-key payload extraction,
+						  while ML-DSA public/private formatter roundtrips and SM2 public-key
+						  formatter fixtures now use checked multihash/prefixed formatter APIs,
+						  and `PublicKeyFull` normalization internals now use a fallible borrowed
+						  canonical-payload path for formatter encoders, and the blstrs typed BLS
+						  backend plus default w3f BLS `PublicKeyFull` variants now borrow stored
+						  canonical public-key payloads, clearing the targeted BLS formatter
+						  compatibility-accessor scan for both backends; bridge finality
+						  commit-QC validator classification now also
+						  uses checked public-key algorithm access before BLS aggregate
+						  verification, returning a structured malformed-validator-key error
+							  for malformed compact key state;
+						  JDG SDN commitment validation,
+								  registry registration/lookup, and attestation commitment dedup now
+								  also build SDN public-key fingerprints through checked payload
+								  extraction; VPN helper-ticket serialization now also exposes fallible
+								  checked byte/hex builders and Torii helper-ticket issuance uses them
+								  before embedding metering public-key payloads; embedded Soracloud
+								  provider-advert fixture admission now also validates provider and
+								  council Ed25519 public-key payloads through checked accessors before
+								  embedding advert/admission bytes;
+							  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
+				  keys, and the standalone key-exchange surface now reject low-order encodings
   before ECDH while retaining all-zero shared-secret fallback checks, and
   X25519 session-key derivation now maps HKDF expansion failures through the
   shared-secret `Result` path instead of using a panic-only assertion; SoraNet
@@ -282,7 +479,9 @@ track detailed unfinished engineering work.
   behavior;
   the RAM-LFE default programmed BFV hidden program now uses profile-sized
   `u16` constants instead of panic-only index conversion assumptions, and its
-  memory RNG transcript binds `u64` step values directly; the feature-gated
+  memory RNG transcript binds `u64` step values directly; BFV/RAM-LFE
+  domain-separated digest, receipt, and RNG-seed transcripts now stream hash
+  chunks directly while preserving the previous contiguous byte layout; the feature-gated
   BFV acceleration selector now falls back to deterministic scalar schoolbook
   multiplication for zero or overflowed derived convolution lengths, and its
   CRT-NTT helper path now rejects invalid operand lengths, unsupported NTT
@@ -371,7 +570,10 @@ track detailed unfinished engineering work.
   verification, while signed-ticket relay/transcript binding checks now run
   before signature work in the full verifier, and signed-ticket policy metadata
   now rejects unsupported versions, difficulty mismatches, expiry, and TTL
-  window failures before signature work; SoraNet PQ helpers now validate ML-KEM
+  window failures before signature work; signed-ticket ML-DSA payloads now use
+  a fixed-size buffer with explicit used length for the optional transcript
+  binding while preserving the previous contiguous signed payload layout;
+  SoraNet PQ helpers now validate ML-KEM
   encapsulation public-key lengths and ML-DSA signing context/secret-key
   lengths before drawing direct or OS-backed randomness for malformed inputs;
   SoraNet runtime client-hello processing now preflights NK2/NK3 client ML-KEM
@@ -401,8 +603,12 @@ track detailed unfinished engineering work.
   return fail-closed policies instead of unwinding on invalid timing bounds; PoW
   ticket minting, Argon2 puzzle minting, and
   revocation-store insertion now reject unrepresentable expiry timestamps
-  through checked `SystemTime` conversion, and p2p SoraNet runtime construction
-  now uses those fallible constructors for config-derived PoW/puzzle bounds;
+  through checked `SystemTime` conversion; PoW challenge, solution-digest, and
+  revocation fingerprints plus Argon2 puzzle challenges now feed BLAKE3
+  incrementally while preserving the previous contiguous transcript layout, and
+  Argon2 puzzle solution salts now use a fixed-size stack buffer. P2P SoraNet
+  runtime construction now uses those fallible constructors for config-derived
+  PoW/puzzle bounds;
   relay capability advertisement and runtime GREASE append now check TLV payload
   lengths before writing the two-byte length field, and relay config validation
   rejects configured GREASE payloads that cannot fit that wire field;
@@ -442,7 +648,10 @@ track detailed unfinished engineering work.
   return decode errors instead of relying on manual slice invariants; admission
   tokens now expose `try_encode`, and the compatibility encoder fails closed to
   a malformed frame when impossible direct token state cannot fit the v1
-  signature-length prefix;
+  signature-length prefix; admission-token ML-DSA signing bodies now use a
+  fixed-size stack buffer for the domain-separated body bytes shared by minting,
+  verification, and token-id derivation while preserving the previous
+  contiguous transcript layout;
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer
@@ -569,21 +778,25 @@ track detailed unfinished engineering work.
 
 ## SoraFS paid pin validation follow-ups
 
-- Rerun the full SoraFS data-model, core pin-registry, Torii storage-pin, and
-  gateway policy suites under the next long validation budget. Focused coverage
-  is now green for the paid-pin adversarial cases, and SoraFS proof-token
-  decode now uses checked cursor reads for fixed-width moderation-token fields
-  with truncated-prefix regression coverage while rejecting unrepresentable
-  issued/expiry UNIX-second fields before `SystemTime` conversion; proof-token
-  body encoding now exposes `try_encode`, routes mint/signature/digest helpers
-  through checked entry-count and entry-length narrowing, and makes the
-  compatibility `encode` path fail closed to a malformed frame for impossible
-  direct token states; proof-token base64 header encoding/decoding now uses the
-  `base64` crate's checked no-alloc slice helpers instead of manual capacity
-  arithmetic and panic-only buffer assertions; remaining breadth should include
-  historical fee receipt acceptance after governance pricing changes, manifest
-  envelope validation, admission fail-closed, streaming CAR range coverage, and
-  SDK validation once Java is available.
+- Completed 2026-06-04: reran the SoraFS paid-pin validation corridor across
+  the data-model SoraFS filter, DA pin intent query-response roundtrip, Core
+  pin-registry suite, Torii storage-pin/discovery suite, and integration gateway
+  policy/conformance filter. The pass is green after the paid-pin adversarial
+  coverage and proof-token hardening work.
+- SoraFS proof-token decode now uses checked cursor reads for fixed-width
+  moderation-token fields with truncated-prefix regression coverage while
+  rejecting unrepresentable issued/expiry UNIX-second fields before
+  `SystemTime` conversion; proof-token body encoding now exposes `try_encode`,
+  routes mint/signature/digest helpers through checked entry-count and
+  entry-length narrowing, and makes the compatibility `encode` path fail closed
+  to a malformed frame for impossible direct token states; proof-token base64
+  header encoding/decoding now uses the `base64` crate's checked no-alloc slice
+  helpers instead of manual capacity arithmetic and panic-only buffer
+  assertions.
+- Remaining breadth should include historical fee receipt acceptance after
+  governance pricing changes, manifest envelope validation, admission
+  fail-closed, streaming CAR range coverage, and SDK validation once Java is
+  available.
 
 ## Norito columnar and streaming validation follow-ups
 
@@ -1772,6 +1985,10 @@ track detailed unfinished engineering work.
     borrowing the entrypoint slice, signed/external entrypoint encoded-length
     coverage avoids the residual Norito fallback for representative shapes, and
     gossip transaction decode now uses the shared cached payload helper.
+  - Rechecked 2026-06-04: the focused `AcceptedTransaction` signed-length,
+    decoded-versioned signed transaction, and gossip signed-metadata regressions
+    remain green. No additional no-wire-change edit is obvious without a fresh
+    sampled profile showing `signed_encoded_len` as a material current bottleneck.
   - The clean release 4-peer no-fault prebuilt `20k TPS` / `120s` rerun at
     `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`
     exited `0`, accepted `54,574` ingress transactions, and reached `28,710`

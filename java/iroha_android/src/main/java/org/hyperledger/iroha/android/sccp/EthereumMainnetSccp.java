@@ -30,6 +30,47 @@ public final class EthereumMainnetSccp {
       "0x577b41c65ffbce226de59f224b464797257063747891b88ebec1bcd57af82727";
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   private static final int BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
+  private static final long ETHEREUM_MAINNET_SECONDS_PER_SLOT = 12L;
+
+  private static final class BeaconRestHeaderSummary {
+    final String root;
+    final long slot;
+
+    BeaconRestHeaderSummary(final String root, final long slot) {
+      this.root = root;
+      this.slot = slot;
+    }
+  }
+
+  private static final class BeaconRestBlockId {
+    final String id;
+    final Long slot;
+    final String root;
+
+    BeaconRestBlockId(final String id, final Long slot, final String root) {
+      this.id = id;
+      this.slot = slot;
+      this.root = root;
+    }
+  }
+
+  private static final class BeaconRestFinalityUpdateSummary {
+    final String syncCommitteeBits;
+    final String syncCommitteeSignature;
+    final long syncCommitteeParticipation;
+    final long syncSignatureSlot;
+
+    BeaconRestFinalityUpdateSummary(
+        final String syncCommitteeBits,
+        final String syncCommitteeSignature,
+        final long syncCommitteeParticipation,
+        final long syncSignatureSlot) {
+      this.syncCommitteeBits = syncCommitteeBits;
+      this.syncCommitteeSignature = syncCommitteeSignature;
+      this.syncCommitteeParticipation = syncCommitteeParticipation;
+      this.syncSignatureSlot = syncSignatureSlot;
+    }
+  }
 
   private final EvmSccpProver.WitnessProvider witnessProvider;
   private final EvmSccpProver.ProofEngine proofEngine;
@@ -412,6 +453,17 @@ public final class EthereumMainnetSccp {
     if (!evidence.beaconFinality().containsKey("beaconSlot")) {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires beaconFinality.beaconSlot");
+    }
+    for (final String field :
+        Arrays.asList(
+            "syncCommitteeBits",
+            "syncCommitteeSignature",
+            "syncCommitteeParticipation",
+            "syncSignatureSlot")) {
+      if (!evidence.beaconFinality().containsKey(field)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet SCCP inbound proof requires beaconFinality." + field);
+      }
     }
     final byte[] proofBytes = inboundProver.prove(evidence);
     if (proofBytes == null || proofBytes.length == 0) {
@@ -810,6 +862,22 @@ public final class EthereumMainnetSccp {
     return null;
   }
 
+  private static Object strictFirstPresent(
+      final Map<String, Object> input, final String label, final String... keys) {
+    Object selected = null;
+    boolean found = false;
+    for (final String key : keys) {
+      if (input.containsKey(key)) {
+        if (found) {
+          throw new IllegalArgumentException(label + " must not use multiple aliases");
+        }
+        selected = input.get(key);
+        found = true;
+      }
+    }
+    return selected;
+  }
+
   private static String normalizeRpcHex(
       final Object value, final String label, final int byteLength) {
     return normalizeRpcHex(value, label, byteLength, false);
@@ -921,8 +989,9 @@ public final class EthereumMainnetSccp {
     }
     if (beaconFinality != null) {
       final Object finalityFinalizedRootInput =
-          firstPresent(
+          strictFirstPresent(
               beaconFinality,
+              "beaconFinality.finalizedHeaderRoot",
               "finalizedHeaderRoot",
               "finalized_header_root",
               "beaconFinalizedRoot",
@@ -940,7 +1009,11 @@ public final class EthereumMainnetSccp {
         }
       }
       final Object finalitySyncCommitteeRootInput =
-          firstPresent(beaconFinality, "syncCommitteeRoot", "sync_committee_root");
+          strictFirstPresent(
+              beaconFinality,
+              "beaconFinality.syncCommitteeRoot",
+              "syncCommitteeRoot",
+              "sync_committee_root");
       if (finalitySyncCommitteeRootInput != null) {
         final String finalitySyncCommitteeRoot =
             normalizeRpcHex(
@@ -954,8 +1027,9 @@ public final class EthereumMainnetSccp {
         }
       }
       final Object finalityBeaconSlotInput =
-          firstPresent(
+          strictFirstPresent(
               beaconFinality,
+              "beaconFinality.beaconSlot",
               "beaconSlot",
               "beacon_slot",
               "finalizedSlot",
@@ -1066,7 +1140,11 @@ public final class EthereumMainnetSccp {
         }
         final String logTransactionHash =
             normalizeRpcHex(
-                firstPresent(log, "transactionHash", "transaction_hash"),
+                strictFirstPresent(
+                    log,
+                    "receipt.logs[" + index + "].transactionHash",
+                    "transactionHash",
+                    "transaction_hash"),
                 "receipt.logs[" + index + "].transactionHash",
                 32);
         if (transactionHash != null && !transactionHash.equals(logTransactionHash)) {
@@ -1075,7 +1153,11 @@ public final class EthereumMainnetSccp {
         }
         final String logBlockHash =
             normalizeRpcHex(
-                firstPresent(log, "blockHash", "block_hash"),
+                strictFirstPresent(
+                    log,
+                    "receipt.logs[" + index + "].blockHash",
+                    "blockHash",
+                    "block_hash"),
                 "receipt.logs[" + index + "].blockHash",
                 32);
         if (blockHash != null && !blockHash.equals(logBlockHash)) {
@@ -1084,7 +1166,11 @@ public final class EthereumMainnetSccp {
         }
         final String logBlockNumber =
             normalizePositiveRpcQuantity(
-                firstPresent(log, "blockNumber", "block_number"),
+                strictFirstPresent(
+                    log,
+                    "receipt.logs[" + index + "].blockNumber",
+                    "blockNumber",
+                    "block_number"),
                 "receipt.logs[" + index + "].blockNumber");
         if (blockNumber != null && !blockNumber.equals(logBlockNumber)) {
           throw new IllegalArgumentException(
@@ -1166,8 +1252,9 @@ public final class EthereumMainnetSccp {
       final String expectedReceiptsRoot) {
     final long executionBlockNumber =
         normalizeUnsignedInteger(
-            firstPresent(
+            strictFirstPresent(
                 finality,
+                "beaconFinality.executionBlockNumber",
                 "executionBlockNumber",
                 "execution_block_number",
                 "finalityHeight",
@@ -1183,8 +1270,9 @@ public final class EthereumMainnetSccp {
     }
     final String executionBlockHash =
         normalizeRpcHex(
-            firstPresent(
+            strictFirstPresent(
                 finality,
+                "beaconFinality.executionBlockHash",
                 "executionBlockHash",
                 "execution_block_hash",
                 "finalityBlockHash",
@@ -1196,8 +1284,9 @@ public final class EthereumMainnetSccp {
     }
     final String executionReceiptsRoot =
         normalizeRpcHex(
-            firstPresent(
+            strictFirstPresent(
                 finality,
+                "beaconFinality.executionReceiptsRoot",
                 "executionReceiptsRoot",
                 "execution_receipts_root",
                 "receiptsRoot",
@@ -1214,8 +1303,9 @@ public final class EthereumMainnetSccp {
     normalized.put("executionBlockHash", executionBlockHash);
     normalized.put("executionReceiptsRoot", executionReceiptsRoot);
     final Object finalizedHeaderRootInput =
-        firstPresent(
+        strictFirstPresent(
             finality,
+            "beaconFinality.finalizedHeaderRoot",
             "finalizedHeaderRoot",
             "finalized_header_root",
             "beaconFinalizedRoot",
@@ -1227,14 +1317,25 @@ public final class EthereumMainnetSccp {
               finalizedHeaderRootInput, "beaconFinality.finalizedHeaderRoot", 32));
     }
     final Object syncCommitteeRootInput =
-        firstPresent(finality, "syncCommitteeRoot", "sync_committee_root");
+        strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeRoot",
+            "syncCommitteeRoot",
+            "sync_committee_root");
     if (syncCommitteeRootInput != null) {
       normalized.put(
           "syncCommitteeRoot",
           normalizeRpcHex(syncCommitteeRootInput, "beaconFinality.syncCommitteeRoot", 32));
     }
     final Object beaconSlotInput =
-        firstPresent(finality, "beaconSlot", "beacon_slot", "finalizedSlot", "finalized_slot", "slot");
+        strictFirstPresent(
+            finality,
+            "beaconFinality.beaconSlot",
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot");
     if (beaconSlotInput != null) {
       final long beaconSlot = normalizeUnsignedInteger(beaconSlotInput, "beaconFinality.beaconSlot");
       if (beaconSlot == 0) {
@@ -1242,7 +1343,85 @@ public final class EthereumMainnetSccp {
       }
       normalized.put("beaconSlot", Long.toString(beaconSlot));
     }
+    final Object syncCommitteeBitsInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeBits",
+            "syncCommitteeBits",
+            "sync_committee_bits");
+    if (syncCommitteeBitsInput != null) {
+      normalized.put(
+          "syncCommitteeBits",
+          normalizeFinalitySyncCommitteeBits(
+              syncCommitteeBitsInput, "beaconFinality.syncCommitteeBits"));
+    }
+    final Object syncCommitteeSignatureInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeSignature",
+            "syncCommitteeSignature",
+            "sync_committee_signature");
+    if (syncCommitteeSignatureInput != null) {
+      normalized.put(
+          "syncCommitteeSignature",
+          normalizeRpcHex(
+              syncCommitteeSignatureInput, "beaconFinality.syncCommitteeSignature", 96));
+    }
+    final Object syncSignatureSlotInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.syncSignatureSlot",
+            "syncSignatureSlot",
+            "sync_signature_slot",
+            "signatureSlot",
+            "signature_slot");
+    if (syncSignatureSlotInput != null) {
+      final long syncSignatureSlot =
+          normalizeUnsignedInteger(syncSignatureSlotInput, "beaconFinality.syncSignatureSlot");
+      if (syncSignatureSlot == 0) {
+        throw new IllegalArgumentException("beaconFinality.syncSignatureSlot must be positive");
+      }
+      normalized.put("syncSignatureSlot", Long.toString(syncSignatureSlot));
+    }
+    final Object syncCommitteeParticipationInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeParticipation",
+            "syncCommitteeParticipation",
+            "sync_committee_participation");
+    if (syncCommitteeParticipationInput != null) {
+      final long syncCommitteeParticipation =
+          normalizeUnsignedInteger(
+              syncCommitteeParticipationInput, "beaconFinality.syncCommitteeParticipation");
+      if (syncCommitteeParticipation == 0) {
+        throw new IllegalArgumentException(
+            "beaconFinality.syncCommitteeParticipation must be positive");
+      }
+      normalized.put("syncCommitteeParticipation", Long.toString(syncCommitteeParticipation));
+    }
     return Collections.unmodifiableMap(normalized);
+  }
+
+  private static String normalizeFinalitySyncCommitteeBits(
+      final Object value, final String label) {
+    final String bits = normalizeRpcHex(value, label, 64, true);
+    if (finalitySyncCommitteeParticipation(bits) == 0) {
+      throw new IllegalArgumentException(label + " must contain at least one participant");
+    }
+    return bits;
+  }
+
+  private static long finalitySyncCommitteeParticipation(final String bits) {
+    final String text = bits.substring(2);
+    long count = 0;
+    for (int index = 0; index < text.length(); index += 2) {
+      int value = Integer.parseInt(text.substring(index, index + 2), 16);
+      while (value != 0) {
+        count += value & 1;
+        value >>>= 1;
+      }
+    }
+    return count;
   }
 
   private static String normalizeBeaconRestEndpoint(final String endpoint) {
@@ -1495,61 +1674,42 @@ public final class EthereumMainnetSccp {
       final String receiptsRoot =
           normalizeRpcHex(
               firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
-      final Map<String, Object> headerRoot =
+      final BeaconRestBlockId targetBlockId = beaconRestBlockIdForTarget(block);
+      final Map<String, Object> finalizedHeaderResponse =
           fetchJsonObject("/eth/v1/beacon/headers/finalized", "Ethereum mainnet Beacon REST finalized header");
-      rejectUnsafeBeaconRestPayload(headerRoot, "Ethereum mainnet Beacon REST finalized header");
-      final Map<String, Object> headerData =
-          expectBeaconRestObject(
-              requireBeaconRestField(
-                  headerRoot, "Ethereum mainnet Beacon REST finalized header", "data"),
-              "Ethereum mainnet Beacon REST finalized header.data");
-      rejectNonBooleanBeaconRestCanonical(
-          headerData, "Ethereum mainnet Beacon REST finalized header");
-      final String finalizedHeaderRoot =
-          normalizeRpcHex(
-              requireBeaconRestField(
-                  headerData, "Ethereum mainnet Beacon REST finalized header.data", "root"),
-              "finalizedHeaderRoot",
-              32);
-      final Map<String, Object> header =
-          expectBeaconRestObject(
-              requireBeaconRestField(
-                  headerData, "Ethereum mainnet Beacon REST finalized header.data", "header"),
-              "Ethereum mainnet Beacon REST finalized header.data.header");
-      final Map<String, Object> message =
-          expectBeaconRestObject(
-              requireBeaconRestField(
-                  header,
-                  "Ethereum mainnet Beacon REST finalized header.data.header",
-                  "message"),
-              "Ethereum mainnet Beacon REST finalized header.data.header.message");
-      for (final String field : Arrays.asList("parent_root", "state_root", "body_root")) {
-        normalizeRpcHex(
-            requireBeaconRestField(
-                message,
-                "Ethereum mainnet Beacon REST finalized header.data.header.message",
-                field),
-            "Ethereum mainnet Beacon REST finalized header.data.header.message." + field,
-            32);
+      final BeaconRestHeaderSummary finalizedHeader =
+          beaconRestHeaderSummary(
+              finalizedHeaderResponse, "Ethereum mainnet Beacon REST finalized header");
+      final BeaconRestHeaderSummary targetHeader;
+      if ("finalized".equals(targetBlockId.id)) {
+        targetHeader = finalizedHeader;
+      } else {
+        targetHeader =
+            beaconRestHeaderSummary(
+                fetchJsonObject(
+                    "/eth/v1/beacon/headers/" + targetBlockId.id,
+                    "Ethereum mainnet Beacon REST finalized target header"),
+                "Ethereum mainnet Beacon REST finalized target header");
       }
-      normalizeRpcHex(
-          requireBeaconRestField(
-              header, "Ethereum mainnet Beacon REST finalized header.data.header", "signature"),
-          "Ethereum mainnet Beacon REST finalized header.data.header.signature",
-          96);
-      final long beaconSlot =
-          normalizeUnsignedInteger(
-              requireBeaconRestField(
-                  message,
-                  "Ethereum mainnet Beacon REST finalized header.data.header.message",
-                  "slot"),
-              "beaconFinality.beaconSlot");
-      if (beaconSlot == 0) {
-        throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
+      if (targetBlockId.slot != null && targetHeader.slot != targetBlockId.slot.longValue()) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot");
+      }
+      if (targetBlockId.root != null && !targetHeader.root.equals(targetBlockId.root)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finalized target header root must match beaconBlockRoot");
+      }
+      if (targetHeader.slot > finalizedHeader.slot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header");
+      }
+      if (targetHeader.slot == finalizedHeader.slot && !targetHeader.root.equals(finalizedHeader.root)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST target header root must match finalized header root at the same slot");
       }
       final Map<String, Object> finalizedBlockRootResponse =
           fetchJsonObject(
-              "/eth/v1/beacon/blocks/finalized/root",
+              "/eth/v1/beacon/blocks/" + targetBlockId.id + "/root",
               "Ethereum mainnet Beacon REST finalized block root");
       rejectUnsafeBeaconRestPayload(
           finalizedBlockRootResponse, "Ethereum mainnet Beacon REST finalized block root");
@@ -1568,13 +1728,13 @@ public final class EthereumMainnetSccp {
                   "root"),
               "finalizedBlockRoot",
               32);
-      if (!finalizedBlockRootHash.equals(finalizedHeaderRoot)) {
+      if (!finalizedBlockRootHash.equals(targetHeader.root)) {
         throw new IllegalArgumentException(
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root");
       }
       final Map<String, Object> finalizedBlockRoot =
           fetchJsonObject(
-              "/eth/v2/beacon/blocks/finalized",
+              "/eth/v2/beacon/blocks/" + targetBlockId.id,
               "Ethereum mainnet Beacon REST finalized block");
       rejectUnsafeBeaconRestPayload(
           finalizedBlockRoot, "Ethereum mainnet Beacon REST finalized block");
@@ -1597,7 +1757,7 @@ public final class EthereumMainnetSccp {
                   "Ethereum mainnet Beacon REST finalized block.data.message",
                   "slot"),
               "Ethereum mainnet Beacon REST finalized block.data.message.slot");
-      if (finalizedBlockSlot != beaconSlot) {
+      if (finalizedBlockSlot != targetHeader.slot) {
         throw new IllegalArgumentException(
             "Ethereum mainnet Beacon REST finalized block slot must match finalized header slot");
       }
@@ -1677,23 +1837,235 @@ public final class EthereumMainnetSccp {
                     "root"),
                 "finalizedCheckpointRoot",
                 32);
-        if (!finalizedCheckpointRoot.equals(finalizedHeaderRoot)) {
+        if (!finalizedCheckpointRoot.equals(finalizedHeader.root)) {
           throw new IllegalArgumentException(
               "Ethereum mainnet Beacon REST finality checkpoint root must match finalized header root");
         }
       }
+      final BeaconRestFinalityUpdateSummary finalityUpdate =
+          beaconRestFinalityUpdateSummary(
+              fetchJsonObject(
+                  "/eth/v1/beacon/light_client/finality_update",
+                  "Ethereum mainnet Beacon REST light-client finality update"),
+              finalizedHeader.slot);
       final java.util.LinkedHashMap<String, Object> evidence = new java.util.LinkedHashMap<>();
       evidence.put(
           "executionBlockNumber",
           Long.toString(normalizeUnsignedInteger(blockNumber, "block.number")));
       evidence.put("executionBlockHash", blockHash);
       evidence.put("executionReceiptsRoot", receiptsRoot);
-      evidence.put("finalizedHeaderRoot", finalizedHeaderRoot);
+      evidence.put("finalizedHeaderRoot", targetHeader.root);
       evidence.put(
           "syncCommitteeRoot",
           resolveBeaconRestSyncCommitteeRoot(syncCommitteeRoot, syncCommitteePayload));
-      evidence.put("beaconSlot", Long.toString(beaconSlot));
+      evidence.put("beaconSlot", Long.toString(targetHeader.slot));
+      evidence.put("syncCommitteeBits", finalityUpdate.syncCommitteeBits);
+      evidence.put("syncCommitteeSignature", finalityUpdate.syncCommitteeSignature);
+      evidence.put(
+          "syncCommitteeParticipation",
+          Long.toString(finalityUpdate.syncCommitteeParticipation));
+      evidence.put("syncSignatureSlot", Long.toString(finalityUpdate.syncSignatureSlot));
       return Collections.unmodifiableMap(evidence);
+    }
+
+    private BeaconRestBlockId beaconRestBlockIdForTarget(final Map<String, Object> block) {
+      final Object rootInput =
+          firstPresent(
+              block,
+              "beaconBlockRoot",
+              "beacon_block_root",
+              "targetBeaconBlockRoot",
+              "target_beacon_block_root");
+      if (rootInput != null) {
+        final String root = normalizeRpcHex(rootInput, "block.beaconBlockRoot", 32);
+        return new BeaconRestBlockId(root, null, root);
+      }
+      final Object idInput =
+          firstPresent(
+              block,
+              "beaconBlockId",
+              "beacon_block_id",
+              "targetBeaconBlockId",
+              "target_beacon_block_id");
+      if (idInput != null) {
+        return beaconRestBlockIdFromValue(idInput, "block.beaconBlockId");
+      }
+      final Object slotInput =
+          firstPresent(block, "beaconSlot", "beacon_slot", "finalizedSlot", "finalized_slot", "slot");
+      if (slotInput != null) {
+        final long slot = normalizeBeaconSlot(slotInput, "block.beaconSlot");
+        return new BeaconRestBlockId(Long.toString(slot), Long.valueOf(slot), null);
+      }
+      final Object timestampInput = firstPresent(block, "timestamp", "blockTimestamp", "block_timestamp");
+      if (timestampInput != null) {
+        final long timestamp = normalizeUnsignedInteger(timestampInput, "block.timestamp");
+        final long genesisTime = beaconRestGenesisTime();
+        if (timestamp < genesisTime) {
+          throw new IllegalArgumentException("block.timestamp must not be before Beacon genesis time");
+        }
+        final long elapsed = timestamp - genesisTime;
+        if (elapsed % ETHEREUM_MAINNET_SECONDS_PER_SLOT != 0) {
+          throw new IllegalArgumentException(
+              "block.timestamp must align to an Ethereum mainnet Beacon slot");
+        }
+        final long slot = elapsed / ETHEREUM_MAINNET_SECONDS_PER_SLOT;
+        if (slot == 0) {
+          throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
+        }
+        return new BeaconRestBlockId(Long.toString(slot), Long.valueOf(slot), null);
+      }
+      return new BeaconRestBlockId("finalized", null, null);
+    }
+
+    private long beaconRestGenesisTime() {
+      final Map<String, Object> genesis =
+          fetchJsonObject(
+              "/eth/v1/beacon/genesis",
+              "Ethereum mainnet Beacon REST genesis");
+      final Map<String, Object> data =
+          expectBeaconRestObject(
+              requireBeaconRestField(genesis, "Ethereum mainnet Beacon REST genesis", "data"),
+              "Ethereum mainnet Beacon REST genesis.data");
+      return normalizeUnsignedInteger(
+          requireBeaconRestField(
+              data,
+              "Ethereum mainnet Beacon REST genesis.data",
+              "genesis_time"),
+          "Ethereum mainnet Beacon REST genesis.data.genesis_time");
+    }
+
+    private static BeaconRestHeaderSummary beaconRestHeaderSummary(
+        final Map<String, Object> payload, final String label) {
+      rejectUnsafeBeaconRestPayload(payload, label);
+      final Map<String, Object> headerData =
+          expectBeaconRestObject(
+              requireBeaconRestField(payload, label, "data"), label + ".data");
+      rejectNonBooleanBeaconRestCanonical(headerData, label);
+      final String root =
+          normalizeRpcHex(
+              requireBeaconRestField(headerData, label + ".data", "root"),
+              label.contains("target") ? "targetHeaderRoot" : "finalizedHeaderRoot",
+              32);
+      final Map<String, Object> header =
+          expectBeaconRestObject(
+              requireBeaconRestField(headerData, label + ".data", "header"),
+              label + ".data.header");
+      final Map<String, Object> message =
+          expectBeaconRestObject(
+              requireBeaconRestField(header, label + ".data.header", "message"),
+              label + ".data.header.message");
+      for (final String field : Arrays.asList("parent_root", "state_root", "body_root")) {
+        normalizeRpcHex(
+            requireBeaconRestField(message, label + ".data.header.message", field),
+            label + ".data.header.message." + field,
+            32);
+      }
+      normalizeRpcHex(
+          requireBeaconRestField(header, label + ".data.header", "signature"),
+          label + ".data.header.signature",
+          96);
+      final long slot =
+          normalizeBeaconSlot(
+              requireBeaconRestField(message, label + ".data.header.message", "slot"),
+              "beaconFinality.beaconSlot");
+      return new BeaconRestHeaderSummary(root, slot);
+    }
+
+    private static BeaconRestFinalityUpdateSummary beaconRestFinalityUpdateSummary(
+        final Map<String, Object> payload, final long expectedFinalizedSlot) {
+      final String label = "Ethereum mainnet Beacon REST light-client finality update";
+      rejectUnsafeBeaconRestPayload(payload, label);
+      final Map<String, Object> data =
+          expectBeaconRestObject(requireBeaconRestField(payload, label, "data"), label + ".data");
+      final Map<String, Object> finalizedHeader =
+          expectBeaconRestObject(
+              requireBeaconRestField(data, label + ".data", "finalized_header"),
+              label + ".data.finalized_header");
+      final Map<String, Object> finalizedBeacon =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedHeader, label + ".data.finalized_header", "beacon"),
+              label + ".data.finalized_header.beacon");
+      final long finalizedSlot =
+          normalizeBeaconSlot(
+              requireBeaconRestField(
+                  finalizedBeacon, label + ".data.finalized_header.beacon", "slot"),
+              label + ".data.finalized_header.beacon.slot");
+      if (finalizedSlot != expectedFinalizedSlot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot");
+      }
+      final long syncSignatureSlot =
+          normalizeBeaconSlot(
+              requireBeaconRestField(data, label + ".data", "signature_slot"),
+              label + ".data.signature_slot");
+      if (syncSignatureSlot < expectedFinalizedSlot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finality update signature_slot must cover finalized header slot");
+      }
+      final Map<String, Object> syncAggregate =
+          expectBeaconRestObject(
+              requireBeaconRestField(data, label + ".data", "sync_aggregate"),
+              label + ".data.sync_aggregate");
+      final String syncCommitteeBits =
+          normalizeBeaconRestSyncCommitteeBits(
+              requireBeaconRestField(
+                  syncAggregate, label + ".data.sync_aggregate", "sync_committee_bits"),
+              label + ".data.sync_aggregate.sync_committee_bits");
+      final String syncCommitteeSignature =
+          normalizeRpcHex(
+              requireBeaconRestField(
+                  syncAggregate, label + ".data.sync_aggregate", "sync_committee_signature"),
+              label + ".data.sync_aggregate.sync_committee_signature",
+              96);
+      return new BeaconRestFinalityUpdateSummary(
+          syncCommitteeBits,
+          syncCommitteeSignature,
+          beaconRestSyncCommitteeParticipation(syncCommitteeBits),
+          syncSignatureSlot);
+    }
+
+    private static String normalizeBeaconRestSyncCommitteeBits(
+        final Object value, final String label) {
+      final String bits = normalizeRpcHex(value, label, 64, true);
+      if (beaconRestSyncCommitteeParticipation(bits) == 0) {
+        throw new IllegalArgumentException(label + " must contain at least one participant");
+      }
+      return bits;
+    }
+
+    private static long beaconRestSyncCommitteeParticipation(final String bits) {
+      final String text = bits.substring(2);
+      long count = 0;
+      for (int index = 0; index < text.length(); index += 2) {
+        int value = Integer.parseInt(text.substring(index, index + 2), 16);
+        while (value != 0) {
+          count += value & 1;
+          value >>>= 1;
+        }
+      }
+      return count;
+    }
+
+    private static BeaconRestBlockId beaconRestBlockIdFromValue(
+        final Object value, final String label) {
+      if (value instanceof String) {
+        final String text = (String) value;
+        if (text.trim().equals(text) && text.startsWith("0x") && text.length() == 66) {
+          final String root = normalizeRpcHex(text, label, 32);
+          return new BeaconRestBlockId(root, null, root);
+        }
+      }
+      final long slot = normalizeBeaconSlot(value, label);
+      return new BeaconRestBlockId(Long.toString(slot), Long.valueOf(slot), null);
+    }
+
+    private static long normalizeBeaconSlot(final Object value, final String label) {
+      final long slot = normalizeUnsignedInteger(value, label);
+      if (slot == 0) {
+        throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
+      }
+      return slot;
     }
 
     private Map<String, Object> fetchJsonObject(final String path, final String label) {
@@ -1718,12 +2090,43 @@ public final class EthereumMainnetSccp {
       String executionBlockNumber,
       String executionBlockHash,
       String executionReceiptsRoot,
+      String beaconSlot,
+      String syncCommitteeBits,
+      String syncCommitteeSignature,
+      String syncCommitteeParticipation,
+      String syncSignatureSlot,
       Map<String, Object> additionalFields) {
     public BeaconFinalityEvidence(
         final String executionBlockNumber,
         final String executionBlockHash,
         final String executionReceiptsRoot) {
-      this(executionBlockNumber, executionBlockHash, executionReceiptsRoot, Collections.emptyMap());
+      this(
+          executionBlockNumber,
+          executionBlockHash,
+          executionReceiptsRoot,
+          null,
+          null,
+          null,
+          null,
+          null,
+          Collections.emptyMap());
+    }
+
+    public BeaconFinalityEvidence(
+        final String executionBlockNumber,
+        final String executionBlockHash,
+        final String executionReceiptsRoot,
+        final Map<String, Object> additionalFields) {
+      this(
+          executionBlockNumber,
+          executionBlockHash,
+          executionReceiptsRoot,
+          null,
+          null,
+          null,
+          null,
+          null,
+          additionalFields);
     }
 
     public Map<String, Object> toMap() {
@@ -1733,6 +2136,21 @@ public final class EthereumMainnetSccp {
       value.put("executionBlockNumber", executionBlockNumber);
       value.put("executionBlockHash", executionBlockHash);
       value.put("executionReceiptsRoot", executionReceiptsRoot);
+      if (beaconSlot != null) {
+        value.put("beaconSlot", beaconSlot);
+      }
+      if (syncCommitteeBits != null) {
+        value.put("syncCommitteeBits", syncCommitteeBits);
+      }
+      if (syncCommitteeSignature != null) {
+        value.put("syncCommitteeSignature", syncCommitteeSignature);
+      }
+      if (syncCommitteeParticipation != null) {
+        value.put("syncCommitteeParticipation", syncCommitteeParticipation);
+      }
+      if (syncSignatureSlot != null) {
+        value.put("syncSignatureSlot", syncSignatureSlot);
+      }
       return Collections.unmodifiableMap(value);
     }
   }

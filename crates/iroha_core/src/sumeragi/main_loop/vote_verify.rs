@@ -79,6 +79,7 @@ struct PreparedVote {
     preimage: Vec<u8>,
     algorithm: Algorithm,
     public_key: PublicKey,
+    public_key_bytes: Vec<u8>,
     pop: Option<Vec<u8>>,
 }
 
@@ -190,13 +191,26 @@ pub(super) fn spawn_vote_verify_workers(
                         let preimage =
                             super::vote_preimage(&work.chain_id, work.mode_tag, &work.vote);
                         let public_key = peer.public_key().clone();
-                        let algorithm = public_key.algorithm();
+                        let Ok((algorithm, public_key_bytes)) = public_key.try_to_bytes() else {
+                            let signature_result = Err(VoteSignatureError::SignatureInvalid);
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&work, err);
+                            }
+                            results.push(VoteVerifyResult {
+                                id: work.id,
+                                key: work.key,
+                                signature_result,
+                            });
+                            continue;
+                        };
+                        let public_key_bytes = public_key_bytes.to_vec();
                         let pop = work.pops.get(&public_key).cloned();
                         prepared.push(Some(PreparedVote {
                             work,
                             preimage,
                             algorithm,
                             public_key,
+                            public_key_bytes,
                             pop,
                         }));
                     }
@@ -374,10 +388,9 @@ pub(super) fn spawn_vote_verify_workers(
                         let mut public_keys: Vec<&[u8]> = Vec::with_capacity(indices.len());
                         for idx in &indices {
                             let prepared_vote = prepared[*idx].as_ref().expect("prepared vote");
-                            let (_, pk_bytes) = prepared_vote.public_key.to_bytes();
                             messages.push(prepared_vote.preimage.as_slice());
                             signatures.push(prepared_vote.work.vote.bls_sig.as_slice());
-                            public_keys.push(pk_bytes);
+                            public_keys.push(prepared_vote.public_key_bytes.as_slice());
                         }
 
                         let use_batch = match algorithm {
@@ -692,6 +705,65 @@ mod tests {
                 used >= 2,
                 "expected multi-message batch verification to be used"
             );
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn vote_verify_rejects_non_bls_public_key_after_checked_extraction() {
+            let handle = spawn_vote_verify_workers(None, 1, 1, 1);
+            let work_tx = handle.work_txs[0].clone();
+
+            let signer = KeyPair::from_seed(b"ed25519-vote-signer".to_vec(), Algorithm::Ed25519);
+            let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
+                signer.public_key().clone(),
+            )]));
+            let chain_id: ChainId = "vote-checked-key-test".parse().expect("chain id");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x42; Hash::LENGTH],
+            ));
+            let vote = crate::sumeragi::consensus::Vote {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: vec![0xA5; 96],
+            };
+            let key = VoteVerifyKey::from_vote(&vote);
+
+            work_tx
+                .send(VoteVerifyWork {
+                    id: 7,
+                    key,
+                    vote,
+                    signature_topology: topology,
+                    pops: Arc::new(BTreeMap::new()),
+                    chain_id,
+                    mode_tag: super::PERMISSIONED_TAG,
+                })
+                .expect("send vote verify work");
+            drop(work_tx);
+
+            let result = handle
+                .result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("vote verify result");
+            assert!(matches!(
+                result.signature_result,
+                Err(VoteSignatureError::SignatureInvalid)
+            ));
 
             drop(handle.work_txs);
             for join in handle.join_handles {

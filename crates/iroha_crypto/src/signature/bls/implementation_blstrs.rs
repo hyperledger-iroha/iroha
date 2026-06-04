@@ -43,6 +43,10 @@ pub struct PublicKey<C: BlsConfiguration> {
     _m: PhantomData<C>,
 }
 impl<C: BlsConfiguration> PublicKey<C> {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.clone()
     }
@@ -322,15 +326,15 @@ fn aggregate_w3f_public_keys<E: EngineBLS>(
 
     let mut seen = BTreeSet::new();
     let mut public_keys = public_keys.iter();
-    let first = public_keys.next().ok_or(Error::BadSignature)?;
-    let first = parse_w3f_public_key::<E>(first)?;
-    if !seen.insert(first.to_bytes()) {
+    let first_bytes = public_keys.next().ok_or(Error::BadSignature)?;
+    let first = parse_w3f_public_key::<E>(first_bytes)?;
+    if !seen.insert(*first_bytes) {
         return Err(Error::BadSignature);
     }
     let mut aggregate = first.0;
-    for public_key in public_keys {
-        let public_key = parse_w3f_public_key::<E>(public_key)?;
-        if !seen.insert(public_key.to_bytes()) {
+    for public_key_bytes in public_keys {
+        let public_key = parse_w3f_public_key::<E>(public_key_bytes)?;
+        if !seen.insert(*public_key_bytes) {
             return Err(Error::BadSignature);
         }
         aggregate.add_assign(&public_key.0);

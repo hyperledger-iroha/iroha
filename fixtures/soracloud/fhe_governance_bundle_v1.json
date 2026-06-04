@@ -25,7 +25,8 @@
     "activation_height": 1,
     "deprecation_height": null,
     "withdraw_height": null,
-    "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E"
+    "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E",
+    "rns_modulus_chain_digest": "hash:C192E8C50E2A42FFDAEE9F3A279A0FB40B73AA7988AE9F8496FD01D261442BEB#51A6"
   },
   "execution_policy": {
     "schema_version": 1,

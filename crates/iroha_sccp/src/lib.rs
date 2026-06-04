@@ -7111,18 +7111,20 @@ fn sccp_route_allowlist_matches_domain_profile(
 
     let evm_canary_fields_absent = sccp_route_allowlist_evm_canary_fields_absent(allowlist);
     let ton_canary_fields_absent = sccp_route_allowlist_ton_canary_fields_absent(allowlist);
-    let tron_canary_fields_absent = sccp_route_allowlist_tron_canary_fields_absent(allowlist);
+    let tron_specific_fields_absent = sccp_route_allowlist_tron_canary_fields_absent(allowlist);
     match domain {
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => ton_canary_fields_absent && tron_canary_fields_absent,
-        SCCP_DOMAIN_TON => evm_canary_fields_absent && tron_canary_fields_absent,
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            ton_canary_fields_absent && tron_specific_fields_absent
+        }
+        SCCP_DOMAIN_TON => evm_canary_fields_absent && tron_specific_fields_absent,
         SCCP_DOMAIN_TRON => evm_canary_fields_absent && ton_canary_fields_absent,
         SCCP_DOMAIN_SOL
         | SCCP_DOMAIN_SORA_KUSAMA
         | SCCP_DOMAIN_SORA_POLKADOT
         | SCCP_DOMAIN_SORA2 => {
-            evm_canary_fields_absent && ton_canary_fields_absent && tron_canary_fields_absent
+            evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent
         }
-        _ => evm_canary_fields_absent && ton_canary_fields_absent && tron_canary_fields_absent,
+        _ => evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent,
     }
 }
 
@@ -13105,12 +13107,13 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
         &consensus.adapter_proof,
     );
     let deployment_hash = sccp_source_adapter_engine_deployment_hash(deployment);
+    let verifier_vk_matches_deployment = env.vk_hash == deployment.adapter_verifier_vk_hash;
     proof.source_domain == deployment.source_domain
         && proof.target_domain == deployment.target_domain
         && proof.source_chain == deployment.source_chain
         && proof.source_proof_plan == deployment.source_proof_plan
         && proof.finality_model == deployment.finality_model
-        && env.vk_hash == deployment.adapter_verifier_vk_hash
+        && verifier_vk_matches_deployment
         && h256_is_nonzero(&deployment_hash)
         && h256_is_nonzero(&deployment.deployment_receipt_hash)
         && consensus.verifier_evidence.source_adapter_deployment_hash == deployment_hash
@@ -17091,7 +17094,10 @@ fn sccp_evm_attestation_digest(
 }
 
 fn sccp_evm_signer_public_key_bytes(signer: &KeyPair) -> Option<Vec<u8>> {
-    (signer.algorithm() == Algorithm::Secp256k1).then(|| signer.public_key().to_bytes().1.to_vec())
+    let Ok((Algorithm::Secp256k1, public_key)) = signer.public_key().try_to_bytes() else {
+        return None;
+    };
+    Some(public_key.to_vec())
 }
 
 fn sccp_evm_signer_address(signer: &KeyPair) -> Option<[u8; 20]> {
@@ -17101,7 +17107,7 @@ fn sccp_evm_signer_address(signer: &KeyPair) -> Option<[u8; 20]> {
 }
 
 fn sccp_evm_sign_digest(signer: &KeyPair, digest: &H256) -> Option<[u8; 65]> {
-    if signer.algorithm() != Algorithm::Secp256k1 {
+    if sccp_evm_signer_public_key_bytes(signer).is_none() {
         return None;
     }
     let secret_key_bytes = signer.private_key().to_bytes().1;
@@ -21608,6 +21614,10 @@ fn sccp_solana_fixed_width_vectors_are_bounded(fields: &[Vec<u8>], max_fields: u
     fields.len() <= max_fields && fields.iter().all(|field| field.len() <= 32)
 }
 
+fn sccp_solana_tower_vote_stack_depth_usize() -> Option<usize> {
+    usize::try_from(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH).ok()
+}
+
 fn sccp_solana_account_opening_shape_is_bounded(opening: &SccpSolanaAccountOpeningV1) -> bool {
     opening.address.len() <= 32 && opening.owner.len() <= 32
 }
@@ -21621,13 +21631,16 @@ fn sccp_solana_account_inclusion_branch_shape_is_bounded(
 fn sccp_solana_vote_account_data_shape_is_bounded(
     account_data: &SccpSolanaVoteAccountDataV1,
 ) -> bool {
+    let Some(tower_vote_stack_depth) = sccp_solana_tower_vote_stack_depth_usize() else {
+        return false;
+    };
     account_data.node_pubkey.len() <= 32
         && account_data.authorized_voter.len() <= 32
         && account_data.authorized_withdrawer.len() <= 32
         && account_data.inflation_rewards_collector.len() <= 32
         && account_data.block_revenue_collector.len() <= 32
         && account_data.bls_pubkey_compressed.len() <= SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
-        && account_data.tower_vote_slots.len() <= SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize
+        && account_data.tower_vote_slots.len() <= tower_vote_stack_depth
 }
 
 fn sccp_solana_stake_account_data_shape_is_bounded(
@@ -21755,7 +21768,10 @@ fn sccp_solana_vote_proof_shape_is_bounded(proof: &SccpSolanaFinalizedVoteProofV
 }
 
 fn sccp_solana_finality_context_shape_is_bounded(context: &SccpSolanaFinalityContextV1) -> bool {
-    context.tower_vote_slots.len() <= SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize
+    let Some(tower_vote_stack_depth) = sccp_solana_tower_vote_stack_depth_usize() else {
+        return false;
+    };
+    context.tower_vote_slots.len() <= tower_vote_stack_depth
         && context.bank_hash_hard_fork_data.len() <= SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES
 }
 
@@ -27438,10 +27454,10 @@ impl SccpSolanaFullLightClientAuditRoleV1 {
         }
     }
 
-    fn proof<'a>(
+    fn proof(
         self,
-        adapter: &'a SccpSolanaFinalizedSourceProofV1,
-    ) -> &'a SccpSourceStateVerificationProofV1 {
+        adapter: &SccpSolanaFinalizedSourceProofV1,
+    ) -> &SccpSourceStateVerificationProofV1 {
         match self {
             Self::TowerReplay => &adapter.vote_proof.tower_replay_verification_proof,
             Self::FullAccountsDbLattice => {
@@ -28482,10 +28498,10 @@ impl SccpTonFullLightClientAuditRoleV1 {
         }
     }
 
-    fn proof<'a>(
+    fn proof(
         self,
-        adapter: &'a SccpTonMasterchainSourceProofV1,
-    ) -> &'a SccpSourceStateVerificationProofV1 {
+        adapter: &SccpTonMasterchainSourceProofV1,
+    ) -> &SccpSourceStateVerificationProofV1 {
         match self {
             Self::MasterchainConfig => &adapter.masterchain_config_verification_proof,
             Self::ValidatorSetTransition => &adapter.validator_set_transition_verification_proof,
@@ -31565,7 +31581,10 @@ fn verify_nexus_commit_qc_bls_aggregate(proof: &NexusBridgeFinalityProofV1) -> b
         Err(_) => return false,
     };
     for (public_key, pop) in public_keys.iter().zip(qc.validator_set_pops.iter()) {
-        if public_key.algorithm() != Algorithm::BlsNormal {
+        if !public_key
+            .try_algorithm()
+            .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+        {
             return false;
         }
         if iroha_crypto::bls_normal_pop_verify(public_key, pop).is_err() {
@@ -34277,6 +34296,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let execution_block_matches_finality_height =
+                adapter.execution_block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_ETH
                 && proof.source_proof_plan == SccpSourceProofPlanV1::EthereumBeaconReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::EthereumBeaconExecution
@@ -34284,7 +34305,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && sccp_eth_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
                 && adapter.beacon_slot != 0
-                && adapter.execution_block_number == proof.finality_height
+                && execution_block_matches_finality_height
                 && adapter.execution_block_hash == proof.finality_block_hash
                 && verify_sccp_eth_beacon_execution_header_root_binding(adapter)
                 && h256_is_nonzero(&adapter.beacon_finalized_root)
@@ -34324,6 +34345,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let block_number_matches_finality_height =
+                adapter.block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_BSC
                 && proof.source_proof_plan == SccpSourceProofPlanV1::BscValidatorSetReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::BscValidatorSet
@@ -34332,7 +34355,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && adapter.source_domain == proof.source_domain
                 && adapter.validator_epoch != 0
                 && verify_sccp_bsc_block_epoch_window(adapter.block_number, adapter.validator_epoch)
-                && adapter.block_number == proof.finality_height
+                && block_number_matches_finality_height
                 && adapter.block_hash == proof.finality_block_hash
                 && receipt_value_binds_source
                 && h256_is_nonzero(&adapter.validator_set_hash)
@@ -34357,13 +34380,15 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let finalized_slot_matches_finality_height =
+                adapter.finalized_slot == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_SOL
                 && proof.source_proof_plan == SccpSourceProofPlanV1::SolanaFinalizedTransactionProof
                 && proof.finality_model == SccpProofFinalityModelV1::SolanaFinalizedSlot
                 && adapter.version == 1
                 && sccp_solana_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.finalized_slot == proof.finality_height
+                && finalized_slot_matches_finality_height
                 && adapter.blockhash == proof.finality_block_hash
                 && adapter.transaction_status_root == proof.receipt_or_message_root
                 && proof.receipt_or_message_root == expected_transaction_status_root
@@ -34399,13 +34424,15 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let masterchain_seqno_matches_finality_height =
+                adapter.masterchain_seqno == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_TON
                 && proof.source_proof_plan == SccpSourceProofPlanV1::TonMasterchainShardProof
                 && proof.finality_model == SccpProofFinalityModelV1::TonMasterchain
                 && adapter.version == 1
                 && sccp_ton_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.masterchain_seqno == proof.finality_height
+                && masterchain_seqno_matches_finality_height
                 && adapter.masterchain_workchain_id == SCCP_TON_MASTERCHAIN_WORKCHAIN_ID
                 && adapter.masterchain_shard == SCCP_TON_MASTERCHAIN_SHARD
                 && adapter.masterchain_block_hash == proof.finality_block_hash
@@ -34476,13 +34503,15 @@ fn verify_sccp_source_adapter_proof_binding(
                 };
                 expected_receipt_proof_hash = hash;
             }
+            let solid_block_matches_finality_height =
+                adapter.solid_block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_TRON
                 && proof.source_proof_plan == SccpSourceProofPlanV1::TronDposReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::TronDpos
                 && adapter.version == 1
                 && sccp_tron_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.solid_block_number == proof.finality_height
+                && solid_block_matches_finality_height
                 && adapter.block_hash == proof.finality_block_hash
                 && adapter.receipt_root == proof.receipt_or_message_root
                 && h256_is_nonzero(&adapter.witness_schedule_hash)
@@ -34513,6 +34542,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let finalized_block_matches_finality_height =
+                adapter.finalized_block_number == proof.finality_height;
             matches!(
                 proof.source_domain,
                 SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
@@ -34521,7 +34552,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && adapter.version == 1
                 && sccp_substrate_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.finalized_block_number == proof.finality_height
+                && finalized_block_matches_finality_height
                 && adapter.grandpa_set_id != 0
                 && adapter.block_hash == proof.finality_block_hash
                 && adapter.events_root == proof.receipt_or_message_root
@@ -35417,7 +35448,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid BSC test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 bytes.to_vec()
             })
@@ -36391,7 +36425,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid ETH test key");
                 assert_eq!(algorithm, Algorithm::BlsNormal);
                 bytes.to_vec()
             })
@@ -36601,7 +36638,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid TON test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -36858,7 +36898,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid TRON test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 let public_key =
                     EcdsaSecp256k1Sha256::parse_public_key(&bytes).expect("secp256k1 public key");
@@ -37275,7 +37318,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Substrate test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -37438,7 +37484,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Solana test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -37864,7 +37913,10 @@ mod tests {
         let validator_public_keys = signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Solana test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -38228,6 +38280,24 @@ mod tests {
     fn sample_tron_source_bridge_owner_address() -> [u8; 20] {
         sccp_evm_signer_address(&sample_tron_transaction_signer())
             .expect("sample TRON transaction signer address")
+    }
+
+    #[test]
+    fn evm_signer_public_key_bytes_require_checked_secp256k1_payload() {
+        let signer = sample_tron_transaction_signer();
+        let public_key = sccp_evm_signer_public_key_bytes(&signer)
+            .expect("sample TRON signer exposes Secp256k1 public key bytes");
+        assert_eq!(public_key.len(), 33);
+        assert!(sccp_evm_signer_address(&signer).is_some());
+        assert!(sccp_evm_sign_digest(&signer, &[0xA5; 32]).is_some());
+
+        let ed25519_signer = KeyPair::from_seed(
+            b"iroha:sccp:test:wrong-evm-signer".to_vec(),
+            Algorithm::Ed25519,
+        );
+        assert!(sccp_evm_signer_public_key_bytes(&ed25519_signer).is_none());
+        assert!(sccp_evm_signer_address(&ed25519_signer).is_none());
+        assert!(sccp_evm_sign_digest(&ed25519_signer, &[0xA5; 32]).is_none());
     }
 
     fn sample_tron_source_bridge_config_hash() -> H256 {
@@ -55352,6 +55422,7 @@ mod tests {
         );
         assert!(!policy.per_message_human_approval_required);
         assert!(!sccp_all_lanes_launch_ready_v1());
+        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_BSC));
         assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_ETH));
     }
 
@@ -63951,6 +64022,16 @@ mod tests {
         ));
         assert!(!verify_nexus_bridge_finality_proof_cryptographic(
             &tampered_signature
+        ));
+
+        let mut non_bls_validator = proof;
+        let ed25519 = iroha_crypto::KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        non_bls_validator.commit_qc.validator_public_keys[0] = ed25519.public_key().to_string();
+        assert!(verify_nexus_bridge_finality_proof_structure(
+            &non_bls_validator
+        ));
+        assert!(!verify_nexus_bridge_finality_proof_cryptographic(
+            &non_bls_validator
         ));
     }
 

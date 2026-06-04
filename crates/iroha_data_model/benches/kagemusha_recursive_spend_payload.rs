@@ -130,19 +130,23 @@ fn recursive_spend_archives() -> Vec<(usize, Vec<u8>)> {
             fixed_hash(format!("recursive-spend-bench-witness-{hop_index}").as_bytes()),
         )
         .expect("recursive spend evidence");
-        let accumulator = match previous.as_ref() {
-            Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                previous,
-                previous_proof
-                    .as_ref()
-                    .expect("previous recursive spend proof"),
-                &evidence,
-                &note,
-            )
-            .expect("append recursive spend accumulator"),
-            None => kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
-                .expect("initial recursive spend accumulator"),
-        };
+        let accumulator = previous.as_ref().map_or_else(
+            || {
+                kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
+                    .expect("initial recursive spend accumulator")
+            },
+            |previous| {
+                kagemusha_recursive_spend_accumulator_append_evidence(
+                    previous,
+                    previous_proof
+                        .as_ref()
+                        .expect("previous recursive spend proof"),
+                    &evidence,
+                    &note,
+                )
+                .expect("append recursive spend accumulator")
+            },
+        );
         let hop_count = usize::try_from(accumulator.hop_count).expect("hop count fits");
         if target_hops.contains(&hop_count) {
             let bundle = spend_bundle(accumulator.clone());

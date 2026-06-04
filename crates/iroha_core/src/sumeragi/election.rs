@@ -243,10 +243,12 @@ pub fn elect_validator_set(
 }
 
 fn score_peer(seed: [u8; 32], peer: &PeerId) -> [u8; 32] {
-    let (_, pk_bytes) = peer.public_key().to_bytes();
     let mut hasher = Blake2b512::new();
     hasher.update(seed);
-    hasher.update(pk_bytes);
+    match peer.public_key().try_to_bytes() {
+        Ok((_, pk_bytes)) => hasher.update(pk_bytes),
+        Err(_) => hasher.update(peer.public_key().to_string().as_bytes()),
+    }
     let digest = hasher.finalize();
     let mut score = [0u8; 32];
     score.copy_from_slice(&digest[..32]);

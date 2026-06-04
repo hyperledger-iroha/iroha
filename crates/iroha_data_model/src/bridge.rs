@@ -427,6 +427,12 @@ pub enum BridgeFinalityVerifyError {
         /// Algorithm advertised by the public key.
         algorithm: iroha_crypto::Algorithm,
     },
+    /// Validator key compact state is malformed.
+    #[error("validator key at index {index} is malformed")]
+    MalformedValidatorPublicKey {
+        /// Signer index that failed validation.
+        index: u64,
+    },
     /// Aggregate signature is missing from the commit certificate.
     #[error("aggregate signature is missing")]
     AggregateSignatureMissing,
@@ -680,7 +686,9 @@ impl BridgeFinalityVerifier {
         let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
         for idx in indices {
             let peer = &validator_set[idx];
-            let (algorithm, _payload) = peer.public_key.to_bytes();
+            let algorithm = peer.public_key.try_algorithm().map_err(|_| {
+                BridgeFinalityVerifyError::MalformedValidatorPublicKey { index: idx as u64 }
+            })?;
             if algorithm != iroha_crypto::Algorithm::BlsNormal {
                 return Err(BridgeFinalityVerifyError::InvalidValidatorKeyAlgorithm {
                     index: idx as u64,
@@ -1775,6 +1783,13 @@ mod tests {
         let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        assert_eq!(
+            wrong_key
+                .public_key()
+                .try_algorithm()
+                .expect("checked public-key algorithm"),
+            Algorithm::Ed25519
+        );
         proof.commit_qc.validator_set = vec![PeerId::from(wrong_key.public_key().clone())];
         proof.commit_qc.validator_set_hash = HashOf::new(&proof.commit_qc.validator_set);
 

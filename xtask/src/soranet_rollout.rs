@@ -336,7 +336,13 @@ pub fn capture_rollout(options: CaptureOptions) -> Result<(), Box<dyn Error>> {
     let signature = Signature::new(key_pair.private_key(), &payload);
     let signature_bytes = signature.payload();
     let sig_algo = Algorithm::Ed25519;
-    let (_, public_key_bytes) = key_pair.public_key().to_bytes();
+    let (public_key_algorithm, public_key_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| format!("signing public key is malformed: {err}"))?;
+    if public_key_algorithm != Algorithm::Ed25519 {
+        return Err("only Ed25519 signing keys are supported".into());
+    }
 
     let mut signed_object = match metadata_value {
         JsonValue::Object(map) => map,
@@ -504,5 +510,75 @@ pub fn parse_duration_spec(spec: &str) -> Result<TimeDuration, Box<dyn Error>> {
         "h" | "H" => Ok(TimeDuration::hours(value)),
         "d" | "D" => Ok(TimeDuration::days(value)),
         _ => Err(format!("unrecognised duration unit `{unit}`; expected s/m/h/d").into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{PublicKey, Signature};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn capture_rollout_writes_checked_signature_metadata() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("rollout.log");
+        fs::write(&log_path, "rollout-ok").expect("write log");
+
+        let key_pair = KeyPair::from_seed(b"xtask-rollout-capture".to_vec(), Algorithm::Ed25519);
+        let key_path = temp.path().join("signing.key");
+        fs::write(&key_path, hex_encode(key_pair.private_key().to_bytes().1)).expect("write key");
+
+        capture_rollout(CaptureOptions {
+            base_output_dir: temp.path().join("captures"),
+            label: Some("canary".to_owned()),
+            environment: "testnet".to_owned(),
+            phase: SorafsRolloutPhase::Canary,
+            log_path,
+            additional_artifacts: Vec::new(),
+            key_path,
+            note: Some("smoke".to_owned()),
+        })
+        .expect("capture rollout");
+
+        let captures_dir = temp.path().join("captures");
+        let run_dir = fs::read_dir(&captures_dir)
+            .expect("read captures")
+            .next()
+            .expect("capture directory entry")
+            .expect("capture directory")
+            .path();
+        let metadata_text =
+            fs::read_to_string(run_dir.join("rollout_capture.json")).expect("read metadata");
+        let mut metadata: JsonValue =
+            norito::json::from_str(&metadata_text).expect("metadata json parses");
+        let signatures = metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("signatures")
+            .expect("signatures present");
+        let signature_entry = signatures
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(JsonValue::as_object)
+            .expect("signature entry");
+        let public_key_hex = signature_entry
+            .get("public_key_hex")
+            .and_then(JsonValue::as_str)
+            .expect("public key hex");
+        let signature_hex = signature_entry
+            .get("signature_hex")
+            .and_then(JsonValue::as_str)
+            .expect("signature hex");
+        let payload = norito::json::to_vec(&metadata).expect("metadata payload bytes");
+        let public_key =
+            PublicKey::from_hex(Algorithm::Ed25519, public_key_hex).expect("parse public key");
+        let signature =
+            Signature::from_bytes(&hex::decode(signature_hex).expect("decode signature"));
+
+        signature
+            .verify(&public_key, &payload)
+            .expect("signature verifies");
     }
 }

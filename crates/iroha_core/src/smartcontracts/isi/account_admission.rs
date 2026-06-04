@@ -39,16 +39,33 @@ static IMPLICIT_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
 fn first_disallowed_algorithm(
     controller: &AccountController,
     allowed: &[iroha_crypto::Algorithm],
-) -> Option<iroha_crypto::Algorithm> {
+) -> Result<Option<iroha_crypto::Algorithm>, AccountAdmissionError> {
     match controller {
-        AccountController::Single(signatory) => {
-            algorithm_if_disallowed(signatory.algorithm(), allowed)
+        AccountController::Single(signatory) => Ok(algorithm_if_disallowed(
+            controller_algorithm(signatory)?,
+            allowed,
+        )),
+        AccountController::Multisig(policy) => {
+            for member in policy.members() {
+                if let Some(disallowed) =
+                    algorithm_if_disallowed(controller_algorithm(member.public_key())?, allowed)
+                {
+                    return Ok(Some(disallowed));
+                }
+            }
+            Ok(None)
         }
-        AccountController::Multisig(policy) => policy
-            .members()
-            .iter()
-            .find_map(|member| algorithm_if_disallowed(member.algorithm(), allowed)),
     }
+}
+
+fn controller_algorithm(
+    public_key: &iroha_crypto::PublicKey,
+) -> Result<iroha_crypto::Algorithm, AccountAdmissionError> {
+    public_key.try_algorithm().map_err(|err| {
+        AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
+            reason: format!("account controller public key is malformed: {err}"),
+        })
+    })
 }
 
 fn algorithm_if_disallowed(
@@ -67,7 +84,7 @@ fn ensure_controller_allowed_for_implicit_admission(
     allowed_algorithms: &[iroha_crypto::Algorithm],
     allowed_curve_ids: &[u8],
 ) -> Result<(), AccountAdmissionError> {
-    if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms) {
+    if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms)? {
         return Err(AccountAdmissionError::AlgorithmNotAllowed(disallowed));
     }
 
@@ -84,10 +101,10 @@ fn ensure_controller_allowed_for_implicit_admission(
     };
 
     match controller {
-        AccountController::Single(signatory) => validate_curve(signatory.algorithm())?,
+        AccountController::Single(signatory) => validate_curve(controller_algorithm(signatory)?)?,
         AccountController::Multisig(policy) => {
             for member in policy.members() {
-                validate_curve(member.algorithm())?;
+                validate_curve(controller_algorithm(member.public_key())?)?;
             }
         }
     }
@@ -444,6 +461,34 @@ mod tests {
 
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+    }
+
+    #[test]
+    fn implicit_admission_controller_checks_use_checked_algorithm_access() {
+        let ed25519 = KeyPair::from_seed(b"implicit-ed25519".to_vec(), Algorithm::Ed25519);
+        let secp256k1 = KeyPair::from_seed(b"implicit-secp256k1".to_vec(), Algorithm::Secp256k1);
+        let allowed = [Algorithm::Ed25519];
+        let allowed_curve_ids =
+            iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
+
+        ensure_controller_allowed_for_implicit_admission(
+            &AccountController::Single(ed25519.public_key().clone()),
+            &allowed,
+            &allowed_curve_ids,
+        )
+        .expect("Ed25519 controller should be allowed");
+
+        let err = ensure_controller_allowed_for_implicit_admission(
+            &AccountController::Single(secp256k1.public_key().clone()),
+            &allowed,
+            &allowed_curve_ids,
+        )
+        .expect_err("Secp256k1 controller should be rejected by allowed_signing");
+
+        assert!(matches!(
+            err,
+            AccountAdmissionError::AlgorithmNotAllowed(Algorithm::Secp256k1)
+        ));
     }
 
     #[test]

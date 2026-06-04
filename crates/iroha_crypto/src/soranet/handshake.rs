@@ -17,7 +17,7 @@ use base64::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
-use hkdf::Hkdf;
+use hkdf::{Hkdf, HkdfExtract};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
@@ -4743,12 +4743,9 @@ fn derive_session_key_and_confirmation(
         ),
     };
 
-    let key_material = match suite {
+    let hk = match suite {
         HandshakeSuite::Nk2Hybrid => {
-            let mut material = Vec::with_capacity(primary_shared.len() + transcript_hash.len());
-            material.extend_from_slice(primary_shared);
-            material.extend_from_slice(transcript_hash);
-            material
+            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])
         }
         HandshakeSuite::Nk3PqForwardSecure => {
             let forward = forward_shared.ok_or(HarnessError::NotImplemented(
@@ -4759,18 +4756,18 @@ fn derive_session_key_and_confirmation(
                 &[primary_shared, forward, transcript_hash],
                 forward.len(),
             );
-            let mut material = Vec::with_capacity(
-                dual_mix.len() + primary_shared.len() + forward.len() + transcript_hash.len(),
-            );
-            material.extend_from_slice(&dual_mix);
-            material.extend_from_slice(primary_shared);
-            material.extend_from_slice(forward);
-            material.extend_from_slice(transcript_hash);
-            material
+            hkdf_sha3_256_from_ikm_parts(
+                Some(transcript_hash),
+                &[
+                    dual_mix.as_slice(),
+                    primary_shared,
+                    forward,
+                    transcript_hash,
+                ],
+            )
         }
     };
 
-    let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), &key_material);
     let mut session_key = vec![0u8; 32];
     hk.expand(session_label, &mut session_key)
         .map_err(|_| HarnessError::Kdf)?;
@@ -4790,6 +4787,14 @@ fn derive_session_key_and_confirmation(
     };
 
     Ok((session_key, confirmation))
+}
+
+fn hkdf_sha3_256_from_ikm_parts(salt: Option<&[u8]>, ikm_parts: &[&[u8]]) -> Hkdf<Sha3_256> {
+    let mut extract = HkdfExtract::<Sha3_256>::new(salt);
+    for part in ikm_parts {
+        extract.input_ikm(part);
+    }
+    extract.finalize().1
 }
 
 fn compute_kem_confirmation(
@@ -7424,6 +7429,103 @@ mod tests {
 
         assert_ne!(nk2_session, nk3_session);
         assert_ne!(nk2_confirm, nk3_confirm);
+    }
+
+    fn legacy_derive_session_key_and_confirmation(
+        inputs: SessionKeyInputs<'_>,
+    ) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
+        let SessionKeyInputs {
+            suite,
+            transcript_hash,
+            primary_shared,
+            forward_shared,
+        } = inputs;
+
+        let (session_label, confirm_label) = match suite {
+            HandshakeSuite::Nk2Hybrid => (
+                b"soranet.handshake.nk2.session",
+                b"soranet.handshake.nk2.confirm",
+            ),
+            HandshakeSuite::Nk3PqForwardSecure => (
+                b"soranet.handshake.nk3.session",
+                b"soranet.handshake.nk3.confirm",
+            ),
+        };
+
+        let key_material = match suite {
+            HandshakeSuite::Nk2Hybrid => {
+                let mut material = Vec::with_capacity(primary_shared.len() + transcript_hash.len());
+                material.extend_from_slice(primary_shared);
+                material.extend_from_slice(transcript_hash);
+                material
+            }
+            HandshakeSuite::Nk3PqForwardSecure => {
+                let forward = forward_shared.ok_or(HarnessError::NotImplemented(
+                    "nk3 forward-secure key schedule requires dual ML-KEM secret",
+                ))?;
+                let dual_mix = expand_material(
+                    b"soranet.kem.dual.mix",
+                    &[primary_shared, forward, transcript_hash],
+                    forward.len(),
+                );
+                let mut material = Vec::with_capacity(
+                    dual_mix.len() + primary_shared.len() + forward.len() + transcript_hash.len(),
+                );
+                material.extend_from_slice(&dual_mix);
+                material.extend_from_slice(primary_shared);
+                material.extend_from_slice(forward);
+                material.extend_from_slice(transcript_hash);
+                material
+            }
+        };
+
+        let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), &key_material);
+        let mut session_key = vec![0u8; 32];
+        hk.expand(session_label, &mut session_key)
+            .map_err(|_| HarnessError::Kdf)?;
+
+        let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
+            let mut confirm = vec![0u8; 32];
+            let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
+            hk_confirm
+                .expand(NK2_CONFIRM_LABEL, &mut confirm)
+                .map_err(|_| HarnessError::Kdf)?;
+            confirm
+        } else {
+            let mut confirm = vec![0u8; 32];
+            hk.expand(confirm_label, &mut confirm)
+                .map_err(|_| HarnessError::Kdf)?;
+            confirm
+        };
+
+        Ok((session_key, confirmation))
+    }
+
+    #[test]
+    fn session_key_schedule_streaming_matches_legacy_contiguous_ikm() {
+        let transcript = [0xA5; 32];
+        let primary = [0x5A; 32];
+        let forward = [0xC3; 32];
+
+        for inputs in [
+            SessionKeyInputs {
+                suite: HandshakeSuite::Nk2Hybrid,
+                transcript_hash: &transcript,
+                primary_shared: &primary,
+                forward_shared: None,
+            },
+            SessionKeyInputs {
+                suite: HandshakeSuite::Nk3PqForwardSecure,
+                transcript_hash: &transcript,
+                primary_shared: &primary,
+                forward_shared: Some(&forward),
+            },
+        ] {
+            assert_eq!(
+                derive_session_key_and_confirmation(inputs).expect("streaming key schedule"),
+                legacy_derive_session_key_and_confirmation(inputs).expect("legacy key schedule")
+            );
+        }
     }
 
     #[test]

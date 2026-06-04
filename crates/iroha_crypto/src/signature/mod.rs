@@ -339,9 +339,17 @@ impl Signature {
             PublicKeyFull::Gost { algorithm, key } => {
                 gost::verify(*algorithm, payload, &self.payload, key)
             }
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            PublicKeyFull::BlsSmall { key, .. } => {
+                bls::BlsSmall::verify(payload, &self.payload, key)
+            }
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            PublicKeyFull::BlsNormal { key, .. } => {
+                bls::BlsNormal::verify(payload, &self.payload, key)
+            }
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             PublicKeyFull::BlsSmall(pk) => bls::BlsSmall::verify(payload, &self.payload, pk),
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             PublicKeyFull::BlsNormal(pk) => bls::BlsNormal::verify(payload, &self.payload, pk),
             #[cfg(feature = "sm")]
             PublicKeyFull::Sm2(pk) => {

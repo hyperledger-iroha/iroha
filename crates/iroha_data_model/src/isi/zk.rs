@@ -914,6 +914,8 @@ impl_zk_decode_from_slice!(FinalizeElection {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::too_many_lines)]
+
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};

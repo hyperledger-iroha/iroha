@@ -61,6 +61,12 @@ The ETH/BSC receipt-proof, TON shard-proof, and Substrate-family storage-proof
 transcript helpers fail closed on an all-zero source event digest before
 hashing source witness material, matching the on-chain requirement that a source
 proof commits to a concrete emitted SCCP event.
+BSC mainnet inbound SDK facades, including the native Swift, Kotlin/JVM, Java
+Android, and .NET surfaces, also fail closed on malformed receipt-observed
+source events before local prover callbacks: a log from the configured source
+bridge with the SCCP source-event topic must carry exactly two topics, empty
+`0x` data, a non-zero digest, and matching transaction/block context, and
+duplicate or removed source-event logs are rejected.
 The dynamic Python witness-provider path snapshots app-owned request data before
 calling the UI resolver, including accepted non-string sequence byte inputs, so
 provider-side normalization or mutation cannot alter the proof request that the
@@ -105,10 +111,15 @@ SDKs fail closed when safety flags are malformed: present
 header, checkpoint, or receipt-bound finality evidence. The JavaScript
 collector also requires `verifyFinalityCheckpoint` / `verify_finality_checkpoint`
 overrides to be real booleans, so dynamic browser code cannot accidentally
-disable checkpoint matching with numeric or string coercion. SDK Beacon REST URL
-builders preserve endpoint query strings when appending finalized-header and
-checkpoint paths, allowing apps to use provider URLs that carry query-scoped
-credentials while still sending headers separately. Browser fetch adapters also
+disable checkpoint matching with numeric or string coercion. Its Beacon REST
+provider resolves the target Beacon block from an explicit slot/root/id or from
+the execution block timestamp, then fetches that target header, block root, and
+block body instead of binding the receipt to the moving finalized head. The
+current finalized header and finalized checkpoint still bound the target as
+finalized. SDK Beacon REST URL builders preserve endpoint query strings when
+appending finalized-header and checkpoint paths, allowing apps to use provider
+URLs that carry query-scoped credentials while still sending headers separately.
+Browser fetch adapters also
 validate Response-like `ok` and `status` fields before parsing JSON, so
 malformed custom stubs or non-2xx status codes cannot be treated as finalized
 Beacon REST evidence; real browser `fetch` responses prefer bounded
@@ -802,6 +813,14 @@ browser and native SDKs. The strict release-bundle verifier also inventories
 those readiness guard definitions themselves, so dropping the source-scan tests
 or the common remote-prover/prover-endpoint spelling checks blocks a published
 BSC release bundle.
+BSC mainnet inbound proving now follows the same receipt-observed source-event
+binding model as Ethereum: JavaScript, Python, Swift, Kotlin/JVM, Java Android,
+and .NET derive `sourceEventDigest` from the BSC receipt log emitted by the
+configured source bridge, compare it to `receiptProof.sourceEventDigest`, and
+reject full receipt-proof evidence before local prover callbacks if the source
+event was not validated. This keeps prebuilt BSC `receiptProof` material from
+bypassing SDK-side source-admission checks while preserving hash-only
+`receiptProofHash` collection as diagnostic evidence only.
 The public release-bundle verifier
 owns the same phase command and success-marker inventory instead of trusting the
 report generator for those transcript requirements; parity tests keep the
@@ -1155,11 +1174,12 @@ The JavaScript browser, Python, Swift, Kotlin/JVM, Java Android, and .NET BSC
 easy inbound proving paths now also require Parlia finality before the
 app-linked source prover callback runs; each SDK can collect that evidence
 through an app-supplied consensus provider or validate caller-supplied finality
-against the collected execution receipt block. JavaScript and Python BSC
-proving additionally require full `receiptProof`/`receipt_proof` material
-before calling the app-linked native prover; hash-only `receiptProofHash`
-evidence remains usable for collection diagnostics, but cannot drive proof
-generation. The JavaScript package declarations expose the BSC Parlia finality
+against the collected execution receipt block. JavaScript, Python, Swift,
+Kotlin/JVM, Java Android, and .NET BSC proving additionally require full
+`receiptProof`/`receipt_proof` material before calling the app-linked native
+prover; hash-only `receiptProofHash` evidence remains usable for collection
+diagnostics, but cannot drive proof generation. The JavaScript package
+declarations expose the BSC Parlia finality
 evidence and consensus-provider input shapes so browser applications see the
 required execution block number, execution block hash, and receipts-root fields
 at compile time.

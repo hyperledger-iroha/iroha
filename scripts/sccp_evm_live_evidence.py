@@ -1030,7 +1030,7 @@ def _collect_route_canary_transaction_evidence(
             timeout=timeout,
         )
         if block_tag == "finalized"
-        else {}
+        else {"receipt_block_finalized": False}
     )
     bridge_address = _parse_hex_bytes(
         str(destination["bridge_address"]),
@@ -1671,6 +1671,8 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
 def _validate_route_allowlist_hash(
     args: argparse.Namespace,
     destination: dict[str, Any],
+    *,
+    include_route_canary: bool = True,
 ) -> dict[str, Any]:
     route_allowlist_hash = getattr(args, "route_allowlist_hash", None)
     if route_allowlist_hash is None:
@@ -1715,13 +1717,14 @@ def _validate_route_allowlist_hash(
         "expected_route_allowlist_hash": _hex(expected_hash),
         "expected_route_allowlist_hash_matches": True,
     }
-    route_canary = evidence._route_canary_summary(
-        args,
-        route_allowlist_hash=route_allowlist_hash,
-        destination_binding_hash=destination_binding_hash,
-    )
-    if route_canary is not None:
-        summary["route_canary"] = route_canary
+    if include_route_canary:
+        route_canary = evidence._route_canary_summary(
+            args,
+            route_allowlist_hash=route_allowlist_hash,
+            destination_binding_hash=destination_binding_hash,
+        )
+        if route_canary is not None:
+            summary["route_canary"] = route_canary
     return summary
 
 
@@ -1953,10 +1956,23 @@ def collect_live_evidence(
         args.route_canary_proof_source_domain = int(
             route_canary_transaction["proof_source_domain"]
         )
-        args.route_canary_used_message_proof = True
-        args.route_canary_receipt_block_finalized = True
+        args.route_canary_used_message_proof = (
+            route_canary_transaction.get("message_proof_used") is True
+        )
+        args.route_canary_receipt_block_finalized = (
+            route_canary_transaction.get("receipt_block_finalized") is True
+        )
     if route_allowlist_hash is not None:
-        summary.update(_validate_route_allowlist_hash(args, destination))
+        summary.update(
+            _validate_route_allowlist_hash(
+                args,
+                destination,
+                include_route_canary=(
+                    route_canary_transaction is None
+                    or route_canary_transaction.get("receipt_block_finalized") is True
+                ),
+            )
+        )
         if route_canary_transaction is not None:
             summary["route_canary_transaction"] = route_canary_transaction
             route_canary = summary.get("route_canary")

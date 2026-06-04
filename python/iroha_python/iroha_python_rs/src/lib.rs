@@ -304,8 +304,43 @@ fn parse_sm2_signature(bytes: &[u8]) -> PyResult<Sm2Signature> {
         .map_err(|err| PyValueError::new_err(format!("invalid SM2 signature: {err}")))
 }
 
+fn public_key_to_bytes<'a>(
+    public_key: &'a PublicKey,
+    context: &'static str,
+) -> PyResult<(Algorithm, &'a [u8])> {
+    public_key
+        .try_to_bytes()
+        .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
+}
+
+fn public_key_multihash_string(
+    public_key: &PublicKey,
+    prefixed: bool,
+    context: &str,
+) -> PyResult<String> {
+    if prefixed {
+        public_key.try_to_prefixed_string()
+    } else {
+        public_key.try_to_multihash_string()
+    }
+    .map_err(|err| PyValueError::new_err(format!("failed to format {context}: {err}")))
+}
+
+fn private_key_multihash_string(
+    private_key: &ExposedPrivateKey,
+    prefixed: bool,
+    context: &str,
+) -> PyResult<String> {
+    if prefixed {
+        private_key.try_to_prefixed_string()
+    } else {
+        private_key.try_to_multihash_string()
+    }
+    .map_err(|err| PyValueError::new_err(format!("failed to format {context}: {err}")))
+}
+
 fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let (_, public_bytes) = key_pair.public_key().to_bytes();
+    let (_, public_bytes) = public_key_to_bytes(key_pair.public_key(), "public key")?;
     let (_, mut private_bytes) = key_pair.private_key().to_bytes();
 
     let public = Py::from(PyBytes::new(py, public_bytes));
@@ -326,7 +361,7 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
 }
 
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
-    let (algorithm, _) = account.signatory().to_bytes();
+    let (algorithm, _) = public_key_to_bytes(account.signatory(), "account signatory public key")?;
     algorithm_guard(algorithm)
 }
 
@@ -590,10 +625,10 @@ fn dict_get_alias<'py>(
     aliases: &[&str],
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     for alias in aliases {
-        if let Some(value) = dict.get_item(alias)? {
-            if !value.is_none() {
-                return Ok(Some(value));
-            }
+        if let Some(value) = dict.get_item(alias)?
+            && !value.is_none()
+        {
+            return Ok(Some(value));
         }
     }
     Ok(None)
@@ -640,7 +675,7 @@ fn parse_zk_ace_verifying_key_id_py(
     context: &str,
 ) -> PyResult<VerifyingKeyId> {
     let vk = parse_required_verifying_key_id_py(Some(value), context)?;
-    if vk.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+    if vk.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
         return Err(PyValueError::new_err(format!(
             "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
         )));
@@ -664,12 +699,12 @@ fn ensure_zk_ace_proof_attachment(
     proof: ProofAttachment,
     context: &str,
 ) -> PyResult<ProofAttachment> {
-    if proof.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+    if proof.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
         return Err(PyValueError::new_err(format!(
             "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
         )));
     }
-    if proof.vk_ref.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+    if proof.vk_ref.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
         return Err(PyValueError::new_err(format!(
             "{context}.vk_ref.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
         )));
@@ -901,21 +936,20 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
             "vk_commitment",
             "vkCommitment",
         ],
-    )? {
-        if !commitment.is_none() {
-            attachment.vk_commitment = Some(py_fixed_array::<32>(
-                &commitment,
-                &format!("{context}.verifying_key_commitment"),
-            )?);
-        }
+    )? && !commitment.is_none()
+    {
+        attachment.vk_commitment = Some(py_fixed_array::<32>(
+            &commitment,
+            &format!("{context}.verifying_key_commitment"),
+        )?);
     }
-    if let Some(envelope_hash) = dict_get_alias(dict, &["envelope_hash", "envelopeHash"])? {
-        if !envelope_hash.is_none() {
-            attachment.envelope_hash = Some(py_fixed_array::<32>(
-                &envelope_hash,
-                &format!("{context}.envelope_hash"),
-            )?);
-        }
+    if let Some(envelope_hash) = dict_get_alias(dict, &["envelope_hash", "envelopeHash"])?
+        && !envelope_hash.is_none()
+    {
+        attachment.envelope_hash = Some(py_fixed_array::<32>(
+            &envelope_hash,
+            &format!("{context}.envelope_hash"),
+        )?);
     }
     Ok(attachment)
 }
@@ -1930,10 +1964,13 @@ fn sorafs_alias_proof_fixture_py(
     )
     .expect("derive keypair");
     let signature = Signature::new(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair.public_key().to_bytes();
-    let signer: [u8; 32] = signer_bytes
-        .try_into()
-        .expect("ed25519 public key must be 32 bytes");
+    let (_, signer_bytes) = public_key_to_bytes(keypair.public_key(), "alias proof signer")?;
+    let signer: [u8; 32] = signer_bytes.try_into().map_err(|_| {
+        PyValueError::new_err(format!(
+            "alias proof signer must be 32 bytes, got {}",
+            signer_bytes.len()
+        ))
+    })?;
     bundle
         .council_signatures
         .push(sorafs_manifest::CouncilSignature {
@@ -4422,10 +4459,10 @@ mod tests {
         KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaRecursiveAggregationProof,
         KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
-        KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendRedeemRequestV1,
-        KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
-        KagemushaSpendableNoteDescriptorV1, KagemushaVerifiedFoldBundle,
-        KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+        KagemushaRecursiveSpendInitRequestV1, KagemushaRecursiveSpendLineageWitnessV1,
+        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendVerifyRequestV1,
+        KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
+        KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
         KagemushaVerifiedFoldVerifierRecord,
         kagemusha_recursive_spend_public_inputs_from_accumulator,
     };
@@ -4804,6 +4841,190 @@ mod tests {
                 parse_sm2_private_key(None, private_bytes).expect("parse SM2 private key");
             let derived_public = private.public_key().to_sec1_bytes(false);
             assert_eq!(derived_public.as_slice(), public_bytes);
+        });
+    }
+
+    #[test]
+    fn parse_public_key_multihash_returns_checked_payload() {
+        ensure_python();
+        let key_pair =
+            KeyPair::from_seed(b"python-public-key-multihash".to_vec(), Algorithm::Ed25519);
+        let (algorithm, expected_payload) =
+            public_key_to_bytes(key_pair.public_key(), "fixture public key")
+                .expect("fixture public key is well-formed");
+        let encoded = key_pair
+            .public_key()
+            .try_to_prefixed_string()
+            .expect("fixture public key prefixed multihash formats");
+
+        Python::attach(|py| {
+            let (parsed_algorithm, parsed_payload) =
+                parse_public_key_multihash_py(py, &encoded).expect("public key multihash parses");
+            assert_eq!(parsed_algorithm, algorithm.as_static_str());
+            assert_eq!(parsed_payload.bind(py).as_bytes(), expected_payload);
+        });
+    }
+
+    #[test]
+    fn multihash_helpers_use_checked_formatters() {
+        ensure_python();
+        let key_pair = KeyPair::from_seed(b"python-multihash-helper".to_vec(), Algorithm::Ed25519);
+        let (_, public_payload) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
+            .expect("fixture public key is well-formed");
+        let public_payload = public_payload.to_vec();
+        let (private_algorithm, private_payload) = key_pair.private_key().to_bytes();
+        assert_eq!(private_algorithm, Algorithm::Ed25519);
+        let exposed_private = ExposedPrivateKey(key_pair.private_key().clone());
+
+        assert_eq!(
+            public_key_multihash_py(Algorithm::Ed25519.as_static_str(), &public_payload, false)
+                .expect("public key multihash formats"),
+            public_key_multihash_string(key_pair.public_key(), false, "expected public key")
+                .expect("expected public key multihash formats")
+        );
+        assert_eq!(
+            public_key_multihash_py(Algorithm::Ed25519.as_static_str(), &public_payload, true)
+                .expect("prefixed public key multihash formats"),
+            public_key_multihash_string(key_pair.public_key(), true, "expected public key")
+                .expect("expected prefixed public key multihash formats")
+        );
+        assert_eq!(
+            private_key_multihash_py(
+                Algorithm::Ed25519.as_static_str(),
+                private_payload.as_slice(),
+                false,
+            )
+            .expect("private key multihash formats"),
+            private_key_multihash_string(&exposed_private, false, "expected private key")
+                .expect("expected private key multihash formats")
+        );
+        assert_eq!(
+            private_key_multihash_py(
+                Algorithm::Ed25519.as_static_str(),
+                private_payload.as_slice(),
+                true,
+            )
+            .expect("prefixed private key multihash formats"),
+            private_key_multihash_string(&exposed_private, true, "expected private key")
+                .expect("expected prefixed private key multihash formats")
+        );
+    }
+
+    #[test]
+    fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
+        ensure_python();
+        let distid = "1234567812345678";
+        let seed = [0x42_u8; SM2_PRIVATE_KEY_LENGTH];
+        let message = b"python sm2 fixture checked multihash";
+
+        Python::attach(|py| {
+            let fixture = sm2_fixture_from_seed_py(py, distid, &seed, message)
+                .expect("SM2 fixture generates");
+            let fixture = fixture.bind(py);
+            let public_key_sec1_hex = fixture
+                .get_item("public_key_sec1_hex")
+                .expect("SEC1 public key item lookup succeeds")
+                .expect("SEC1 public key item exists")
+                .extract::<String>()
+                .expect("SEC1 public key is string");
+            let public_key_multihash = fixture
+                .get_item("public_key_multihash")
+                .expect("multihash item lookup succeeds")
+                .expect("multihash item exists")
+                .extract::<String>()
+                .expect("multihash is string");
+            let public_key_prefixed = fixture
+                .get_item("public_key_prefixed")
+                .expect("prefixed item lookup succeeds")
+                .expect("prefixed item exists")
+                .extract::<String>()
+                .expect("prefixed multihash is string");
+            let public_key_sec1 =
+                hex::decode(public_key_sec1_hex).expect("fixture SEC1 public key hex decodes");
+            let payload = encode_sm2_public_key_payload(distid, &public_key_sec1)
+                .expect("fixture SM2 public key payload encodes");
+            let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload)
+                .expect("fixture SM2 public key constructs");
+
+            assert_eq!(
+                sm2_public_key_multihash_py(&public_key_sec1, Some(distid))
+                    .expect("SM2 public key multihash formats"),
+                public_key_multihash
+            );
+            assert_eq!(
+                sm2_fixture_public_key_multihashes(&public_key)
+                    .expect("fixture public key multihashes format")
+                    .1,
+                public_key_prefixed
+            );
+        });
+    }
+
+    #[test]
+    fn keypair_and_account_public_exports_use_checked_payloads() {
+        ensure_python();
+        let key_pair = KeyPair::from_seed(b"python-keypair-export".to_vec(), Algorithm::Ed25519);
+        let (_, expected_public) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
+            .expect("fixture public key is well-formed");
+        let expected_public = expected_public.to_vec();
+        let (_, expected_private) = key_pair.private_key().to_bytes();
+        let authority = AccountId::new(key_pair.public_key().clone())
+            .canonical_i105()
+            .expect("canonical authority");
+
+        Python::attach(|py| {
+            let (private_py, public_py) =
+                keypair_to_py(py, key_pair.clone()).expect("keypair exports");
+            assert_eq!(public_py.bind(py).as_bytes(), expected_public.as_slice());
+            assert_eq!(private_py.bind(py).as_bytes(), expected_private.as_slice());
+        });
+
+        let account = PyAccountId::new(&authority).expect("account id parses");
+        assert_eq!(
+            account.public_key_hex().expect("public key hex"),
+            hex::encode(expected_public)
+        );
+    }
+
+    #[test]
+    fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
+        ensure_python();
+        Python::attach(|py| {
+            let fixture =
+                sorafs_alias_proof_fixture_py(py, None).expect("alias proof fixture generates");
+            let fixture = fixture.bind(py);
+            let proof_b64 = fixture
+                .get_item("proof_b64")
+                .expect("proof item lookup succeeds")
+                .expect("proof item exists")
+                .extract::<String>()
+                .expect("proof is string");
+            let generated_at_unix = fixture
+                .get_item("generated_at_unix")
+                .expect("generated item lookup succeeds")
+                .expect("generated item exists")
+                .extract::<u64>()
+                .expect("generated timestamp is integer");
+
+            let evaluation =
+                sorafs_evaluate_alias_proof_py(py, &proof_b64, None, Some(generated_at_unix))
+                    .expect("alias proof evaluates");
+            let evaluation = evaluation.bind(py);
+            let state = evaluation
+                .get_item("state")
+                .expect("state item lookup succeeds")
+                .expect("state item exists")
+                .extract::<String>()
+                .expect("state is string");
+            let servable = evaluation
+                .get_item("servable")
+                .expect("servable item lookup succeeds")
+                .expect("servable item exists")
+                .extract::<bool>()
+                .expect("servable is boolean");
+
+            assert_eq!(state, "fresh");
+            assert!(servable);
         });
     }
 
@@ -7956,7 +8177,8 @@ impl PyAccountId {
 
     #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
-        let (algorithm, bytes) = self.inner.signatory().to_bytes();
+        let (algorithm, bytes) =
+            public_key_to_bytes(self.inner.signatory(), "account signatory public key")?;
         algorithm_guard(algorithm)?;
         Ok(hex::encode(bytes))
     }
@@ -8252,6 +8474,7 @@ impl Instruction {
     }
 
     #[classmethod]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (asset_definition_id, identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
     fn register_zk_ace_identity_commitment<'py>(
         _cls: &Bound<'py, PyType>,
@@ -9252,7 +9475,10 @@ impl TransactionBuilder {
         builder
     }
 
-    fn envelope_from_signed(&self, signed: &SignedTransaction) -> SignedTransactionEnvelope {
+    fn envelope_from_signed(
+        &self,
+        signed: &SignedTransaction,
+    ) -> PyResult<SignedTransactionEnvelope> {
         let signature: Signature = signed.signature().payload().clone();
         let signature_bytes = signature.payload().to_vec();
 
@@ -9262,8 +9488,9 @@ impl TransactionBuilder {
         let signed_bytes = codec::encode_adaptive(signed);
         let signed_versioned = signed.encode_versioned();
 
-        let (_, public_key_bytes) = signed.authority().signatory().to_bytes();
-        SignedTransactionEnvelope {
+        let (_, public_key_bytes) =
+            public_key_to_bytes(signed.authority().signatory(), "authority public key")?;
+        Ok(SignedTransactionEnvelope {
             chain_id: self.chain_id.to_string(),
             authority: self.authority.to_string(),
             signed_transaction: signed_bytes,
@@ -9271,7 +9498,7 @@ impl TransactionBuilder {
             hash: hash_bytes,
             signature: signature_bytes,
             public_key: public_key_bytes.to_vec(),
-        }
+        })
     }
 
     fn clear_transaction_state(&mut self) {
@@ -9449,7 +9676,7 @@ impl TransactionBuilder {
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
         let private_key = parse_private_key(private_key)?;
         let signed = self.to_model_builder().sign(&private_key);
-        let envelope = self.envelope_from_signed(&signed);
+        let envelope = self.envelope_from_signed(&signed)?;
 
         // Reset instructions for the next transaction while keeping metadata.
         self.clear_transaction_state();
@@ -9472,7 +9699,7 @@ impl TransactionBuilder {
         signed.verify_signature().map_err(|err| {
             PyValueError::new_err(format!("signature verification failed: {err}"))
         })?;
-        let envelope = self.envelope_from_signed(&signed);
+        let envelope = self.envelope_from_signed(&signed)?;
         self.clear_transaction_state();
         Ok(envelope)
     }
@@ -9817,11 +10044,7 @@ fn verify_py(
 fn public_key_multihash_py(algorithm: &str, public_key: &[u8], prefixed: bool) -> PyResult<String> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
-    Ok(if prefixed {
-        public_key.to_prefixed_string()
-    } else {
-        public_key.to_string()
-    })
+    public_key_multihash_string(&public_key, prefixed, "public key multihash")
 }
 
 #[pyfunction]
@@ -9835,11 +10058,7 @@ fn private_key_multihash_py(
     let algorithm = parse_algorithm_arg(algorithm)?;
     let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
     let exposed = ExposedPrivateKey(private_key);
-    Ok(if prefixed {
-        exposed.to_prefixed_string()
-    } else {
-        exposed.to_string()
-    })
+    private_key_multihash_string(&exposed, prefixed, "private key multihash")
 }
 
 #[pyfunction]
@@ -9849,7 +10068,7 @@ fn parse_public_key_multihash_py(py: Python<'_>, encoded: &str) -> PyResult<(Str
     let public_key = encoded.parse::<PublicKey>().map_err(|err| {
         PyValueError::new_err(format!("failed to parse public key multihash: {err}"))
     })?;
-    let (algorithm, payload) = public_key.to_bytes();
+    let (algorithm, payload) = public_key_to_bytes(&public_key, "public key multihash")?;
     Ok((
         algorithm.as_static_str().to_owned(),
         Py::from(PyBytes::new(py, payload)),
@@ -10016,8 +10235,14 @@ fn sm2_public_key_multihash_py(public_key: &[u8], distid: Option<&str>) -> PyRes
         PyValueError::new_err(format!("failed to encode SM2 public key payload: {err}"))
     })?;
     PublicKey::from_bytes(Algorithm::Sm2, &payload)
-        .map(|pk| pk.to_string())
         .map_err(|err| PyValueError::new_err(format!("failed to construct SM2 public key: {err}")))
+        .and_then(|pk| public_key_multihash_string(&pk, false, "SM2 public key multihash"))
+}
+
+fn sm2_fixture_public_key_multihashes(public_key: &PublicKey) -> PyResult<(String, String)> {
+    let multihash = public_key_multihash_string(public_key, false, "SM2 fixture public key")?;
+    let prefixed = public_key_multihash_string(public_key, true, "SM2 fixture public key")?;
+    Ok((multihash, prefixed))
 }
 
 #[pyfunction]
@@ -10104,8 +10329,7 @@ fn sm2_fixture_from_seed_py(
     let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(|err| {
         PyValueError::new_err(format!("failed to construct SM2 public key: {err}"))
     })?;
-    let multihash = public_key.to_string();
-    let prefixed = public_key.to_prefixed_string();
+    let (multihash, prefixed) = sm2_fixture_public_key_multihashes(&public_key)?;
     let za = public
         .compute_z(distid)
         .map_err(|err| PyValueError::new_err(format!("failed to compute SM2 ZA: {err}")))?;

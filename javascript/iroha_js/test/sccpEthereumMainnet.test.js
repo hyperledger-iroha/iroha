@@ -28,6 +28,14 @@ const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const SOURCE_EVENT_DIGEST = hex32("34");
 const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
+const SAMPLE_SYNC_COMMITTEE_BITS = `0x01${"00".repeat(63)}`;
+const SAMPLE_SYNC_COMMITTEE_SIGNATURE = `0x${"34".repeat(96)}`;
+const sampleFinalityUpdateFields = () => ({
+  syncCommitteeBits: SAMPLE_SYNC_COMMITTEE_BITS,
+  syncCommitteeSignature: SAMPLE_SYNC_COMMITTEE_SIGNATURE,
+  syncCommitteeParticipation: "1",
+  syncSignatureSlot: "65",
+});
 const sampleReceiptProof = {
   sourceDomain: SCCP_DOMAIN_ETH,
   sourceEventDigest: SOURCE_EVENT_DIGEST,
@@ -540,7 +548,40 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   const fetchCalls = [];
   const beaconFetch = async (url, init) => {
     fetchCalls.push([url, init]);
+    if (url === "https://beacon.example/eth/v1/beacon/genesis") {
+      return {
+        ok: true,
+        async json() {
+          return { data: { genesis_time: "0" } };
+        },
+      };
+    }
     if (url === "https://beacon.example/eth/v1/beacon/headers/finalized") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            finalized: true,
+            data: {
+              root: hex32("ff"),
+              canonical: true,
+              header: {
+                message: {
+                  slot: "96",
+                  proposer_index: "1",
+                  parent_root: hex32("01"),
+                  state_root: hex32("02"),
+                  body_root: hex32("03"),
+                },
+                signature: `0x${"12".repeat(96)}`,
+              },
+            },
+          };
+        },
+      };
+    }
+    if (url === "https://beacon.example/eth/v1/beacon/headers/64") {
       return {
         ok: true,
         async json() {
@@ -565,7 +606,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
         },
       };
     }
-    if (url === "https://beacon.example/eth/v1/beacon/blocks/finalized/root") {
+    if (url === "https://beacon.example/eth/v1/beacon/blocks/64/root") {
       return {
         ok: true,
         async json() {
@@ -577,7 +618,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
         },
       };
     }
-    if (url === "https://beacon.example/eth/v2/beacon/blocks/finalized") {
+    if (url === "https://beacon.example/eth/v2/beacon/blocks/64") {
       return {
         ok: true,
         async json() {
@@ -608,7 +649,33 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              finalized: { root: hex32("dd"), epoch: "2" },
+              finalized: { root: hex32("ff"), epoch: "3" },
+            },
+          };
+        },
+      };
+    }
+    if (url === "https://beacon.example/eth/v1/beacon/light_client/finality_update") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            data: {
+              finalized_header: {
+                beacon: {
+                  slot: "96",
+                  proposer_index: "1",
+                  parent_root: hex32("01"),
+                  state_root: hex32("02"),
+                  body_root: hex32("03"),
+                },
+              },
+              sync_aggregate: {
+                sync_committee_bits: `0x01${"00".repeat(63)}`,
+                sync_committee_signature: `0x${"34".repeat(96)}`,
+              },
+              signature_slot: "97",
             },
           };
         },
@@ -629,7 +696,12 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
       }
       if (method === "eth_getBlockByHash") {
         assert.deepEqual(params, [BLOCK_HASH, false]);
-        return { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") };
+        return {
+          hash: BLOCK_HASH,
+          number: "0x1234",
+          receiptsRoot: hex32("cc"),
+          timestamp: "0x300",
+        };
       }
       throw new Error(`unexpected RPC method ${method}`);
     },
@@ -650,13 +722,20 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   assert.equal(evidence.beaconFinality.finalizedHeaderRoot, hex32("dd"));
   assert.equal(evidence.beaconFinality.syncCommitteeRoot, hex32("ee"));
   assert.equal(evidence.beaconFinality.beaconSlot, "64");
+  assert.equal(evidence.beaconFinality.syncCommitteeBits, `0x01${"00".repeat(63)}`);
+  assert.equal(evidence.beaconFinality.syncCommitteeSignature, `0x${"34".repeat(96)}`);
+  assert.equal(evidence.beaconFinality.syncCommitteeParticipation, "1");
+  assert.equal(evidence.beaconFinality.syncSignatureSlot, "97");
   assert.deepEqual(
     fetchCalls.map(([url]) => url),
     [
+      "https://beacon.example/eth/v1/beacon/genesis",
       "https://beacon.example/eth/v1/beacon/headers/finalized",
-      "https://beacon.example/eth/v1/beacon/blocks/finalized/root",
-      "https://beacon.example/eth/v2/beacon/blocks/finalized",
+      "https://beacon.example/eth/v1/beacon/headers/64",
+      "https://beacon.example/eth/v1/beacon/blocks/64/root",
+      "https://beacon.example/eth/v2/beacon/blocks/64",
       "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
+      "https://beacon.example/eth/v1/beacon/light_client/finality_update",
     ],
   );
   for (const [, init] of fetchCalls) {
@@ -666,7 +745,12 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
 });
 
 test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Beacon REST data", async () => {
-  const block = { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") };
+  const block = {
+    hash: BLOCK_HASH,
+    number: "0x1234",
+    receiptsRoot: hex32("cc"),
+    beaconSlot: "64",
+  };
   const validHeader = () => ({
     execution_optimistic: false,
     finalized: true,
@@ -711,6 +795,25 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       },
     },
   });
+  const validFinalityUpdate = () => ({
+    execution_optimistic: false,
+    data: {
+      finalized_header: {
+        beacon: {
+          slot: "64",
+          proposer_index: "1",
+          parent_root: hex32("01"),
+          state_root: hex32("02"),
+          body_root: hex32("03"),
+        },
+      },
+      sync_aggregate: {
+        sync_committee_bits: `0x01${"00".repeat(63)}`,
+        sync_committee_signature: `0x${"34".repeat(96)}`,
+      },
+      signature_slot: "65",
+    },
+  });
   const syncCommitteePayload = {
     syncCommitteePublicKeys: [`0x${"11".repeat(48)}`],
     syncCommitteeWeights: ["1"],
@@ -718,20 +821,26 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
   };
   const providerFor = (
     headerResponse,
-    checkpointResponse = validCheckpoint(),
+    checkpointResponse = { ok: true, json: async () => validCheckpoint() },
     extra = {},
     blockResponse = { ok: true, json: async () => validBlock() },
     blockRootResponse = { ok: true, json: async () => validBlockRoot() },
+    targetHeaderResponse = headerResponse,
+    finalityUpdateResponse = { ok: true, json: async () => validFinalityUpdate() },
   ) =>
     new EthereumMainnetBeaconRestConsensusProvider({
       endpoint: "https://beacon.example",
       syncCommitteeRoot: hex32("ee"),
       fetch: async (url) => {
         if (url.endsWith("/eth/v1/beacon/headers/finalized")) return headerResponse;
-        if (url.endsWith("/eth/v1/beacon/blocks/finalized/root")) return blockRootResponse;
-        if (url.endsWith("/eth/v2/beacon/blocks/finalized")) return blockResponse;
+        if (url.endsWith("/eth/v1/beacon/headers/64")) return targetHeaderResponse;
+        if (url.endsWith("/eth/v1/beacon/blocks/64/root")) return blockRootResponse;
+        if (url.endsWith("/eth/v2/beacon/blocks/64")) return blockResponse;
         if (url.endsWith("/eth/v1/beacon/states/finalized/finality_checkpoints")) {
           return checkpointResponse;
+        }
+        if (url.endsWith("/eth/v1/beacon/light_client/finality_update")) {
+          return finalityUpdateResponse;
         }
         throw new Error(`unexpected Beacon REST URL ${url}`);
       },
@@ -868,6 +977,14 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
 
   await assert.rejects(
     () =>
+      providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence({
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+      }),
+    /requires beaconSlot, beaconBlockRoot, or block\.timestamp/u,
+  );
+
+  await assert.rejects(
+    () =>
       providerFor({ ok: false, status: 503, statusText: "Unavailable" })
         .collectFinalityEvidence({ block }),
     /request failed 503 Unavailable/u,
@@ -960,6 +1077,36 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       providerFor({ ok: true, json: async () => ({ ...validHeader(), finalized: false }) })
         .collectFinalityEvidence({ block }),
     /must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        { ok: true, json: async () => validBlockRoot() },
+        {
+          ok: true,
+          json: async () => ({ ...validHeader(), finalized: false }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized target header must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => ({ ...validBlock(), finalized: false }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized block must be finalized/u,
   );
 
   await assert.rejects(
@@ -1131,6 +1278,27 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       providerFor(
         { ok: true, json: async () => validHeader() },
         { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        { ok: true, json: async () => validBlockRoot() },
+        { ok: true, json: async () => validHeader() },
+        {
+          ok: true,
+          json: async () => {
+            const update = validFinalityUpdate();
+            update.data.sync_aggregate.sync_committee_bits = `0x${"00".repeat(64)}`;
+            return update;
+          },
+        },
+      ).collectFinalityEvidence({ block }),
+    /sync_committee_bits must contain at least one participant/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
         { syncCommitteeRoot: null },
       ).collectFinalityEvidence({ block }),
     /requires syncCommitteeRoot or syncCommitteePayload/u,
@@ -1178,6 +1346,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           executionBlockNumber: "0x1234",
           executionBlockHash: BLOCK_HASH,
           executionReceiptsRoot: hex32("cc"),
+          ...sampleFinalityUpdateFields(),
         };
       },
     },
@@ -1616,6 +1785,40 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
         sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
       }),
     /beaconFinality\.beaconSlot/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+          syncCommitteeSignature: SAMPLE_SYNC_COMMITTEE_SIGNATURE,
+          syncCommitteeParticipation: "1",
+          syncSignatureSlot: "65",
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.syncCommitteeBits/u,
   );
   assert.equal(proveCalls, 1);
 
@@ -2323,6 +2526,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
   assert.equal(await sdk.submitOutboundToEthereum({ proofResult }), "0xeth1");
   assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
   assert.equal(submittedTxs[0].data, sdk.buildEthereumCalldata({ proofResult }).callDataHex);
+  assert.equal(submittedTxs[0].chainId, "0x1");
 
   const { destinationBinding, ...proofResultWithoutBinding } = proofResult;
   const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = destinationBinding;
@@ -2335,6 +2539,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
   };
   assert.equal(await sdk.submitOutboundToEthereum({ proof_result: snakeProofResult }), "0xeth2");
   assert.equal(submittedTxs[1].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[1].chainId, "0x1");
 
   assert.equal(
     await sdk.submitOutboundToEthereum({
@@ -2344,6 +2549,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
     "0xeth3",
   );
   assert.equal(submittedTxs[2].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[2].chainId, "0x1");
 
   assert.equal(
     await sdk.submitOutboundToEthereum({
@@ -2353,6 +2559,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
     "0xeth4",
   );
   assert.equal(submittedTxs[3].from, `0x${"aa".repeat(20)}`);
+  assert.equal(submittedTxs[3].chainId, "0x1");
 
   await assert.rejects(
     () => sdk.submitOutboundToEthereum({ proofResult, from: `0x${"00".repeat(20)}` }),

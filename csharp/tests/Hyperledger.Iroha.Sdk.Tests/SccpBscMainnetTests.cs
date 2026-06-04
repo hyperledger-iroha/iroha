@@ -44,17 +44,40 @@ public sealed class SccpBscMainnetTests
     }
 
     private sealed class InboundProverStub(
-        string expectedTransactionHash,
-        byte[]? proofBytes = null) : IBscMainnetInboundProver
+        string? expectedTransactionHash,
+        byte[]? proofBytes = null,
+        string? expectedReceiptProofHash = null,
+        string? expectedSourceEventDigest = null,
+        string? expectedSourceBridgeEmitterAddress = null) : IBscMainnetInboundProver
     {
+        public int Calls { get; private set; }
+
         public ValueTask<byte[]> ProveAsync(
             BscMainnetInboundEvidence evidence,
             CancellationToken cancellationToken = default)
         {
+            Calls += 1;
             Assert.Equal(BscMainnetSccp.DomainBsc, evidence.SourceDomain);
             Assert.Equal(BscMainnetSccp.DomainSora, evidence.TargetDomain);
-            Assert.Equal(expectedTransactionHash, evidence.TransactionHash);
+            if (expectedTransactionHash is not null)
+            {
+                Assert.Equal(expectedTransactionHash, evidence.TransactionHash);
+            }
             Assert.NotNull(evidence.ParliaFinality);
+            Assert.NotNull(evidence.ReceiptProof);
+            if (expectedReceiptProofHash is not null)
+            {
+                Assert.Equal(expectedReceiptProofHash, evidence.ReceiptProofHash);
+            }
+            if (expectedSourceEventDigest is not null)
+            {
+                Assert.Equal(expectedSourceEventDigest, evidence.SourceEventDigest);
+                Assert.Equal(expectedSourceEventDigest, evidence.ReceiptProof.SourceEventDigest);
+            }
+            if (expectedSourceBridgeEmitterAddress is not null)
+            {
+                Assert.Equal(expectedSourceBridgeEmitterAddress, evidence.SourceBridgeEmitterAddress);
+            }
             return ValueTask.FromResult(proofBytes ?? new byte[] { 1, 2, 3 });
         }
     }
@@ -373,12 +396,33 @@ public sealed class SccpBscMainnetTests
         var txHash = "0x" + new string('a', 64);
         var blockHash = "0x" + new string('b', 64);
         var receiptsRoot = "0x" + new string('c', 64);
+        var sourceEventDigest = "0x" + new string('e', 64);
+        var sourceBridgeEmitterAddress = "0x" + new string('4', 40);
+        Dictionary<string, object?> SourceEventLog(params KeyValuePair<string, object?>[] overrides)
+        {
+            var log = new Dictionary<string, object?>
+            {
+                ["address"] = sourceBridgeEmitterAddress,
+                ["transactionHash"] = txHash,
+                ["blockHash"] = blockHash,
+                ["blockNumber"] = "0x1234",
+                ["topics"] = new object?[] { BscMainnetSccp.SourceEventTopic, sourceEventDigest },
+                ["data"] = "0x",
+            };
+            foreach (var (key, value) in overrides)
+            {
+                log[key] = value;
+            }
+
+            return log;
+        }
         var receipt = new Dictionary<string, object?>
         {
             ["transactionHash"] = txHash,
             ["blockHash"] = blockHash,
             ["blockNumber"] = "0x1234",
             ["status"] = "0x1",
+            ["logs"] = new object?[] { SourceEventLog() },
         };
         var block = new Dictionary<string, object?>
         {
@@ -386,6 +430,30 @@ public sealed class SccpBscMainnetTests
             ["number"] = "0x1234",
             ["receiptsRoot"] = receiptsRoot,
         };
+        var receiptProof = new BscMainnetReceiptProof
+        {
+            SourceEventDigest = sourceEventDigest,
+            ValidatorEpoch = 36,
+            BlockNumber = 4660,
+            BlockHash = blockHash,
+            ReceiptsRoot = receiptsRoot,
+            ValidatorSetHash = "0x" + new string('a', 64),
+            CommitSealHash = "0x" + new string('d', 64),
+            ReceiptRootIndex = 3,
+            ReceiptTrieProofNodes = new[] { new byte[] { 0x01 }, new byte[] { 0x02, 0x03 } },
+            InclusionBranch = new[] { Enumerable.Repeat((byte)0x11, 32).ToArray() },
+        };
+        var receiptProofHash = BscMainnetSccp.BscSccpReceiptProofHash(
+            receiptProof.SourceEventDigest,
+            receiptProof.ValidatorEpoch,
+            receiptProof.BlockNumber,
+            receiptProof.BlockHash,
+            receiptProof.ReceiptsRoot,
+            receiptProof.ValidatorSetHash,
+            receiptProof.CommitSealHash,
+            receiptProof.ReceiptRootIndex,
+            receiptProof.ReceiptTrieProofNodes,
+            receiptProof.InclusionBranch);
         var parliaFinalityEvidence = new BscMainnetParliaFinalityEvidence(
             "0x1234",
             blockHash,
@@ -393,8 +461,9 @@ public sealed class SccpBscMainnetTests
         var parliaFinality = parliaFinalityEvidence.ToDictionary(
             new Dictionary<string, object?>
             {
-                ["validatorSetHash"] = "0x" + new string('d', 64),
-                ["commitSealCount"] = 15,
+                ["validatorEpoch"] = "0x24",
+                ["validatorSetHash"] = "0x" + new string('a', 64),
+                ["commitSealHash"] = "0x" + new string('d', 64),
             });
         var provider = new ExecutionProviderStub("0x38", receipt, block);
 
@@ -402,13 +471,18 @@ public sealed class SccpBscMainnetTests
             new BscMainnetInboundEvidence
             {
                 TransactionHash = txHash,
+                ReceiptProof = receiptProof,
             }.WithParliaFinalityEvidence(
                 parliaFinalityEvidence,
                 new Dictionary<string, object?>
                 {
-                    ["validatorSetHash"] = "0x" + new string('d', 64),
-                    ["commitSealCount"] = 15,
-                }),
+                    ["validatorEpoch"] = "0x24",
+                    ["validatorSetHash"] = "0x" + new string('a', 64),
+                    ["commitSealHash"] = "0x" + new string('d', 64),
+                }) with
+                {
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                },
             provider);
         Assert.Equal(BscMainnetSccp.DomainBsc, evidence.SourceDomain);
         Assert.Equal(BscMainnetSccp.DomainSora, evidence.TargetDomain);
@@ -418,23 +492,44 @@ public sealed class SccpBscMainnetTests
         Assert.Equal("4660", evidence.ParliaFinality?["executionBlockNumber"]);
         Assert.Equal(blockHash, evidence.ParliaFinality?["executionBlockHash"]);
         Assert.Equal(receiptsRoot, evidence.ParliaFinality?["executionReceiptsRoot"]);
+        Assert.Equal(receiptProofHash, evidence.ReceiptProofHash);
+        Assert.Equal(receiptsRoot, evidence.ReceiptProof?.ReceiptsRoot);
+        Assert.Equal(sourceEventDigest, evidence.SourceEventDigest);
+        Assert.Equal(sourceBridgeEmitterAddress, evidence.SourceBridgeEmitterAddress);
+        Assert.NotSame(receiptProof.ReceiptTrieProofNodes[0], evidence.ReceiptProof?.ReceiptTrieProofNodes[0]);
         Assert.Equal(
             ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"],
             provider.Calls);
         var providerFinalityEvidence = await BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
-            new BscMainnetInboundEvidence { TransactionHash = txHash },
+            new BscMainnetInboundEvidence
+            {
+                TransactionHash = txHash,
+                ReceiptProof = receiptProof,
+                SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            },
             provider,
             new ConsensusProviderStub(parliaFinality));
         Assert.Equal(blockHash, providerFinalityEvidence.ParliaFinality?["executionBlockHash"]);
+        Assert.Equal(receiptProofHash, providerFinalityEvidence.ReceiptProofHash);
+        Assert.Equal(sourceEventDigest, providerFinalityEvidence.SourceEventDigest);
 
         var proofBytes = await BscMainnetSccp.ProveInboundToSoraAsync(
             evidence,
-            new InboundProverStub(txHash));
+            new InboundProverStub(
+                txHash,
+                expectedReceiptProofHash: receiptProofHash,
+                expectedSourceEventDigest: sourceEventDigest,
+                expectedSourceBridgeEmitterAddress: sourceBridgeEmitterAddress));
         Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
         var mutableProverOutput = new byte[] { 4, 5, 6 };
         var copiedProofBytes = await BscMainnetSccp.ProveInboundToSoraAsync(
             evidence,
-            new InboundProverStub(txHash, mutableProverOutput));
+            new InboundProverStub(
+                txHash,
+                mutableProverOutput,
+                receiptProofHash,
+                sourceEventDigest,
+                sourceBridgeEmitterAddress));
         mutableProverOutput[0] = 9;
         Assert.Equal(new byte[] { 4, 5, 6 }, copiedProofBytes);
         Assert.Equal(
@@ -480,9 +575,26 @@ public sealed class SccpBscMainnetTests
         var proofHashOnly = await BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
             new BscMainnetInboundEvidence
             {
-                ReceiptProofHash = "0x" + new string('e', 64),
+                ReceiptProofHash = receiptProofHash,
             });
-        Assert.Equal("0x" + new string('e', 64), proofHashOnly.ReceiptProofHash);
+        Assert.Equal(receiptProofHash, proofHashOnly.ReceiptProofHash);
+        Assert.Null(proofHashOnly.ReceiptProof);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    ReceiptProof = receiptProof,
+                    ReceiptProofHash = "0x" + new string('9', 64),
+                }).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    ReceiptProof = receiptProof with
+                    {
+                        SourceDomain = EthereumMainnetSccp.DomainEthereum,
+                    },
+                }).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(
             () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
                 new BscMainnetInboundEvidence
@@ -597,9 +709,178 @@ public sealed class SccpBscMainnetTests
             () => BscMainnetSccp.ProveInboundToSoraAsync(
                 new BscMainnetInboundEvidence
                 {
-                    ReceiptProofHash = "0x" + new string('e', 64),
+                    ReceiptProofHash = receiptProofHash,
+                },
+                new InboundProverStub(null)).AsTask());
+
+        var hashOnlyProver = new InboundProverStub(null);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ProveInboundToSoraAsync(
+                new BscMainnetInboundEvidence
+                {
+                    ParliaFinality = parliaFinality,
+                    ReceiptProofHash = receiptProofHash,
+                },
+                hashOnlyProver).AsTask());
+        Assert.Equal(0, hashOnlyProver.Calls);
+
+        var noSourceEventProver = new InboundProverStub(null);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ProveInboundToSoraAsync(
+                new BscMainnetInboundEvidence
+                {
+                    ParliaFinality = parliaFinality,
+                    ReceiptProof = receiptProof,
+                },
+                noSourceEventProver).AsTask());
+        Assert.Equal(0, noSourceEventProver.Calls);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ProveInboundToSoraAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = receipt,
+                    Block = block,
+                    ParliaFinality = parliaFinality,
+                    ReceiptProof = receiptProof with
+                    {
+                        ReceiptsRoot = "0x" + new string('9', 64),
+                    },
                 },
                 new InboundProverStub(txHash)).AsTask());
+
+        var driftedSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[]
+            {
+                SourceEventLog(
+                    new KeyValuePair<string, object?>(
+                        "topics",
+                        new object?[] { BscMainnetSccp.SourceEventTopic, "0x" + new string('9', 64) })),
+            },
+        };
+        var driftedSourceProver = new InboundProverStub(null);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ProveInboundToSoraAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = driftedSourceReceipt,
+                    Block = block,
+                    ParliaFinality = parliaFinality,
+                    ReceiptProof = receiptProof,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                },
+                driftedSourceProver).AsTask());
+        Assert.Equal(0, driftedSourceProver.Calls);
+
+        var extraTopicBscSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[]
+            {
+                SourceEventLog(
+                    new KeyValuePair<string, object?>(
+                        "topics",
+                        new object?[]
+                        {
+                            BscMainnetSccp.SourceEventTopic,
+                            sourceEventDigest,
+                            "0x" + new string('6', 64),
+                        })),
+            },
+        };
+        var extraTopicBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = extraTopicBscSourceReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("exactly 2 topics", extraTopicBscSourceError.Message);
+
+        var nonEmptyDataBscSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[]
+            {
+                SourceEventLog(new KeyValuePair<string, object?>("data", "0x01")),
+            },
+        };
+        var nonEmptyDataBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = nonEmptyDataBscSourceReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("data must be 0x", nonEmptyDataBscSourceError.Message);
+
+        var zeroDigestBscSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[]
+            {
+                SourceEventLog(
+                    new KeyValuePair<string, object?>(
+                        "topics",
+                        new object?[] { BscMainnetSccp.SourceEventTopic, "0x" + new string('0', 64) })),
+            },
+        };
+        var zeroDigestBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = zeroDigestBscSourceReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("digest must not be zero", zeroDigestBscSourceError.Message);
+
+        var duplicateBscSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { SourceEventLog(), SourceEventLog() },
+        };
+        var duplicateBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = duplicateBscSourceReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("exactly one matching", duplicateBscSourceError.Message);
+
+        var removedBscSourceReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[]
+            {
+                SourceEventLog(new KeyValuePair<string, object?>("removed", true)),
+            },
+        };
+        var removedBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = removedBscSourceReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("removed logs", removedBscSourceError.Message);
+
+        var missingBscSourceContextLog = SourceEventLog();
+        missingBscSourceContextLog.Remove("transactionHash");
+        var missingBscSourceContextReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { missingBscSourceContextLog },
+        };
+        var missingBscSourceContextError = await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new BscMainnetInboundEvidence
+                {
+                    Receipt = missingBscSourceContextReceipt,
+                    Block = block,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("receipt.logs[0].transactionHash", missingBscSourceContextError.Message);
 
         var driftedFinalityHash = new Dictionary<string, object?>(parliaFinality)
         {

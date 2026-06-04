@@ -2410,7 +2410,9 @@ mod sorafs_tests {
         let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
         let signature_hex = hex::encode(signature.payload());
         let public_key = keypair.public_key();
-        let (_, signer_bytes) = public_key.to_bytes();
+        let (_, signer_bytes) = public_key
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         let signer_hex = hex::encode(signer_bytes);
         let signer_multihash = public_key.to_string();
         let mut signature_entry = json::Map::new();
@@ -2680,7 +2682,10 @@ mod sorafs_tests {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("seeded key");
         let keypair = KeyPair::from_private_key(private).expect("derive keypair");
         let signature = Signature::new(keypair.private_key(), digest_bytes.as_ref());
-        let (_, signer_bytes) = keypair.public_key().to_bytes();
+        let (_, signer_bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         let signer: [u8; 32] = signer_bytes
             .try_into()
             .expect("ed25519 public key must be 32 bytes");

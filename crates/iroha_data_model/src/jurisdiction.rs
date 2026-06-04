@@ -350,6 +350,9 @@ impl JdgSdnCommitment {
             .block_range
             .validate()
             .map_err(|_| JdgSdnCommitmentError::InvalidBlockRange)?;
+        self.sdn_public_key
+            .try_to_bytes()
+            .map_err(|_| JdgSdnCommitmentError::MalformedSdnPublicKey)?;
         let seal: Signature = self.seal.clone().into();
         if seal.payload().is_empty() {
             return Err(JdgSdnCommitmentError::EmptySeal);
@@ -468,13 +471,20 @@ impl JdgSdnRegistry {
         record: JdgSdnKeyRecord,
         rotation_policy: &JdgSdnRotationPolicy,
     ) -> Result<(), JdgSdnRegistryError> {
-        let fingerprint = Self::fingerprint(&record.public_key);
+        let fingerprint = Self::fingerprint(&record.public_key).map_err(|_| {
+            JdgSdnRegistryError::MalformedPublicKey {
+                public_key: record.public_key.clone(),
+            }
+        })?;
         if self.keys.contains_key(&fingerprint) {
             return Err(JdgSdnRegistryError::DuplicateKey);
         }
 
         if let Some(parent) = &record.rotation_parent {
-            let parent_fingerprint = Self::fingerprint(parent);
+            let parent_fingerprint =
+                Self::fingerprint(parent).map_err(|_| JdgSdnRegistryError::MalformedPublicKey {
+                    public_key: parent.clone(),
+                })?;
             let parent_record = self.keys.get_mut(&parent_fingerprint).ok_or_else(|| {
                 JdgSdnRegistryError::MissingParent {
                     parent: parent.clone(),
@@ -531,7 +541,12 @@ impl JdgSdnRegistry {
             return Err(JdgSdnValidationError::ScopeMismatch { index });
         }
 
-        let fingerprint = Self::fingerprint(&commitment.sdn_public_key);
+        let fingerprint = Self::fingerprint(&commitment.sdn_public_key).map_err(|_| {
+            JdgSdnValidationError::Commitment {
+                index,
+                source: JdgSdnCommitmentError::MalformedSdnPublicKey,
+            }
+        })?;
         let record =
             self.keys
                 .get(&fingerprint)
@@ -577,7 +592,8 @@ impl JdgSdnRegistry {
     /// Fetch a key record by public key fingerprint.
     #[must_use]
     pub fn record(&self, key: &PublicKey) -> Option<&JdgSdnKeyRecord> {
-        self.keys.get(&Self::fingerprint(key))
+        let fingerprint = Self::fingerprint(key).ok()?;
+        self.keys.get(&fingerprint)
     }
 
     /// Iterate over all registered SDN key records.
@@ -585,9 +601,11 @@ impl JdgSdnRegistry {
         self.keys.values()
     }
 
-    fn fingerprint(key: &PublicKey) -> (Algorithm, Vec<u8>) {
-        let (algorithm, bytes) = key.to_bytes();
-        (algorithm, bytes.to_vec())
+    fn fingerprint(
+        key: &PublicKey,
+    ) -> Result<(Algorithm, Vec<u8>), iroha_crypto::error::ParseError> {
+        let (algorithm, bytes) = key.try_to_bytes()?;
+        Ok((algorithm, bytes.to_vec()))
     }
 }
 
@@ -749,7 +767,13 @@ impl JdgAttestation {
             if commitment.scope != self.scope {
                 return Err(JdgAttestationError::SdnScopeMismatch { index });
             }
-            let (algorithm, key_bytes) = commitment.sdn_public_key.to_bytes();
+            let (algorithm, key_bytes) =
+                commitment.sdn_public_key.try_to_bytes().map_err(|_| {
+                    JdgAttestationError::SdnCommitment {
+                        index,
+                        source: JdgSdnCommitmentError::MalformedSdnPublicKey,
+                    }
+                })?;
             let dedup_key = (
                 algorithm,
                 key_bytes.to_vec(),
@@ -797,6 +821,9 @@ pub enum JdgSdnCommitmentError {
     /// SDN seal must be non-empty.
     #[error("SDN seal must not be empty")]
     EmptySeal,
+    /// SDN public key compact state is malformed.
+    #[error("SDN public key is malformed")]
+    MalformedSdnPublicKey,
 }
 
 /// Errors surfaced by SDN key registration and rotation.
@@ -810,6 +837,12 @@ pub enum JdgSdnRegistryError {
     MissingParent {
         /// Public key of the missing parent.
         parent: PublicKey,
+    },
+    /// SDN public key compact state is malformed.
+    #[error("SDN public key is malformed")]
+    MalformedPublicKey {
+        /// Malformed SDN public key.
+        public_key: PublicKey,
     },
     /// New activation height is not strictly after the parent activation.
     #[error(
@@ -1306,6 +1339,10 @@ mod tests {
     fn duplicate_sdn_commitments_are_rejected() {
         let mut attestation = sample_attestation();
         let duplicate = attestation.sdn_commitments[0].clone();
+        duplicate
+            .sdn_public_key
+            .try_to_bytes()
+            .expect("checked SDN public-key payload");
         attestation.sdn_commitments.push(duplicate);
         let err = attestation
             .validate_with_sdn(true)
@@ -1321,6 +1358,9 @@ mod tests {
         let attestation = sample_attestation();
         let mut registry = JdgSdnRegistry::default();
         let key = attestation.sdn_commitments[0].sdn_public_key.clone();
+        let (expected_algorithm, expected_payload) =
+            key.try_to_bytes().expect("checked SDN public-key payload");
+        let expected_payload = expected_payload.to_vec();
         let rotation = JdgSdnRotationPolicy {
             dual_publish_blocks: 2,
         };
@@ -1335,6 +1375,15 @@ mod tests {
                 &rotation,
             )
             .expect("register active key");
+        let record = registry
+            .record(&attestation.sdn_commitments[0].sdn_public_key)
+            .expect("registered key lookup");
+        let (record_algorithm, record_payload) = record
+            .public_key
+            .try_to_bytes()
+            .expect("checked registered public-key payload");
+        assert_eq!(record_algorithm, expected_algorithm);
+        assert_eq!(record_payload, expected_payload.as_slice());
 
         let policy = JdgSdnPolicy {
             require_commitments: true,

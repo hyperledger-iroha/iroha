@@ -10,7 +10,8 @@ use iroha_crypto::{
     fhe_bfv::{
         BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters,
         add_ciphertexts, bootstrap_ciphertext, multiply_ciphertexts, multiply_plain_scalar,
-        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest, rotate_ciphertext_slots_left,
+        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
+        registered_bfv_rns_modulus_chain_digest, rotate_ciphertext_slots_left,
         validate_registered_bfv_parameters,
     },
 };
@@ -4814,6 +4815,14 @@ fn validate_registered_soracloud_bfv_descriptor(
         ));
     }
 
+    let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(params)
+        .map_err(|err| invalid_parameter(format!("failed to digest BFV RNS chain: {err}")))?;
+    if param_set.rns_modulus_chain_digest != rns_modulus_chain_digest {
+        return Err(invalid_parameter(
+            "fhe parameter-set RNS modulus-chain digest does not match the registered BFV profile",
+        ));
+    }
+
     Ok(())
 }
 
@@ -4980,6 +4989,12 @@ fn execute_soracloud_fhe_job(
             let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
                 invalid_parameter("missing BFV bootstrap key for bootstrap operation")
             })?;
+            if job.bootstrap_count > bootstrap_key.max_refresh_rounds {
+                return Err(invalid_parameter(format!(
+                    "bootstrap_count {} exceeds BFV bootstrap key max_refresh_rounds {}",
+                    job.bootstrap_count, bootstrap_key.max_refresh_rounds
+                )));
+            }
             let slots = inputs
                 .first()
                 .expect("input presence checked above")
@@ -10597,8 +10612,12 @@ mod tests {
         Hash, KeyPair,
         fhe_bfv::{
             BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext,
-            BfvIdentifierPublicParameters, bootstrap_key_from_seed, decrypt, decrypt_identifier,
-            encrypt_identifier_from_seed, keygen_from_seed, rotation_key_from_seed,
+            BfvIdentifierPublicParameters, apply_galois_automorphism_ciphertext,
+            bootstrap_key_from_seed, bootstrap_key_with_max_refresh_rounds_from_seed,
+            decode_packed_plaintext_slots, decrypt, decrypt_identifier, encode_packed_plaintext_slots,
+            encrypt_from_seed, encrypt_identifier_from_seed, galois_key_from_seed,
+            keygen_from_seed, packed_galois_slot_permutation, registered_bfv_rns_modulus_chain,
+            rotation_key_from_seed,
         },
     };
     use iroha_data_model::{
@@ -11187,6 +11206,8 @@ mod tests {
         let registered_params = ram_lfe_bfv_parameters_v1();
         let parameter_digest = registered_bfv_parameter_digest(&registered_params)
             .expect("registered BFV parameter digest");
+        let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
+            .expect("registered BFV RNS modulus-chain digest");
         FheParamSetV1 {
             schema_version: iroha_data_model::soracloud::FHE_PARAM_SET_VERSION_V1,
             param_set: "bfv-default".parse().expect("valid name"),
@@ -11211,12 +11232,13 @@ mod tests {
             deprecation_height: None,
             withdraw_height: None,
             parameter_digest,
+            rns_modulus_chain_digest,
         }
     }
 
     fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
         let params = ram_lfe_bfv_parameters_v1();
-        let (_secret_key, public_key, relinearization_key) =
+        let (secret_key, public_key, relinearization_key) =
             keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
         BfvEvaluationKeyBundle {
             relinearization_key,
@@ -11224,11 +11246,16 @@ mod tests {
                 rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
                     .expect("rotation key"),
             ],
+            galois_keys: vec![
+                galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
+                    .expect("Galois key"),
+            ],
             bootstrap_key: Some(
-                bootstrap_key_from_seed(
+                bootstrap_key_with_max_refresh_rounds_from_seed(
                     &params,
                     &public_key,
                     "bootstrap-test-key",
+                    2,
                     b"soracloud-fhe-bootstrap-key",
                 )
                 .expect("bootstrap key"),
@@ -11374,6 +11401,18 @@ mod tests {
             .collect()
     }
 
+    fn fixture_str_array<'a>(value: &'a norito::json::Value, field: &str) -> Vec<&'a str> {
+        fixture_array(value, field)
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture field `{field}[{index}]` must be a string"))
+            })
+            .collect()
+    }
+
     fn fixture_array<'a>(value: &'a norito::json::Value, field: &str) -> &'a [norito::json::Value] {
         fixture_get(value, field)
             .as_array()
@@ -11493,6 +11532,140 @@ mod tests {
         );
     }
 
+    fn assert_bfv_rns_modulus_chain_fixture(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+    ) {
+        let chain_fixture = fixture_get(operation_vectors, "rns_modulus_chain");
+        let chain = registered_bfv_rns_modulus_chain(params).expect("registered BFV RNS chain");
+        assert_eq!(
+            fixture_u64_array(chain_fixture, "moduli"),
+            chain.moduli,
+            "RNS modulus-chain limbs"
+        );
+        assert_eq!(
+            fixture_str(chain_fixture, "product"),
+            chain.product().expect("RNS product").to_string(),
+            "RNS modulus-chain product"
+        );
+        assert_eq!(
+            fixture_str(chain_fixture, "expected_digest_hex"),
+            registered_bfv_rns_modulus_chain_digest(params)
+                .expect("registered RNS digest")
+                .to_string(),
+            "RNS modulus-chain digest"
+        );
+
+        let polynomial_fixture = fixture_get(chain_fixture, "sample_polynomials");
+        let lhs_coefficients = fixture_u64_array(polynomial_fixture, "lhs_coefficients");
+        let rhs_coefficients = fixture_u64_array(polynomial_fixture, "rhs_coefficients");
+        assert_eq!(
+            lhs_coefficients,
+            rns_sample_lhs_coefficients(params),
+            "RNS fixture lhs sample coefficients"
+        );
+        assert_eq!(
+            rhs_coefficients,
+            rns_sample_rhs_coefficients(params),
+            "RNS fixture rhs sample coefficients"
+        );
+        let lhs = chain
+            .decompose_polynomial(params, &lhs_coefficients)
+            .expect("decompose fixture lhs polynomial");
+        let rhs = chain
+            .decompose_polynomial(params, &rhs_coefficients)
+            .expect("decompose fixture rhs polynomial");
+        assert_rns_polynomial_fixture(
+            fixture_get(polynomial_fixture, "lhs"),
+            "lhs",
+            params,
+            &chain,
+            &lhs,
+            &lhs_coefficients,
+        );
+        assert_rns_polynomial_fixture(
+            fixture_get(polynomial_fixture, "rhs"),
+            "rhs",
+            params,
+            &chain,
+            &rhs,
+            &rhs_coefficients,
+        );
+
+        let added = chain
+            .add_rns_polynomials(params, &lhs, &rhs)
+            .expect("add fixture RNS polynomials");
+        let reconstructed_add = chain
+            .reconstruct_polynomial(params, &added)
+            .expect("reconstruct fixture RNS sum")
+            .into_iter()
+            .map(|coefficient| u64::try_from(coefficient).expect("sum coefficient fits u64"))
+            .collect::<Vec<_>>();
+        assert_rns_polynomial_fixture(
+            fixture_get(polynomial_fixture, "sum"),
+            "sum",
+            params,
+            &chain,
+            &added,
+            &reconstructed_add,
+        );
+
+        let multiplied = chain
+            .multiply_rns_polynomials_negacyclic(params, &lhs, &rhs)
+            .expect("multiply fixture RNS polynomials");
+        let reconstructed_product = chain
+            .reconstruct_polynomial(params, &multiplied)
+            .expect("reconstruct fixture RNS product")
+            .into_iter()
+            .map(|coefficient| u64::try_from(coefficient).expect("product coefficient fits u64"))
+            .collect::<Vec<_>>();
+        assert_rns_polynomial_fixture(
+            fixture_get(polynomial_fixture, "negacyclic_product"),
+            "negacyclic product",
+            params,
+            &chain,
+            &multiplied,
+            &reconstructed_product,
+        );
+    }
+
+    fn assert_rns_polynomial_fixture(
+        fixture: &norito::json::Value,
+        label: &str,
+        params: &BfvParameters,
+        chain: &iroha_crypto::fhe_bfv::BfvRnsModulusChain,
+        polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
+        reconstructed: &[u64],
+    ) {
+        assert_eq!(
+            fixture_u64(fixture, "coefficient_count"),
+            u64::from(params.polynomial_degree),
+            "{label} coefficient count"
+        );
+        assert_eq!(
+            fixture_str(fixture, "reconstructed_sha256"),
+            coefficient_vector_sha256_hex(reconstructed),
+            "{label} reconstructed coefficient SHA-256"
+        );
+        let limb_hashes = fixture_str_array(fixture, "residue_limb_sha256");
+        assert_eq!(
+            limb_hashes.len(),
+            chain.moduli.len(),
+            "{label} residue limb count"
+        );
+        for (index, (expected_hash, residues)) in limb_hashes
+            .iter()
+            .zip(&polynomial.residues_by_limb)
+            .enumerate()
+        {
+            assert_eq!(
+                *expected_hash,
+                coefficient_vector_sha256_hex(residues),
+                "{label} residue limb {index} SHA-256"
+            );
+        }
+    }
+
     fn assert_bfv_evaluation_key_fixture(
         operation_vectors: &norito::json::Value,
         params: &BfvParameters,
@@ -11541,6 +11714,11 @@ mod tests {
             "rotation key count"
         );
         assert_eq!(
+            fixture_u64(key_fixture, "galois_key_count"),
+            u64::try_from(evaluation_keys.galois_keys.len()).expect("Galois count fits u64"),
+            "Galois key count"
+        );
+        assert_eq!(
             fixture_str(key_fixture, "bootstrap_key_id"),
             evaluation_keys
                 .bootstrap_key
@@ -11581,6 +11759,55 @@ mod tests {
                 coefficient_vector_sha256_hex(&entry.a),
                 "relinearization entry a SHA-256"
             );
+        }
+
+        let galois_fixtures = fixture_array(operation_vectors, "galois_keys");
+        assert_eq!(
+            galois_fixtures.len(),
+            evaluation_keys.galois_keys.len(),
+            "Galois key fixture count"
+        );
+        for (fixture, key) in galois_fixtures.iter().zip(&evaluation_keys.galois_keys) {
+            assert_eq!(
+                fixture_u64(fixture, "automorphism_power"),
+                u64::from(key.automorphism_power),
+                "Galois automorphism power"
+            );
+            assert_eq!(
+                fixture_u64(fixture, "entry_count"),
+                u64::try_from(key.entries.len()).expect("Galois entry count fits u64"),
+                "Galois entry count"
+            );
+            let entry_fixtures = fixture_array(fixture, "entries");
+            assert_eq!(
+                entry_fixtures.len(),
+                key.entries.len(),
+                "Galois entry fixture count"
+            );
+            for (index, (entry_fixture, entry)) in
+                entry_fixtures.iter().zip(&key.entries).enumerate()
+            {
+                assert_eq!(
+                    fixture_u64(entry_fixture, "index"),
+                    u64::try_from(index).expect("entry index fits u64"),
+                    "Galois entry index"
+                );
+                assert_eq!(
+                    fixture_u64(entry_fixture, "coefficient_count"),
+                    u64::from(params.polynomial_degree),
+                    "Galois entry coefficient count"
+                );
+                assert_eq!(
+                    fixture_str(entry_fixture, "b_sha256"),
+                    coefficient_vector_sha256_hex(&entry.b),
+                    "Galois entry b SHA-256"
+                );
+                assert_eq!(
+                    fixture_str(entry_fixture, "a_sha256"),
+                    coefficient_vector_sha256_hex(&entry.a),
+                    "Galois entry a SHA-256"
+                );
+            }
         }
 
         let rotation_fixtures = fixture_array(operation_vectors, "rotation_keys");
@@ -11625,6 +11852,11 @@ mod tests {
             bootstrap_key.key_id,
             "bootstrap key id"
         );
+        assert_eq!(
+            fixture_u64(bootstrap_fixture, "max_refresh_rounds"),
+            u64::from(bootstrap_key.max_refresh_rounds),
+            "bootstrap key max refresh rounds"
+        );
         let encoded_refresh =
             norito::to_bytes(&bootstrap_key.zero_refresh).expect("encode bootstrap refresh");
         assert_eq!(
@@ -11643,6 +11875,264 @@ mod tests {
             params,
             &bootstrap_key.zero_refresh,
         );
+    }
+
+    fn assert_bfv_galois_switch_vectors(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        public_parameters: &BfvIdentifierPublicParameters,
+        secret_key: &iroha_crypto::fhe_bfv::BfvSecretKey,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) {
+        let vectors = fixture_array(operation_vectors, "galois_switch_vectors");
+        assert!(
+            !vectors.is_empty(),
+            "Galois switch vector fixture must not be empty"
+        );
+        for vector in vectors {
+            let power = u32::try_from(fixture_u64(vector, "automorphism_power"))
+                .expect("fixture Galois automorphism power must fit u32");
+            let key = evaluation_keys
+                .galois_keys
+                .iter()
+                .find(|key| key.automorphism_power == power)
+                .unwrap_or_else(|| panic!("fixture Galois key for power {power} is missing"));
+            let input_plaintext = fixture_u64_array(vector, "input_plaintext_slots");
+            let input = encrypt_from_seed(
+                params,
+                &public_parameters.public_key,
+                &input_plaintext,
+                fixture_str(vector, "seed_utf8").as_bytes(),
+            )
+            .expect("fixture Galois input must encrypt");
+            let encoded_input = norito::to_bytes(&input).expect("encode Galois input");
+            assert_eq!(
+                fixture_u64(vector, "expected_input_ciphertext_bytes"),
+                u64::try_from(encoded_input.len()).expect("Galois input length fits u64"),
+                "Galois input byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_input_ciphertext_sha256"),
+                sha256_hex(&encoded_input),
+                "Galois input SHA-256"
+            );
+
+            let transformed = apply_galois_automorphism_ciphertext(params, key, &input)
+                .expect("fixture Galois switch must apply");
+            let encoded_output = norito::to_bytes(&transformed).expect("encode Galois output");
+            assert_eq!(
+                fixture_u64(vector, "expected_output_ciphertext_bytes"),
+                u64::try_from(encoded_output.len()).expect("Galois output length fits u64"),
+                "Galois output byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_output_ciphertext_sha256"),
+                sha256_hex(&encoded_output),
+                "Galois output SHA-256"
+            );
+            assert_ciphertext_component_fixture(
+                fixture_get(vector, "output_components"),
+                "Galois output",
+                params,
+                &transformed,
+            );
+
+            let plaintext =
+                decrypt(params, secret_key, &transformed).expect("decrypt Galois output");
+            assert_eq!(
+                fixture_str(vector, "expected_plaintext_sha256"),
+                coefficient_vector_sha256_hex(&plaintext),
+                "Galois output plaintext SHA-256"
+            );
+        }
+    }
+
+    fn assert_bfv_packed_galois_switch_vectors(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        public_parameters: &BfvIdentifierPublicParameters,
+        secret_key: &iroha_crypto::fhe_bfv::BfvSecretKey,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) {
+        let vectors = fixture_array(operation_vectors, "packed_galois_switch_vectors");
+        assert!(
+            !vectors.is_empty(),
+            "packed Galois switch vector fixture must not be empty"
+        );
+        for vector in vectors {
+            let power = u32::try_from(fixture_u64(vector, "automorphism_power"))
+                .expect("fixture Galois automorphism power must fit u32");
+            let key = evaluation_keys
+                .galois_keys
+                .iter()
+                .find(|key| key.automorphism_power == power)
+                .unwrap_or_else(|| panic!("fixture Galois key for power {power} is missing"));
+            let input_slots = fixture_u64_array(vector, "input_packed_slots");
+            let packed_plaintext =
+                encode_packed_plaintext_slots(params, &input_slots).expect("pack fixture slots");
+            assert_eq!(
+                fixture_str(vector, "expected_packed_plaintext_sha256"),
+                coefficient_vector_sha256_hex(&packed_plaintext),
+                "packed Galois plaintext coefficient SHA-256"
+            );
+
+            let expected_permutation = fixture_u64_array(vector, "expected_slot_permutation")
+                .into_iter()
+                .map(|slot| usize::try_from(slot).expect("fixture slot index fits usize"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                expected_permutation,
+                packed_galois_slot_permutation(params, power).expect("packed slot permutation"),
+                "packed Galois slot permutation"
+            );
+            let expected_slots = expected_permutation
+                .iter()
+                .map(|&input_index| input_slots[input_index])
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fixture_u64_array(vector, "expected_packed_slots"),
+                expected_slots,
+                "packed Galois expected slots"
+            );
+
+            let input = encrypt_from_seed(
+                params,
+                &public_parameters.public_key,
+                &packed_plaintext,
+                fixture_str(vector, "seed_utf8").as_bytes(),
+            )
+            .expect("fixture packed Galois input must encrypt");
+            let encoded_input = norito::to_bytes(&input).expect("encode packed Galois input");
+            assert_eq!(
+                fixture_u64(vector, "expected_input_ciphertext_bytes"),
+                u64::try_from(encoded_input.len()).expect("packed Galois input length fits u64"),
+                "packed Galois input byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_input_ciphertext_sha256"),
+                sha256_hex(&encoded_input),
+                "packed Galois input SHA-256"
+            );
+
+            let transformed = apply_galois_automorphism_ciphertext(params, key, &input)
+                .expect("fixture packed Galois switch must apply");
+            let encoded_output =
+                norito::to_bytes(&transformed).expect("encode packed Galois output");
+            assert_eq!(
+                fixture_u64(vector, "expected_output_ciphertext_bytes"),
+                u64::try_from(encoded_output.len()).expect("packed Galois output length fits u64"),
+                "packed Galois output byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_output_ciphertext_sha256"),
+                sha256_hex(&encoded_output),
+                "packed Galois output SHA-256"
+            );
+            assert_ciphertext_component_fixture(
+                fixture_get(vector, "output_components"),
+                "packed Galois output",
+                params,
+                &transformed,
+            );
+
+            let plaintext =
+                decrypt(params, secret_key, &transformed).expect("decrypt packed Galois output");
+            assert_eq!(
+                fixture_str(vector, "expected_plaintext_coefficients_sha256"),
+                coefficient_vector_sha256_hex(&plaintext),
+                "packed Galois output plaintext coefficient SHA-256"
+            );
+            assert_eq!(
+                decode_packed_plaintext_slots(params, &plaintext).expect("decode packed output"),
+                expected_slots,
+                "packed Galois output slots"
+            );
+        }
+    }
+
+    fn assert_bfv_bootstrap_refresh_vectors(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        public_parameters: &BfvIdentifierPublicParameters,
+        secret_key: &iroha_crypto::fhe_bfv::BfvSecretKey,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) {
+        let vectors = fixture_array(operation_vectors, "bootstrap_refresh_vectors");
+        assert!(
+            !vectors.is_empty(),
+            "bootstrap refresh vector fixture must not be empty"
+        );
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("fixture bootstrap key");
+        for vector in vectors {
+            assert_eq!(
+                fixture_str(vector, "key_id"),
+                bootstrap_key.key_id,
+                "bootstrap refresh vector key id"
+            );
+            let refresh_rounds = u16::try_from(fixture_u64(vector, "refresh_rounds"))
+                .expect("fixture bootstrap refresh_rounds must fit u16");
+            assert!(
+                refresh_rounds > 0,
+                "bootstrap refresh vector rounds must be non-zero"
+            );
+            assert!(
+                refresh_rounds <= bootstrap_key.max_refresh_rounds,
+                "bootstrap refresh vector rounds exceed key capacity"
+            );
+            let input_plaintext = fixture_u64_array(vector, "input_plaintext_slots");
+            let input = encrypt_from_seed(
+                params,
+                &public_parameters.public_key,
+                &input_plaintext,
+                fixture_str(vector, "seed_utf8").as_bytes(),
+            )
+            .expect("fixture bootstrap input must encrypt");
+            let encoded_input = norito::to_bytes(&input).expect("encode bootstrap input");
+            assert_eq!(
+                fixture_u64(vector, "expected_input_ciphertext_bytes"),
+                u64::try_from(encoded_input.len()).expect("bootstrap input length fits u64"),
+                "bootstrap input byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_input_ciphertext_sha256"),
+                sha256_hex(&encoded_input),
+                "bootstrap input SHA-256"
+            );
+
+            let mut refreshed = input;
+            for _ in 0..refresh_rounds {
+                refreshed = bootstrap_ciphertext(params, bootstrap_key, &refreshed)
+                    .expect("fixture bootstrap refresh must apply");
+            }
+            let encoded_output = norito::to_bytes(&refreshed).expect("encode bootstrap output");
+            assert_eq!(
+                fixture_u64(vector, "expected_output_ciphertext_bytes"),
+                u64::try_from(encoded_output.len()).expect("bootstrap output length fits u64"),
+                "bootstrap output byte length"
+            );
+            assert_eq!(
+                fixture_str(vector, "expected_output_ciphertext_sha256"),
+                sha256_hex(&encoded_output),
+                "bootstrap output SHA-256"
+            );
+            assert_ciphertext_component_fixture(
+                fixture_get(vector, "output_components"),
+                "bootstrap output",
+                params,
+                &refreshed,
+            );
+
+            let plaintext =
+                decrypt(params, secret_key, &refreshed).expect("decrypt bootstrap output");
+            assert_eq!(
+                fixture_str(vector, "expected_plaintext_sha256"),
+                coefficient_vector_sha256_hex(&plaintext),
+                "bootstrap output plaintext SHA-256"
+            );
+        }
     }
 
     fn bfv_operation_material(
@@ -11670,6 +12160,7 @@ mod tests {
             .validate()
             .expect("fixture public parameters must validate");
         assert_bfv_public_parameters_fixture(operation_vectors, &params, &public_parameters);
+        assert_bfv_rns_modulus_chain_fixture(operation_vectors, &params);
 
         let rotation_keys = fixture_array(operation_vectors, "rotation_keys")
             .iter()
@@ -11685,12 +12176,28 @@ mod tests {
                 .expect("fixture rotation key must derive")
             })
             .collect();
+        let galois_keys = fixture_array(operation_vectors, "galois_keys")
+            .iter()
+            .map(|key| {
+                let power = u32::try_from(fixture_u64(key, "automorphism_power"))
+                    .expect("fixture Galois automorphism power must fit u32");
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    power,
+                    fixture_str(key, "seed_utf8").as_bytes(),
+                )
+                .expect("fixture Galois key must derive")
+            })
+            .collect();
         let bootstrap = fixture_get(operation_vectors, "bootstrap_key");
         let bootstrap_key = Some(
-            bootstrap_key_from_seed(
+            bootstrap_key_with_max_refresh_rounds_from_seed(
                 &params,
                 &public_key,
                 fixture_str(bootstrap, "key_id"),
+                u16::try_from(fixture_u64(bootstrap, "max_refresh_rounds"))
+                    .expect("fixture bootstrap max_refresh_rounds must fit u16"),
                 fixture_str(bootstrap, "seed_utf8").as_bytes(),
             )
             .expect("fixture bootstrap key must derive"),
@@ -11698,12 +12205,34 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys,
+            galois_keys,
             bootstrap_key,
         };
         evaluation_keys
             .validate(&params)
             .expect("fixture evaluation keys must validate");
         assert_bfv_evaluation_key_fixture(operation_vectors, &params, &evaluation_keys);
+        assert_bfv_galois_switch_vectors(
+            operation_vectors,
+            &params,
+            &public_parameters,
+            &secret_key,
+            &evaluation_keys,
+        );
+        assert_bfv_packed_galois_switch_vectors(
+            operation_vectors,
+            &params,
+            &public_parameters,
+            &secret_key,
+            &evaluation_keys,
+        );
+        assert_bfv_bootstrap_refresh_vectors(
+            operation_vectors,
+            &params,
+            &public_parameters,
+            &secret_key,
+            &evaluation_keys,
+        );
 
         (params, public_parameters, secret_key, evaluation_keys)
     }
@@ -11827,6 +12356,109 @@ mod tests {
             .join(", ")
     }
 
+    fn u64_json_array(values: &[u64]) -> String {
+        values
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn string_json_array(values: &[String]) -> String {
+        values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn rns_sample_lhs_coefficients(params: &BfvParameters) -> Vec<u64> {
+        rns_sample_coefficients(params, 3, params.plaintext_modulus + 11)
+    }
+
+    fn rns_sample_rhs_coefficients(params: &BfvParameters) -> Vec<u64> {
+        rns_sample_coefficients(params, 5, params.plaintext_modulus + 29)
+    }
+
+    fn rns_sample_coefficients(
+        params: &BfvParameters,
+        index_offset: u64,
+        multiplier: u64,
+    ) -> Vec<u64> {
+        (0..u64::from(params.polynomial_degree))
+            .map(|index| {
+                let coefficient = (u128::from(index + index_offset) * u128::from(multiplier))
+                    % u128::from(params.ciphertext_modulus);
+                u64::try_from(coefficient).expect("RNS sample coefficient fits u64")
+            })
+            .collect()
+    }
+
+    fn reconstruct_rns_polynomial_u64(
+        params: &BfvParameters,
+        chain: &iroha_crypto::fhe_bfv::BfvRnsModulusChain,
+        polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
+    ) -> Vec<u64> {
+        chain
+            .reconstruct_polynomial(params, polynomial)
+            .expect("reconstruct RNS fixture polynomial")
+            .into_iter()
+            .map(|coefficient| u64::try_from(coefficient).expect("RNS coefficient fits u64"))
+            .collect()
+    }
+
+    fn rns_polynomial_fixture_json(
+        params: &BfvParameters,
+        polynomial: &iroha_crypto::fhe_bfv::BfvRnsPolynomial,
+        reconstructed: &[u64],
+    ) -> String {
+        let limb_hashes = polynomial
+            .residues_by_limb
+            .iter()
+            .map(|residues| coefficient_vector_sha256_hex(residues))
+            .collect::<Vec<_>>();
+        format!(
+            "{{\"coefficient_count\":{},\"residue_limb_sha256\":[{}],\"reconstructed_sha256\":\"{}\"}}",
+            params.polynomial_degree,
+            string_json_array(&limb_hashes),
+            coefficient_vector_sha256_hex(reconstructed)
+        )
+    }
+
+    fn rns_modulus_chain_fixture_json(params: &BfvParameters) -> String {
+        let chain = registered_bfv_rns_modulus_chain(params).expect("registered BFV RNS chain");
+        let lhs_coefficients = rns_sample_lhs_coefficients(params);
+        let rhs_coefficients = rns_sample_rhs_coefficients(params);
+        let lhs = chain
+            .decompose_polynomial(params, &lhs_coefficients)
+            .expect("decompose RNS fixture lhs");
+        let rhs = chain
+            .decompose_polynomial(params, &rhs_coefficients)
+            .expect("decompose RNS fixture rhs");
+        let sum = chain
+            .add_rns_polynomials(params, &lhs, &rhs)
+            .expect("add RNS fixture polynomials");
+        let product = chain
+            .multiply_rns_polynomials_negacyclic(params, &lhs, &rhs)
+            .expect("multiply RNS fixture polynomials");
+        let reconstructed_sum = reconstruct_rns_polynomial_u64(params, &chain, &sum);
+        let reconstructed_product = reconstruct_rns_polynomial_u64(params, &chain, &product);
+
+        format!(
+            "{{\"moduli\":[{}],\"product\":\"{}\",\"expected_digest_hex\":\"{}\",\"sample_polynomials\":{{\"lhs_coefficients\":[{}],\"rhs_coefficients\":[{}],\"lhs\":{},\"rhs\":{},\"sum\":{},\"negacyclic_product\":{}}}}}",
+            u64_json_array(&chain.moduli),
+            chain.product().expect("RNS modulus-chain product"),
+            registered_bfv_rns_modulus_chain_digest(params)
+                .expect("registered BFV RNS chain digest"),
+            u64_json_array(&lhs_coefficients),
+            u64_json_array(&rhs_coefficients),
+            rns_polynomial_fixture_json(params, &lhs, &lhs_coefficients),
+            rns_polynomial_fixture_json(params, &rhs, &rhs_coefficients),
+            rns_polynomial_fixture_json(params, &sum, &reconstructed_sum),
+            rns_polynomial_fixture_json(params, &product, &reconstructed_product)
+        )
+    }
+
     fn execute_operation_vector(
         params: &BfvParameters,
         public_parameters: &BfvIdentifierPublicParameters,
@@ -11922,6 +12554,7 @@ mod tests {
         let wrong_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: vec![wrong_rotation_key],
+            galois_keys: Vec::new(),
             bootstrap_key: Some(wrong_bootstrap_key),
         };
         wrong_keys
@@ -12143,11 +12776,19 @@ mod tests {
             decimal_json_array(&public_key.a),
             public_parameters.max_input_bytes
         );
+        println!(
+            "rns-modulus-chain-json: {}",
+            rns_modulus_chain_fixture_json(&params)
+        );
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: vec![
                 rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
                     .expect("rotation key"),
+            ],
+            galois_keys: vec![
+                galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
+                    .expect("Galois key"),
             ],
             bootstrap_key: Some(
                 bootstrap_key_from_seed(
@@ -12162,7 +12803,7 @@ mod tests {
         let encoded_evaluation_keys =
             norito::to_bytes(&evaluation_keys).expect("encode evaluation keys");
         println!(
-            "evaluation-key-bundle: bytes={} sha256={} digest={} relinearization_entries={} rotation_key_count={} bootstrap_key_id={}",
+            "evaluation-key-bundle: bytes={} sha256={} digest={} relinearization_entries={} rotation_key_count={} galois_key_count={} bootstrap_key_id={} bootstrap_max_refresh_rounds={}",
             encoded_evaluation_keys.len(),
             sha256_hex(&encoded_evaluation_keys),
             evaluation_keys
@@ -12170,11 +12811,17 @@ mod tests {
                 .expect("evaluation-key digest"),
             evaluation_keys.relinearization_key.entries.len(),
             evaluation_keys.rotation_keys.len(),
+            evaluation_keys.galois_keys.len(),
             evaluation_keys
                 .bootstrap_key
                 .as_ref()
                 .expect("bootstrap key")
-                .key_id
+                .key_id,
+            evaluation_keys
+                .bootstrap_key
+                .as_ref()
+                .expect("bootstrap key")
+                .max_refresh_rounds
         );
         for (index, entry) in evaluation_keys
             .relinearization_key
@@ -12190,6 +12837,115 @@ mod tests {
                 coefficient_vector_sha256_hex(&entry.a)
             );
         }
+        for key in &evaluation_keys.galois_keys {
+            println!(
+                "galois-key: power={} seed=soracloud-fhe-galois-key entry_count={}",
+                key.automorphism_power,
+                key.entries.len()
+            );
+            for (index, entry) in key.entries.iter().enumerate() {
+                println!(
+                    "galois-key-entry: power={} index={} coeffs={} b_sha256={} a_sha256={}",
+                    key.automorphism_power,
+                    index,
+                    entry.b.len(),
+                    coefficient_vector_sha256_hex(&entry.b),
+                    coefficient_vector_sha256_hex(&entry.a)
+                );
+            }
+        }
+        let galois_input_plaintext = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let galois_input = encrypt_from_seed(
+            &params,
+            &public_key,
+            &galois_input_plaintext,
+            b"soracloud-fhe-galois-switch-input",
+        )
+        .expect("encrypt Galois switch input");
+        let encoded_galois_input =
+            norito::to_bytes(&galois_input).expect("encode Galois switch input");
+        let galois_output = apply_galois_automorphism_ciphertext(
+            &params,
+            &evaluation_keys.galois_keys[0],
+            &galois_input,
+        )
+        .expect("apply Galois switch");
+        let encoded_galois_output =
+            norito::to_bytes(&galois_output).expect("encode Galois switch output");
+        let galois_plaintext =
+            decrypt(&params, &secret_key, &galois_output).expect("decrypt Galois switch output");
+        println!(
+            "galois-switch-vector: {{\"name\":\"soracloud-galois-power-3-output\",\"purpose\":\"BFV packed-polynomial Galois key-switch output over one scalar ciphertext\",\"automorphism_power\":{},\"seed_utf8\":\"soracloud-fhe-galois-switch-input\",\"input_plaintext_slots\":[{}],\"expected_input_ciphertext_bytes\":{},\"expected_input_ciphertext_sha256\":\"{}\",\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_sha256\":\"{}\",\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            evaluation_keys.galois_keys[0].automorphism_power,
+            u64_json_array(&galois_input_plaintext),
+            encoded_galois_input.len(),
+            sha256_hex(&encoded_galois_input),
+            encoded_galois_output.len(),
+            sha256_hex(&encoded_galois_output),
+            coefficient_vector_sha256_hex(&galois_plaintext),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&galois_output.c0),
+            coefficient_vector_sha256_hex(&galois_output.c1)
+        );
+        let packed_galois_input_slots = (0..usize::from(params.polynomial_degree))
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_galois_plaintext =
+            encode_packed_plaintext_slots(&params, &packed_galois_input_slots)
+                .expect("encode packed Galois input");
+        let packed_galois_permutation = packed_galois_slot_permutation(
+            &params,
+            evaluation_keys.galois_keys[0].automorphism_power,
+        )
+        .expect("packed Galois slot permutation");
+        let packed_galois_expected_slots = packed_galois_permutation
+            .iter()
+            .map(|&input_index| packed_galois_input_slots[input_index])
+            .collect::<Vec<_>>();
+        let packed_galois_input = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_galois_plaintext,
+            b"soracloud-fhe-packed-galois-switch-input",
+        )
+        .expect("encrypt packed Galois switch input");
+        let encoded_packed_galois_input =
+            norito::to_bytes(&packed_galois_input).expect("encode packed Galois switch input");
+        let packed_galois_output = apply_galois_automorphism_ciphertext(
+            &params,
+            &evaluation_keys.galois_keys[0],
+            &packed_galois_input,
+        )
+        .expect("apply packed Galois switch");
+        let encoded_packed_galois_output =
+            norito::to_bytes(&packed_galois_output).expect("encode packed Galois switch output");
+        let packed_galois_plaintext_output = decrypt(&params, &secret_key, &packed_galois_output)
+            .expect("decrypt packed Galois switch output");
+        assert_eq!(
+            decode_packed_plaintext_slots(&params, &packed_galois_plaintext_output)
+                .expect("decode packed Galois output"),
+            packed_galois_expected_slots
+        );
+        let packed_galois_permutation_u64 = packed_galois_permutation
+            .iter()
+            .map(|&slot| u64::try_from(slot).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        println!(
+            "packed-galois-switch-vector: {{\"name\":\"soracloud-packed-galois-power-3-slots\",\"purpose\":\"BFV packed-slot Galois key-switch execution vector\",\"automorphism_power\":{},\"seed_utf8\":\"soracloud-fhe-packed-galois-switch-input\",\"input_packed_slots\":[{}],\"expected_slot_permutation\":[{}],\"expected_packed_slots\":[{}],\"expected_packed_plaintext_sha256\":\"{}\",\"expected_input_ciphertext_bytes\":{},\"expected_input_ciphertext_sha256\":\"{}\",\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_coefficients_sha256\":\"{}\",\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            evaluation_keys.galois_keys[0].automorphism_power,
+            u64_json_array(&packed_galois_input_slots),
+            u64_json_array(&packed_galois_permutation_u64),
+            u64_json_array(&packed_galois_expected_slots),
+            coefficient_vector_sha256_hex(&packed_galois_plaintext),
+            encoded_packed_galois_input.len(),
+            sha256_hex(&encoded_packed_galois_input),
+            encoded_packed_galois_output.len(),
+            sha256_hex(&encoded_packed_galois_output),
+            coefficient_vector_sha256_hex(&packed_galois_plaintext_output),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&packed_galois_output.c0),
+            coefficient_vector_sha256_hex(&packed_galois_output.c1)
+        );
         for key in &evaluation_keys.rotation_keys {
             let encoded_refresh =
                 norito::to_bytes(&key.zero_refresh).expect("encode rotation refresh");
@@ -12214,8 +12970,9 @@ mod tests {
         let encoded_bootstrap_refresh =
             norito::to_bytes(&bootstrap_key.zero_refresh).expect("encode bootstrap refresh");
         println!(
-            "bootstrap-key: key_id={} zero_refresh_bytes={} zero_refresh_sha256={}",
+            "bootstrap-key: key_id={} max_refresh_rounds={} zero_refresh_bytes={} zero_refresh_sha256={}",
             bootstrap_key.key_id,
+            bootstrap_key.max_refresh_rounds,
             encoded_bootstrap_refresh.len(),
             sha256_hex(&encoded_bootstrap_refresh)
         );
@@ -12225,6 +12982,55 @@ mod tests {
             bootstrap_key.zero_refresh.c0.len(),
             coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c0),
             coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c1)
+        );
+        let bootstrap_input_plaintext = vec![9, 8, 7, 6, 5, 4, 3, 2];
+        let bootstrap_input = encrypt_from_seed(
+            &params,
+            &public_key,
+            &bootstrap_input_plaintext,
+            b"soracloud-fhe-bootstrap-refresh-input",
+        )
+        .expect("encrypt bootstrap refresh input");
+        let encoded_bootstrap_input =
+            norito::to_bytes(&bootstrap_input).expect("encode bootstrap refresh input");
+        let bootstrap_output = bootstrap_ciphertext(&params, bootstrap_key, &bootstrap_input)
+            .expect("apply bootstrap refresh");
+        let encoded_bootstrap_output =
+            norito::to_bytes(&bootstrap_output).expect("encode bootstrap refresh output");
+        let bootstrap_plaintext = decrypt(&params, &secret_key, &bootstrap_output)
+            .expect("decrypt bootstrap refresh output");
+        println!(
+            "bootstrap-refresh-vector: {{\"name\":\"soracloud-bootstrap-refresh-output\",\"purpose\":\"BFV bootstrap encrypted-zero refresh output over one scalar ciphertext\",\"key_id\":\"{}\",\"refresh_rounds\":1,\"seed_utf8\":\"soracloud-fhe-bootstrap-refresh-input\",\"input_plaintext_slots\":[{}],\"expected_input_ciphertext_bytes\":{},\"expected_input_ciphertext_sha256\":\"{}\",\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_sha256\":\"{}\",\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            bootstrap_key.key_id,
+            u64_json_array(&bootstrap_input_plaintext),
+            encoded_bootstrap_input.len(),
+            sha256_hex(&encoded_bootstrap_input),
+            encoded_bootstrap_output.len(),
+            sha256_hex(&encoded_bootstrap_output),
+            coefficient_vector_sha256_hex(&bootstrap_plaintext),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&bootstrap_output.c0),
+            coefficient_vector_sha256_hex(&bootstrap_output.c1)
+        );
+        let second_bootstrap_output =
+            bootstrap_ciphertext(&params, bootstrap_key, &bootstrap_output)
+                .expect("apply second bootstrap refresh");
+        let encoded_second_bootstrap_output =
+            norito::to_bytes(&second_bootstrap_output).expect("encode second bootstrap output");
+        let second_bootstrap_plaintext = decrypt(&params, &secret_key, &second_bootstrap_output)
+            .expect("decrypt second bootstrap refresh output");
+        println!(
+            "bootstrap-refresh-vector: {{\"name\":\"soracloud-bootstrap-refresh-two-round-output\",\"purpose\":\"BFV bounded two-round bootstrap encrypted-zero refresh output over one scalar ciphertext\",\"key_id\":\"{}\",\"refresh_rounds\":2,\"seed_utf8\":\"soracloud-fhe-bootstrap-refresh-input\",\"input_plaintext_slots\":[{}],\"expected_input_ciphertext_bytes\":{},\"expected_input_ciphertext_sha256\":\"{}\",\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_sha256\":\"{}\",\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
+            bootstrap_key.key_id,
+            u64_json_array(&bootstrap_input_plaintext),
+            encoded_bootstrap_input.len(),
+            sha256_hex(&encoded_bootstrap_input),
+            encoded_second_bootstrap_output.len(),
+            sha256_hex(&encoded_second_bootstrap_output),
+            coefficient_vector_sha256_hex(&second_bootstrap_plaintext),
+            params.polynomial_degree,
+            coefficient_vector_sha256_hex(&second_bootstrap_output.c0),
+            coefficient_vector_sha256_hex(&second_bootstrap_output.c1)
         );
         let specs = [
             (
@@ -12462,6 +13268,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: Some(
                 bootstrap_key_from_seed(
                     &params,
@@ -12533,6 +13340,7 @@ mod tests {
                 rotation_key_from_seed(&params, &public_key, 1, b"soracloud-rotate-refresh-zero")
                     .expect("rotation key"),
             ],
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let job = FheJobSpecV1 {
@@ -12728,6 +13536,12 @@ mod tests {
         let err = registered_soracloud_bfv_parameters(&wrong_plaintext)
             .expect_err("wrong plaintext modulus width must be rejected");
         assert_invalid_parameter_contains(err, "plaintext modulus bits");
+
+        let mut wrong_rns_digest = bundle.param_set.clone();
+        wrong_rns_digest.rns_modulus_chain_digest = Hash::new(b"wrong-bfv-rns-chain");
+        let err = registered_soracloud_bfv_parameters(&wrong_rns_digest)
+            .expect_err("wrong RNS modulus-chain digest must be rejected");
+        assert_invalid_parameter_contains(err, "RNS modulus-chain digest");
 
         let mut excessive_ciphertext_limb = bundle.param_set.clone();
         excessive_ciphertext_limb.ciphertext_modulus_bits = vec![

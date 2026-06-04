@@ -18,11 +18,18 @@ public static partial class BscMainnetSccp
     public const string LocalAdmissionSubmissionKind = "local_admission";
     public const string LocalAdmissionEntrypoint = "SubmitBridgeProof";
     public const int NativeRecursiveMaxProofBytes = 2 * 1024 * 1024;
+    public const string SourceEventTopic = EthereumMainnetSccp.SourceEventTopic;
     public const string MainnetNetworkId =
         "0x0000000000000000000000000000000000000000000000000000000000000038";
 
     private const string EvmDestinationBindingLabel = "iroha:sccp:evm-destination-binding:v1";
+    private const string BscReceiptProofPrefix = "sccp:bsc:receipt-proof:v1";
     private const int Keccak256Rate = 136;
+    private const int MaxSourceMerkleBranchNodes = 64;
+    private const int MaxMptProofNodes = 64;
+    private const int MaxMptNodeBytes = 16 * 1024;
+
+    private sealed record SourceEvent(string? SourceEventDigest, string? SourceBridgeEmitterAddress);
 
     private static readonly int[] KeccakRhoOffsets =
     [
@@ -116,16 +123,19 @@ public static partial class BscMainnetSccp
                 "eth_getTransactionReceipt");
         }
 
-        if (receipt is null && input.ReceiptProofHash is null)
+        var receiptProof = SnapshotReceiptProof(input.ReceiptProof);
+        if (receipt is null && receiptProof is null && input.ReceiptProofHash is null)
         {
             throw new ArgumentException(
-                "BSC mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash.",
+                "BSC mainnet inbound evidence requires receipt, receiptProof, receiptProofHash, or transactionHash.",
                 nameof(input));
         }
 
         string? blockHash = null;
         string? receiptBlockNumber = null;
         string? executionReceiptsRoot = null;
+        string? sourceEventDigest = null;
+        string? normalizedSourceBridgeEmitterAddress = null;
         if (receipt is not null)
         {
             if (!string.Equals(FirstPresent(receipt, "status") as string, "0x1", StringComparison.Ordinal))
@@ -154,6 +164,21 @@ public static partial class BscMainnetSccp
                 32);
             var receiptBlockNumberValue = FirstPresent(receipt, "blockNumber", "block_number");
             receiptBlockNumber = NormalizePositiveRpcQuantity(receiptBlockNumberValue, "receipt.blockNumber");
+            var sourceEvent = NormalizeBscReceiptSourceEvent(
+                receipt,
+                input.SourceEventDigest,
+                input.SourceBridgeEmitterAddress,
+                transactionHash,
+                blockHash,
+                receiptBlockNumber);
+            sourceEventDigest = sourceEvent.SourceEventDigest;
+            normalizedSourceBridgeEmitterAddress = sourceEvent.SourceBridgeEmitterAddress;
+        }
+        else if (input.SourceEventDigest is not null || input.SourceBridgeEmitterAddress is not null)
+        {
+            throw new ArgumentException(
+                "receipt.logs is required for SCCP source event validation.",
+                nameof(input));
         }
 
         var block = input.Block;
@@ -215,6 +240,13 @@ public static partial class BscMainnetSccp
                 blockHash,
                 receiptBlockNumber,
                 executionReceiptsRoot);
+        RequireReceiptProofMatchesEvidence(
+            receiptProof,
+            blockHash,
+            receiptBlockNumber,
+            executionReceiptsRoot,
+            normalizedParliaFinality,
+            sourceEventDigest);
 
         return input with
         {
@@ -224,9 +256,10 @@ public static partial class BscMainnetSccp
             Receipt = receipt,
             Block = block,
             ParliaFinality = normalizedParliaFinality,
-            ReceiptProofHash = input.ReceiptProofHash is null
-                ? null
-                : NormalizeRpcHex(input.ReceiptProofHash, nameof(input.ReceiptProofHash), 32),
+            ReceiptProof = receiptProof,
+            ReceiptProofHash = NormalizeReceiptProofHash(receiptProof, input.ReceiptProofHash),
+            SourceEventDigest = sourceEventDigest,
+            SourceBridgeEmitterAddress = normalizedSourceBridgeEmitterAddress,
         };
     }
 
@@ -248,6 +281,18 @@ public static partial class BscMainnetSccp
         {
             throw new ArgumentException(
                 "BSC mainnet SCCP inbound proof requires ParliaFinality.",
+                nameof(input));
+        }
+        if (evidence.ReceiptProof is null)
+        {
+            throw new ArgumentException(
+                "BSC mainnet SCCP inbound proof requires ReceiptProof.",
+                nameof(input));
+        }
+        if (evidence.SourceEventDigest is null)
+        {
+            throw new ArgumentException(
+                "BSC mainnet SCCP inbound proof requires receipt source event validation.",
                 nameof(input));
         }
         var proofBytes = await inboundProver.ProveAsync(
@@ -339,6 +384,79 @@ public static partial class BscMainnetSccp
                 "BSC mainnet outbound SCCP proofs must route SORA -> BSC.");
         }
     }
+
+    public static byte[] CanonicalBscSccpReceiptProofBytes(
+        string sourceEventDigest,
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash,
+        string commitSealHash,
+        ulong receiptRootIndex,
+        IReadOnlyList<byte[]> receiptTrieProofNodes,
+        IReadOnlyList<byte[]> inclusionBranch,
+        int sourceDomain = DomainBsc)
+    {
+        if (sourceDomain != DomainBsc)
+        {
+            throw new ArgumentException("sourceDomain must be BSC.", nameof(sourceDomain));
+        }
+
+        var nodes = NormalizeReceiptTrieProofNodes(receiptTrieProofNodes);
+        var branch = NormalizeReceiptInclusionBranch(inclusionBranch, requireNonEmpty: true);
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(sourceDomain));
+        payload.Write(RpcHexToBytes(sourceEventDigest, nameof(sourceEventDigest), 32));
+        payload.Write(LeU64(validatorEpoch));
+        payload.Write(LeU64(blockNumber));
+        payload.Write(RpcHexToBytes(blockHash, nameof(blockHash), 32));
+        payload.Write(RpcHexToBytes(receiptsRoot, nameof(receiptsRoot), 32));
+        payload.Write(RpcHexToBytes(validatorSetHash, nameof(validatorSetHash), 32));
+        payload.Write(RpcHexToBytes(commitSealHash, nameof(commitSealHash), 32));
+        payload.Write(LeU64(receiptRootIndex));
+        payload.Write(LeU32(nodes.Count));
+        foreach (var node in nodes)
+        {
+            payload.Write(WriteBytes(node));
+        }
+
+        payload.Write(LeU32(branch.Count));
+        foreach (var sibling in branch)
+        {
+            payload.Write(sibling);
+        }
+
+        return payload.ToArray();
+    }
+
+    public static string BscSccpReceiptProofHash(
+        string sourceEventDigest,
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash,
+        string commitSealHash,
+        ulong receiptRootIndex,
+        IReadOnlyList<byte[]> receiptTrieProofNodes,
+        IReadOnlyList<byte[]> inclusionBranch,
+        int sourceDomain = DomainBsc)
+        => PrefixedBlake2bHex(
+            Encoding.UTF8.GetBytes(BscReceiptProofPrefix),
+            CanonicalBscSccpReceiptProofBytes(
+                sourceEventDigest,
+                validatorEpoch,
+                blockNumber,
+                blockHash,
+                receiptsRoot,
+                validatorSetHash,
+                commitSealHash,
+                receiptRootIndex,
+                receiptTrieProofNodes,
+                inclusionBranch,
+                sourceDomain));
 
     public static void RequireMainnetNetworkId(string networkId)
     {
@@ -547,6 +665,15 @@ public static partial class BscMainnetSccp
 
     private static string NormalizeRpcHex(object? value, string parameterName, int byteLength)
     {
+        return NormalizeRpcHex(value, parameterName, byteLength, allowZero: false);
+    }
+
+    private static string NormalizeRpcHex(
+        object? value,
+        string parameterName,
+        int byteLength,
+        bool allowZero)
+    {
         if (value is not string text
             || !string.Equals(text.Trim(), text, StringComparison.Ordinal)
             || !text.StartsWith("0x", StringComparison.Ordinal))
@@ -564,12 +691,385 @@ public static partial class BscMainnetSccp
                 parameterName);
         }
 
-        if (!hex.Any(static character => character != '0'))
+        if (!allowZero && !hex.Any(static character => character != '0'))
         {
             throw new ArgumentException($"{parameterName} must not be zero.", parameterName);
         }
 
         return text;
+    }
+
+    private static string? NormalizeReceiptProofHash(
+        BscMainnetReceiptProof? receiptProof,
+        string? suppliedHash)
+    {
+        var normalizedHash = suppliedHash is null
+            ? null
+            : NormalizeRpcHex(suppliedHash, nameof(BscMainnetInboundEvidence.ReceiptProofHash), 32);
+        if (receiptProof is null)
+        {
+            return normalizedHash;
+        }
+
+        if (receiptProof.SourceDomain != DomainBsc)
+        {
+            throw new ArgumentException(
+                "receiptProof.sourceDomain must be BSC.",
+                nameof(receiptProof));
+        }
+
+        var computedHash = BscSccpReceiptProofHash(
+            receiptProof.SourceEventDigest,
+            receiptProof.ValidatorEpoch,
+            receiptProof.BlockNumber,
+            receiptProof.BlockHash,
+            receiptProof.ReceiptsRoot,
+            receiptProof.ValidatorSetHash,
+            receiptProof.CommitSealHash,
+            receiptProof.ReceiptRootIndex,
+            receiptProof.ReceiptTrieProofNodes,
+            receiptProof.InclusionBranch,
+            receiptProof.SourceDomain);
+        if (normalizedHash is not null
+            && !string.Equals(normalizedHash, computedHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProofHash must match receiptProof.",
+                nameof(suppliedHash));
+        }
+
+        return computedHash;
+    }
+
+    private static void RequireReceiptProofMatchesEvidence(
+        BscMainnetReceiptProof? receiptProof,
+        string? blockHash,
+        string? receiptBlockNumber,
+        string? blockReceiptsRoot,
+        IReadOnlyDictionary<string, object?>? parliaFinality,
+        string? sourceEventDigest)
+    {
+        if (receiptProof is null)
+        {
+            return;
+        }
+
+        if (receiptBlockNumber is not null
+            && receiptProof.BlockNumber != NormalizeUnsignedInteger(receiptBlockNumber, "block.number"))
+        {
+            throw new ArgumentException(
+                "receiptProof.blockNumber must match block.number.",
+                nameof(receiptProof));
+        }
+
+        if (parliaFinality is not null
+            && receiptProof.BlockNumber != NormalizeUnsignedInteger(
+                parliaFinality["executionBlockNumber"],
+                "parliaFinality.executionBlockNumber"))
+        {
+            throw new ArgumentException(
+                "receiptProof.blockNumber must match parliaFinality.executionBlockNumber.",
+                nameof(receiptProof));
+        }
+
+        var proofBlockHash = NormalizeRpcHex(
+            receiptProof.BlockHash,
+            "receiptProof.blockHash",
+            32);
+        if (blockHash is not null
+            && !string.Equals(proofBlockHash, blockHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.blockHash must match block.hash.",
+                nameof(receiptProof));
+        }
+
+        if (parliaFinality is not null
+            && !string.Equals(
+                proofBlockHash,
+                parliaFinality["executionBlockHash"] as string,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.blockHash must match parliaFinality.executionBlockHash.",
+                nameof(receiptProof));
+        }
+
+        var proofReceiptsRoot = NormalizeRpcHex(
+            receiptProof.ReceiptsRoot,
+            "receiptProof.receiptsRoot",
+            32);
+        if (blockReceiptsRoot is not null
+            && !string.Equals(proofReceiptsRoot, blockReceiptsRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.receiptsRoot must match block.receiptsRoot.",
+                nameof(receiptProof));
+        }
+
+        if (parliaFinality is not null)
+        {
+            if (!string.Equals(
+                proofReceiptsRoot,
+                parliaFinality["executionReceiptsRoot"] as string,
+                StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "receiptProof.receiptsRoot must match parliaFinality.executionReceiptsRoot.",
+                    nameof(receiptProof));
+            }
+
+            var finalityValidatorEpochInput = FirstPresent(
+                parliaFinality,
+                "validatorEpoch",
+                "validator_epoch");
+            if (finalityValidatorEpochInput is not null
+                && receiptProof.ValidatorEpoch != NormalizeUnsignedInteger(
+                    finalityValidatorEpochInput,
+                    "parliaFinality.validatorEpoch"))
+            {
+                throw new ArgumentException(
+                    "receiptProof.validatorEpoch must match parliaFinality.validatorEpoch.",
+                    nameof(receiptProof));
+            }
+
+            var finalityValidatorSetHashInput = FirstPresent(
+                parliaFinality,
+                "validatorSetHash",
+                "validator_set_hash");
+            if (finalityValidatorSetHashInput is not null)
+            {
+                var finalityValidatorSetHash = NormalizeRpcHex(
+                    finalityValidatorSetHashInput,
+                    "parliaFinality.validatorSetHash",
+                    32);
+                var proofValidatorSetHash = NormalizeRpcHex(
+                    receiptProof.ValidatorSetHash,
+                    "receiptProof.validatorSetHash",
+                    32);
+                if (!string.Equals(proofValidatorSetHash, finalityValidatorSetHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receiptProof.validatorSetHash must match parliaFinality.validatorSetHash.",
+                        nameof(receiptProof));
+                }
+            }
+
+            var finalityCommitSealHashInput = FirstPresent(
+                parliaFinality,
+                "commitSealHash",
+                "commit_seal_hash");
+            if (finalityCommitSealHashInput is not null)
+            {
+                var finalityCommitSealHash = NormalizeRpcHex(
+                    finalityCommitSealHashInput,
+                    "parliaFinality.commitSealHash",
+                    32);
+                var proofCommitSealHash = NormalizeRpcHex(
+                    receiptProof.CommitSealHash,
+                    "receiptProof.commitSealHash",
+                    32);
+                if (!string.Equals(proofCommitSealHash, finalityCommitSealHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receiptProof.commitSealHash must match parliaFinality.commitSealHash.",
+                        nameof(receiptProof));
+                }
+            }
+        }
+
+        if (sourceEventDigest is not null)
+        {
+            var proofSourceEventDigest = NormalizeRpcHex(
+                receiptProof.SourceEventDigest,
+                "receiptProof.sourceEventDigest",
+                32);
+            if (!string.Equals(proofSourceEventDigest, sourceEventDigest, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "receiptProof.sourceEventDigest must match receipt source event.",
+                    nameof(receiptProof));
+            }
+        }
+    }
+
+    private static SourceEvent NormalizeBscReceiptSourceEvent(
+        IReadOnlyDictionary<string, object?>? receipt,
+        string? sourceEventDigestInput,
+        string? sourceBridgeEmitterAddressInput,
+        string? transactionHash,
+        string? blockHash,
+        string? blockNumber)
+    {
+        var sourceEventDigest = sourceEventDigestInput is null
+            ? null
+            : NormalizeRpcHex(sourceEventDigestInput, nameof(BscMainnetInboundEvidence.SourceEventDigest), 32);
+        var sourceBridgeEmitterAddress = sourceBridgeEmitterAddressInput is null
+            ? null
+            : NormalizeRpcHex(
+                sourceBridgeEmitterAddressInput,
+                nameof(BscMainnetInboundEvidence.SourceBridgeEmitterAddress),
+                20);
+        if (sourceEventDigest is null && sourceBridgeEmitterAddress is null)
+        {
+            return new SourceEvent(null, null);
+        }
+
+        if (sourceBridgeEmitterAddress is null)
+        {
+            throw new ArgumentException(
+                "sourceBridgeEmitterAddress is required when validating sourceEventDigest.",
+                nameof(sourceBridgeEmitterAddressInput));
+        }
+
+        if (receipt is null)
+        {
+            throw new ArgumentException(
+                "receipt.logs is required for SCCP source event validation.",
+                nameof(receipt));
+        }
+
+        var logs = RequireList(FirstPresent(receipt, "logs"), "receipt.logs");
+        string? matchedDigest = null;
+        for (var index = 0; index < logs.Count; index++)
+        {
+            if (logs[index] is not IReadOnlyDictionary<string, object?> log)
+            {
+                throw new ArgumentException($"receipt.logs[{index}] must be an object.", nameof(receipt));
+            }
+
+            if (FirstPresent(log, "removed") is true)
+            {
+                throw new ArgumentException("receipt.logs must not contain removed logs.", nameof(receipt));
+            }
+
+            var logAddress = NormalizeRpcHex(
+                FirstPresent(log, "address"),
+                $"receipt.logs[{index}].address",
+                20,
+                allowZero: true);
+            var topics = RequireList(FirstPresent(log, "topics"), $"receipt.logs[{index}].topics");
+            if (topics.Count > 4)
+            {
+                throw new ArgumentException(
+                    $"receipt.logs[{index}].topics must contain at most 4 entries.",
+                    nameof(receipt));
+            }
+
+            var normalizedTopics = topics
+                .Select((topic, topicIndex) => NormalizeRpcHex(
+                    topic,
+                    $"receipt.logs[{index}].topics[{topicIndex}]",
+                    32,
+                    allowZero: true))
+                .ToArray();
+            if (string.Equals(logAddress, sourceBridgeEmitterAddress, StringComparison.Ordinal)
+                && normalizedTopics.Length > 0
+                && string.Equals(normalizedTopics[0], SourceEventTopic, StringComparison.Ordinal))
+            {
+                if (normalizedTopics.Length != 2)
+                {
+                    throw new ArgumentException(
+                        "SCCP source event log must contain exactly 2 topics.",
+                        nameof(receipt));
+                }
+
+                var data = FirstPresent(log, "data") as string
+                    ?? throw new ArgumentException(
+                        $"receipt.logs[{index}].data is required.",
+                        nameof(receipt));
+                if (!string.Equals(data, "0x", StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "SCCP source event log data must be 0x.",
+                        nameof(receipt));
+                }
+
+                var logTransactionHash = NormalizeRpcHex(
+                    FirstPresent(log, "transactionHash", "transaction_hash"),
+                    $"receipt.logs[{index}].transactionHash",
+                    32);
+                if (transactionHash is not null
+                    && !string.Equals(logTransactionHash, transactionHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs transactionHash must match receipt.transactionHash.",
+                        nameof(receipt));
+                }
+
+                var logBlockHash = NormalizeRpcHex(
+                    FirstPresent(log, "blockHash", "block_hash"),
+                    $"receipt.logs[{index}].blockHash",
+                    32);
+                if (blockHash is not null
+                    && !string.Equals(logBlockHash, blockHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs blockHash must match receipt.blockHash.",
+                        nameof(receipt));
+                }
+
+                var logBlockNumber = NormalizePositiveRpcQuantity(
+                    FirstPresent(log, "blockNumber", "block_number"),
+                    $"receipt.logs[{index}].blockNumber");
+                if (blockNumber is not null
+                    && !string.Equals(logBlockNumber, blockNumber, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs blockNumber must match receipt.blockNumber.",
+                        nameof(receipt));
+                }
+
+                var candidateDigest = normalizedTopics[1];
+                if (IsZeroRpcHex(candidateDigest))
+                {
+                    throw new ArgumentException(
+                        "SCCP source event digest must not be zero.",
+                        nameof(receipt));
+                }
+
+                if (sourceEventDigest is not null
+                    && !string.Equals(sourceEventDigest, candidateDigest, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (matchedDigest is not null)
+                {
+                    throw new ArgumentException(
+                        "receipt.logs must contain exactly one matching SCCP source event.",
+                        nameof(receipt));
+                }
+
+                matchedDigest = candidateDigest;
+            }
+        }
+
+        if (matchedDigest is null)
+        {
+            throw new ArgumentException(
+                "receipt.logs must contain the expected SCCP source event.",
+                nameof(receipt));
+        }
+
+        return new SourceEvent(matchedDigest, sourceBridgeEmitterAddress);
+    }
+
+    private static IReadOnlyList<object?> RequireList(object? value, string parameterName)
+    {
+        return value switch
+        {
+            IReadOnlyList<object?> list => list,
+            IEnumerable<object?> enumerable => enumerable.ToArray(),
+            _ => throw new ArgumentException(
+                $"{parameterName} must be an array.",
+                parameterName),
+        };
+    }
+
+    private static bool IsZeroRpcHex(string text)
+    {
+        return text[2..].All(static character => character == '0');
     }
 
     private static string NormalizeRpcQuantity(object? value, string parameterName)
@@ -712,6 +1212,100 @@ public static partial class BscMainnetSccp
                     $"{parameterName} must be an unsigned integer.",
                     parameterName);
         }
+    }
+
+    private static byte[] RpcHexToBytes(object? value, string parameterName, int byteLength)
+    {
+        var normalized = NormalizeRpcHex(value, parameterName, byteLength);
+        return Convert.FromHexString(normalized[2..]);
+    }
+
+    private static IReadOnlyList<byte[]> NormalizeReceiptTrieProofNodes(IReadOnlyList<byte[]> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (nodes.Count == 0 || nodes.Count > MaxMptProofNodes)
+        {
+            throw new ArgumentException(
+                $"receiptTrieProofNodes must contain 1..{MaxMptProofNodes} entries.",
+                nameof(nodes));
+        }
+
+        var normalized = new byte[nodes.Count][];
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            var node = nodes[index] ?? throw new ArgumentException(
+                $"receiptTrieProofNodes[{index}] is required.",
+                nameof(nodes));
+            if (node.Length == 0 || node.Length > MaxMptNodeBytes)
+            {
+                throw new ArgumentException(
+                    $"receiptTrieProofNodes[{index}] must contain 1..{MaxMptNodeBytes} bytes.",
+                    nameof(nodes));
+            }
+
+            normalized[index] = node.ToArray();
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<byte[]> NormalizeReceiptInclusionBranch(
+        IReadOnlyList<byte[]> branch,
+        bool requireNonEmpty)
+    {
+        ArgumentNullException.ThrowIfNull(branch);
+        if (requireNonEmpty && branch.Count == 0)
+        {
+            throw new ArgumentException("inclusionBranch must not be empty.", nameof(branch));
+        }
+
+        if (branch.Count > MaxSourceMerkleBranchNodes)
+        {
+            throw new ArgumentException(
+                $"inclusionBranch must contain at most {MaxSourceMerkleBranchNodes} entries.",
+                nameof(branch));
+        }
+
+        var normalized = new byte[branch.Count][];
+        for (var index = 0; index < branch.Count; index++)
+        {
+            var sibling = branch[index] ?? throw new ArgumentException(
+                $"inclusionBranch[{index}] is required.",
+                nameof(branch));
+            if (sibling.Length != 32)
+            {
+                throw new ArgumentException($"inclusionBranch[{index}] must be 32 bytes.", nameof(branch));
+            }
+
+            normalized[index] = sibling.ToArray();
+        }
+
+        return normalized;
+    }
+
+    private static BscMainnetReceiptProof? SnapshotReceiptProof(BscMainnetReceiptProof? receiptProof)
+    {
+        if (receiptProof is null)
+        {
+            return null;
+        }
+
+        return receiptProof with
+        {
+            ReceiptTrieProofNodes = CopyByteArrays(receiptProof.ReceiptTrieProofNodes),
+            InclusionBranch = CopyByteArrays(receiptProof.InclusionBranch),
+        };
+    }
+
+    private static byte[][] CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        var copy = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            copy[index] = values[index].ToArray();
+        }
+
+        return copy;
     }
 
     private static byte[] RequireNonZeroProofBytes(byte[] proofBytes, string parameterName)
@@ -1053,6 +1647,31 @@ public sealed record BscMainnetParliaFinalityEvidence(
     }
 }
 
+public sealed record BscMainnetReceiptProof
+{
+    public int SourceDomain { get; init; } = BscMainnetSccp.DomainBsc;
+
+    public string SourceEventDigest { get; init; } = string.Empty;
+
+    public ulong ValidatorEpoch { get; init; }
+
+    public ulong BlockNumber { get; init; }
+
+    public string BlockHash { get; init; } = string.Empty;
+
+    public string ReceiptsRoot { get; init; } = string.Empty;
+
+    public string ValidatorSetHash { get; init; } = string.Empty;
+
+    public string CommitSealHash { get; init; } = string.Empty;
+
+    public ulong ReceiptRootIndex { get; init; }
+
+    public IReadOnlyList<byte[]> ReceiptTrieProofNodes { get; init; } = Array.Empty<byte[]>();
+
+    public IReadOnlyList<byte[]> InclusionBranch { get; init; } = Array.Empty<byte[]>();
+}
+
 public sealed record BscMainnetInboundEvidence
 {
     public int SourceDomain { get; init; } = BscMainnetSccp.DomainBsc;
@@ -1068,6 +1687,12 @@ public sealed record BscMainnetInboundEvidence
     public IReadOnlyDictionary<string, object?>? ParliaFinality { get; init; }
 
     public string? ReceiptProofHash { get; init; }
+
+    public BscMainnetReceiptProof? ReceiptProof { get; init; }
+
+    public string? SourceEventDigest { get; init; }
+
+    public string? SourceBridgeEmitterAddress { get; init; }
 
     public BscMainnetInboundEvidence WithParliaFinalityEvidence(
         BscMainnetParliaFinalityEvidence? evidence,

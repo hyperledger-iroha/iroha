@@ -98,15 +98,33 @@ fn selector_value() -> Value {
     json_obj!({ "kind": "default" })
 }
 
+fn checked_public_key_bytes(public_key: &PublicKey) -> (Algorithm, &[u8]) {
+    public_key
+        .try_to_bytes()
+        .expect("compliance vector public key must be well-formed")
+}
+
+fn checked_public_key_multihash(public_key: &PublicKey) -> String {
+    public_key
+        .try_to_multihash_string()
+        .expect("compliance vector public key must format as a multihash")
+}
+
+fn checked_public_key_prefixed(public_key: &PublicKey) -> String {
+    public_key
+        .try_to_prefixed_string()
+        .expect("compliance vector public key must format as a prefixed multihash")
+}
+
 fn controller_single_value(public_key: &PublicKey) -> Value {
-    let (algorithm, payload) = public_key.to_bytes();
+    let (algorithm, payload) = checked_public_key_bytes(public_key);
     assert_eq!(algorithm, Algorithm::Ed25519, "expected ed25519 key");
     json_obj!({
         "kind": "single",
         "curve": "ed25519",
         "public_key_hex": encode_upper(payload),
-        "public_key_multihash": public_key.to_string(),
-        "public_key_prefixed": public_key.to_prefixed_string(),
+        "public_key_multihash": checked_public_key_multihash(public_key),
+        "public_key_prefixed": checked_public_key_prefixed(public_key),
     })
 }
 
@@ -115,13 +133,13 @@ fn controller_multisig_value(policy: &MultisigPolicy) -> Value {
         .members()
         .iter()
         .map(|member| {
-            let (algorithm, payload) = member.public_key().to_bytes();
+            let (algorithm, payload) = checked_public_key_bytes(member.public_key());
             json_obj!({
                 "curve": format!("{algorithm:?}").to_lowercase(),
                 "weight": member.weight(),
                 "public_key_hex": encode_upper(payload),
-                "public_key_multihash": member.public_key().to_string(),
-                "public_key_prefixed": member.public_key().to_prefixed_string(),
+                "public_key_multihash": checked_public_key_multihash(member.public_key()),
+                "public_key_prefixed": checked_public_key_prefixed(member.public_key()),
             })
         })
         .collect();
@@ -209,7 +227,7 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 .members()
                 .iter()
                 .map(|member| {
-                    let (_, payload) = member.public_key().to_bytes();
+                    let (_, payload) = checked_public_key_bytes(member.public_key());
                     encode_upper(payload)
                 })
                 .collect();
@@ -301,6 +319,7 @@ fn policy_error_to_string(err: MultisigPolicyError) -> &'static str {
         MultisigPolicyError::ThresholdExceedsTotal { .. } => "ThresholdExceedsTotal",
         MultisigPolicyError::UnsupportedVersion(_) => "UnsupportedVersion",
         MultisigPolicyError::UnsupportedCurve(_) => "UnsupportedCurve",
+        MultisigPolicyError::MalformedPublicKey => "MalformedPublicKey",
     }
 }
 
@@ -487,4 +506,47 @@ pub fn compliance_vectors_json() -> Value {
             "negative": Value::Array(negative_cases),
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compliance_vectors_build_with_checked_public_key_payloads() {
+        let Value::Object(root) = compliance_vectors_json() else {
+            panic!("compliance vectors root must be an object");
+        };
+        let Some(Value::Object(cases)) = root.get("cases") else {
+            panic!("compliance vectors must contain cases");
+        };
+        let Some(Value::Array(positive)) = cases.get("positive") else {
+            panic!("compliance vectors must contain positive cases");
+        };
+
+        assert!(!positive.is_empty());
+        let public_key = KeyPair::from_seed(vec![0x00; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let Some(controller) = positive
+            .iter()
+            .find_map(|case| case.get("controller").and_then(Value::as_object))
+        else {
+            panic!("positive vector must include controller details");
+        };
+        let expected_multihash = checked_public_key_multihash(&public_key);
+        let expected_prefixed = checked_public_key_prefixed(&public_key);
+        assert_eq!(
+            controller
+                .get("public_key_multihash")
+                .and_then(Value::as_str),
+            Some(expected_multihash.as_str())
+        );
+        assert_eq!(
+            controller
+                .get("public_key_prefixed")
+                .and_then(Value::as_str),
+            Some(expected_prefixed.as_str())
+        );
+    }
 }

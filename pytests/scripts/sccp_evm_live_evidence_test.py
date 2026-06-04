@@ -807,13 +807,75 @@ def test_live_evm_eth_toml_requires_finalized_block_tag():
     )
 
     assert summary["block_tag"] == "latest"
+    assert "route_canary" not in summary
+    assert summary["route_canary_transaction"]["receipt_block_finalized"] is False
     assert "offline_toml_sha256" not in summary
+    offline_args = summary["offline_evidence_args"]
+    assert "--route-canary-receipt-block-finalized" in offline_args
+    finalized_index = offline_args.index("--route-canary-receipt-block-finalized")
+    assert offline_args[finalized_index + 1] == "false"
     try:
         module.render_offline_toml(summary)
     except ValueError as exc:
         assert "--block-tag finalized" in str(exc)
     else:
         raise AssertionError("Ethereum destination TOML rendered from non-finalized block tag")
+
+
+def test_live_evm_bsc_default_latest_route_canary_stays_diagnostic():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        rpc_chain_id=56,
+        target_domain=module.evidence.SCCP_DOMAIN_BSC,
+    )
+    route_allowlist_hash = module.evidence.evm_route_allowlist_hash(
+        domain=module.evidence.SCCP_DOMAIN_BSC,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=fake.destination_binding,
+    )
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://bsc.example",
+            domain=module.evidence.SCCP_DOMAIN_BSC,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="latest",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    assert summary["block_tag"] == "latest"
+    assert "route_canary" not in summary
+    assert summary["route_canary_transaction"]["receipt_block_finalized"] is False
+    assert "offline_toml_sha256" not in summary
+    try:
+        module.render_offline_toml(summary)
+    except ValueError as exc:
+        message = str(exc)
+        assert "--block-tag finalized" not in message
+        assert "--route-canary-evidence-hash" in message
+        assert "--route-canary-transaction-hash" in message
+    else:
+        raise AssertionError("BSC destination TOML rendered from unfinalized route canary")
 
 
 def test_live_evm_evidence_rejects_aliased_verifier_and_bridge():

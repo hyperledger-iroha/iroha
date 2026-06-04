@@ -71,6 +71,8 @@ const IDENTIFIER_RECEIPT_VECTOR_FIXTURE = JSON.parse(
   ),
 );
 const BFV_COMPONENT_DIGEST_RE = /^[0-9A-F]{64}$/u;
+const BFV_CHAIN_DIGEST_RE = /^[0-9a-f]{64}$/u;
+const BFV_RNS_MODULI_V1 = [358273, 448769, 449921];
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -129,9 +131,55 @@ function assertBfvComponentDigest(label, value, seen) {
   seen.add(value);
 }
 
+function assertBfvUpperSha256(label, value) {
+  assert.equal(typeof value, "string", `${label}: digest must be a string`);
+  assert.match(value, BFV_COMPONENT_DIGEST_RE, `${label}: digest must be canonical uppercase SHA-256`);
+  assert.notEqual(value, "0".repeat(64), `${label}: digest must not be zero`);
+}
+
+function assertBfvLowerDigest(label, value) {
+  assert.equal(typeof value, "string", `${label}: digest must be a string`);
+  assert.match(value, BFV_CHAIN_DIGEST_RE, `${label}: digest must be canonical lowercase hex`);
+  assert.notEqual(value, "0".repeat(64), `${label}: digest must not be zero`);
+}
+
+function assertBfvRnsPolynomialFixture(label, polynomial, publicDegree, limbCount) {
+  assert.equal(polynomial.coefficient_count, publicDegree, `${label}: coefficient count`);
+  assert.equal(polynomial.residue_limb_sha256.length, limbCount, `${label}: residue limb count`);
+  assertBfvUpperSha256(`${label}: reconstructed coefficients`, polynomial.reconstructed_sha256);
+  for (const [index, digest] of polynomial.residue_limb_sha256.entries()) {
+    assertBfvUpperSha256(`${label}: residue limb ${index}`, digest);
+  }
+}
+
+function assertBfvRnsModulusChainFixture(operationVectors, publicDegree) {
+  const rns = operationVectors.rns_modulus_chain;
+  assert.deepEqual(rns.moduli, BFV_RNS_MODULI_V1, "RNS moduli");
+  assert.equal(rns.product, "72339115408190977", "RNS product");
+  assertBfvLowerDigest("RNS chain digest", rns.expected_digest_hex);
+
+  const samples = rns.sample_polynomials;
+  assert.equal(samples.lhs_coefficients.length, publicDegree, "RNS lhs sample coefficient count");
+  assert.equal(samples.rhs_coefficients.length, publicDegree, "RNS rhs sample coefficient count");
+  for (const [label, coefficients] of [
+    ["lhs", samples.lhs_coefficients],
+    ["rhs", samples.rhs_coefficients],
+  ]) {
+    for (const [index, coefficient] of coefficients.entries()) {
+      assert.equal(Number.isSafeInteger(coefficient), true, `RNS ${label}[${index}] must be a safe integer`);
+      assert.equal(coefficient >= 0, true, `RNS ${label}[${index}] must be non-negative`);
+    }
+  }
+
+  for (const label of ["lhs", "rhs", "sum", "negacyclic_product"]) {
+    assertBfvRnsPolynomialFixture(label, samples[label], publicDegree, rns.moduli.length);
+  }
+}
+
 function assertBfvOperationKeyComponentVectors(operationVectors) {
   assert.equal(operationVectors.vector_set, "soracloud-bfv-operation-v1");
   const publicDegree = operationVectors.public_parameters.polynomial_degree;
+  assertBfvRnsModulusChainFixture(operationVectors, publicDegree);
   const evaluationKey = operationVectors.evaluation_key_bundle;
   assert.equal(evaluationKey.decomposition_base_log, operationVectors.public_parameters.decomposition_base_log);
   assert.equal(evaluationKey.decomposition_digit_count, evaluationKey.relinearization_entry_count);
@@ -142,6 +190,65 @@ function assertBfvOperationKeyComponentVectors(operationVectors) {
     assert.equal(entry.coefficient_count, publicDegree, `relinearization entry ${index}: coefficient count`);
     assertBfvComponentDigest(`relinearization entry ${index} b`, entry.b_sha256, componentDigests);
     assertBfvComponentDigest(`relinearization entry ${index} a`, entry.a_sha256, componentDigests);
+  }
+  assert.equal(operationVectors.galois_keys.length, evaluationKey.galois_key_count);
+  for (const key of operationVectors.galois_keys) {
+    assert.equal(key.entries.length, key.entry_count, `Galois key ${key.automorphism_power}: entry count`);
+    for (const [index, entry] of key.entries.entries()) {
+      assert.equal(entry.index, index, `Galois key ${key.automorphism_power} entry ${index}: index`);
+      assert.equal(entry.coefficient_count, publicDegree, `Galois key ${key.automorphism_power} entry ${index}: coefficient count`);
+      assertBfvComponentDigest(`Galois key ${key.automorphism_power} entry ${index} b`, entry.b_sha256, componentDigests);
+      assertBfvComponentDigest(`Galois key ${key.automorphism_power} entry ${index} a`, entry.a_sha256, componentDigests);
+    }
+  }
+  assert.equal(operationVectors.galois_switch_vectors.length > 0, true, "Galois switch vectors must not be empty");
+  for (const vector of operationVectors.galois_switch_vectors) {
+    assert.equal(
+      operationVectors.galois_keys.some((key) => key.automorphism_power === vector.automorphism_power),
+      true,
+      `Galois switch vector ${vector.name}: matching key`,
+    );
+    assert.equal(vector.input_plaintext_slots.length > 0, true, `Galois switch vector ${vector.name}: plaintext slots`);
+    for (const [index, slot] of vector.input_plaintext_slots.entries()) {
+      assert.equal(Number.isSafeInteger(slot), true, `Galois switch vector ${vector.name}: slot ${index}`);
+      assert.equal(slot >= 0, true, `Galois switch vector ${vector.name}: slot ${index} non-negative`);
+    }
+    assert.equal(vector.expected_input_ciphertext_bytes > 0, true, `Galois switch vector ${vector.name}: input bytes`);
+    assert.equal(vector.expected_output_ciphertext_bytes > 0, true, `Galois switch vector ${vector.name}: output bytes`);
+    assertBfvUpperSha256(`Galois switch vector ${vector.name}: input`, vector.expected_input_ciphertext_sha256);
+    assertBfvUpperSha256(`Galois switch vector ${vector.name}: output`, vector.expected_output_ciphertext_sha256);
+    assertBfvUpperSha256(`Galois switch vector ${vector.name}: plaintext`, vector.expected_plaintext_sha256);
+    assert.equal(vector.output_components.coefficient_count, publicDegree, `Galois switch vector ${vector.name}: coefficient count`);
+    assertBfvComponentDigest(`Galois switch vector ${vector.name} c0`, vector.output_components.c0_sha256, componentDigests);
+    assertBfvComponentDigest(`Galois switch vector ${vector.name} c1`, vector.output_components.c1_sha256, componentDigests);
+  }
+  assert.equal(operationVectors.packed_galois_switch_vectors.length > 0, true, "packed Galois switch vectors must not be empty");
+  for (const vector of operationVectors.packed_galois_switch_vectors) {
+    assert.equal(
+      operationVectors.galois_keys.some((key) => key.automorphism_power === vector.automorphism_power),
+      true,
+      `packed Galois switch vector ${vector.name}: matching key`,
+    );
+    assert.equal(vector.input_packed_slots.length, publicDegree, `packed Galois switch vector ${vector.name}: input slot count`);
+    assert.equal(vector.expected_slot_permutation.length, publicDegree, `packed Galois switch vector ${vector.name}: permutation count`);
+    assert.equal(vector.expected_packed_slots.length, publicDegree, `packed Galois switch vector ${vector.name}: output slot count`);
+    for (const [label, values] of [
+      ["input", vector.input_packed_slots],
+      ["permutation", vector.expected_slot_permutation],
+      ["output", vector.expected_packed_slots],
+    ]) {
+      for (const [index, value] of values.entries()) {
+        assert.equal(Number.isSafeInteger(value), true, `packed Galois switch vector ${vector.name}: ${label} ${index}`);
+        assert.equal(value >= 0, true, `packed Galois switch vector ${vector.name}: ${label} ${index} non-negative`);
+      }
+    }
+    assertBfvUpperSha256(`packed Galois switch vector ${vector.name}: packed plaintext`, vector.expected_packed_plaintext_sha256);
+    assertBfvUpperSha256(`packed Galois switch vector ${vector.name}: input`, vector.expected_input_ciphertext_sha256);
+    assertBfvUpperSha256(`packed Galois switch vector ${vector.name}: output`, vector.expected_output_ciphertext_sha256);
+    assertBfvUpperSha256(`packed Galois switch vector ${vector.name}: plaintext`, vector.expected_plaintext_coefficients_sha256);
+    assert.equal(vector.output_components.coefficient_count, publicDegree, `packed Galois switch vector ${vector.name}: coefficient count`);
+    assertBfvComponentDigest(`packed Galois switch vector ${vector.name} c0`, vector.output_components.c0_sha256, componentDigests);
+    assertBfvComponentDigest(`packed Galois switch vector ${vector.name} c1`, vector.output_components.c1_sha256, componentDigests);
   }
   assert.equal(operationVectors.rotation_keys.length, evaluationKey.rotation_key_count);
   for (const key of operationVectors.rotation_keys) {
@@ -634,6 +741,12 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
       },
     ],
     [
+      "missing Galois component",
+      (operationVectors) => {
+        delete operationVectors.galois_keys[0].entries[0].a_sha256;
+      },
+    ],
+    [
       "zero refresh component digest",
       (operationVectors) => {
         operationVectors.rotation_keys[0].zero_refresh_components.c1_sha256 = "0".repeat(64);
@@ -643,6 +756,25 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
       "component coefficient-count drift",
       (operationVectors) => {
         operationVectors.bootstrap_key.zero_refresh_components.coefficient_count = 63;
+      },
+    ],
+    [
+      "uppercase RNS chain digest",
+      (operationVectors) => {
+        operationVectors.rns_modulus_chain.expected_digest_hex =
+          operationVectors.rns_modulus_chain.expected_digest_hex.toUpperCase();
+      },
+    ],
+    [
+      "RNS sample coefficient-count drift",
+      (operationVectors) => {
+        operationVectors.rns_modulus_chain.sample_polynomials.lhs_coefficients.pop();
+      },
+    ],
+    [
+      "RNS residue limb-count drift",
+      (operationVectors) => {
+        operationVectors.rns_modulus_chain.sample_polynomials.negacyclic_product.residue_limb_sha256.pop();
       },
     ],
   ]) {

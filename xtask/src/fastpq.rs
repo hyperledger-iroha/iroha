@@ -585,7 +585,10 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
         PrivateKey::from_hex(Algorithm::Ed25519, &cleaned).context("parse signing key")?;
     let key_pair: KeyPair = private_key.clone().into();
     let signature = Signature::new(key_pair.private_key(), payload);
-    let (algorithm, public_bytes) = key_pair.public_key().to_bytes();
+    let (algorithm, public_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| eyre!("signing public key is malformed: {err}"))?;
     ensure!(
         algorithm == Algorithm::Ed25519,
         "only Ed25519 signing keys are supported"
@@ -1465,6 +1468,26 @@ mod tests {
         let json = sample_bundle(rows);
         fs::write(&path, norito::json::to_vec_pretty(&json).unwrap()).unwrap();
         path
+    }
+
+    #[test]
+    fn sign_manifest_exports_checked_public_key_payload() {
+        let temp = TempDir::new().expect("tempdir");
+        let key_hex = hex::encode([0x55u8; 32]);
+        let key_path = temp.path().join("signing.key");
+        fs::write(&key_path, &key_hex).expect("write key");
+        let expected_key_pair: KeyPair = PrivateKey::from_hex(Algorithm::Ed25519, &key_hex)
+            .expect("private key parses")
+            .into();
+        let (_, expected_public) = expected_key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key is well-formed");
+
+        let signature = sign_manifest(b"bench manifest", &key_path).expect("sign manifest");
+
+        assert_eq!(signature.algorithm, "ed25519");
+        assert_eq!(signature.public_key_hex, hex::encode(expected_public));
     }
 
     #[test]

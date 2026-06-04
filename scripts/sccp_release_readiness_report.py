@@ -15,10 +15,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
-ACTIVE_LAUNCH_DOMAIN = 2
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = "BSC mainnet"
+ACTIVE_LAUNCH_DOMAIN = 1
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
+ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
+    "eth": "`eth_chainId == 0x1` (1)",
+    "bsc": "`eth_chainId == 0x38` (56)",
+}.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
@@ -1538,7 +1542,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
-            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 0x38` (56) and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
+            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]

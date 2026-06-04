@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use blake3::hash;
+use blake3::Hasher;
 use norito::{
     codec::{decode_adaptive, encode_adaptive},
     decode_from_bytes,
@@ -23,12 +23,14 @@ pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
 /// Domain separator used when hashing `PoW` solutions.
 pub const SOLUTION_DOMAIN: &[u8] = b"soranet.pow.solution.v1";
 /// Domain separator used when signing `SignedTicket` payloads.
-pub const SIGNING_DOMAIN: &[u8] = b"soranet.pow.signed_ticket.v1";
+pub const SIGNING_DOMAIN: &[u8; 28] = b"soranet.pow.signed_ticket.v1";
 /// Domain separator used when hashing revocation fingerprints.
 pub const REVOCATION_DOMAIN: &[u8] = b"soranet.pow.revocation.v1";
 
 /// Length of the serialized `PoW` ticket payload.
 pub const TICKET_LEN: usize = 74;
+const SIGNED_TICKET_PAYLOAD_BASE_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32;
+const SIGNED_TICKET_PAYLOAD_MAX_LEN: usize = SIGNED_TICKET_PAYLOAD_BASE_LEN + 32;
 /// Slack tolerated when validating the remaining TTL to account for second-level truncation.
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
@@ -171,6 +173,17 @@ pub struct SignedTicket {
     pub signature: Vec<u8>,
 }
 
+struct SignedTicketPayload {
+    bytes: [u8; SIGNED_TICKET_PAYLOAD_MAX_LEN],
+    len: usize,
+}
+
+impl SignedTicketPayload {
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
 impl SignedTicket {
     /// Create a new `SignedTicket` by signing the provided `ticket` and bindings.
     ///
@@ -186,8 +199,9 @@ impl SignedTicket {
             .validate_secret_key(secret_key)
             .map_err(|err| Error::Signing(format!("ML-DSA secret key is invalid: {err}")))?;
         let payload = Self::build_payload(&ticket, relay_id, transcript_hash);
-        let signature = sign_mldsa_from_os(MlDsaSuite::MlDsa44, secret_key, &[], &payload)
-            .map_err(|e| Error::Signing(e.to_string()))?;
+        let signature =
+            sign_mldsa_from_os(MlDsaSuite::MlDsa44, secret_key, &[], payload.as_slice())
+                .map_err(|e| Error::Signing(e.to_string()))?;
 
         Ok(Self {
             ticket,
@@ -238,7 +252,7 @@ impl SignedTicket {
             MlDsaSuite::MlDsa44,
             public_key,
             &[],
-            &payload,
+            payload.as_slice(),
             &self.signature,
         )
         .map_err(|e| match e {
@@ -262,14 +276,27 @@ impl SignedTicket {
         ticket: &Ticket,
         relay_id: &[u8; 32],
         transcript_hash: Option<&[u8; 32]>,
-    ) -> Vec<u8> {
-        let mut payload = Vec::with_capacity(SIGNING_DOMAIN.len() + TICKET_LEN + 32 + 32);
-        payload.extend_from_slice(SIGNING_DOMAIN);
-        payload.extend_from_slice(&ticket.to_bytes());
-        payload.extend_from_slice(relay_id);
+    ) -> SignedTicketPayload {
+        let mut payload = SignedTicketPayload {
+            bytes: [0u8; SIGNED_TICKET_PAYLOAD_MAX_LEN],
+            len: 0,
+        };
+
+        payload.bytes[payload.len..payload.len + SIGNING_DOMAIN.len()]
+            .copy_from_slice(SIGNING_DOMAIN);
+        payload.len += SIGNING_DOMAIN.len();
+        payload.bytes[payload.len..payload.len + TICKET_LEN].copy_from_slice(&ticket.to_bytes());
+        payload.len += TICKET_LEN;
+        payload.bytes[payload.len..payload.len + relay_id.len()].copy_from_slice(relay_id);
+        payload.len += relay_id.len();
         if let Some(hash) = transcript_hash {
-            payload.extend_from_slice(hash);
+            payload.bytes[payload.len..payload.len + hash.len()].copy_from_slice(hash);
+            payload.len += hash.len();
         }
+        debug_assert!(matches!(
+            payload.len,
+            SIGNED_TICKET_PAYLOAD_BASE_LEN | SIGNED_TICKET_PAYLOAD_MAX_LEN
+        ));
         payload
     }
 
@@ -1187,34 +1214,24 @@ fn derive_challenge(
     client_nonce: [u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
-    let transcript_len = binding.transcript_hash.map_or(0, <[u8]>::len);
-    let relay_len = binding.relay_id.len();
-    let mut input = Vec::with_capacity(
-        CHALLENGE_DOMAIN.len()
-            + binding.descriptor_commit.len()
-            + relay_len
-            + transcript_len
-            + client_nonce.len()
-            + 8,
-    );
-    input.extend_from_slice(CHALLENGE_DOMAIN);
-    input.extend_from_slice(binding.descriptor_commit);
-    input.extend_from_slice(binding.relay_id);
+    let mut hasher = Hasher::new();
+    hasher.update(CHALLENGE_DOMAIN);
+    hasher.update(binding.descriptor_commit);
+    hasher.update(binding.relay_id);
     if let Some(transcript) = binding.transcript_hash {
-        input.extend_from_slice(transcript);
+        hasher.update(transcript);
     }
-    input.extend_from_slice(&client_nonce);
-    input.extend_from_slice(&expires_at.to_be_bytes());
-    hash(&input)
+    hasher.update(&client_nonce);
+    hasher.update(&expires_at.to_be_bytes());
+    hasher.finalize()
 }
 
 fn derive_solution_digest(challenge: &blake3::Hash, solution: &[u8; 32]) -> blake3::Hash {
-    let mut input =
-        Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len() + solution.len());
-    input.extend_from_slice(SOLUTION_DOMAIN);
-    input.extend_from_slice(challenge.as_bytes());
-    input.extend_from_slice(solution);
-    hash(&input)
+    let mut hasher = Hasher::new();
+    hasher.update(SOLUTION_DOMAIN);
+    hasher.update(challenge.as_bytes());
+    hasher.update(solution);
+    hasher.finalize()
 }
 
 fn leading_zero_bits_at_least(bytes: &[u8], bits: u8) -> bool {
@@ -1265,10 +1282,10 @@ fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
 }
 
 fn compute_revocation_fingerprint(signature: &[u8]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(REVOCATION_DOMAIN.len() + signature.len());
-    input.extend_from_slice(REVOCATION_DOMAIN);
-    input.extend_from_slice(signature);
-    hash(&input).into()
+    let mut hasher = Hasher::new();
+    hasher.update(REVOCATION_DOMAIN);
+    hasher.update(signature);
+    hasher.finalize().into()
 }
 
 fn is_expired(expires_at: SystemTime, now: SystemTime) -> bool {
@@ -1357,6 +1374,62 @@ mod tests {
             }
         }
         panic!("expected at least one invalid solution for difficulty {difficulty}");
+    }
+
+    #[test]
+    fn transcript_hashes_match_legacy_contiguous_layout() {
+        let descriptor = [0x11; 32];
+        let relay = [0x22; 32];
+        let transcript = [0x33; 32];
+        let client_nonce = [0x44; 32];
+        let expires_at = 1_700_000_123_u64;
+
+        for transcript_hash in [None, Some(transcript.as_slice())] {
+            let binding = ChallengeBinding::new(&descriptor, &relay, transcript_hash);
+            let mut legacy = Vec::with_capacity(
+                CHALLENGE_DOMAIN.len()
+                    + descriptor.len()
+                    + relay.len()
+                    + transcript_hash.map_or(0, <[u8]>::len)
+                    + client_nonce.len()
+                    + 8,
+            );
+            legacy.extend_from_slice(CHALLENGE_DOMAIN);
+            legacy.extend_from_slice(&descriptor);
+            legacy.extend_from_slice(&relay);
+            if let Some(transcript_hash) = transcript_hash {
+                legacy.extend_from_slice(transcript_hash);
+            }
+            legacy.extend_from_slice(&client_nonce);
+            legacy.extend_from_slice(&expires_at.to_be_bytes());
+
+            assert_eq!(
+                derive_challenge(&binding, client_nonce, expires_at),
+                blake3::hash(&legacy)
+            );
+        }
+
+        let challenge = blake3::hash(b"challenge");
+        let solution = [0x55; 32];
+        let mut legacy_solution =
+            Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len() + solution.len());
+        legacy_solution.extend_from_slice(SOLUTION_DOMAIN);
+        legacy_solution.extend_from_slice(challenge.as_bytes());
+        legacy_solution.extend_from_slice(&solution);
+        assert_eq!(
+            derive_solution_digest(&challenge, &solution),
+            blake3::hash(&legacy_solution)
+        );
+
+        let signature = vec![0x66; 97];
+        let mut legacy_revocation = Vec::with_capacity(REVOCATION_DOMAIN.len() + signature.len());
+        legacy_revocation.extend_from_slice(REVOCATION_DOMAIN);
+        legacy_revocation.extend_from_slice(&signature);
+        let expected_revocation: [u8; 32] = blake3::hash(&legacy_revocation).into();
+        assert_eq!(
+            compute_revocation_fingerprint(&signature),
+            expected_revocation
+        );
     }
 
     #[test]
@@ -1719,6 +1792,41 @@ mod tests {
         tampered_relay
             .verify(kp.public_key())
             .expect_err("tampered relay");
+    }
+
+    #[test]
+    fn signed_ticket_payload_matches_legacy_contiguous_layout() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 7,
+            expires_at: 1_700_000_600,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
+        };
+        let relay_id = [0x33; 32];
+        let transcript = [0x44; 32];
+
+        for transcript_hash in [None, Some(&transcript)] {
+            let payload = SignedTicket::build_payload(&ticket, &relay_id, transcript_hash);
+            let mut legacy =
+                Vec::with_capacity(SIGNING_DOMAIN.len() + TICKET_LEN + relay_id.len() + 32);
+            legacy.extend_from_slice(SIGNING_DOMAIN);
+            legacy.extend_from_slice(&ticket.to_bytes());
+            legacy.extend_from_slice(&relay_id);
+            if let Some(hash) = transcript_hash {
+                legacy.extend_from_slice(hash);
+            }
+
+            assert_eq!(payload.as_slice(), legacy.as_slice());
+            assert_eq!(
+                payload.as_slice().len(),
+                if transcript_hash.is_some() {
+                    SIGNED_TICKET_PAYLOAD_MAX_LEN
+                } else {
+                    SIGNED_TICKET_PAYLOAD_BASE_LEN
+                }
+            );
+        }
     }
 
     #[test]

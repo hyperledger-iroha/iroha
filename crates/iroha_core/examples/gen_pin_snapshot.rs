@@ -508,7 +508,7 @@ fn alias_binding_for(
 
     let digest = alias_proof_signature_digest(&bundle);
     let signature = Signature::new(council_keys.private_key(), digest.as_ref());
-    let (_, public_bytes) = council_keys.public_key().to_bytes();
+    let public_bytes = checked_ed25519_public_key_bytes(council_keys, "alias council public key");
     let signer: [u8; 32] = public_bytes
         .try_into()
         .expect("ed25519 public key must contain 32 bytes");
@@ -533,10 +533,22 @@ fn council_keypair() -> KeyPair {
     KeyPair::from_private_key(private).expect("derive keypair")
 }
 
+fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> &'a [u8] {
+    let (algorithm, public_bytes) = keypair
+        .public_key()
+        .try_to_bytes()
+        .unwrap_or_else(|err| panic!("{context} must be well-formed: {err}"));
+    assert_eq!(algorithm, Algorithm::Ed25519, "{context} must be Ed25519");
+    public_bytes
+}
+
 fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
     let mut sig_entry = json::Map::new();
     let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
-    let public_bytes_hex = hex::encode(keypair.public_key().to_bytes().1);
+    let public_bytes_hex = hex::encode(checked_ed25519_public_key_bytes(
+        keypair,
+        "pin fixture signer public key",
+    ));
     sig_entry.insert("algorithm".into(), Value::from("ed25519"));
     sig_entry.insert("signer".into(), Value::from(public_bytes_hex));
     sig_entry.insert(

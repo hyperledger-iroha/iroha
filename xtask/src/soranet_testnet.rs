@@ -414,7 +414,10 @@ fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope>
     })?;
     let key_pair: KeyPair = private_key.clone().into();
     let signature = Signature::new(key_pair.private_key(), payload);
-    let (algorithm, public_bytes) = key_pair.public_key().to_bytes();
+    let (algorithm, public_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| eyre!("signing public key is malformed: {err}"))?;
     ensure!(
         algorithm == Algorithm::Ed25519,
         "only Ed25519 signing keys are supported"

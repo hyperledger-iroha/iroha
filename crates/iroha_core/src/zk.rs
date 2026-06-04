@@ -13195,7 +13195,10 @@ mod offline_note_instance_guardrail_tests {
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = note_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -25280,7 +25283,10 @@ mod offline_note_real_prover_tests {
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = note_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),

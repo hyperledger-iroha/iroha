@@ -88,6 +88,24 @@ fn test_signature_verification_different_keys<
         .expect_err("Signature verification for wrong public key should fail");
 }
 
+fn test_aggregate_rejects_duplicate_public_key_content<C: BlsConfiguration>() {
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let msg = b"aggregate-duplicate-pk-content";
+    let sig = BlsImpl::<C>::sign(msg, &sk).expect("BLS sign");
+    let pk_bytes = pk.to_bytes();
+    let pk_bytes_clone = pk_bytes.clone();
+    let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+    let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes_clone.as_slice()];
+
+    BlsImpl::<C>::verify_aggregate_same_message(msg, &signatures, &public_keys)
+        .expect_err("duplicate public-key bytes must reject same-message aggregate");
+
+    let aggregate = BlsImpl::<C>::aggregate_signatures(&[sig.as_slice(), sig.as_slice()])
+        .expect("aggregate signatures");
+    BlsImpl::<C>::verify_preaggregated_same_message(msg, &aggregate, &public_keys)
+        .expect_err("duplicate public-key bytes must reject preaggregated verification");
+}
+
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 fn test_fallible_paths_reject_corrupted_stored_secret<C: BlsConfiguration>() {
     let key =
@@ -218,6 +236,11 @@ mod normal {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_duplicate_public_key_content() {
+        test_aggregate_rejects_duplicate_public_key_content::<NormalConfiguration>();
     }
 
     #[test]
@@ -525,6 +548,11 @@ mod small {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_duplicate_public_key_content() {
+        test_aggregate_rejects_duplicate_public_key_content::<SmallConfiguration>();
     }
 
     #[test]

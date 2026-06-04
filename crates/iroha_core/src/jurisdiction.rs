@@ -268,21 +268,19 @@ impl JdgCommitteeRecord {
                 threshold: self.threshold,
             });
         }
-        let dedup: BTreeSet<_> = self
-            .members
-            .iter()
-            .map(|member| {
-                let (alg, bytes) = member.public_key.to_bytes();
-                (alg, bytes)
-            })
-            .collect();
-        if dedup.len() != self.members.len() {
-            return Err(JdgCommitteeError::DuplicateMember {
-                committee_id: self.committee_id,
-            });
-        }
+        let mut dedup = BTreeSet::new();
         for (index, member) in self.members.iter().enumerate() {
-            let (algorithm, _) = member.public_key.to_bytes();
+            let (algorithm, bytes) = member.public_key.try_to_bytes().map_err(|_| {
+                JdgCommitteeError::MalformedMemberPublicKey {
+                    committee_id: self.committee_id,
+                    index,
+                }
+            })?;
+            if !dedup.insert((algorithm, bytes)) {
+                return Err(JdgCommitteeError::DuplicateMember {
+                    committee_id: self.committee_id,
+                });
+            }
             if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
                 let Some(pop) = member.pop.as_ref() else {
                     return Err(JdgCommitteeError::MissingMemberPop {
@@ -567,17 +565,21 @@ impl JdgAttestationGuard {
         attestation: &JdgAttestation,
         committee: &JdgCommitteeRecord,
     ) -> Result<(), JdgAttestationGuardError> {
-        let committee_members: BTreeSet<_> = committee
-            .members
-            .iter()
-            .map(|member| {
-                let (alg, bytes) = member.public_key.to_bytes();
-                (alg, bytes)
-            })
-            .collect();
-        for signer in &attestation.signer_set {
-            let (alg, bytes) = signer.to_bytes();
-            if !committee_members.contains(&(alg, bytes)) {
+        let mut committee_members = BTreeSet::new();
+        for (index, member) in committee.members.iter().enumerate() {
+            let (algorithm, bytes) = member.public_key.try_to_bytes().map_err(|_| {
+                JdgAttestationGuardError::MalformedCommitteeMemberPublicKey {
+                    committee_id: committee.committee_id,
+                    index,
+                }
+            })?;
+            committee_members.insert((algorithm, bytes.to_vec()));
+        }
+        for (index, signer) in attestation.signer_set.iter().enumerate() {
+            let (algorithm, bytes) = signer
+                .try_to_bytes()
+                .map_err(|_| JdgAttestationGuardError::MalformedSignerPublicKey { index })?;
+            if !committee_members.contains(&(algorithm, bytes.to_vec())) {
                 return Err(JdgAttestationGuardError::UnknownSigner {
                     committee_id: committee.committee_id,
                 });
@@ -663,9 +665,14 @@ impl JdgAttestationGuard {
                         });
                     }
                     let mut pop_map: BTreeMap<(Algorithm, Vec<u8>), Vec<u8>> = BTreeMap::new();
-                    for member in &committee.members {
+                    for (index, member) in committee.members.iter().enumerate() {
                         if let Some(pop) = member.pop.as_ref() {
-                            let (alg, bytes) = member.public_key.to_bytes();
+                            let (alg, bytes) = member.public_key.try_to_bytes().map_err(|_| {
+                                JdgAttestationGuardError::MalformedCommitteeMemberPublicKey {
+                                    committee_id: committee.committee_id,
+                                    index,
+                                }
+                            })?;
                             pop_map.insert((alg, bytes.to_vec()), pop.clone());
                         }
                     }
@@ -678,7 +685,11 @@ impl JdgAttestationGuard {
                                 actual: attestation.signer_set.len(),
                             },
                         )?;
-                        let (algorithm, bytes) = signer.to_bytes();
+                        let (algorithm, bytes) = signer.try_to_bytes().map_err(|_| {
+                            JdgAttestationGuardError::MalformedSignerPublicKey {
+                                index: *signer_index,
+                            }
+                        })?;
                         if algorithm != Algorithm::BlsNormal {
                             return Err(JdgAttestationGuardError::SignatureInvalid { index: 0 });
                         }
@@ -861,6 +872,14 @@ pub enum JdgCommitteeError {
         /// Committee identifier.
         committee_id: JdgCommitteeId,
     },
+    /// Committee member public key is malformed.
+    #[error("committee {committee_id:?} member {index} public key is malformed")]
+    MalformedMemberPublicKey {
+        /// Committee identifier.
+        committee_id: JdgCommitteeId,
+        /// Member index.
+        index: usize,
+    },
     /// BLS member missing proof-of-possession.
     #[error("committee {committee_id:?} member {index} missing PoP for {algorithm:?}")]
     MissingMemberPop {
@@ -1003,6 +1022,20 @@ pub enum JdgAttestationGuardError {
     UnknownSigner {
         /// Committee identifier.
         committee_id: JdgCommitteeId,
+    },
+    /// Configured committee member public key is malformed.
+    #[error("committee {committee_id:?} member {index} public key is malformed")]
+    MalformedCommitteeMemberPublicKey {
+        /// Committee identifier.
+        committee_id: JdgCommitteeId,
+        /// Member index.
+        index: usize,
+    },
+    /// Attestation signer public key is malformed.
+    #[error("attestation signer {index} public key is malformed")]
+    MalformedSignerPublicKey {
+        /// Signer index.
+        index: usize,
     },
     /// Signature count does not match signer bitmap/cardinality.
     #[error("signature count mismatch: expected {expected}, got {actual}")]
@@ -1462,6 +1495,26 @@ mod tests {
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs).expect("aggregate");
         attestation.signature.signatures = vec![aggregated];
         attestation
+    }
+
+    #[test]
+    fn committee_manifest_rejects_duplicate_member_after_checked_key_extraction() {
+        let dataspace = DataSpaceId::new(8);
+        let (mut committee, _signers) = committee_with_members(dataspace, 1, 10, 1, 2);
+        committee.members[1].public_key = committee.members[0].public_key.clone();
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+
+        let err = JdgCommitteeSchedule::from_manifests(vec![manifest], 1)
+            .expect_err("duplicate committee member should be rejected");
+
+        assert!(matches!(
+            err,
+            JdgCommitteeError::DuplicateMember { committee_id }
+                if committee_id == committee.committee_id
+        ));
     }
 
     #[test]

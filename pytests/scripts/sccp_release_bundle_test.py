@@ -124,6 +124,15 @@ def load_report_module():
     return module
 
 
+def active_evm_live_chain_id(report):
+    """Return the decimal EVM chain id required by the active launch lane."""
+
+    return {
+        "eth": "1",
+        "bsc": "56",
+    }.get(report.ACTIVE_LAUNCH_CHAIN)
+
+
 def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     """Write a complete synthetic all-lanes evidence bundle."""
 
@@ -131,14 +140,15 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     evidence_module = helpers.load_evidence_module()
     report = load_report_module()
     records = helpers.complete_bundle(evidence_module)
-    if report.ACTIVE_LAUNCH_CHAIN == "bsc":
+    evm_chain_id = active_evm_live_chain_id(report)
+    if evm_chain_id is not None:
         for record in records["sccp_source_verifier_materials"]:
             if record.get("source_domain") == report.ACTIVE_LAUNCH_DOMAIN:
-                record["_comment_evm_source_rpc_chain_id"] = "56"
+                record["_comment_evm_source_rpc_chain_id"] = evm_chain_id
                 record["_comment_evm_source_block_tag"] = "finalized"
         for record in records["sccp_destination_rollouts"]:
             if record.get("domain") == report.ACTIVE_LAUNCH_DOMAIN:
-                record["_comment_evm_rpc_chain_id"] = "56"
+                record["_comment_evm_rpc_chain_id"] = evm_chain_id
                 record["_comment_evm_block_tag"] = "finalized"
     evidence = tmp_path / "complete.toml"
     payload = helpers.render_records(records)
@@ -146,17 +156,17 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, payload
 
 
-def test_release_bundle_active_launch_policy_is_bsc_mainnet() -> None:
-    """Readiness and verifier constants must pin the BSC launch lane."""
+def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
+    """Readiness and verifier constants must pin the Ethereum launch lane."""
 
     report = load_report_module()
     verifier = load_verify_helpers()
 
     for module in (report, verifier):
-        assert module.ACTIVE_LAUNCH_DOMAIN == 2
-        assert module.ACTIVE_LAUNCH_CHAIN == "bsc"
-        assert module.ACTIVE_LAUNCH_POLICY == "BscMainnetLane"
-        assert module.ACTIVE_LAUNCH_DISPLAY == "BSC mainnet"
+        assert module.ACTIVE_LAUNCH_DOMAIN == 1
+        assert module.ACTIVE_LAUNCH_CHAIN == "eth"
+        assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
+        assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
 def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
@@ -206,12 +216,13 @@ def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
             for record in records[section]
             if record.get(domain_key) == active_domain
         ]
-    if report.ACTIVE_LAUNCH_CHAIN == "bsc":
+    evm_chain_id = active_evm_live_chain_id(report)
+    if evm_chain_id is not None:
         for record in records["sccp_source_verifier_materials"]:
-            record["_comment_evm_source_rpc_chain_id"] = "56"
+            record["_comment_evm_source_rpc_chain_id"] = evm_chain_id
             record["_comment_evm_source_block_tag"] = "finalized"
         for record in records["sccp_destination_rollouts"]:
-            record["_comment_evm_rpc_chain_id"] = "56"
+            record["_comment_evm_rpc_chain_id"] = evm_chain_id
             record["_comment_evm_block_tag"] = "finalized"
     evidence = tmp_path / f"{report.ACTIVE_LAUNCH_CHAIN}-launch.toml"
     payload = helpers.render_records(records)
@@ -3134,16 +3145,9 @@ def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift(
     ) in verified.stdout
     assert (
         "readiness report release_checklist does not match embedded evidence"
-        in verified.stdout
+        not in verified.stdout
     )
-    assert (
-        "all-lanes summary active Ethereum mainnet release checklist is not ready"
-        in verified.stdout
-    )
-    assert (
-        "manifest release_checklist_ready does not match all-lanes summary "
-        "active Ethereum mainnet release checklist"
-    ) in verified.stdout
+    assert "active BSC mainnet release checklist" not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_destination_binding_field_shape(
@@ -7255,6 +7259,8 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
                 "route_canary_finalized_block_number",
                 'params[0] == "finalized"',
                 '"receipt_block_finalized"] is True',
+                '"receipt_block_finalized"] is False',
+                "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
             ),
         ),
     )
@@ -7279,6 +7285,49 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
         "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
         in error
         and 'missing marker: "receipt_block_finalized"] is True' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
+        in error
+        and 'missing marker: "receipt_block_finalized"] is False' in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH contract smoke bound to chain id 1."""
+
+    verifier = load_verify_helpers()
+    assert verifier._contract_smoke_eth_mainnet_network_id_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_message_bridge_smoke.js"
+    sparse_test.write_text(
+        "networkId = ethMainnetNetworkId\n",
+        encoding="utf-8",
+    )
+    verifier.CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
+        (
+            sparse_test,
+            (
+                "networkId = ethMainnetNetworkId",
+                "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        and "missing marker: const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);"
+        in error
         for error in verified["errors"]
     )
 
@@ -7485,12 +7534,22 @@ def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests(
     )
     sparse_python = tmp_path / "sccp_test.py"
     sparse_python.write_text("called_with_hash_only\n", encoding="utf-8")
+    sparse_kotlin = tmp_path / "EvmSccpProverTest.kt"
+    sparse_kotlin.write_text("BscMainnetReceiptProof(\n", encoding="utf-8")
+    sparse_swift = tmp_path / "SccpSolanaProverTests.swift"
+    sparse_swift.write_text("BscMainnetReceiptProof(\n", encoding="utf-8")
+    sparse_java = tmp_path / "EvmSccpProverTests.java"
+    sparse_java.write_text("BscMainnetSccp.ReceiptProof\n", encoding="utf-8")
+    sparse_dotnet = tmp_path / "SccpBscMainnetTests.cs"
+    sparse_dotnet.write_text("BscMainnetReceiptProof\n", encoding="utf-8")
     verifier.BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
         (
             sparse_js,
             (
                 "BscMainnetSccp requires full receipt proof evidence before inbound proving",
                 "callbackEvidence.receiptProof.blockHash",
+                "callbackEvidence.sourceEventDigest",
+                "malformedSourceLogCases",
             ),
         ),
         (
@@ -7498,6 +7557,45 @@ def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests(
             (
                 "called_with_hash_only",
                 'evidence["receipt_proof"]["block_hash"]',
+                'evidence["source_event_digest"]',
+                "malformed_source_log_cases",
+            ),
+        ),
+        (
+            sparse_kotlin,
+            (
+                "BscMainnetReceiptProof(",
+                "calledWithHashOnly",
+                "calledWithoutSourceEvent",
+                "extraTopicBscSourceLog",
+            ),
+        ),
+        (
+            sparse_swift,
+            (
+                "BscMainnetReceiptProof(",
+                "XCTAssertFalse(calledWithHashOnly)",
+                "missingSourceEventCallbackCalled",
+                "extraTopicBscSourceReceipt",
+            ),
+        ),
+        (
+            sparse_java,
+            (
+                "BscMainnetSccp.ReceiptProof",
+                "BSC inbound proving must reject hash-only receipt proof evidence",
+                "receipt source event validation",
+                "extraTopicBscSourceLog",
+            ),
+        ),
+        (
+            sparse_dotnet,
+            (
+                "BscMainnetReceiptProof",
+                "BscSccpReceiptProofHash",
+                "Assert.Equal(0, hashOnlyProver.Calls)",
+                "Assert.Equal(0, noSourceEventProver.Calls)",
+                "extraTopicBscSourceReceipt",
             ),
         ),
     )
@@ -7516,6 +7614,84 @@ def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests(
     assert any(
         "BSC mainnet inbound adversarial SDK test inventory" in error
         and 'missing marker: evidence["receipt_proof"]["block_hash"]' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: calledWithHashOnly" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: extraTopicBscSourceLog" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: XCTAssertFalse(calledWithHashOnly)" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: extraTopicBscSourceReceipt" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and (
+            "missing marker: BSC inbound proving must reject hash-only receipt proof evidence"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: Assert.Equal(0, hashOnlyProver.Calls)" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: BscSccpReceiptProofHash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: callbackEvidence.sourceEventDigest" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: malformedSourceLogCases" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and 'missing marker: evidence["source_event_digest"]' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: malformed_source_log_cases" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: calledWithoutSourceEvent" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: missingSourceEventCallbackCalled" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: receipt source event validation" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: Assert.Equal(0, noSourceEventProver.Calls)" in error
         for error in verified["errors"]
     )
 
@@ -7731,7 +7907,7 @@ def test_release_bundle_verifier_guards_ethereum_source_event_missing_context_sd
 def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tests(
     tmp_path: Path,
 ) -> None:
-    """Published bundle verification must keep hash-only ETH evidence tests."""
+    """Published bundle verification must keep hash-only and sync-aggregate ETH tests."""
 
     verifier = load_verify_helpers()
     assert verifier._ethereum_inbound_adversarial_sdk_test_inventory_errors() == []
@@ -7756,6 +7932,8 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
                 "receiptProofHash: evmSccpReceiptProofHash(sampleReceiptProof)",
                 "/requires receiptProof/u",
                 "/requires receipt source event validation/u",
+                "SAMPLE_SYNC_COMMITTEE_BITS",
+                "/beaconFinality\\.syncCommitteeBits/u",
             ),
         ),
         (
@@ -7768,6 +7946,7 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
                 'XCTFail("prover callback must not run without receiptProof")',
                 'XCTFail("prover callback must not run without source event validation")',
                 'invalidPublicInputs("receiptProof")',
+                'invalidPublicInputs("beaconFinality.syncCommitteeBits")',
             ),
         ),
         (
@@ -7779,6 +7958,7 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
                 'receiptProofHash + " "',
                 "val missingReceiptProof = assertFailsWith<IllegalArgumentException>",
                 'missingReceiptProof.message?.contains("receiptProof")',
+                'missingSyncBits.message?.contains("beaconFinality.syncCommitteeBits")',
             ),
         ),
         (
@@ -7790,6 +7970,7 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
                 'receiptProofHash + " "',
                 "Ethereum inbound proving must reject hash-only receipt proof evidence",
                 "Ethereum inbound prover must not run without receipt proof material",
+                "Ethereum inbound proving must reject missing sync-committee bits",
             ),
         ),
         (
@@ -7803,6 +7984,7 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
                 'Assert.Contains("receiptProof", missingReceiptProof.Message)',
                 "unanchoredReceiptProofProver",
                 'Assert.Contains("receipt source event validation", unanchoredReceiptProof.Message)',
+                'Assert.Contains("beaconFinality.syncCommitteeBits", missingSyncBits.Message)',
             ),
         ),
     )
@@ -7821,6 +8003,17 @@ def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tes
     assert any(
         "Ethereum mainnet inbound adversarial SDK test inventory" in error
         and "missing marker: hash-only receiptProofHash evidence" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: /beaconFinality\\.syncCommitteeBits/u" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: Ethereum inbound proving must reject missing sync-committee bits"
+        in error
         for error in verified["errors"]
     )
 
@@ -8240,12 +8433,22 @@ def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_t
 
     sparse_source = tmp_path / "sccp.js"
     sparse_source.write_text("/eth/v2/beacon/blocks/finalized\n", encoding="utf-8")
+    sparse_declarations = tmp_path / "index.d.ts"
+    sparse_declarations.write_text("syncCommitteeBits?: string;\n", encoding="utf-8")
     verifier.ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
         (
             sparse_source,
             (
                 "/eth/v2/beacon/blocks/finalized",
+                "/eth/v1/beacon/light_client/finality_update",
                 "execution payload receipts_root must match block.receiptsRoot",
+            ),
+        ),
+        (
+            sparse_declarations,
+            (
+                "syncCommitteeBits?: string;",
+                "readonly syncCommitteeBits?: string;",
             ),
         ),
     )
@@ -8261,6 +8464,18 @@ def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_t
         in error
         and "missing marker: execution payload receipts_root must match block.receiptsRoot"
         in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+        in error
+        and "missing marker: /eth/v1/beacon/light_client/finality_update" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+        in error
+        and "missing marker: readonly syncCommitteeBits?: string;" in error
         for error in verified["errors"]
     )
 

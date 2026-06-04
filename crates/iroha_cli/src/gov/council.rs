@@ -283,7 +283,9 @@ impl GenVrfArgs {
             if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_bytes, &input)
             {
-                let (_alg, pk_payload) = public_key.to_bytes();
+                let (_alg, pk_payload) = public_key
+                    .try_to_bytes()
+                    .wrap_err("derived BLS normal public key is malformed")?;
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG2(bytes) => bytes,
                     _ => unreachable!("Normal uses SigInG2"),
@@ -321,7 +323,9 @@ impl GenVrfArgs {
             if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_small_with_chain(&sk, chain_bytes, &input)
             {
-                let (_alg, pk_payload) = public_key.to_bytes();
+                let (_alg, pk_payload) = public_key
+                    .try_to_bytes()
+                    .wrap_err("derived BLS small public key is malformed")?;
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG1(bytes) => bytes,
                     _ => unreachable!("Small uses SigInG1"),

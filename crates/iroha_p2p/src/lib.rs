@@ -148,6 +148,8 @@ pub enum Error {
     },
     /// Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)
     HandshakeMessageTooLarge,
+    /// Local peer public key is malformed during handshake
+    HandshakePublicKeyMalformed(#[source] iroha_crypto::error::ParseError),
     /// `SoraNet` handshake negotiation failed.
     HandshakeSoranet(String),
     /// Noise handshake negotiation failed.

@@ -86,11 +86,19 @@ pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::B
         .stack_size(sumeragi_stack_size_bytes())
 }
 
+pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
+    public_key
+        .try_algorithm()
+        .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+}
+
 #[cfg(test)]
 mod thread_builder_tests {
     use std::sync::mpsc;
 
-    use super::sumeragi_thread_builder;
+    use iroha_crypto::KeyPair;
+
+    use super::{Algorithm, is_bls_normal_public_key, sumeragi_thread_builder};
 
     #[test]
     fn sumeragi_thread_builder_applies_requested_thread_name() {
@@ -108,6 +116,15 @@ mod thread_builder_tests {
         join.join().expect("join test thread");
         assert_eq!(observed, "sumeragi-thread-builder-test");
     }
+
+    #[test]
+    fn bls_normal_public_key_check_uses_checked_algorithm_access() {
+        let bls_key = KeyPair::from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal);
+        let ed25519_key = KeyPair::from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519);
+
+        assert!(is_bls_normal_public_key(bls_key.public_key()));
+        assert!(!is_bls_normal_public_key(ed25519_key.public_key()));
+    }
 }
 
 /// Build the initial validator topology from trusted peers.
@@ -121,7 +138,7 @@ pub fn filter_validators_from_trusted(
     let iter = std::iter::once(tp.myself.clone()).chain(tp.others.clone());
     for peer in iter {
         let pk = peer.id().public_key();
-        if pk.algorithm() != Algorithm::BlsNormal {
+        if !is_bls_normal_public_key(pk) {
             iroha_logger::warn!(?pk, "excluding peer: validator identity must be BLS-normal");
             continue;
         }

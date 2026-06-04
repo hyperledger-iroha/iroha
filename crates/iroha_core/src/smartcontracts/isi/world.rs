@@ -490,7 +490,11 @@ pub mod isi {
         allowed_algorithms.sort();
         allowed_algorithms.dedup();
 
-        let algo = record.public_key.algorithm();
+        let algo = record.public_key.try_algorithm().map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("consensus key public key is malformed: {err}"),
+            ))
+        })?;
         if !sumeragi.key_allowed_algorithms.contains(&algo) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(format!(
@@ -12631,7 +12635,7 @@ pub mod isi {
             }
             let peer_id = self.peer.clone();
             // Enforce BLS-normal only for consensus peers.
-            if peer_id.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+            if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
                 crate::sumeragi::status::record_peer_key_policy_reject(
                     PeerKeyPolicyRejectReason::DisallowedAlgorithm,
                 );

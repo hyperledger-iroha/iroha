@@ -80,7 +80,11 @@ impl<T: Write> RunArgs<T> for Args {
         let key_pair = self.clone().key_pair()?;
         let exposed_private_key = ExposedPrivateKey(key_pair.private_key().clone());
         let pop_hex = if self.pop {
-            if key_pair.public_key().algorithm() != Algorithm::BlsNormal {
+            let public_algorithm = key_pair
+                .public_key()
+                .try_algorithm()
+                .wrap_err("generated public key is malformed")?;
+            if public_algorithm != Algorithm::BlsNormal {
                 color_eyre::eyre::bail!(
                     "--pop requires --algorithm bls_normal (validator consensus key)"
                 );
@@ -101,8 +105,13 @@ impl<T: Write> RunArgs<T> for Args {
                     #[norito(skip_serializing_if = "Option::is_none")]
                     pop_hex: Option<String>,
                 }
-                let pk_str = key_pair.public_key().to_prefixed_string();
-                let sk_str = exposed_private_key.to_prefixed_string();
+                let pk_str = key_pair
+                    .public_key()
+                    .try_to_prefixed_string()
+                    .wrap_err("generated public key is malformed")?;
+                let sk_str = exposed_private_key
+                    .try_to_prefixed_string()
+                    .wrap_err("generated private key is malformed")?;
                 let payload = KeyPairStrings {
                     public_key: pk_str,
                     private_key: sk_str,
@@ -188,12 +197,12 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, io::BufWriter};
 
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use clap::ValueEnum;
 
-    use super::{Algorithm, AlgorithmArg};
+    use super::{Algorithm, AlgorithmArg, Args, ExposedPrivateKey, RunArgs};
 
     #[test]
     fn algorithm_arg_displays_as_algorithm() {
@@ -241,6 +250,47 @@ mod tests {
         assert_eq!(
             variants, expected,
             "AlgorithmArg::value_variants is out of sync with Algorithm"
+        );
+    }
+
+    #[test]
+    fn json_prefixed_output_uses_checked_formatters() {
+        let args = Args {
+            algorithm: AlgorithmArg(Algorithm::Ed25519),
+            private_key: None,
+            seed: Some("checked-formatters".to_owned()),
+            json: true,
+            json_mh_prefixed: true,
+            compact: false,
+            pop: false,
+        };
+        let mut writer = BufWriter::new(Vec::new());
+
+        args.clone()
+            .run(&mut writer)
+            .expect("generate keypair JSON");
+        let output = String::from_utf8(writer.into_inner().expect("writer flush")).expect("utf8");
+        let value: norito::json::Value = norito::json::from_str(&output).expect("json output");
+        let keypair = args.key_pair().expect("expected keypair");
+        let expected_public = keypair
+            .public_key()
+            .try_to_prefixed_string()
+            .expect("checked public formatter");
+        let expected_private = ExposedPrivateKey(keypair.private_key().clone())
+            .try_to_prefixed_string()
+            .expect("checked private formatter");
+
+        assert_eq!(
+            value
+                .get("public_key")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_public.as_str())
+        );
+        assert_eq!(
+            value
+                .get("private_key")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_private.as_str())
         );
     }
 }
