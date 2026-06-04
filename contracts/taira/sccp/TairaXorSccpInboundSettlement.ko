@@ -1,0 +1,10 @@
+// TAIRA-side SCCP XOR inbound settlement contract for the taira_tron_xor route.
+//
+// Torii verifies the SCCP message proof, derives this entrypoint payload from
+// the canonical transfer bundle, and enforces proof replay protection before
+// appending this contract call to the settlement transaction.
+seiyaku TairaXorSccpInboundSettlement {
+  kotoage fn finalize_inbound() permission(AssetManager) {
+    require(true);
+  }
+}

@@ -18574,7 +18574,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
         payload_hash: bundle.commitment.payload_hash,
         target_domain: SCCP_DOMAIN_SORA,
         commitment_root: bundle.commitment_root,
-        finality_height: transfer.nonce.max(1),
+        finality_height: transfer.nonce.saturating_add(1),
         finality_block_hash,
     })
 }
@@ -20122,6 +20122,27 @@ pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
     out
 }
 
+pub fn decode_canonical_transfer_payload_bytes(payload_bytes: &[u8]) -> Option<TransferPayloadV1> {
+    let mut cursor = PayloadCursor::new(payload_bytes);
+    let payload = TransferPayloadV1 {
+        version: cursor.take_u8()?,
+        source_domain: cursor.take_u32()?,
+        dest_domain: cursor.take_u32()?,
+        nonce: cursor.take_u64()?,
+        asset_home_domain: cursor.take_u32()?,
+        asset_id_codec: cursor.take_u8()?,
+        asset_id: cursor.take_vec()?,
+        amount: cursor.take_u128()?,
+        sender_codec: cursor.take_u8()?,
+        sender: cursor.take_vec()?,
+        recipient_codec: cursor.take_u8()?,
+        recipient: cursor.take_vec()?,
+        route_id_codec: cursor.take_u8()?,
+        route_id: cursor.take_vec()?,
+    };
+    cursor.is_finished().then_some(payload)
+}
+
 struct PayloadCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -20198,22 +20219,11 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
                 route_id: cursor.take_vec()?,
             })
         }
-        SccpPayloadV1::TRANSFER_DISCRIMINANT => SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: cursor.take_u8()?,
-            source_domain: cursor.take_u32()?,
-            dest_domain: cursor.take_u32()?,
-            nonce: cursor.take_u64()?,
-            asset_home_domain: cursor.take_u32()?,
-            asset_id_codec: cursor.take_u8()?,
-            asset_id: cursor.take_vec()?,
-            amount: cursor.take_u128()?,
-            sender_codec: cursor.take_u8()?,
-            sender: cursor.take_vec()?,
-            recipient_codec: cursor.take_u8()?,
-            recipient: cursor.take_vec()?,
-            route_id_codec: cursor.take_u8()?,
-            route_id: cursor.take_vec()?,
-        }),
+        SccpPayloadV1::TRANSFER_DISCRIMINANT => {
+            let payload = decode_canonical_transfer_payload_bytes(&cursor.bytes[cursor.offset..])?;
+            cursor.offset = cursor.bytes.len();
+            SccpPayloadV1::Transfer(payload)
+        }
         SccpPayloadV1::TOKEN_ADD_DISCRIMINANT => SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
             version: cursor.take_u8()?,
             target_domain: cursor.take_u32()?,
@@ -35263,7 +35273,38 @@ mod tests {
         assert_eq!(public_inputs.payload_hash, bundle.commitment.payload_hash);
         assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
         assert_eq!(public_inputs.commitment_root, bundle.commitment_root);
-        assert_eq!(public_inputs.finality_height, 42);
+        assert_eq!(public_inputs.finality_height, 43);
+
+        let zero_nonce_bundle = {
+            let mut bundle = bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 0;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let one_nonce_bundle = {
+            let mut bundle = zero_nonce_bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 1;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let zero_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&zero_nonce_bundle)
+                .expect("zero-nonce diagnostic public inputs");
+        let one_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&one_nonce_bundle)
+                .expect("one-nonce diagnostic public inputs");
+        assert_eq!(zero_nonce_inputs.finality_height, 1);
+        assert_eq!(one_nonce_inputs.finality_height, 2);
 
         let artifact = build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
             .expect("diagnostic artifact");
@@ -63355,6 +63396,33 @@ mod tests {
         let decoded = decode_canonical_sccp_payload_bytes(&encoded).expect("decode payload");
         assert_eq!(decoded, payload);
         assert!(verify_sccp_payload_structure(&decoded));
+    }
+
+    #[test]
+    fn canonical_transfer_payload_roundtrips_without_message_discriminant() {
+        let payload = TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TRON,
+            nonce: 11,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor".to_vec(),
+            amount: 1,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:alice".to_vec(),
+            recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"taira_tron_xor".to_vec(),
+        };
+        let encoded = canonical_transfer_payload_bytes(&payload);
+        let decoded =
+            decode_canonical_transfer_payload_bytes(&encoded).expect("decode transfer payload");
+        assert_eq!(decoded, payload);
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::Transfer(
+            decoded
+        )));
     }
 
     #[test]

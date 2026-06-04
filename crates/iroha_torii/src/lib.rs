@@ -3152,6 +3152,7 @@ fn route_timeout_for_path(path: &str) -> Duration {
         "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
             CONTRACT_DEPLOY_ROUTE_TIMEOUT
         }
+        "/v1/zk/ivm/derive" | "/v1/zk/ivm/prove" => ZK_IVM_ROUTE_TIMEOUT,
         "/v1/sorafs/storage/pin" => SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
         // Keep the outer HTTP timeout at least as large as the internal
         // read-fanout proxy budget so ingress does not emit a bare 408 while a
@@ -35033,6 +35034,7 @@ const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
 // otherwise healthy deployments every ten minutes.
 const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(60);
 const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
+const ZK_IVM_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
 const HEADER_API_TOKEN: &str = "x-api-token";
@@ -44543,6 +44545,16 @@ pub(crate) mod tests_runtime_handlers {
             super::route_timeout_for_path("/v1/sorafs/storage/pin"),
             SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
             "SoraFS storage-pin uploads need a publish-sized HTTP route budget"
+        );
+        assert_eq!(
+            super::route_timeout_for_path("/v1/zk/ivm/derive"),
+            ZK_IVM_ROUTE_TIMEOUT,
+            "ZK IVM derive can legitimately exceed the default route timeout"
+        );
+        assert_eq!(
+            super::route_timeout_for_path("/v1/zk/ivm/prove"),
+            ZK_IVM_ROUTE_TIMEOUT,
+            "ZK IVM prove can legitimately exceed the default route timeout"
         );
     }
 

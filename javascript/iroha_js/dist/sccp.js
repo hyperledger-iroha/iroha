@@ -26358,9 +26358,11 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   if (publicInputs.messageId !== expectedMessageId) {
     throw new TypeError("publicInputs.messageId must match canonicalPayloadBytes");
   }
-  const expectedPayloadHash = sccpPayloadHash(canonicalPayloadBytes);
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: parsedPayload }),
+  );
   if (publicInputs.payloadHash !== expectedPayloadHash) {
-    throw new TypeError("publicInputs.payloadHash must match canonicalPayloadBytes");
+    throw new TypeError("publicInputs.payloadHash must match canonical SCCP payload envelope");
   }
   const proofBytesTail = abiDynamicBytes(proofBytes, "proofBytes");
   const canonicalPayloadTail = abiDynamicBytes(canonicalPayloadBytes, "canonicalPayloadBytes");
@@ -26490,12 +26492,39 @@ const readTairaXorTronEventResult = (event) => {
     : requirePlainObject(result, "event.result");
 };
 
+const equalTairaXorTronEventAliasValue = (a, b) => {
+  if (a === b) return true;
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const aHex = a.replace(/^0x/iu, "").toLowerCase();
+  const bHex = b.replace(/^0x/iu, "").toLowerCase();
+  return /^[0-9a-f]+$/u.test(aHex) && aHex === bHex;
+};
+
+const readOptionalTairaXorTronEventAliasField = (value, label, ...names) => {
+  let selected = SCCP_OPTIONAL_FIELD_MISSING;
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(value, name)) {
+      const next = value[name];
+      if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
+        selected = next;
+      } else if (!equalTairaXorTronEventAliasValue(selected, next)) {
+        throw new TypeError(`${label} must not conflict between aliases`);
+      }
+    }
+  }
+  return selected;
+};
+
 const readTairaXorTronEventField = (event, label, ...names) => {
   const result = readTairaXorTronEventResult(event);
   const resultValue = result
-    ? strictOptionalResultField(result, label, ...names)
+    ? readOptionalTairaXorTronEventAliasField(result, label, ...names)
     : SCCP_OPTIONAL_FIELD_MISSING;
-  const eventValue = strictOptionalResultField(event, label, ...names);
+  const eventValue = readOptionalTairaXorTronEventAliasField(
+    event,
+    label,
+    ...names,
+  );
   if (
     resultValue !== SCCP_OPTIONAL_FIELD_MISSING &&
     eventValue !== SCCP_OPTIONAL_FIELD_MISSING &&
@@ -26545,14 +26574,21 @@ const normalizeTairaXorTronEventUint = (value, label, max, typeLabel) => {
 };
 
 const decodeTairaXorEventRecipientText = (value, label) => {
-  if (typeof value === "string" && value.startsWith("0x")) {
+  if (typeof value === "string") {
+    const hexText = value.startsWith("0x") ? value.slice(2) : value;
+    if (value.startsWith("0x") || /^[0-9a-fA-F]+$/u.test(hexText)) {
+      if (hexText.length % 2 !== 0) {
+        throw new TypeError(`${label} must be hex-encoded bytes`);
+      }
+      return normalizeCanonicalTairaAccountId(
+        textDecoder.decode(toBytes(`0x${hexText}`, label)),
+        label,
+      );
+    }
     return normalizeCanonicalTairaAccountId(
-      textDecoder.decode(toBytes(value, label)),
+      value,
       label,
     );
-  }
-  if (typeof value === "string") {
-    return normalizeCanonicalTairaAccountId(value, label);
   }
   return normalizeCanonicalTairaAccountId(
     textDecoder.decode(toBytes(value, label)),
@@ -27076,7 +27112,9 @@ export function bindTairaXorTronToTairaSourceProofPackage(input) {
     amount,
     nonce: transferNonce,
   });
-  const expectedPayloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(expectedPayload));
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: expectedPayload }),
+  );
   if (commitmentPayloadHash !== expectedPayloadHash) {
     throw new TypeError("messageBundle commitment payload hash must match the TAIRA XOR payload");
   }

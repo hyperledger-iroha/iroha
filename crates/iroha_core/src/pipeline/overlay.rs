@@ -490,7 +490,7 @@ fn decode_taira_tron_xor_record(
         return Ok(None);
     };
 
-    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)
+    let payload = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
         .ok_or_else(|| sccp_admission_error("record payload bytes could not be decoded"))?;
     if !iroha_sccp::verify_sccp_payload_structure(&payload) {
         return Err(sccp_admission_error(
@@ -2498,7 +2498,7 @@ mod tests {
         .into()
     }
 
-    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
+    fn taira_tron_xor_record_payload(sender: &AccountId, amount: u128) -> Vec<u8> {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -2515,8 +2515,22 @@ mod tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID.to_vec(),
         });
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
+            unreachable!("TAIRA XOR test payload is always a transfer");
+        };
+        iroha_sccp::canonical_transfer_payload_bytes(&transfer)
+    }
+
+    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
+        iroha_data_model::isi::bridge::RecordSccpMessage::new(taira_tron_xor_record_payload(
+            sender, amount,
+        ))
+        .into()
+    }
+
+    fn taira_tron_xor_hex_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
         iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            hex::encode(taira_tron_xor_record_payload(sender, amount)).into_bytes(),
         )
         .into()
     }
@@ -2676,6 +2690,22 @@ mod tests {
 
         validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
             .expect("matching XOR burn must satisfy TAIRA -> TRON record");
+    }
+
+    #[test]
+    fn taira_tron_xor_record_accepts_hex_encoded_payload_bytes() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_hex_record_instruction(&authority, 10),
+        ];
+
+        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect("hex-encoded XOR record payload must satisfy TAIRA -> TRON record");
     }
 
     #[test]
@@ -4338,6 +4368,92 @@ mod tests {
         assert_eq!(
             proved.gas_policy_commitment, expected_gas_policy_commitment,
             "gas policy commitment should match deterministic replay"
+        );
+    }
+
+    #[test]
+    fn derive_ivm_proved_payload_dispatches_contract_entrypoint_metadata() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::VerifyingKeyRecord,
+            transaction::Executable,
+            zk::BackendTag,
+        };
+
+        let compiler =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                force_zk: true,
+                max_cycles: 10_000,
+                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            });
+        let (program, _manifest) = compiler
+            .compile_source_with_manifest(
+                r#"
+seiyaku DeriveDispatch {
+  kotoage fn main() -> int {
+    assert(false);
+    return 0;
+  }
+
+  kotoage fn open(amount: int) -> int {
+    assert(amount == 7);
+    return 0;
+  }
+}
+"#,
+            )
+            .expect("compile ZK-mode contract artifact");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(kp.public_key().clone());
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
+        let account = build_wonderland_account(&authority);
+        let world = crate::state::World::with([domain], [account], []);
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new("open"),
+        );
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new(norito::json!({ "amount": 7 })),
+        );
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(bytecode))
+            .sign(kp.private_key());
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            [0u8; 32],
+        );
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
+            .expect("derive proved payload using contract entrypoint metadata");
+
+        assert!(
+            proved.overlay.is_empty(),
+            "test entrypoint should execute without queuing instructions"
         );
     }
 
@@ -6264,13 +6380,23 @@ where
         .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_zk_trace_enabled(true);
+    let contract_call_context =
+        parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
 
     let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-        tx.authority().clone(),
-        Arc::clone(&accounts),
-    );
+    let mut host = if let Some(context) = contract_call_context.as_ref() {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            tx.authority().clone(),
+            Arc::clone(&accounts),
+            context.args.clone(),
+        )
+    } else {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+            tx.authority().clone(),
+            Arc::clone(&accounts),
+        )
+    };
     let amx_analysis =
         ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
             ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
@@ -6298,6 +6424,7 @@ where
 
     vm.set_gas_limit(gas_limit);
     vm.set_zk_trace_enabled(true);
+    apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
     run_vm_with_host(&mut vm, &mut host)?;
 
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());

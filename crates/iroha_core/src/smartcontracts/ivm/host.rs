@@ -7152,9 +7152,26 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Accept a Norito-encoded InstructionBox and enqueue it for later execution.
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
                 let p = vm.register(10);
-                let tlv = Self::decode_pointer_tlv(vm, p, PointerType::NoritoBytes)?;
+                let tlv = Self::decode_pointer_tlv(vm, p, PointerType::NoritoBytes)
+                    .or_else(|_| Self::decode_pointer_tlv(vm, p, PointerType::Blob))?;
+                let payload = if tlv.type_id == PointerType::Blob {
+                    std::str::from_utf8(tlv.payload)
+                        .ok()
+                        .and_then(|raw| {
+                            let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
+                            (!trimmed.is_empty()
+                                && trimmed.len() % 2 == 0
+                                && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()))
+                            .then(|| hex::decode(trimmed).ok())
+                            .flatten()
+                        })
+                        .map(std::borrow::Cow::Owned)
+                        .unwrap_or_else(|| std::borrow::Cow::Borrowed(tlv.payload))
+                } else {
+                    std::borrow::Cow::Borrowed(tlv.payload)
+                };
                 let ib: iroha_data_model::isi::InstructionBox =
-                    norito::decode_from_bytes(tlv.payload)
+                    norito::decode_from_bytes(payload.as_ref())
                         .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 // Only enqueue supported ZK ISIs via this vendor syscall for now.
                 // If present, attach the last verify envelope hash to the proof attachment
@@ -13038,6 +13055,49 @@ seiyaku AliasPayout {{
         let gas = host
             .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
             .expect("SCCP record instruction should be queued");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_accepts_blob_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::Blob, &payload);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued from Blob bytes");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_accepts_blob_hex_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let hex_payload = hex::encode(payload);
+        let ptr = store_tlv(&mut vm, PointerType::Blob, hex_payload.as_bytes());
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued from Blob hex bytes");
 
         assert_eq!(gas, crate::gas::meter_instruction(&instruction));
         assert_eq!(host.queued, vec![instruction]);

@@ -15,6 +15,6 @@ seiyaku TairaXorSccpBurnRecord {
     require(sender == authority());
 
     burn_asset(sender, settlement_asset, amount);
-    execute_instruction(record_instruction);
+    execute_instruction(norito_bytes(record_instruction));
   }
 }

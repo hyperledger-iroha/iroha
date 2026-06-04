@@ -13823,7 +13823,7 @@ function normalizeSccpCapabilitiesResponse(payload) {
       "sccp capabilities response.proof_manifest_path",
     ),
     burnRegistryBackend: requireNonEmptyString(
-      record.burn_registry_backend,
+      record.burn_registry_backend ?? record.legacy_burn_registry_backend,
       "sccp capabilities response.burn_registry_backend",
     ),
     proofSubmitPath: optionalString(
@@ -14019,8 +14019,36 @@ function normalizeSccpEvmWordPublicInputs(value, context) {
   };
 }
 
-function normalizeSccpPlatformSubmissionPayload(value, context) {
+function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
   const record = ensureRecord(value, context);
+  if (record.platform !== undefined || record.payload !== undefined) {
+    return record;
+  }
+  const enumKeys = Object.keys(record).filter((key) => record[key] !== undefined);
+  if (enumKeys.length !== 1) {
+    return record;
+  }
+  const platformByEnumKey = {
+    EvmContractCall: "evm_contract_call",
+    EvmGroth16ContractCall: "evm_contract_call",
+    TronContractCall: "tron_contract_call",
+    SolanaProgramInstruction: "solana_program_instruction",
+    TonInternalMessage: "ton_internal_message",
+    SubstrateRuntimeCall: "substrate_runtime_call",
+  };
+  const enumKey = enumKeys[0];
+  const platform = platformByEnumKey[enumKey];
+  if (!platform) {
+    return record;
+  }
+  return {
+    platform,
+    payload: record[enumKey],
+  };
+}
+
+function normalizeSccpPlatformSubmissionPayload(value, context) {
+  const record = normalizeSccpPlatformSubmissionPayloadRecord(value, context);
   const platform = requireNonEmptyString(record.platform, `${context}.platform`);
   const payload = ensureRecord(record.payload, `${context}.payload`);
   switch (platform) {
@@ -14279,6 +14307,10 @@ function normalizeSccpProofManifestSetResponse(payload) {
       "sccp proof manifests response.manifests",
     ).map((entry, index) =>
       normalizeSccpProofManifest(entry, `sccp proof manifests response.manifests[${index}]`),
+    ),
+    routes: parseRecordArray(
+      record.routes ?? [],
+      "sccp proof manifests response.routes",
     ),
   };
 }
@@ -26981,8 +27013,9 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       record.circuit_id,
       "registerVerifyingKey.circuitId",
     ),
-    public_inputs_schema_hash_hex: requireHexString(
-      record.public_inputs_schema_hash_hex ??
+    public_inputs_schema_hex: requireHexString(
+      record.public_inputs_schema_hex ??
+        record.public_inputs_schema_hash_hex ??
         record.public_inputs_schema_hash ??
         record.publicInputsSchemaHashHex ??
         record.publicInputsSchemaHash,
@@ -27019,8 +27052,9 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       record.circuit_id,
       "updateVerifyingKey.circuitId",
     ),
-    public_inputs_schema_hash_hex: requireHexString(
-      record.public_inputs_schema_hash_hex ??
+    public_inputs_schema_hex: requireHexString(
+      record.public_inputs_schema_hex ??
+        record.public_inputs_schema_hash_hex ??
         record.public_inputs_schema_hash ??
         record.publicInputsSchemaHashHex ??
         record.publicInputsSchemaHash,
