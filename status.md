@@ -103,7 +103,9 @@ Last updated: 2026-06-04
   allows local audits without final receipt archive verification, but
   production release evidence should omit both. Legacy `colr.007` diagnostics
   are similarly surfaced through `allow_legacy_colr007` and block production
-  readiness.
+  readiness. Evidence-level production policy flags must all be present as
+  booleans; omitted policy flags are malformed input instead of implicit
+  production defaults.
 - Added dependency-free unittest coverage for strict positive readiness,
   checked-in XSD gap blockers, diagnostic XSD warnings, XSD/evidence digest
   tampering, non-production evidence policies, provider/environment mismatch,
@@ -127,6 +129,8 @@ Last updated: 2026-06-04
   rechecks digest-correct archived summary mutations of `source.retrieved_at`,
   equal-form local-only child flags, equal-form bearer-token leakage, and
   unsupported child command flags in executed and plan-only canary summaries.
+  Readiness coverage now also rejects digest-correct evidence summaries that
+  omit required production policy flags.
 - Updated the TradFi ISO audit note, engineering backlog, and roadmap so the
   aggregate readiness gate is the final offline release artifact, the operator
   URL policy is explicit, `colr.012.001.05` is the active collateral
@@ -136,9 +140,10 @@ Last updated: 2026-06-04
   - `cargo fmt --all`
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
   - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test` (18 tests)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test` (11 tests)
   - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test` (28 tests)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (42 tests)
-  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (87 tests)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (88 tests)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p ivm colr012 --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_core default_catalog_exposes_inbound_lifecycle_messages --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_torii checked_in_colr012_fixture_records_collateral_context --lib -- --nocapture`
