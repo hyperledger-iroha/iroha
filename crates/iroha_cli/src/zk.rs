@@ -2044,7 +2044,7 @@ mod tests {
             ("groth16/bls12-377", BackendTag::Groth16Bls12377),
             ("penumbra-masp", BackendTag::Groth16Bls12377),
             ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("sis-with-hints", BackendTag::LatticePcsSis),
+            ("sis-with-hints", BackendTag::SisWithHints),
             ("post-quantum-masp", BackendTag::PqMaspStarkFri),
         ] {
             assert_eq!(
