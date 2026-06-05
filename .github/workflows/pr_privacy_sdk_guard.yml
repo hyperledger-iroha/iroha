@@ -218,10 +218,13 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity
           ci/check_privacy_sdk_guard.sh --negative-control-readme-boundary
           ci/check_privacy_sdk_guard.sh --negative-control-readme-api
           ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard
+          ci/check_privacy_sdk_guard.sh --negative-control-python-ffi-catalog-bytecode-guard
+          ci/check_privacy_sdk_guard.sh --negative-control-source-reference-obfuscated-ipv4-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-readme-error-code
           ci/check_privacy_sdk_guard.sh --negative-control-browser-error-code
           ci/check_privacy_sdk_guard.sh --negative-control-browser-dist-error-code
@@ -263,6 +266,7 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-override-script
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-resolver-script
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-major-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-python-bytecode-script
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-cache-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-setup-order-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-install-workflow

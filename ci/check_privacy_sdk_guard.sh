@@ -168,6 +168,10 @@ negative_control_commands = (
         "ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow",
     ),
     (
+        "negative-control inventory parity test negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity",
+    ),
+    (
         "README boundary negative control",
         "ci/check_privacy_sdk_guard.sh --negative-control-readme-boundary",
     ),
@@ -182,6 +186,14 @@ negative_control_commands = (
     (
         "Python catalog bytecode guard negative control",
         "ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard",
+    ),
+    (
+        "Python FFI catalog bytecode guard negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-python-ffi-catalog-bytecode-guard",
+    ),
+    (
+        "source-reference obfuscated IPv4 coverage negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-source-reference-obfuscated-ipv4-coverage",
     ),
     (
         "README error-code negative control",
@@ -346,6 +358,10 @@ negative_control_commands = (
     (
         "JavaScript SDK Node major script negative control",
         "ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-major-script",
+    ),
+    (
+        "JavaScript SDK Python bytecode script negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-python-bytecode-script",
     ),
     (
         "JavaScript SDK Node cache workflow negative control",
@@ -745,11 +761,6 @@ def check_zk_ace_proof_builder_coverage(errors):
         "Privacy catalog parity tests must invoke the Python ZK-ACE proof-builder coverage guard",
         errors,
     )
-    require(
-        'env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }' in js_parity,
-        "Privacy catalog parity tests must suppress Python bytecode when loading the Python catalog",
-        errors,
-    )
     for snippet in (
         "Python privacy capabilities must require both ZK-ACE proof-builder names",
         "Python catalog-named ZK-ACE proof builder must delegate to the native-backed builder",
@@ -806,6 +817,98 @@ def check_zk_ace_proof_builder_coverage(errors):
         require(
             snippet in python_tests,
             f"Python ZK-ACE proof-builder adversarial coverage is missing {snippet}",
+            errors,
+        )
+
+
+def check_python_catalog_loader_bytecode_guards(errors):
+    bytecode_env = 'env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }'
+    for relative in (
+        "javascript/iroha_js/test/privacyCatalogParity.test.js",
+        "javascript/iroha_js/test/privacyFfiContractParity.test.js",
+    ):
+        require(
+            bytecode_env in read(relative),
+            f"{relative} must suppress Python bytecode when loading the Python catalog",
+            errors,
+        )
+
+
+def check_negative_control_inventory_parity_test(errors):
+    ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
+    require(
+        "function negativeControlModesFromInventory(text, startMarker, endMarker)" in ffi_parity,
+        "Privacy FFI parity tests must keep the guard negative-control inventory parser",
+        errors,
+    )
+    require(
+        re.search(
+            r'const\s+privacySdkGuardNegativeControlModes\s*=\s*negativeControlModesFromInventory\(\s*guard,\s*"negative_control_commands = \(",\s*"required_paths = \(",\s*\);',
+            ffi_parity,
+        )
+        is not None,
+        "Privacy FFI parity tests must derive SDK guard negative-control modes from the guard inventory",
+        errors,
+    )
+    require(
+        re.search(
+            r'assertWorkflowRunsNegativeControlModes\(\s*workflow,\s*"ci/check_privacy_sdk_guard\.sh",\s*privacySdkGuardNegativeControlModes,\s*"Privacy SDK guard",\s*\);',
+            ffi_parity,
+        )
+        is not None,
+        "Privacy FFI parity tests must pass the dynamic SDK guard negative-control inventory to the workflow assertion",
+        errors,
+    )
+    for snippet in (
+        "for (const mode of privacySdkGuardNegativeControlModes)",
+        'guard.includes(`if mode == "${mode}":`)',
+        'new RegExp(`^\\\\s+ci/check_privacy_sdk_guard\\\\.sh ${mode}$`, "m")',
+    ):
+        require(
+            snippet in ffi_parity,
+            f"Privacy FFI parity tests are missing dynamic SDK guard negative-control assertion: {snippet}",
+            errors,
+        )
+
+
+def check_source_reference_obfuscated_ipv4_coverage(errors):
+    js_catalog_parity = read("javascript/iroha_js/test/privacyCatalogParity.test.js")
+    js_catalog = read("javascript/iroha_js/src/privacyAlgorithms.js")
+    python_tests = read("python/iroha_python/tests/privacy_catalog_test.py")
+    python_catalog = read("python/iroha_python/src/iroha_python/privacy_catalog.py")
+
+    require(
+        "function isNonGlobalIpv4Address(hostname)" in js_catalog,
+        "JS privacy catalog must keep source-reference IPv4 private-range validation",
+        errors,
+    )
+    require(
+        "_parse_obfuscated_ipv4_source_reference_address" in python_catalog,
+        "Python privacy catalog must keep obfuscated IPv4 source-reference validation",
+        errors,
+    )
+    for url in (
+        "https://2130706433/source",
+        "https://0x7f000001/source",
+        "https://017700000001/source",
+        "https://127.1/source",
+        "https://192.168.257/source",
+    ):
+        require(
+            url in js_catalog_parity,
+            f"JS privacy catalog parity tests must reject obfuscated source-reference IPv4 URL {url}",
+            errors,
+        )
+    for url in (
+        "https://2130706433/shape-source",
+        "https://0x7f000001/shape-source",
+        "https://017700000001/shape-source",
+        "https://127.1/shape-source",
+        "https://192.168.257/shape-source",
+    ):
+        require(
+            url in python_tests,
+            f"Python privacy catalog tests must reject obfuscated source-reference IPv4 URL {url}",
             errors,
         )
 
@@ -1202,6 +1305,11 @@ def check_javascript_sdk_script_prints_node_version(errors):
         "Privacy JavaScript SDK script must reject non-Node-20 runtimes",
         errors,
     )
+    require(
+        "export PYTHONDONTWRITEBYTECODE=1" in script,
+        "Privacy JavaScript SDK script must suppress Python bytecode for spawned Python catalog loaders",
+        errors,
+    )
 
 
 def check_workflow_runs_python_sdk_tests(errors):
@@ -1380,6 +1488,9 @@ def run_checks():
     errors = []
     check_readmes(errors)
     check_zk_ace_proof_builder_coverage(errors)
+    check_python_catalog_loader_bytecode_guards(errors)
+    check_negative_control_inventory_parity_test(errors)
+    check_source_reference_obfuscated_ipv4_coverage(errors)
     check_workflow_paths(errors)
     check_workflow_commands(errors)
     check_workflow_cancellation_policy(errors)
@@ -1597,6 +1708,25 @@ if mode == "--negative-control-negative-controls-order-workflow":
         raise SystemExit(0)
     raise SystemExit("negative control failed: late negative-control workflow drift was not detected")
 
+if mode == "--negative-control-negative-controls-inventory-parity":
+    target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
+    original = read(target)
+    mutated = original.replace(
+        "  const privacySdkGuardNegativeControlModes = negativeControlModesFromInventory(\n",
+        "  const privacySdkGuardNegativeControlModes = [\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate negative-control inventory parity")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected privacy negative-control inventory parity drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: negative-control inventory parity drift was not detected")
+
 if mode == "--negative-control-readme-boundary":
     target = "javascript/iroha_js/README.md"
     original = read(target)
@@ -1668,6 +1798,44 @@ if mode == "--negative-control-python-catalog-bytecode-guard":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python catalog bytecode guard drift was not detected")
+
+if mode == "--negative-control-python-ffi-catalog-bytecode-guard":
+    target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
+    original = read(target)
+    mutated = original.replace(
+        '    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python FFI catalog bytecode guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected Python FFI catalog bytecode guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python FFI catalog bytecode guard drift was not detected")
+
+if mode == "--negative-control-source-reference-obfuscated-ipv4-coverage":
+    target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
+    original = read(target)
+    mutated = original.replace(
+        '      { sourceReferences: [{ label: "paper", url: "https://2130706433/source" }] },\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate source-reference obfuscated IPv4 coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected source-reference obfuscated IPv4 coverage drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: source-reference obfuscated IPv4 coverage drift was not detected")
 
 if mode == "--negative-control-readme-error-code":
     target = "javascript/iroha_js/README.md"
@@ -2415,6 +2583,20 @@ if mode == "--negative-control-js-sdk-node-major-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node major script drift was not detected")
+
+if mode == "--negative-control-js-sdk-python-bytecode-script":
+    original = read(js_sdk_command)
+    mutated = original.replace("export PYTHONDONTWRITEBYTECODE=1\n\n", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK Python bytecode guard")
+    text_overrides[js_sdk_command] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected privacy JavaScript SDK Python bytecode guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK Python bytecode guard drift was not detected")
 
 if mode == "--negative-control-js-sdk-node-cache-workflow":
     original = read(workflow_path)

@@ -28,6 +28,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import stat
 import sys
 import urllib.parse
@@ -42,6 +43,14 @@ MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
 POLICIES = {"record-only", "reject-unsupported", "require-verified"}
 REQUIRE_VERIFIED = "require-verified"
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+KNOWN_RAILS = {
+    "generic-iso20022",
+    "swift-cbpr-plus",
+    "fedwire-funds",
+    "sepa-sct-inst",
+    "securities-csd",
+}
 TOP_LEVEL_KEYS = {
     "version",
     "profile_id",
@@ -265,6 +274,22 @@ def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
     _reject_ascii_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
+
+
+def _required_profile_id(bundle: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(bundle, key, label)
+    if PROFILE_ID_RE.fullmatch(raw) is None:
+        raise TrustBundleError(f"{label}.{key} must be a canonical lowercase profile id")
+    return raw
+
+
+def _required_rail(bundle: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(bundle, key, label)
+    if raw not in KNOWN_RAILS:
+        raise TrustBundleError(
+            f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
+        )
     return raw
 
 
@@ -792,8 +817,8 @@ def verify_bundle(
     if bundle.get("version") != BUNDLE_VERSION:
         raise TrustBundleError(f"{path}.version must be {BUNDLE_VERSION}")
 
-    profile_id = _required_string(bundle, "profile_id", str(path))
-    rail = _required_string(bundle, "rail", str(path))
+    profile_id = _required_profile_id(bundle, "profile_id", str(path))
+    rail = _required_rail(bundle, "rail", str(path))
     environment = _required_string(bundle, "environment", str(path))
     policy = bundle.get("embedded_signature_policy", DEFAULT_POLICY)
     if not isinstance(policy, str) or policy not in POLICIES:

@@ -25,6 +25,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import stat
 import sys
 import urllib.parse
@@ -46,6 +47,7 @@ RECEIPT_VERSION = 1
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 SUPPORTED_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 RAIL_SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
 COMMON_RECEIPT_KEYS = {
     "version",
@@ -929,6 +931,17 @@ def _normalize_optional_string(
     return value
 
 
+def _normalize_profile(value: Any, label: str) -> str | None:
+    profile = _normalize_optional_string(
+        value,
+        label,
+        allow_embedded_whitespace=False,
+    )
+    if profile is not None and PROFILE_ID_RE.fullmatch(profile) is None:
+        raise ReceiptError(f"{label} must be a canonical lowercase profile id")
+    return profile
+
+
 def _verify_rail_sidecar(
     path: Path,
     sidecar_path: Path,
@@ -946,10 +959,9 @@ def _verify_rail_sidecar(
         raise ReceiptError(f"{path} payload_sha256 does not match source sidecar")
     if sidecar.get("message_type") != message_type:
         raise ReceiptError(f"{path} message_type does not match source sidecar")
-    sidecar_profile = _normalize_optional_string(
+    sidecar_profile = _normalize_profile(
         sidecar.get("profile"),
         f"{sidecar_path} profile",
-        allow_embedded_whitespace=False,
     )
     if sidecar_profile != profile:
         raise ReceiptError(f"{path} profile does not match source sidecar")
@@ -978,11 +990,7 @@ def _verify_rail_source(
             f"{path} uses legacy rail message_type {message_type!r}; "
             "production evidence must use colr.012"
         )
-    profile = _normalize_optional_string(
-        receipt.get("profile"),
-        f"{path} profile",
-        allow_embedded_whitespace=False,
-    )
+    profile = _normalize_profile(receipt.get("profile"), f"{path} profile")
     rail_message_id = _normalize_optional_string(
         receipt.get("rail_message_id"),
         f"{path} rail_message_id",

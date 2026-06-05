@@ -2348,6 +2348,26 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
     ],
     [
+      { sourceReferences: [{ label: "paper", url: "https://2130706433/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://0x7f000001/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://017700000001/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://127.1/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://192.168.257/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
       { sourceReferences: [{ label: "paper", url: "https://[::ffff:127.0.0.1]/source" }] },
       /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
     ],

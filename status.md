@@ -2,6 +2,129 @@
 
 Last updated: 2026-06-05
 
+## 2026-06-05 Privacy source-reference obfuscated IPv4 guard
+
+- Added explicit JS catalog adversarial cases for source-reference URLs that
+  encode private/local IPv4 addresses as single-label decimal, hex, octal, and
+  non-standard dotted forms such as `2130706433`, `0x7f000001`,
+  `017700000001`, `127.1`, and `192.168.257`.
+- Mirrored the same hostile URL forms in the Python privacy catalog tests so
+  Python's obfuscated IPv4 source-reference parser remains covered.
+- Extended the aggregate privacy SDK guard to require both JS and Python
+  adversarial coverage and added
+  `--negative-control-source-reference-obfuscated-ipv4-coverage`, wired into
+  the PR privacy SDK workflow before the aggregate guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm JS validators reject hostile catalog descriptor shapes' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that
+    `_load_descriptors()` rejects the five obfuscated IPv4 source-reference
+    URLs
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-source-reference-obfuscated-ipv4-coverage`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+
+## 2026-06-05 ISO trust profile identity gate
+
+- Hardened the ISO trust-bundle preflight, production evidence gate, and final
+  readiness rollup so trust profiles must use canonical lowercase `profile_id`
+  values and rail IDs from the known ISO catalog: `generic-iso20022`,
+  `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`.
+  Unknown rails, uppercase profile or rail values, underscore profile IDs, and
+  trailing-hyphen profile IDs now fail before trust summaries, evidence
+  archives, or readiness summaries can be accepted.
+- Added focused negative/adversarial coverage for the preflight, archived
+  evidence, and compact readiness paths so digest-correct trust artifacts cannot
+  smuggle non-canonical trust identity through later aggregation.
+- Updated ISO audit/backlog/roadmap notes to record the local identity
+  hardening and keep the remaining production blockers focused on official MDR
+  or XSD packages, official trust and revocation material, and live provider
+  canary evidence.
+- Validation:
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`170` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`278` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 Privacy JS runner bytecode suppression
+
+- Updated `ci/check_privacy_js_sdk.sh` to export `PYTHONDONTWRITEBYTECODE=1`
+  before running the JS privacy tests, so any Python catalog/package loaders
+  spawned by Node tests cannot leave local `__pycache__` artifacts.
+- Extended the aggregate privacy SDK guard to require that runner-level export
+  and added `--negative-control-js-sdk-python-bytecode-script`, wired into the
+  PR workflow negative-control block.
+- Validation:
+  - `bash -n ci/check_privacy_js_sdk.sh`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-python-bytecode-script`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after the JS suite
+
+## 2026-06-05 Privacy guard inventory-parity self-check
+
+- Added an aggregate privacy SDK source check that requires the JS FFI parity
+  test to derive `privacySdkGuardNegativeControlModes` directly from
+  `ci/check_privacy_sdk_guard.sh` `negative_control_commands` inventory.
+- The guard now requires that dynamic inventory to feed the workflow assertion
+  and the per-mode implementation/workflow loop, preventing a regression back
+  to stale manual negative-control lists.
+- Added `--negative-control-negative-controls-inventory-parity` and wired it
+  into the PR privacy SDK workflow before the aggregate guard.
+- Validation:
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-ffi-catalog-bytecode-guard`
+  - `bash ci/check_privacy_js_sdk.sh`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was active in
+  this repo; the full guard proceeds into native SDK build/test work after the
+  source guard.
+
+## 2026-06-05 Privacy FFI catalog bytecode guard
+
+- Split Python catalog loader bytecode suppression into a dedicated privacy SDK
+  guard check instead of tying it to ZK-ACE proof-builder coverage.
+- The aggregate guard now requires `PYTHONDONTWRITEBYTECODE=1` in both JS
+  catalog loaders: `privacyCatalogParity.test.js` and
+  `privacyFfiContractParity.test.js`.
+- Added `--negative-control-python-ffi-catalog-bytecode-guard` and wired it
+  into the PR privacy SDK workflow, so removing bytecode suppression from the
+  FFI parity loader is rejected and the workflow inventory parity test requires
+  the new mode.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-ffi-catalog-bytecode-guard`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was active in
+  this repo; the full guard proceeds into native SDK build/test work after the
+  source guard.
+
 ## 2026-06-05 Privacy guard negative-control inventory parity
 
 - Tightened the JS privacy FFI workflow/parity test so it derives the privacy

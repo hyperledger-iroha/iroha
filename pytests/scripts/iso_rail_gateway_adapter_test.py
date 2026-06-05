@@ -671,6 +671,24 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "profile must not contain whitespace",
             ),
             (
+                "profile uppercase",
+                "profile",
+                "Swift-CBPR-Plus",
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
+                "profile underscore",
+                "profile",
+                "swift_cbpr_plus",
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
+                "profile trailing hyphen",
+                "profile",
+                "swift-cbpr-plus-",
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
                 "rail message null",
                 "rail_message_id",
                 None,

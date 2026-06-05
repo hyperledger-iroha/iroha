@@ -500,6 +500,37 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
                 kagemusha.kagemusha_recursive_spend_verify(b"request")
 
 
+def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> None:
+    import iroha_python
+
+    if "is_kagemusha_recursive_spend_available" not in iroha_python.__all__:
+        pytest.skip("package root crypto exports are unavailable")
+
+    from iroha_python import (
+        requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
+        as root_requires_key_artifacts_for_append_output,
+        requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
+        as root_requires_key_artifacts_for_init,
+    )
+
+    assert (
+        "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init"
+        in iroha_python.__all__
+    )
+    assert (
+        "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output"
+        in iroha_python.__all__
+    )
+    assert (
+        root_requires_key_artifacts_for_init
+        is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
+    )
+    assert (
+        root_requires_key_artifacts_for_append_output
+        is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
+    )
+
+
 def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION == 6
     assert (

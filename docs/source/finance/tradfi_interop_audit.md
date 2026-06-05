@@ -296,7 +296,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   explicit `--message` paths inside the declared inbox, requires an explicit
   profile by default, rejects sidecar `profile` and `rail_message_id` values
   that are explicitly `null` or carry surrounding whitespace, embedded
-  whitespace, or control characters,
+  whitespace, or control characters, rejects non-canonical sidecar profile IDs,
   rejects legacy `colr.007`
   collateral drops unless `--allow-legacy-colr007` is set for local diagnostics,
   requires bearer-token files to be regular non-symlink bounded exact UTF-8
@@ -342,7 +342,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   characters, backslashes, semicolon path parameters, empty path segments, or
   dot/parent path segments, plus receipt and source-sidecar rail
   `profile`/`rail_message_id` values when they carry surrounding whitespace or
-  embedded whitespace or control characters, replays digest-addressed notary-anchor and
+  embedded whitespace or control characters, rejects non-canonical receipt or
+  source-sidecar profile IDs, replays digest-addressed notary-anchor and
   `messages.index.json` checks while rejecting symlinked or non-regular notary
   anchor/index peers and rail XML/sidecar files, rejects legacy `colr.007` rail
   source files unless `--allow-legacy-colr007` is set for local diagnostics,
@@ -547,11 +548,14 @@ python3 scripts/iso_trust_bundle_verify.py \
 
 The verifier is offline. It does not replace Torii's semantic X.509, CRL, and
 OCSP checks; it catches operator-package mistakes earlier by requiring
-lowercase nonzero SHA-256 pins, matching DER digests, no duplicate DER within a
-material class, unique DER labels within each material class, no trust anchor
-that is also revoked, CRL/OCSP material when the corresponding profile flags are
-explicitly enabled, explicit CRL/OCSP revocation policy booleans, clean HTTPS
-source URLs by default, timezone-aware non-future
+canonical lowercase trust profile IDs, rail values from the supported ISO rail
+catalog (`generic-iso20022`, `swift-cbpr-plus`, `fedwire-funds`,
+`sepa-sct-inst`, and `securities-csd`), lowercase nonzero SHA-256 pins, matching
+DER digests, no duplicate DER within a material class, unique DER labels within
+each material class, no trust anchor that is also revoked, CRL/OCSP material when
+the corresponding profile flags are explicitly enabled, explicit CRL/OCSP
+revocation policy booleans, clean HTTPS source URLs by default,
+timezone-aware non-future
 `source.retrieved_at` values, clean `source.authority`/`source.version`
 provenance when present, and no runtime secret fields. DER-object `sha256` values are optional only when the key
 is absent; present `null` or other non-string values are malformed for trust
@@ -636,10 +640,11 @@ policy, insecure provenance overrides, or malformed/future trust-source
 retrieval timestamps, with trust-summary policy booleans present explicitly and
 with profile override JSON actually emitted;
 requires archived trust profile overrides to carry explicit CRL/OCSP revocation
-policy booleans, unique profile IDs, unique bundle digests, matching
-profile/rail/policy override identities, canonical OIDs, bounded canonical
-base64 DER SEQUENCE blobs, override material counts, and CRL/OCSP DER digests
-and byte lengths that agree with the trust-bundle verifier summary; and scans
+policy booleans, unique canonical lowercase profile IDs, known rail IDs, unique
+bundle digests, matching profile/rail/policy override identities, canonical
+OIDs, bounded canonical base64 DER SEQUENCE blobs, override material counts, and
+CRL/OCSP DER digests and byte lengths that agree with the trust-bundle verifier
+summary; and scans
 archived commands/output for obvious secret leakage.
 Plan-only diagnostic archives must still record each planned stage's `dry_run`
 boolean. Bearer-token file arguments must be redacted whether represented as
@@ -680,8 +685,9 @@ inputs become production blockers instead of silently passing release posture.
 The rollup also rechecks the digest-bound provider/environment and freshness
 policy recorded by the evidence gate, rejects archive freshness budgets that
 are weaker than the final release budgets, requires and revalidates each compact
-trust profile's source `authority`/`version`, source URL, and `retrieved_at`
-timestamp, rejects stale or smuggled trust source provenance including
+trust profile's canonical lowercase profile ID, known rail ID, source
+`authority`/`version`, source URL, and `retrieved_at` timestamp, rejects stale or
+smuggled trust source provenance including
 raw-whitespace and malformed-port URL smuggling plus non-canonical host spelling,
 invalid host labels, percent-host and percent-path smuggling, numeric-host
 spoofing, repeated path separators, and path traversal, rejects compact canary/trust summary paths,

@@ -49,6 +49,13 @@ SOURCE_REPOSITORY_RE = re.compile(
     r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 )
 PROFILE_DIRECTIONS = {"inbound", "outbound", "follow-up"}
+KNOWN_RAILS = {
+    "generic-iso20022",
+    "swift-cbpr-plus",
+    "fedwire-funds",
+    "sepa-sct-inst",
+    "securities-csd",
+}
 REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 REQUIRE_VERIFIED = "require-verified"
@@ -553,6 +560,15 @@ def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
+    return raw
+
+
+def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if raw not in KNOWN_RAILS:
+        raise ReadinessError(
+            f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
+        )
     return raw
 
 
@@ -2028,8 +2044,8 @@ def _verify_trust_profile(
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
-    profile_id = _require_string(profile, "profile_id", label)
-    rail = _require_string(profile, "rail", label)
+    profile_id = _require_profile_id(profile, "profile_id", label)
+    rail = _require_rail(profile, "rail", label)
     environment = _require_string(profile, "environment", label)
     bundle_sha256 = _require_sha256(profile, "bundle_sha256", label)
     policy = _require_string(profile, "embedded_signature_policy", label)

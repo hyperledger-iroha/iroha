@@ -496,6 +496,47 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_trust_profile_identity_fields_are_canonical(self):
+        cases = (
+            (
+                "uppercase-profile-id",
+                lambda bundle: bundle.__setitem__("profile_id", "Swift-CBPR-Plus"),
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "underscore-profile-id",
+                lambda bundle: bundle.__setitem__("profile_id", "swift_cbpr_plus"),
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "trailing-hyphen-profile-id",
+                lambda bundle: bundle.__setitem__("profile_id", "swift-cbpr-plus-"),
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "unknown-rail",
+                lambda bundle: bundle.__setitem__("rail", "swift"),
+                "rail must be one of",
+            ),
+            (
+                "uppercase-rail",
+                lambda bundle: bundle.__setitem__("rail", "Swift-CBPR-Plus"),
+                "rail must be one of",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_noncanonical_pin_and_all_zero_pin_are_rejected(self):
         for pin in ["A" * 64, "0" * 64]:
             with self.subTest(pin=pin):

@@ -2139,6 +2139,59 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_compact_trust_profile_identity_fields_are_canonical(self):
+        def set_nested(evidence, parts, value):
+            target = evidence
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+
+        cases = (
+            (
+                "uppercase-profile-id",
+                ("trust_summaries", 0, "profiles", 0, "profile_id"),
+                "Swift-CBPR-Plus",
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "underscore-profile-id",
+                ("trust_summaries", 0, "profiles", 0, "profile_id"),
+                "swift_cbpr_plus",
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "unknown-rail",
+                ("trust_summaries", 0, "profiles", 0, "rail"),
+                "swift",
+                "rail must be one of",
+            ),
+            (
+                "uppercase-rail",
+                ("trust_summaries", 0, "profiles", 0, "rail"),
+                "Swift-CBPR-Plus",
+                "rail must be one of",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, parts, value, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    set_nested(evidence, parts, value)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"trust-identity-{name}.summary.json", evidence)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_compact_identity_strings_reject_surrounding_whitespace(self):
         def set_nested(evidence, parts, value):
             target = evidence

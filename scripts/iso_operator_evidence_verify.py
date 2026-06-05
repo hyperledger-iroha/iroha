@@ -41,6 +41,14 @@ from typing import Any
 
 EVIDENCE_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+KNOWN_RAILS = {
+    "generic-iso20022",
+    "swift-cbpr-plus",
+    "fedwire-funds",
+    "sepa-sct-inst",
+    "securities-csd",
+}
 REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
@@ -361,6 +369,22 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
         raise EvidenceError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
         raise EvidenceError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
+
+
+def _required_profile_id(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    if PROFILE_ID_RE.fullmatch(raw) is None:
+        raise EvidenceError(f"{label}.{key} must be a canonical lowercase profile id")
+    return raw
+
+
+def _required_rail(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    if raw not in KNOWN_RAILS:
+        raise EvidenceError(
+            f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
+        )
     return raw
 
 
@@ -1488,8 +1512,8 @@ def _check_trust_bundle(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     _reject_unknown_keys(bundle, TRUST_BUNDLE_KEYS, label)
-    profile_id = _required_string(bundle, "profile_id", label)
-    rail = _required_string(bundle, "rail", label)
+    profile_id = _required_profile_id(bundle, "profile_id", label)
+    rail = _required_rail(bundle, "rail", label)
     environment = _required_string(bundle, "environment", label)
     if args.environment is not None and environment != args.environment:
         raise EvidenceError(

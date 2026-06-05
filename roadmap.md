@@ -764,10 +764,11 @@ and completed history lives in [`status.md`](./status.md).
   closing raw receipt and notary source schemas including nested audit records,
 	  audit record filename/message-id bindings, endpoint-digest bindings,
 	  timestamp/status consistency, bounded response
-	  metadata, canonical receipt endpoint,
-	  timestamp, canonical notary/rail source paths, and whitespace-free rail
-	  metadata identifiers, with live rail sidecars rejecting explicit `null`
-	  `profile`/`rail_message_id` values before submission,
+		  metadata, canonical receipt endpoint,
+		  timestamp, canonical notary/rail source paths, and whitespace-free rail
+		  metadata identifiers, with live rail sidecars rejecting explicit `null`
+		  `profile`/`rail_message_id` values and non-canonical profile IDs before
+		  submission,
 	  rail sidecar source bindings, notary anchor-path shape checks even when
 	  source files are not required, notary anchor/index source bindings that
 	  require regular non-symlink files, notary adapter publication that requires
@@ -848,7 +849,9 @@ and completed history lives in [`status.md`](./status.md).
   requiring summary digests, rejecting duplicate receipt paths or receipt digests,
   rejecting non-canonical compact receipt paths, rejecting duplicate compact
   trust profile IDs or bundle digests, rejecting control-bearing or whitespace-padded
-  compact identity strings,
+  compact identity strings, rejecting non-canonical compact trust profile IDs,
+  and rejecting compact trust rail IDs outside `generic-iso20022`,
+  `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`,
   rejecting unknown compact evidence fields,
   rechecking XSD schema/fixture summary arrays for count, digest, and
   schema-path/message-id, fixture-path segment canonicality, canonical fixture
@@ -895,11 +898,11 @@ and completed history lives in [`status.md`](./status.md).
   and securities CSD operator canaries. Remaining persistence work is
   provider-specific live service canaries and vendor evidence that passes the
   aggregate production-readiness gate.
-  ISO rail ingress now has
-  an operator file-drop adapter that verifies sidecar-pinned message
-  type/profile/payload digests before submitting to clean Torii base URLs and
-  writing receipts, plus the same receipt verifier and runbook runner for
-  canary evidence.
+	  ISO rail ingress now has
+	  an operator file-drop adapter that verifies sidecar-pinned message
+	  type/profile/payload digests, rejects non-canonical sidecar profile IDs
+	  before submitting to clean Torii base URLs and writing receipts, plus the
+	  same receipt verifier and runbook runner for canary evidence.
   Remaining rail-connectivity work is provider-specific live gateway canaries
   and archived rail evidence. Live
   securities lifecycle profile admission now checks
@@ -921,15 +924,17 @@ and completed history lives in [`status.md`](./status.md).
   for X.509 chains, explicit certificate revocation pins, configured and
   signature-scoped embedded CRL/OCSP signer revocation checks evaluated against verified XAdES
   `SigningTime` or BAH `CreDt` rather than local wall clock, plus an offline
-	  trust-bundle verifier with semantic DER-shape checks, required clean
-	  provenance URL and retrieval-time fields, trim-free source
-	  authority/version provenance for archives, duplicate-label rejection,
-	  DER-object digest keys
+  trust-bundle verifier with semantic DER-shape checks, required clean
+  provenance URL and retrieval-time fields, trim-free source
+  authority/version provenance for archives, duplicate-label rejection,
+  DER-object digest keys
   that fail closed when present as `null` or another non-string value, omitted
   absent labels in trust summaries, archived-summary `label: null` rejection,
   repeated-separator URL path rejection, and
-  repeated-path/copied-bundle/duplicate-profile rejection plus profile-family
-  templates for operator PKI preflight. The templates are schema/CI scaffolding
+  repeated-path/copied-bundle/duplicate-profile rejection, canonical lowercase
+  trust profile ID enforcement, known ISO rail ID enforcement, plus
+  profile-family templates for operator PKI preflight. The templates are
+  schema/CI scaffolding
   only, require an explicit synthetic-template flag, and cannot emit profile
   overrides; remaining trust work is replacing them with official rail packages
   and archiving live provenance evidence that passes the production evidence

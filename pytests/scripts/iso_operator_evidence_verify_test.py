@@ -2068,6 +2068,61 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_trust_profile_identity_fields_are_rechecked_in_archives(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            cases = (
+                (
+                    "uppercase-profile-id",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "profile_id",
+                        "Swift-CBPR-Plus",
+                    ),
+                    "profile_id must be a canonical lowercase profile id",
+                ),
+                (
+                    "underscore-profile-id",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "profile_id",
+                        "swift_cbpr_plus",
+                    ),
+                    "profile_id must be a canonical lowercase profile id",
+                ),
+                (
+                    "unknown-rail",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "rail",
+                        "swift",
+                    ),
+                    "rail must be one of",
+                ),
+                (
+                    "uppercase-rail",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "rail",
+                        "Swift-CBPR-Plus",
+                    ),
+                    "rail must be one of",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_trust_source_identity_fields_are_required_and_must_be_strings(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

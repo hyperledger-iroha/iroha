@@ -693,6 +693,34 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "profile must not contain whitespace",
             ),
             (
+                "profile_uppercase",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "profile": "Swift-CBPR-Plus",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
+                "profile_underscore",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "profile": "swift_cbpr_plus",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
                 "rail_message_id_whitespace",
                 lambda receipt, sidecar_path: sidecar_path.write_text(
                     json.dumps(
@@ -827,6 +855,21 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "receipt profile embedded whitespace",
                 lambda body: body.update({"profile": "swift cbpr-plus"}),
                 "profile must not contain whitespace",
+            ),
+            (
+                "receipt profile uppercase",
+                lambda body: body.update({"profile": "Swift-CBPR-Plus"}),
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
+                "receipt profile underscore",
+                lambda body: body.update({"profile": "swift_cbpr_plus"}),
+                "profile must be a canonical lowercase profile id",
+            ),
+            (
+                "receipt profile trailing hyphen",
+                lambda body: body.update({"profile": "swift-cbpr-plus-"}),
+                "profile must be a canonical lowercase profile id",
             ),
             (
                 "receipt rail message whitespace",

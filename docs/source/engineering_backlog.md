@@ -1372,10 +1372,11 @@ track detailed unfinished engineering work.
 	  encoded-percent, percent-encoded control/space bytes, malformed percent
 	  escapes, or embedded-semicolon URL paths, keeps explicit `--message` paths
 	  inside the declared inbox, rejects explicit `--message` path and discovered
-	  XML leaf whitespace, backslash, semicolon, empty-segment, or dot/parent
-	  segment smuggling before reads, rejects sidecar `profile` and `rail_message_id`
-	  values that are explicitly `null` or carry surrounding whitespace,
-	  embedded whitespace, or control characters, rejects legacy `colr.007`
+		  XML leaf whitespace, backslash, semicolon, empty-segment, or dot/parent
+		  segment smuggling before reads, rejects sidecar `profile` and `rail_message_id`
+		  values that are explicitly `null` or carry surrounding whitespace,
+		  embedded whitespace, or control characters, rejects non-canonical sidecar
+		  profile IDs, rejects legacy `colr.007`
 	  drops unless `--allow-legacy-colr007`
 	  is set for local diagnostics, requires bearer-token files to be regular
 	  non-symlink bounded exact UTF-8 values with no surrounding whitespace,
@@ -1415,7 +1416,8 @@ track detailed unfinished engineering work.
 	  backslashes, semicolon path parameters, empty path segments, or dot/parent
 	  path segments, plus receipt and source-sidecar rail
 	  `profile`/`rail_message_id` values when they carry surrounding whitespace or
-	  embedded whitespace or control characters, replays digest-addressed notary-anchor and
+	  embedded whitespace or control characters, rejects non-canonical receipt or
+	  source-sidecar profile IDs, replays digest-addressed notary-anchor and
   `messages.index.json` checks while rejecting symlinked or non-regular notary
   anchor/index peers and rail XML/sidecar files, rejects legacy `colr.007` rail
   source files unless `--allow-legacy-colr007` is set for local diagnostics,
@@ -1457,8 +1459,9 @@ track detailed unfinished engineering work.
   that each template plans successfully without network access.
 - Completed 2026-06-04: added `scripts/iso_trust_bundle_verify.py` as an
   offline XMLDSig/XAdES trust-bundle preflight for operator rail PKI packages.
-  It verifies canonical lowercase nonzero SHA-256 pins, digest-bound base64 DER
-  envelopes with lightweight semantic shape checks for X.509 certificates,
+  It verifies canonical lowercase profile IDs, known ISO rail IDs, canonical
+  lowercase nonzero SHA-256 pins, digest-bound base64 DER envelopes with
+  lightweight semantic shape checks for X.509 certificates,
   X.509 CRLs, and OCSPResponse wrappers, duplicate material, contradictory
   trust/revocation pins, explicit CRL/OCSP revocation policy booleans, required
   CRL/OCSP material, HTTPS provenance without credentials, params, query
@@ -1506,7 +1509,8 @@ track detailed unfinished engineering work.
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
   `--require-explicit-policy`, rejects duplicate archived trust profile IDs and
-  bundle digests, rejects forged trust profile overrides whose id/rail/policy,
+  bundle digests, rejects non-canonical archived trust profile IDs or unknown
+  rail IDs, rejects forged trust profile overrides whose id/rail/policy,
   pin/OID/CRL/OCSP counts, canonical OIDs, DER summary digests, DER byte
   lengths, bounded canonical base64 DER SEQUENCE blobs, or trusted/revoked pin
   overlap no longer match the trust-bundle verifier output,
@@ -1605,7 +1609,8 @@ track detailed unfinished engineering work.
   repeated or copied compact canary/trust summaries, nested receipt-summary
   tampering, non-canonical compact receipt paths, duplicate receipt paths or
   receipt digests, weak trust profiles, duplicate compact trust profile IDs or
-  bundle digests, missing or malformed compact trust `bundle_sha256`,
+  bundle digests, non-canonical compact trust profile IDs or unknown rail IDs,
+  missing or malformed compact trust `bundle_sha256`,
   record-only trust policy,
   disabled CRL/OCSP revocation checks, and missing required revocation
   material, omitted revoked-certificate or certificate-policy compact trust

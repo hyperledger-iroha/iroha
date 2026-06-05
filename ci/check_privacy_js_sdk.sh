@@ -63,6 +63,8 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
+export PYTHONDONTWRITEBYTECODE=1
+
 "${NODE_BIN}" --test \
   test/privacyFfiContractParity.test.js \
   test/privacyCatalogParity.test.js \

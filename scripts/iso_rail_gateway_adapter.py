@@ -27,6 +27,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import stat
 import sys
 import urllib.error
@@ -43,6 +44,7 @@ MAX_BEARER_TOKEN_BYTES = 8192
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
 LEGACY_MESSAGE_TYPES = {"colr.007"}
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 
 ENDPOINTS = {
     "pacs.008": "pacs008",
@@ -335,6 +337,10 @@ def verify_message_file(
             )
         if any(ch.isspace() for ch in profile):
             raise AdapterError(f"{sidecar_path} profile must not contain whitespace")
+        if PROFILE_ID_RE.fullmatch(profile) is None:
+            raise AdapterError(
+                f"{sidecar_path} profile must be a canonical lowercase profile id"
+            )
 
     rail_message_id_present = "rail_message_id" in sidecar
     rail_message_id = None
