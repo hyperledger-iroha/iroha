@@ -4,7 +4,7 @@
 use iroha_core::{
     executor::Executor,
     kura::Kura,
-    query::store::LiveQueryStore,
+    query::{insert_proof_record_for_test, store::LiveQueryStore},
     state::{State, WorldReadOnly},
     telemetry::StateTelemetry,
 };
@@ -2248,7 +2248,7 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
             proof: ProofBox::new(backend, proof_bytes),
             recursion_depth: None,
         }),
-        pinned: false,
+        pinned: true,
     }
 }
 
@@ -2541,7 +2541,7 @@ fn make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
             proof: ProofBox::new(backend, proof_bytes),
             recursion_depth: None,
         }),
-        pinned: false,
+        pinned: true,
     }
 }
 
@@ -2583,7 +2583,7 @@ fn make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
             proof: ProofBox::new(backend, proof_bytes),
             recursion_depth: None,
         }),
-        pinned: false,
+        pinned: true,
     }
 }
 
@@ -2731,7 +2731,7 @@ fn make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(nonce: u64) -> Bridg
             ),
             recursion_depth: None,
         }),
-        pinned: false,
+        pinned: true,
     }
 }
 
@@ -2816,6 +2816,66 @@ fn bridge_retention_prunes_oldest_unpinned() {
         stx2.world.proofs().get(&id1).is_none(),
         "older unpinned proof should be pruned when cap is hit"
     );
+}
+
+#[test]
+fn manual_prune_keeps_pinned_bridge_proofs() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+    state.zk.proof_history_cap = 1;
+    state.zk.proof_retention_grace_blocks = 0;
+    state.zk.proof_prune_batch = 10;
+
+    let exec = Executor::default();
+
+    let header1 =
+        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block1 = state.block(header1);
+    let mut stx1 = block1.transaction();
+    let pinned_proof = make_ics_proof(0x23, (1, 1), true);
+    let pinned_id = bridge_proof_id(&pinned_proof);
+    let submit1: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(pinned_proof).into();
+    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
+        .expect("pinned proof accepted");
+    stx1.apply();
+    block1
+        .commit()
+        .expect("commit pinned bridge-proof block snapshot");
+
+    let header2 =
+        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block2 = state.block(header2);
+    let mut stx2 = block2.transaction();
+    let unpinned_proof = make_ics_proof(0x34, (2, 2), false);
+    let unpinned_id = bridge_proof_id(&unpinned_proof);
+    let submit2: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(unpinned_proof).into();
+    exec.execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
+        .expect("unpinned proof accepted");
+    stx2.apply();
+    block2
+        .commit()
+        .expect("commit unpinned bridge-proof block snapshot");
+
+    let header3 =
+        iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block3 = state.block(header3);
+    let mut stx3 = block3.transaction();
+    let prune: InstructionBox =
+        iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned())).into();
+    exec.execute_instruction(&mut stx3, &ALICE_ID.clone(), prune)
+        .expect("manual bridge prune should keep pinned records");
+
+    assert!(
+        stx3.world.proofs().get(&pinned_id).is_some(),
+        "manual pruning must not remove pinned bridge records"
+    );
+    assert!(stx3.world.proofs().get(&unpinned_id).is_some());
 }
 
 #[test]
@@ -3351,6 +3411,353 @@ fn submit_sccp_inbound_message_with_configured_eth_source_adapter_is_accepted_fo
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect("ETH source proofs should pass the Ethereum mainnet lane launch policy");
     assert!(stx.world.proofs().get(&proof_id).is_some());
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_rejects_outer_range_replay_after_ethereum_lane_launch()
+ {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES;
+    state.zk.sccp_source_verifier_materials.clear();
+    state.zk.sccp_source_adapter_engine_deployments.clear();
+    state.zk.sccp_destination_rollouts.clear();
+    state.zk.sccp_route_allowlists.clear();
+
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_eth_destination_rollout();
+    let route_allowlist =
+        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
+    state
+        .zk
+        .sccp_source_verifier_materials
+        .push(actual_source_verifier_material(&material));
+    state
+        .zk
+        .sccp_source_adapter_engine_deployments
+        .push(actual_source_adapter_engine_deployment(&deployment));
+    state
+        .zk
+        .sccp_destination_rollouts
+        .push(actual_destination_rollout(&destination_rollout));
+    state
+        .zk
+        .sccp_route_allowlists
+        .push(actual_route_allowlist(&route_allowlist));
+
+    let mut proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_607,
+        &material,
+        &deployment,
+    );
+    let shifted_height = proof.range.end_height.saturating_add(1);
+    proof.range = BridgeProofRange {
+        start_height: shifted_height,
+        end_height: shifted_height,
+    };
+    let proof_id = bridge_proof_id(&proof);
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("ETH source proofs must bind the outer range to artifact finality");
+    assert!(
+        format!("{err:?}").contains("SCCP message proof range must match finality height"),
+        "unexpected error: {err:?}",
+    );
+    assert!(stx.world.proofs().get(&proof_id).is_none());
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_rejects_unpinned_message_after_ethereum_lane_launch()
+{
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES;
+    state.zk.sccp_source_verifier_materials.clear();
+    state.zk.sccp_source_adapter_engine_deployments.clear();
+    state.zk.sccp_destination_rollouts.clear();
+    state.zk.sccp_route_allowlists.clear();
+
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_eth_destination_rollout();
+    let route_allowlist =
+        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
+    state
+        .zk
+        .sccp_source_verifier_materials
+        .push(actual_source_verifier_material(&material));
+    state
+        .zk
+        .sccp_source_adapter_engine_deployments
+        .push(actual_source_adapter_engine_deployment(&deployment));
+    state
+        .zk
+        .sccp_destination_rollouts
+        .push(actual_destination_rollout(&destination_rollout));
+    state
+        .zk
+        .sccp_route_allowlists
+        .push(actual_route_allowlist(&route_allowlist));
+
+    let mut proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_609,
+        &material,
+        &deployment,
+    );
+    proof.pinned = false;
+    let proof_id = bridge_proof_id(&proof);
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("ETH source proofs must be pinned for durable replay protection");
+    assert!(
+        format!("{err:?}").contains("SCCP message proof records must be pinned"),
+        "unexpected error: {err:?}",
+    );
+    assert!(stx.world.proofs().get(&proof_id).is_none());
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_rejects_message_id_replay_after_ethereum_lane_launch()
+{
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES;
+    state.zk.sccp_source_verifier_materials.clear();
+    state.zk.sccp_source_adapter_engine_deployments.clear();
+    state.zk.sccp_destination_rollouts.clear();
+    state.zk.sccp_route_allowlists.clear();
+
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_eth_destination_rollout();
+    let route_allowlist =
+        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
+    state
+        .zk
+        .sccp_source_verifier_materials
+        .push(actual_source_verifier_material(&material));
+    state
+        .zk
+        .sccp_source_adapter_engine_deployments
+        .push(actual_source_adapter_engine_deployment(&deployment));
+    state
+        .zk
+        .sccp_destination_rollouts
+        .push(actual_destination_rollout(&destination_rollout));
+    state
+        .zk
+        .sccp_route_allowlists
+        .push(actual_route_allowlist(&route_allowlist));
+
+    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_611,
+        &material,
+        &deployment,
+    );
+    let mut replayed_record_proof = proof.clone();
+    let shifted_height = replayed_record_proof.range.end_height.saturating_add(10);
+    replayed_record_proof.range = BridgeProofRange {
+        start_height: shifted_height,
+        end_height: shifted_height,
+    };
+    let replayed_id = bridge_proof_id(&replayed_record_proof);
+    let encoded_len = u32::try_from(
+        norito::to_bytes(&replayed_record_proof)
+            .expect("encode replayed proof record")
+            .len(),
+    )
+    .expect("bridge proof length fits in u32");
+    insert_proof_record_for_test(
+        &mut state,
+        replayed_id.clone(),
+        iroha_data_model::proof::ProofRecord {
+            id: replayed_id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status: ProofStatus::Verified,
+            verified_at_height: Some(1),
+            bridge: Some(iroha_data_model::bridge::BridgeProofRecord {
+                proof: replayed_record_proof,
+                commitment: replayed_id.proof_hash,
+                size_bytes: encoded_len,
+            }),
+        },
+    );
+
+    let proof_id = bridge_proof_id(&proof);
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("ETH source proofs must reject replayed SCCP message ids");
+    assert!(
+        format!("{err:?}").contains("SCCP message proof replays existing message proof"),
+        "unexpected error: {err:?}",
+    );
+    assert!(stx.world.proofs().get(&proof_id).is_none());
+}
+
+fn state_with_configured_eth_source_adapter_lane(
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+) -> State {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES;
+    state.zk.sccp_source_verifier_materials.clear();
+    state.zk.sccp_source_adapter_engine_deployments.clear();
+    state.zk.sccp_destination_rollouts.clear();
+    state.zk.sccp_route_allowlists.clear();
+
+    let destination_rollout = configured_eth_destination_rollout();
+    let route_allowlist =
+        configured_eth_route_allowlist(material, deployment, &destination_rollout);
+    state
+        .zk
+        .sccp_source_verifier_materials
+        .push(actual_source_verifier_material(material));
+    state
+        .zk
+        .sccp_source_adapter_engine_deployments
+        .push(actual_source_adapter_engine_deployment(deployment));
+    state
+        .zk
+        .sccp_destination_rollouts
+        .push(actual_destination_rollout(&destination_rollout));
+    state
+        .zk
+        .sccp_route_allowlists
+        .push(actual_route_allowlist(&route_allowlist));
+    state
+}
+
+fn assert_eth_source_proof_accepts_with_noncanonical_history(
+    label: &str,
+    retained_status: ProofStatus,
+    retained_pinned: bool,
+    corrupt_retained_commitment: bool,
+) {
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let mut state = state_with_configured_eth_source_adapter_lane(&material, &deployment);
+
+    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_613,
+        &material,
+        &deployment,
+    );
+    let mut retained_proof = proof.clone();
+    let shifted_height = retained_proof.range.end_height.saturating_add(10);
+    retained_proof.range = BridgeProofRange {
+        start_height: shifted_height,
+        end_height: shifted_height,
+    };
+    retained_proof.pinned = retained_pinned;
+    let retained_id = bridge_proof_id(&retained_proof);
+    let encoded_len = u32::try_from(
+        norito::to_bytes(&retained_proof)
+            .expect("encode retained proof record")
+            .len(),
+    )
+    .expect("bridge proof length fits in u32");
+    let retained_commitment = if corrupt_retained_commitment {
+        [0x9a; 32]
+    } else {
+        retained_id.proof_hash
+    };
+    insert_proof_record_for_test(
+        &mut state,
+        retained_id.clone(),
+        iroha_data_model::proof::ProofRecord {
+            id: retained_id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status: retained_status,
+            verified_at_height: Some(1),
+            bridge: Some(iroha_data_model::bridge::BridgeProofRecord {
+                proof: retained_proof,
+                commitment: retained_commitment,
+                size_bytes: encoded_len,
+            }),
+        },
+    );
+
+    let proof_id = bridge_proof_id(&proof);
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .unwrap_or_else(|err| {
+            panic!(
+                "ETH source proofs must ignore non-canonical SCCP message history ({label}): {err:?}"
+            )
+        });
+    assert!(stx.world.proofs().get(&proof_id).is_some());
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_ignores_rejected_history_after_ethereum_lane_launch()
+{
+    assert_eth_source_proof_accepts_with_noncanonical_history(
+        "rejected retained record",
+        ProofStatus::Rejected,
+        true,
+        false,
+    );
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_ignores_unpinned_history_after_ethereum_lane_launch()
+{
+    assert_eth_source_proof_accepts_with_noncanonical_history(
+        "unpinned retained record",
+        ProofStatus::Verified,
+        false,
+        false,
+    );
+}
+
+#[test]
+fn submit_configured_eth_source_adapter_proof_ignores_malformed_history_after_ethereum_lane_launch()
+{
+    assert_eth_source_proof_accepts_with_noncanonical_history(
+        "mismatched retained bridge commitment",
+        ProofStatus::Verified,
+        true,
+        true,
+    );
 }
 
 fn assert_eth_source_proof_rejected_for_governed_material(

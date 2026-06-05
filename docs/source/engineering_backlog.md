@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-04
+Last updated: 2026-06-05
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -41,19 +41,145 @@ track detailed unfinished engineering work.
   ciphertexts without requiring a secret key; the same check now runs at the
   evaluation-key bundle level so admission cannot accidentally validate only a
   subset of public rotation/bootstrap refresh masks. The validated transcript
-  inventory now also has a stable domain-separated digest over the parameter
-  set, public key, evaluation-key digest, and transcript seed metadata, giving
-  governance/admission code a canonical value to bind before the final
-  proof-carrying bootstrap key format lands. This is an admission hardening
-  step for the current refresh path, not the final proof-carrying bootstrap
-  key format.
+  inventory now also has nonzero duplicate-free rotation step metadata,
+  bounded non-empty public seed metadata, bounded canonical bootstrap key-id
+  metadata, and bounded nonzero bootstrap refresh round metadata plus a stable
+  domain-separated digest over the parameter set, public key, evaluation-key
+  digest, and transcript metadata, giving governance/admission code a
+  canonical value to bind before the final proof-carrying bootstrap key format
+  lands; the lower-level crypto bundle validator now enforces the same public
+  metadata preflight for direct callers, and standalone refresh-key transcript
+  generators/validators reject the same empty or oversized public seed
+  metadata before deriving or recomputing encrypted-zero masks. Soracloud FHE
+  execution policies now carry that digest,
+  `RunSoracloudFheJob` signs the transcript inventory in the provenance
+  payload, and core rejects jobs whose supplied refresh transcript is
+  unbounded or does not match the governance-bound digest. This is an admission
+  hardening step for the current refresh path, not the final proof-carrying
+  bootstrap key format.
   Bundle-level owner diagnostics now also verify that relinearization entries
   decrypt to scaled `s^2` residues and Galois entries decrypt to scaled
   automorphed-secret residues under the matching secret key, with key-switch
-  residuals constrained to the current plaintext-multiple error bound.
+  residuals constrained to the current plaintext-multiple error bound;
+  standalone Galois key generation now applies that same residual self-check
+  before returning generated key-switch material. Rotation and bootstrap
+  encrypted-zero refresh diagnostics also reject zero-plaintext masks whose
+  residual multiples exceed the deterministic `(2n + 1)E` refresh bound for
+  the first-release seeded encryption format.
   Public-key owner diagnostics now also reject shape-valid wrong-secret,
   non-plaintext-multiple, or oversized residuals before publication, while
   future public admission still needs proof-carrying key-material checks.
+  Seeded key generation and public-key encryption now also fail closed unless
+  the parameter set's centered `q/t` capacity covers the same deterministic
+  encrypted-zero refresh bound, so structurally valid but too-narrow profiles
+  cannot produce first-release ciphertext/key material; deterministic BFV
+  keygen, encryption, Galois-key generation, and identifier seed helpers now
+  also reject empty seeds before deriving RNG material. Registered BFV profile
+  validation and the production digest path now enforce the same capacity
+  invariant before admitting the RAM-LFE profile, and BFV parameter validation
+  uses checked exact-arithmetic products for raw and plaintext-scaled scalar
+  accumulator bounds rather than relying on saturating overflow guards. The
+  key-switch decomposition digit count now also validates parameters and uses
+  checked coverage arithmetic, so invalid or future-widened profiles fail with
+  `BfvError` instead of silently saturating digit generation; BFV residual-bound
+  helpers likewise use checked `t - 1` and decomposition-base-minus-one bounds
+  instead of saturating those admission inputs. The crypto crate now also has a
+  separate rounded BFV path for the pending BFV-RNS replacement: bounded-noise
+  public-key generation samples small centered error, plaintext is encoded as
+  `(q / t) * m`, decryption rounds back into `Z_t`, and owner diagnostics
+  report centered noise/headroom against the rounded-decoding capacity. Rounded
+  ciphertext addition now also has conservative centered-noise bound
+  propagation tested against real rounded ciphertext addition; subtract,
+  rounded plaintext-scalar addition, plaintext-scalar multiplication, and
+  plaintext-polynomial multiplication have the same bounded-noise propagation
+  coverage. Rounded ciphertext-ciphertext multiplication now has a scalar
+  semantic bridge that computes centered raw products before `t/q`
+  scale-and-rounding, then relinearizes with bounded-noise key-switch entries
+  and validates a conservative output noise budget. Rounded Galois key
+  switching now also has small-noise key generation, secret-key consistency
+  checks, automorphism application, and output-bound propagation over rounded
+  ciphertexts. Rounded packed `RotateLeft` now wires that bounded-noise Galois
+  path through the public packed-selector schedule with matching output-bound
+  propagation. This still needs the production approximate BFV-RNS
+  basis-extension/key-switch implementation, Soracloud evaluator
+  migration/broader propagation, and full bootstrapping before Soracloud can
+  leave the exact-lift bridge.
+  RNS polynomials can now be exactly basis-extended between validated modulus
+  chains by canonical CRT reconstruction plus target-limb reduction, with
+  target-product coverage checks to reject aliasing; this is a deterministic
+  bridge for the future BFV-RNS key-switch pipeline rather than the final
+  approximate basis-extension algorithm. Key-switch components now also
+  decompose directly into RNS digit polynomials, exact RNS key switching
+  consumes those digit polynomials internally, and basis-extended digits are
+  rejected if they no longer reconstruct to canonical decomposition digits. An
+  explicit exact basis-extension key-switch path now decomposes in a source
+  chain, verifies that the source cannot alias decomposition digits,
+  basis-extends canonical key-switch digits into the evaluator chain without
+  requiring the evaluator target to cover the full source-chain product, and
+  drives rounded multiplication, Galois, and packed `RotateLeft` bridges while
+  matching the scalar bounded-noise outputs.
+  Rounded ciphertext multiplication now also has an RNS exact raw-product
+  bridge that decomposes ciphertext components as centered residues,
+  reconstructs signed negacyclic products before `t/q` scale-and-rounding, and
+  relinearizes the scaled quadratic component through the RNS digit/key-switch
+  path while matching the scalar bounded-noise multiplication output. Rounded
+  Galois key switching and packed `RotateLeft` now also have RNS exact bridge
+  entry points that match the scalar bounded-noise schedule and reject
+  too-narrow chains. Outer-slot rotation and bootstrap refresh material can now
+  also be generated and publicly transcript-validated with rounded
+  bounded-noise encrypted-zero ciphertexts, refreshed through scalar or exact
+  RNS addition, and propagated with centered-noise output bounds. Evaluation-key
+  bundles can now validate and digest the bounded-noise rotation/bootstrap
+  transcript inventory under a separate domain from the exact-lift refresh
+  path, and owner diagnostics can validate bounded relin/Galois key-switch
+  residuals plus every bounded refresh mask in one bundle check. Soracloud FHE
+  execution policies now bind the refresh transcript mode, data-model digesting
+  routes through exact-lift or bounded-noise transcript derivation explicitly,
+  and core runtime admission rejects mode/digest mismatches before job
+  execution. Soracloud bounded-noise jobs now dispatch to the bounded-noise RNS
+  bridge for Add, Multiply, outer/packed `RotateLeft`, and encrypted-zero
+  Bootstrap refresh when policy/input metadata are explicitly bounded; public
+  bounded input admission, approximate BFV-RNS basis extension, and full
+  bootstrapping circuit/key material remain pending.
+  Registered RNS chain selection now also preflights exact-addition and exact
+  negacyclic-product coverage before exposing the chain or its production digest. Public RNS
+  exact evaluator entry points now also preflight their required chain coverage
+  before late operation-specific checks, so malformed RNS context is rejected
+  before invalid refresh rounds, no-op packed rotations, or key-switch
+  scheduling can short-circuit validation. Refresh transcript digest assembly
+  now also returns structured shape errors for missing or unmatched rotation
+  transcript seeds instead of relying on a post-validation panic invariant.
+  Owner-side evaluated-output
+  diagnostics can now validate a ciphertext against a caller-declared exact
+  residual-multiple bound and reject plaintext-preserving residual inflation,
+  while checked helper APIs derive exact add-output and public bootstrap
+  refresh-output residual bounds before those diagnostics run. Those helpers
+  now also cover exact subtract, plaintext addition, plaintext-scalar
+  multiplication, plaintext-polynomial multiplication, and public affine-circuit
+  row bounds. Outer ciphertext-slot `RotateLeft` now also propagates rotated
+  per-slot bounds and one public encrypted-zero refresh bound per output slot.
+  Packed `RotateLeft` now also has conservative exact-bound propagation for the
+  current Galois key-switch bridge and plaintext-mask schedule, including
+  capacity rejection for parameter profiles whose centered modulus cannot cover
+  key-switch residuals. Soracloud service-state rows now carry optional exact
+  BFV residual-multiple metadata for FHE ciphertexts, and `RunSoracloudFheJob`
+  persists propagated bounds for Add, balanced Multiply/relinearization,
+  outer/packed `RotateLeft`, and Bootstrap outputs while rejecting
+  missing or over-capacity input bounds before execution. Client-provided FHE
+  state mutations without proof-carrying input admission intentionally remain
+  metadata-free and cannot feed FHE jobs. Upsert mutations may now carry a
+  canonical Soracloud FHE input-admission proof attachment: provenance signs
+  the proof statement, core derives the statement from the service, binding,
+  key, operation, payload, BFV profile, RNS chain, and governance transaction,
+  validates the STARK/FRI `OpenVerifyEnvelope` against an active `soracloud`
+  verifier key for the canonical V1 circuit id, rejects restored verifier
+  records whose Goldilocks field label or inline key length drift from the
+  stored key material, and persists the claimed residual bound only after the
+  envelope, ciphertext shape, registered identifier slot cap, and residual
+  capacity checks pass. The
+  production circuit and governed key-material rollout for public noise
+  admission remains open, so this is the ledger admission boundary rather than
+  a complete BFV-RNS proof system.
   BFV evaluation-key metadata now caps rotation-key and Galois key bundles,
   rejects duplicate Galois automorphism powers, and requires canonical bounded bootstrap key ids.
   The crypto layer now also exposes and validates a
@@ -162,7 +288,8 @@ track detailed unfinished engineering work.
   `RotateLeft` vector that pins the full BFV Galois mask-and-sum schedule,
   expected packed slot rotation, ciphertext digests, plaintext coefficient
   digest, requested multiplication-depth metadata, and output component
-  digests across the same SDK fixture-shape validators, plus bounded bootstrap refresh vectors with refresh rounds,
+  digests across the same SDK fixture-shape validators, plus bounded bootstrap
+  refresh vectors with key-aware refresh-round admission, refresh rounds,
   deterministic input/output ciphertext digests, plaintext coefficient digests,
   and output component digests. The same shared operation fixture now pins the
   registered RNS chain descriptor/digest, deterministic sample coefficients,
@@ -253,7 +380,9 @@ track detailed unfinished engineering work.
   verifier keys before proof-carrying programmed policies are admitted;
   crypto identifier-envelope public-parameter validation now rejects
   structurally valid but unregistered BFV profiles before identifier
-  encryption, decryption, or downstream Torii/core admission, and identifier
+  encryption, decryption, or downstream Torii/core admission, caps
+  `max_input_bytes` at the registered 63-byte/64-slot RAM-LFE identifier
+  profile across Rust, JS, Swift, Kotlin/JVM, and Java Android clients, and identifier
   slot encoding now reports byte-length and slot-index conversion failures
   through `BfvError` instead of panic-only assumptions; always-built BFV scalar
   modular addition, multiplication, and coefficient reduction now avoid
@@ -323,6 +452,9 @@ track detailed unfinished engineering work.
   draws OS-backed private-key bytes through `OsRng::try_fill_bytes`, and routes
   P2P, native Connect bridge, and Python Connect keypair generation through
   fallible error surfaces instead of the infallible compatibility adapter;
+  Connect Norito bridge C/Java keypair-from-seed helpers and the Swift parity
+  regeneration utility now use `KeyPair::try_from_seed`, returning existing
+  bridge/key-derivation errors instead of panic-only seed expansion;
   GOST random scalar sampling and per-signature extra entropy now also use
   checked OS fills, while both BLS backends derive random keys from checked OS
   seed material and the default w3f backend seeds its key-splitting/signing RNGs
@@ -333,15 +465,27 @@ track detailed unfinished engineering work.
   keeps explicit seeds deterministic while routing unseeded `StdRng` setup
   through `SeedableRng::try_from_os_rng` and the CLI `Result` path, and CEK
   rotation receipt HKDF salts use the same checked OS-seeded path when an
-  explicit `--hkdf-salt` is not supplied; Kagami keypair, PoP, genesis-signing,
-  wizard, and localnet peer/genesis/gas/extra-account key generation now route
+  explicit `--hkdf-salt` is not supplied; Kagami keypair, PoP, client-config,
+  genesis-signing including NPoS bootstrap escrow, wizard, and localnet
+  peer/genesis/gas/extra-account key generation now route
   random, seeded, and private-key-derived material through `KeyPair`'s fallible
   APIs and BLS PoP `Result`s instead of compatibility panic
   wrappers; irohad's ephemeral Torii receipt-signer fallback now uses checked
   secp256k1 key generation and surfaces entropy/keygen failures as `StartTorii`,
   while `iroha_swarm` peer/genesis key generation, seeded network material, and
   BLS PoP proving now return `Error::KeyGeneration` through `Swarm::new`
-  instead of panicking;
+  instead of panicking; the CLI offline fallback config and governance council
+  VRF candidate-account derivation now use `KeyPair::try_from_seed`, surfacing
+  config/candidate derivation errors through existing `Result` paths, and
+  Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
+  key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
+  explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
+  `MultisigRegister::from_spec` now also returns `Result` and generates its
+  temporary registration anchor account through checked default key generation;
+  the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
+  instead of drawing a runtime dummy key;
+  Private Kaigi fee-spend execution now derives its synthetic fee-payer account
+  through checked Ed25519 seed expansion from the action hash;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
   public/private key formatting, `Signature::try_new` now routes SM2 through
   checked private-key rebuild/signing helpers, and ML-DSA import plus
@@ -371,9 +515,11 @@ track detailed unfinished engineering work.
   backend now exposes fallible secret reload, signing, and public-key derivation
   helpers, both BLS backends expose checked keypair generation, the public
   backend helper names `keypair` and `sign` now return `Result`, and the w3f
-  stored-secret `public_key` helper is fallible too. Top-level BLS keygen,
-  signing, proof-of-possession proving, and public-key derivation route through
-  checked paths on `Result`-returning APIs;
+  stored-secret `public_key` helper is fallible too. SM2 top-level random
+  key generation now routes through `Sm2PrivateKey::try_random`, fallible
+  `TryCryptoRng` byte draws, and bounded scalar validation before returning
+  key material. Top-level BLS keygen, signing, proof-of-possession proving, and
+  public-key derivation route through checked paths on `Result`-returning APIs;
   BLS VRF proof construction now returns `Result`, rejects invalid stored
   secret scalars before signing for both Normal and Small variants, and uses
   checked compressed-proof decoding so malformed G1/G2 proof encodings fail
@@ -517,8 +663,58 @@ track detailed unfinished engineering work.
 						  helpers, Taira canaries, Soracloud release governance proofs, CLI
 						  governance/account controller display, and ephemeral Torii receipt-signer
 						  logging now also use checked public-key accessors and propagate their
-						  existing error surfaces; P2P handshake hello construction now also
-						  extracts local peer key metadata through checked accessors and reports
+						  existing error surfaces; Taira write-canary generated signers now also
+						  use checked Ed25519 keypair generation and surface OS entropy failures
+						  through the canary command result path; oracle default reward/slash
+						  accounts now derive their fixed Ed25519 ids through checked
+						  seed-expansion while preserving infallible config defaults; the
+						  `iroha_genesis` manifest-normalize helper now generates its temporary
+						  signing key through checked default key generation and reports entropy
+						  failures with binary-specific context; the `iroha_crypto` SoraNet
+						  handshake-check helper now derives its fixed client/relay Ed25519 keys
+						  through checked seed expansion and reports failures through the
+						  handshake harness error path; offline v1/v2 interop vector generators
+						  now derive their fixed issuer, account, and note Ed25519 keys through
+						  checked seed-expansion helpers with fixture-specific error context; the
+							  `iroha` dev key-material example now generates its
+							  Ed25519 keypair through checked randomness and propagates entropy
+							  failures from `main`; the `iroha` Nexus app transfer and tutorial,
+							  `iroha_data_model` signed-block/I105 vector, and
+							  `iroha_torii_shared` permissions-preimage examples now also use checked
+							  Ed25519 generation or seed derivation and surface entropy or fixture-key
+							  failures through their example `main` result paths; the `iroha_kagami`
+							  Taira Kaigi localnet example now also derives its optional seed-based
+							  genesis signer through checked seed expansion and reports failures
+							  through the example result path; `iroha_js_host`
+							  N-API Ed25519/generic keypair exports and the relay envelope sample now
+							  also use checked random generation or seed derivation, mapping failures
+							  into N-API errors instead of panic-only keypair wrappers; Offline
+							  deterministic escrow account derivation now also uses checked Ed25519
+							  seed expansion while preserving the fixed-seed infallible API; account-address
+							  vector and compliance-vector fixture public keys now also use checked
+							  Ed25519 seed expansion while preserving their fixed seed bytes; Norito
+							  fixture-export and trigger-print scripts now also derive their fixed
+							  Ed25519 fixture authorities through checked seed expansion; `iroha_test_samples`
+							  sample-account generation now exposes a fallible helper and routes seeded/random
+							  test key material through checked key-generation APIs; `iroha_core` tx-size
+							  and memory examples now also use checked random key generation, with `tx_size`
+							  surfacing entropy/keygen failures through its example `main` result; the custom
+							  data-model sample fault-injection smoke test now also uses checked random
+							  key generation for its transaction signer; confidential keyset generation now
+							  accepts fallible `rand_core` 0.9 crypto RNGs and maps spend-key entropy
+							  failures to `ConfidentialKeyError::RandomBytes`; SoraNet client and relay
+							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
+							  Noise secret, and client ML-KEM seed material, returning labelled
+							  `HarnessError::RandomBytes` failures; SoraNet PoW and Argon2 puzzle
+							  ticket minting now also uses fallible `TryCryptoRng` draws and preserves
+							  labelled nonce-generation failures through `MintError::RandomBytes` and
+							  the p2p challenge wrapper; SoraNet admission-token minting and SoraFS
+							  proof-token minting now also use fallible `TryCryptoRng` draws and return
+							  labelled `MintError::RandomBytes` failures for admission-token nonce and
+							  proof-token id generation; SoraNet request blinding nonce generation now
+							  also accepts fallible `TryCryptoRng` inputs and reports entropy failures
+							  through `BlindingError::RandomBytes`; P2P handshake hello
+							  construction now also extracts local peer key metadata through checked accessors and reports
 						  malformed local keys through a dedicated handshake error, while multisig
 						  members expose a fallible checked algorithm accessor for result-returning
 							  callers; Python native bridge keypair export, account public-key hex,
@@ -577,7 +773,10 @@ track detailed unfinished engineering work.
   routes OS-backed keygen through key-pair validation, and hybrid X25519/ML-KEM
   `try_generate` consumes that checked path before reconstructing the hybrid
   secret. The public `HybridKeyPair::generate` helper now returns `Result`
-  instead of panicking after checked generation; the public direct and seeded
+  instead of panicking after checked generation; hybrid key-generation,
+  encapsulation, and SoraFS hybrid payload envelope paths now consume fallible
+  `TryCryptoRng` draws and return labelled RNG errors before key, ciphertext,
+  or AEAD nonce material is emitted; the public direct and seeded
   `generate_mlkem_keypair*` wrappers now
   return `Result` instead of panicking after validation; nonzero PQClean ML-KEM
   backend statuses now surface as
@@ -762,7 +961,9 @@ track detailed unfinished engineering work.
   returns the second branch failure directly when both dials fail, avoiding
   panic-only option readbacks in the fallback path; SoraNet CID
   blinding key derivation now rejects
-  all-zero epoch salts or all-zero circuit secrets before HKDF; SoraNet
+  all-zero epoch salts or all-zero circuit secrets before HKDF, and
+  request-scoped blinding nonce generation now reports RNG failures without
+  panicking; SoraNet
   revocation-store reload now rejects duplicate persisted fingerprints, rejects
   overflowing expiry timestamps, and bounds loaded active records to the
   configured capacity;
@@ -792,7 +993,59 @@ track detailed unfinished engineering work.
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer
   public-key and detached-signature lengths before backend verification or
-  replay-store mutation; admission-token verifier construction exposes a
+  replay-store mutation. Torii SoraFS stream-token issuance now generates token
+  IDs through checked OS RNG fills and returns labelled issuance errors before
+  signed token bodies are emitted; Torii internal operator-signature request
+  headers now generate their base64url nonces through checked OS RNG fills and
+  return labelled signing-header errors before canonical request signing, and
+  ZK IVM prove job creation now generates public job ids through checked OS RNG
+  fills before inserting async job state; Rust client account-signed multisig
+  and operator-signed admin request headers now also generate their base64url
+  request nonces through checked OS RNG fills and propagate entropy failures
+  before request builders are emitted; SoraFS orchestrator guard-cache
+  persistence now generates authentication-tag nonces through checked OS RNG
+  fills and returns labelled persistence errors before tagged cache bytes are
+  emitted, and Taikai cache-admission gossip bodies now generate replay nonces
+  through checked OS RNG fills before signed gossip entries are emitted;
+  SoraFS orchestrator fetch job IDs now use checked OS RNG fills and return
+  `OrchestratorError::JobIdRandomness` before fetch telemetry or provider
+  selection continues on entropy failure;
+  embedded Soracloud uploaded-model X25519 upload-key persistence now generates
+  the local static secret seed through checked OS RNG fills and returns a
+  labelled `io::Error` before the key file is written; CLI SM2 keygen and
+  confidential `create-keys` random seed paths now generate 32-byte seed
+  material through checked OS RNG fills and return normal command errors on
+  entropy failure; SoraFS CLI repair idempotency keys, storage-token nonces,
+  GAR receipt IDs, and admission-token RNG seeding now use checked OS RNG paths
+  and return command errors on entropy failure, while hybrid manifest envelope
+  encryption uses the already-fallible `OsRng` path; Soracloud CLI
+  mutation-auth signature nonces and staging temporary directory suffixes now
+  use checked OS RNG fills and return command errors before request signing or
+  staging on entropy failure; Rust client transaction nonces now use checked OS
+  RNG reads through fallible `try_build_transaction*` APIs, and client
+  submission plus CLI transaction creation paths propagate those entropy
+  failures before submit; transaction gossiper public/restricted shuffle seeds
+  now derive deterministically from chain/local-peer/max-peer identity material
+  and plane domains instead of reading process RNG during actor construction;
+  telemetry future ids now use a process-local atomic counter instead of random
+  ids; unseeded persisted-RBC chunk sampling now seeds `StdRng` through checked
+  OS entropy and reports `SamplingError::RandomSeed` on failure while explicit
+  seeds remain deterministic; proactive block-sync gossip now derives
+  target-selection seeds from local-peer, height, gossip round, gossip size,
+  candidate, and world-peer material instead of reading thread RNG; P2P connect
+  scheduling and reconnect backoff jitter now derive bounded delays from
+  domain-separated local-peer, remote-peer, address, and attempt-context
+  material instead of reading thread RNG; Iroha core queue/storage tests now
+  use deterministic counters for synthetic domain names, transaction hashes,
+  and stress-test delays instead of process or thread RNG; operator-signature
+  integration and Torii fixture helpers now use monotonic deterministic nonces
+  instead of thread RNG in test-only signed requests; `iroha_test_network`
+  peer selection now uses deterministic round-robin order instead of thread
+  RNG; Iroha core memory-example synthetic asset/NFT values now use
+  deterministic counters instead of process RNG; Izanami chaos keeps explicit
+  seeds deterministic while routing unseeded `StdRng` setup through checked OS
+  entropy and returning setup errors on entropy failure;
+  admission-token verifier construction exposes a
   fallible path that rejects malformed issuer public keys before fingerprint
   derivation or runtime state admission, and the compatibility constructor now
   keeps malformed issuer keys as fail-closed verifier state that is rejected
@@ -802,7 +1055,8 @@ track detailed unfinished engineering work.
   `SystemTime` conversion;
   admission-token minting now
   preflights issuer ML-DSA secret-key length before nonce generation, body
-  construction, or backend signing; SoraNet SRCv2 bundle
+  construction, or backend signing, and reports nonce RNG failures as typed
+  mint errors; SoraNet SRCv2 bundle
   verification re-runs canonical certificate-payload admission for in-memory
   bundles, rejects weak Ed25519 verifier keys, and preflights ML-DSA-65
   issuer public-key and detached-signature lengths before backend verification;
@@ -925,7 +1179,9 @@ track detailed unfinished engineering work.
   `SystemTime` conversion; proof-token body encoding now exposes `try_encode`,
   routes mint/signature/digest helpers through checked entry-count and
   entry-length narrowing, and makes the compatibility `encode` path fail closed
-  to a malformed frame for impossible direct token states; proof-token base64
+  to a malformed frame for impossible direct token states; proof-token minting
+  now reports token-id RNG failures through labelled `MintError::RandomBytes`
+  before blinded digest or signature material is produced; proof-token base64
   header encoding/decoding now uses the `base64` crate's checked no-alloc slice
   helpers instead of manual capacity arithmetic and panic-only buffer
   assertions.

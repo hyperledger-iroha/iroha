@@ -23,7 +23,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
 use iroha_crypto::{
-    KeyPair,
+    Hash, KeyPair,
     soranet::{
         pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
         puzzle,
@@ -40,7 +40,6 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use rand::Rng as _;
 use soranet_pq::MlDsaSuite;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -6418,11 +6417,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     .saturating_mul(u32::try_from(i).unwrap_or(u32::MAX));
                 let jitter_cap_ms =
                     u64::try_from(self.happy_eyeballs_stagger.as_millis() / 2).unwrap_or(u64::MAX);
-                let jitter_ms = if jitter_cap_ms > 0 {
-                    rand::rng().random_range(0..=jitter_cap_ms)
-                } else {
-                    0
-                };
+                let jitter_ms = connect_attempt_jitter_ms(
+                    &self.self_id,
+                    &peer_id,
+                    &addr,
+                    i,
+                    self.happy_eyeballs_stagger,
+                    jitter_cap_ms,
+                );
                 let when = now + base + Duration::from_millis(jitter_ms);
                 let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
                 self.pending_connects
@@ -6911,13 +6913,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             .and_then(|m| m.get(&key).map(|(_, b)| *b))
             .unwrap_or(BACKOFF_INITIAL);
         let next_base = core::cmp::min(BACKOFF_MAX, base.saturating_mul(2));
-        let mut rng = rand::rng();
         let upper_ms = u64::try_from(next_base.as_millis()).unwrap_or(u64::MAX);
-        let jitter_ms = if upper_ms == 0 {
-            0
-        } else {
-            rng.random_range(0..=upper_ms)
-        };
+        let jitter_ms =
+            reconnect_backoff_jitter_ms(&self.self_id, id, addr, base, next_base, upper_ms);
         CONNECT_RETRY_MILLIS_TOTAL.fetch_add(jitter_ms, Ordering::Relaxed);
         let when = now + Duration::from_millis(jitter_ms);
         self.retry_backoff
@@ -7907,6 +7905,50 @@ fn apply_connect_startup_delay(
     }
 }
 
+fn connect_attempt_jitter_ms(
+    self_id: &PeerId,
+    peer_id: &PeerId,
+    addr: &SocketAddr,
+    stagger_index: usize,
+    stagger: Duration,
+    upper_ms: u64,
+) -> u64 {
+    let material = format!(
+        "iroha:p2p-connect-attempt-jitter:v1\nself={self_id}\npeer={peer_id}\naddr={addr}\nindex={stagger_index}\nstagger_ms={}\nupper_ms={upper_ms}",
+        stagger.as_millis()
+    );
+    bounded_hash_jitter_ms(&material, upper_ms)
+}
+
+fn reconnect_backoff_jitter_ms(
+    self_id: &PeerId,
+    peer_id: &PeerId,
+    addr: &SocketAddr,
+    base: Duration,
+    next_base: Duration,
+    upper_ms: u64,
+) -> u64 {
+    let material = format!(
+        "iroha:p2p-reconnect-backoff-jitter:v1\nself={self_id}\npeer={peer_id}\naddr={addr}\nbase_ms={}\nnext_base_ms={}\nupper_ms={upper_ms}",
+        base.as_millis(),
+        next_base.as_millis()
+    );
+    bounded_hash_jitter_ms(&material, upper_ms)
+}
+
+fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
+    if upper_ms == 0 {
+        return 0;
+    }
+    let digest = Hash::new(material.as_bytes());
+    let digest: [u8; Hash::LENGTH] = digest.into();
+    let mut word = [0_u8; 8];
+    word.copy_from_slice(&digest[..8]);
+    let raw = u64::from_le_bytes(word);
+    u64::try_from(u128::from(raw) % (u128::from(upper_ms) + 1))
+        .expect("bounded jitter value fits in u64")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -7976,6 +8018,81 @@ mod tests {
     }
 
     impl_decode_from_slice_via_codec!(DummyMsg, TrustGossipMsg, PeerGossipMsg, TopicMsg);
+
+    #[test]
+    fn connect_attempt_jitter_is_stable_and_bounded() {
+        let self_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:34567);
+        let upper_ms = 25;
+
+        let jitter = connect_attempt_jitter_ms(
+            &self_id,
+            &peer_id,
+            &addr,
+            3,
+            Duration::from_millis(50),
+            upper_ms,
+        );
+
+        assert_eq!(
+            jitter,
+            connect_attempt_jitter_ms(
+                &self_id,
+                &peer_id,
+                &addr,
+                3,
+                Duration::from_millis(50),
+                upper_ms,
+            )
+        );
+        assert!(jitter <= upper_ms);
+        assert_eq!(
+            connect_attempt_jitter_ms(&self_id, &peer_id, &addr, 3, Duration::from_millis(50), 0,),
+            0
+        );
+    }
+
+    #[test]
+    fn reconnect_backoff_jitter_is_stable_and_bounded() {
+        let self_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45678);
+        let upper_ms = 250;
+
+        let jitter = reconnect_backoff_jitter_ms(
+            &self_id,
+            &peer_id,
+            &addr,
+            Duration::from_millis(100),
+            Duration::from_millis(200),
+            upper_ms,
+        );
+
+        assert_eq!(
+            jitter,
+            reconnect_backoff_jitter_ms(
+                &self_id,
+                &peer_id,
+                &addr,
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+                upper_ms,
+            )
+        );
+        assert!(jitter <= upper_ms);
+        assert_eq!(
+            reconnect_backoff_jitter_ms(
+                &self_id,
+                &peer_id,
+                &addr,
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+                0,
+            ),
+            0
+        );
+    }
 
     #[test]
     fn trust_gossip_allowed_blocks_when_disabled() {

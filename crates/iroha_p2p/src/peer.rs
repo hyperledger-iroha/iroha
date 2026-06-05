@@ -36,7 +36,8 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     core as ncore,
 };
-use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
+use rand::rand_core::TryCryptoRng;
+use rand::{SeedableRng, rngs::StdRng};
 #[cfg(feature = "noise_handshake")]
 use snow::{Builder, params::NoiseParams};
 use tokio::{
@@ -380,7 +381,7 @@ impl SoranetHandshakeConfig {
         Some(self.admission_for_difficulty(self.pow_params.difficulty()))
     }
 
-    pub(crate) fn mint_challenge_ticket<R: RngCore + CryptoRng>(
+    pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
         rng: &mut R,
     ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
@@ -570,13 +571,46 @@ pub struct MintedChallenge {
 
 #[cfg(test)]
 mod handshake_config_tests {
-    use std::num::NonZeroU32;
+    use std::{fmt, num::NonZeroU32};
 
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::{
+        RngCore, SeedableRng,
+        rand_core::{TryCryptoRng, TryRngCore},
+        rngs::StdRng,
+    };
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::tempdir;
 
     use super::*;
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing p2p ticket RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn soranet_handshake_rng_reads_os_entropy() {
@@ -718,6 +752,43 @@ mod handshake_config_tests {
         assert!(minted.admission.is_none());
         assert_eq!(minted.frames.len(), 1);
         assert_eq!(minted.frames[0], encoded);
+    }
+
+    #[test]
+    fn mint_challenge_ticket_reports_rng_failure() {
+        let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
+        let config = SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+            true,
+            1,
+            1,
+            None,
+            true,
+            pow_params,
+            None,
+            Duration::from_secs(240),
+            None,
+            None,
+            None,
+        );
+        let mut rng = FailingTryRng;
+
+        let err = config
+            .mint_challenge_ticket(&mut rng)
+            .expect_err("failing RNG must abort challenge minting");
+
+        match err {
+            ChallengeMintError::Pow(pow::MintError::RandomBytes { operation, message }) => {
+                assert_eq!(operation, "minting PoW client nonce");
+                assert!(
+                    message.contains("failing p2p ticket RNG"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected PoW RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

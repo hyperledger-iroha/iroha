@@ -2669,6 +2669,47 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(request.encryptedInputHex, expected)
     }
 
+    func testIdentifierBfvEnvelopeBuilderRejectsOverwideInputProfile() throws {
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "string#retail",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .exact,
+            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
+                parameters: ToriiIdentifierBfvParameters(
+                    polynomialDegree: 8,
+                    plaintextModulus: 257,
+                    ciphertextModulus: 16_842_752,
+                    decompositionBaseLog: 12
+                ),
+                publicKey: ToriiIdentifierBfvPublicKey(
+                    b: [11_472_226, 15_791_131, 10_301_391, 6_321_610, 502_045, 1_948_157, 5_332_249, 12_641_494],
+                    a: [3_503_246, 2_379_264, 12_091_019, 30_169, 15_804_162, 8_155_629, 2_418_997, 3_003_107]
+                ),
+                maxInputBytes: 64
+            ),
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+
+        XCTAssertThrowsError(
+            try policy.encryptInput(
+                "ab",
+                seedHex: "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+            )
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("registered RAM-LFE"))
+        }
+    }
+
     func testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors() throws {
         let fixtureURL = repositoryRootURL()
             .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")

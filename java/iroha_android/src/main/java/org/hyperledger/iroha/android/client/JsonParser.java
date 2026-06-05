@@ -67,6 +67,9 @@ public final class JsonParser {
     }
     while (true) {
       final String key = parseString();
+      if (map.containsKey(key)) {
+        throw new IllegalStateException("Duplicate JSON object key: " + key);
+      }
       skipWhitespace();
       expect(':');
       skipWhitespace();

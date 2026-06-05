@@ -264,7 +264,8 @@ fn run() -> Result<(), String> {
         .map_err(|err| format!("invalid payload JSON: {err}"))?;
 
     let seed = hex::decode(SIGNING_SEED_HEX).map_err(|err| err.to_string())?;
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .map_err(|err| format!("failed to derive fixture signing key: {err}"))?;
     let (algorithm, public_key_bytes) = keypair
         .public_key()
         .try_to_bytes()
@@ -425,7 +426,8 @@ mod tests {
 
     #[test]
     fn instruction_builder_rejects_legacy_asset_literal_argument() {
-        let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("seeded fixture key should derive");
         let authority = AccountId::new(keypair.public_key().clone());
         let destination = AccountId::new(keypair.public_key().clone());
 
@@ -453,7 +455,8 @@ mod tests {
 
     #[test]
     fn payload_builder_sets_nonce_and_ttl() {
-        let keypair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
+            .expect("seeded fixture key should derive");
         let authority = AccountId::new(keypair.public_key().clone());
         let destination = AccountId::new(keypair.public_key().clone());
         let mut args = BTreeMap::new();

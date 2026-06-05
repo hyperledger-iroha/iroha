@@ -234,9 +234,9 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
-                let mut rng = sm2::elliptic_curve::rand_core::OsRng;
+                let mut rng = rand::rngs::OsRng;
                 let private =
-                    sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng)
+                    sm::Sm2PrivateKey::try_random(sm::Sm2PublicKey::default_distid(), &mut rng)
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
                 let public_key = PublicKey::new(PublicKeyFull::Sm2(private.public_key()));
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
@@ -2931,6 +2931,19 @@ mod tests {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
             .expect("checked secp256k1 random keypair");
         let message = b"top-level checked secp256k1 random keypair";
+        let signature = Signature::new(key_pair.private_key(), message);
+
+        signature
+            .verify(key_pair.public_key(), message)
+            .expect("signature verifies");
+    }
+
+    #[cfg(feature = "sm")]
+    #[test]
+    fn try_random_with_algorithm_sm2_signs_and_verifies() {
+        let key_pair =
+            KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("checked SM2 random keypair");
+        let message = b"top-level checked SM2 random keypair";
         let signature = Signature::new(key_pair.private_key(), message);
 
         signature

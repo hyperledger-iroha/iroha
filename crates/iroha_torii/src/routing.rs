@@ -8541,7 +8541,7 @@ fn bridge_proof_from_sccp_message_bundle(
                 recursion_depth: None,
             },
         ),
-        pinned: false,
+        pinned: true,
     })
 }
 
@@ -9846,7 +9846,7 @@ mod sccp_message_backend_tests {
                         recursion_depth: None,
                     },
                 ),
-                pinned: false,
+                pinned: true,
             },
             commitment,
             size_bytes: 2,
@@ -12002,6 +12002,10 @@ mod sccp_message_backend_tests {
             proof.manifest_hash,
             iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed)
         );
+        assert!(
+            proof.pinned,
+            "SCCP message bridge proofs must be pinned for core replay protection"
+        );
 
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
             .expect_err("diagnostic proof must be blocked without the unready flag");
@@ -12025,6 +12029,16 @@ mod sccp_message_backend_tests {
         assert_eq!(
             sccp_message_source_domain(&extracted.bundle.payload),
             iroha_sccp::SCCP_DOMAIN_ETH
+        );
+
+        let mut unpinned = record.clone();
+        let Some(bridge) = unpinned.bridge.as_mut() else {
+            unreachable!("test record carries bridge metadata");
+        };
+        bridge.proof.pinned = false;
+        assert!(
+            sccp_message_artifact_from_verified_bridge_record(&unpinned, message_id).is_none(),
+            "unpinned SCCP message records must not be served as source-chain envelopes"
         );
 
         let rejected = proof_record_for_sccp_artifact(
@@ -12539,6 +12553,9 @@ fn sccp_message_artifact_from_verified_bridge_record(
         return None;
     }
     let bridge = record.bridge.as_ref()?;
+    if !bridge.proof.pinned {
+        return None;
+    }
     if record.id.backend != bridge.proof.backend_label()
         || record.id.proof_hash != bridge.commitment
     {

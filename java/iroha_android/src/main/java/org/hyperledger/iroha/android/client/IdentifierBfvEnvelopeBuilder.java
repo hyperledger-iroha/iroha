@@ -36,6 +36,7 @@ final class IdentifierBfvEnvelopeBuilder {
       "iroha.sdk.identifier.bfv.e2.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] NORITO_MAGIC = {'N', 'R', 'T', '0'};
   private static final int NORITO_COMPACT_LEN_FLAG = 0x02;
+  private static final int BFV_IDENTIFIER_MAX_INPUT_BYTES = 63;
   private static final long CRC64_POLY = 0xC96C5795D7870F42L;
   private static final long[] CRC64_TABLE = buildCrc64Table();
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -110,6 +111,12 @@ final class IdentifierBfvEnvelopeBuilder {
     if (BigInteger.valueOf(maxInputBytes).compareTo(plaintextModulus) >= 0) {
       throw new IllegalArgumentException(
           "BFV maxInputBytes must fit into one plaintext slot");
+    }
+    if (maxInputBytes > BFV_IDENTIFIER_MAX_INPUT_BYTES) {
+      throw new IllegalArgumentException(
+          "BFV maxInputBytes must be at most "
+              + BFV_IDENTIFIER_MAX_INPUT_BYTES
+              + " for the registered RAM-LFE BFV identifier profile");
     }
     final List<Long> rawA = publicParameters.publicKey().a();
     final List<Long> rawB = publicParameters.publicKey().b();

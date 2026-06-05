@@ -9,6 +9,7 @@
 use std::fmt;
 
 use blake3::Hasher;
+use rand_core::TryCryptoRng;
 use soranet_pq::{HkdfDomain, HkdfSuite, derive_labeled_hkdf};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -29,7 +30,7 @@ const REQUEST_DOMAIN: &[u8] = b"soranet.blinding.request.v1";
 const CIRCUIT_DOMAIN: &[u8] = b"soranet.blinding.circuit.v1";
 
 /// Errors surfaced while deriving or applying `SoraNet` CID blinding.
-#[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum BlindingError {
     /// A required entropy-bearing input was all zero.
     #[error("soranet blinding input {0} must not be all zero")]
@@ -38,6 +39,14 @@ pub enum BlindingError {
     /// length is unsupported by the underlying hash function.
     #[error("soranet hkdf expansion failed")]
     Hkdf,
+    /// Random byte generation failed while building a request nonce.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
 }
 
 /// Deterministic blinding key derived from the daily salt and circuit secret.
@@ -143,19 +152,21 @@ impl RequestNonce {
 
     /// Populate the nonce with random bytes using the provided RNG.
     ///
-    /// # Panics
-    ///
-    /// Panics if the RNG fails to fill the buffer, matching the behaviour of
-    /// `RngCore::fill_bytes`.
+    /// # Errors
+    /// Returns [`BlindingError::RandomBytes`] if the RNG cannot provide request
+    /// nonce material.
     #[cfg(feature = "rand")]
-    #[must_use]
-    pub fn random<R>(rng: &mut R) -> Self
+    pub fn random<R>(rng: &mut R) -> Result<Self, BlindingError>
     where
-        R: rand::RngCore,
+        R: TryCryptoRng,
     {
         let mut buf = [0_u8; REQUEST_NONCE_LEN];
-        rng.fill_bytes(&mut buf);
-        Self(buf)
+        rng.try_fill_bytes(&mut buf)
+            .map_err(|err| BlindingError::RandomBytes {
+                operation: "building request blinding nonce",
+                message: err.to_string(),
+            })?;
+        Ok(Self(buf))
     }
 }
 
@@ -191,7 +202,38 @@ impl fmt::Debug for CircuitBlindingKey {
 
 #[cfg(test)]
 mod tests {
+    use rand_core::{TryCryptoRng, TryRngCore};
+
     use super::*;
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing blinding nonce RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn canonical_cache_key_matches_reference() {
@@ -233,6 +275,19 @@ mod tests {
         // Same nonce => same digest to support deterministic retries.
         let blinded_a_again = key.request_scoped_blinded(cid, &nonce_a);
         assert_eq!(blinded_a, blinded_a_again);
+    }
+
+    #[test]
+    fn request_nonce_random_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+        let err = RequestNonce::random(&mut rng).expect_err("RNG failure must be reported");
+        match err {
+            BlindingError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building request blinding nonce");
+                assert!(message.contains("failing blinding nonce RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

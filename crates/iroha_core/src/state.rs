@@ -59838,6 +59838,8 @@ mod tests {
                     payload: b"ciphertext".to_vec(),
                     payload_bytes: std::num::NonZeroU64::new(10).expect("nonzero"),
                     payload_commitment: Hash::new(b"ciphertext"),
+                    fhe_residual_multiple_bound: None,
+                    fhe_bound_mode: None,
                     last_update_sequence: 4,
                     governance_tx_hash: Hash::new(b"gov"),
                     source_action:

@@ -31,6 +31,7 @@ class JsonParser private constructor(private val input: String) {
         if (peek('}')) { index++; return map }
         while (true) {
             val key = parseString()
+            check(!map.containsKey(key)) { "Duplicate JSON object key: $key" }
             skipWhitespace()
             expect(':')
             skipWhitespace()

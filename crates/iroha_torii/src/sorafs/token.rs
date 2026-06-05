@@ -10,7 +10,10 @@ use base64::Engine as _;
 use dashmap::{DashMap, mapref::entry::Entry};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use iroha_config::parameters::actual;
-use rand::random;
+use rand::{
+    rand_core::{TryCryptoRng, TryRngCore},
+    rngs::OsRng,
+};
 use sorafs_manifest::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
 use thiserror::Error;
 
@@ -183,7 +186,7 @@ impl StreamTokenIssuer {
         let requests_per_minute = window_limit;
 
         let body = StreamTokenBodyV1 {
-            token_id: new_token_id(),
+            token_id: new_token_id()?,
             manifest_cid,
             provider_id,
             profile_handle,
@@ -229,9 +232,19 @@ impl StreamTokenIssuer {
     }
 }
 
-fn new_token_id() -> String {
-    let bytes: [u8; 16] = random();
-    hex::encode(bytes)
+fn new_token_id() -> Result<String, StreamTokenIssuerError> {
+    let mut rng = OsRng;
+    new_token_id_with_rng(&mut rng)
+}
+
+fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamTokenIssuerError> {
+    let mut bytes = [0u8; 16];
+    rng.try_fill_bytes(&mut bytes)
+        .map_err(|err| StreamTokenIssuerError::RandomBytes {
+            operation: "issuing stream token id",
+            message: err.to_string(),
+        })?;
+    Ok(hex::encode(bytes))
 }
 
 fn load_signing_key(path: &PathBuf) -> Result<SigningKey, StreamTokenIssuerError> {
@@ -298,6 +311,14 @@ pub enum StreamTokenIssuerError {
     /// Serialising or signing the stream token body failed.
     #[error("failed to create stream token: {0}")]
     StreamToken(#[from] StreamTokenError),
+    /// Random byte generation failed during stream token issuance.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// The issuing client exceeded their per-minute token quota.
     #[error("client {client_id} exceeded token issuance quota ({limit} requests/minute)")]
     ClientQuotaExceeded {
@@ -350,6 +371,35 @@ mod tests {
 
     use super::*;
 
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing stream token RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
+
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {
             token_id: "01J3E4ZCMQ3GP2H3R5PSNF6Z7X".to_string(),
@@ -376,6 +426,19 @@ mod tests {
         let hash = token.body_hash().expect("hash");
         let bytes = body.to_canonical_bytes().expect("bytes");
         assert_eq!(hash.as_bytes(), blake3::hash(&bytes).as_bytes());
+    }
+
+    #[test]
+    fn new_token_id_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+        match new_token_id_with_rng(&mut rng) {
+            Err(StreamTokenIssuerError::RandomBytes { operation, message }) => {
+                assert_eq!(operation, "issuing stream token id");
+                assert!(message.contains("failing stream token RNG"));
+            }
+            Ok(_) => panic!("RNG failure must be reported"),
+            Err(other) => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

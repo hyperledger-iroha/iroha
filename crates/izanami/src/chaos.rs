@@ -2664,18 +2664,19 @@ fn workload_account_count(config: &ChaosConfig) -> usize {
     }
 }
 
-fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
+fn make_network_builder(
+    config: &ChaosConfig,
+    genesis: Vec<Vec<InstructionBox>>,
+) -> Result<NetworkBuilder> {
     let mut genesis = genesis;
-    let nexus_bootstrap_post_topology = config
-        .nexus
-        .as_ref()
-        .map(|profile| {
-            let post_topology =
-                extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile);
-            compact_nexus_retained_genesis(&mut genesis);
-            post_topology
-        })
-        .unwrap_or_default();
+    let nexus_bootstrap_post_topology = if let Some(profile) = config.nexus.as_ref() {
+        let post_topology =
+            extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile)?;
+        compact_nexus_retained_genesis(&mut genesis);
+        post_topology
+    } else {
+        Vec::new()
+    };
     let recovery_profile = recovery_profile_for(config);
     let phase_operator_keypair = sumeragi_phase_operator_keypair();
     let torii_receipt_public_key = phase_operator_keypair.public_key().to_string();
@@ -2718,7 +2719,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         builder = builder
             .with_data_availability_enabled(profile.da_enabled)
             .with_config_table(profile.config_layer.clone());
-        let gas_account_id = instructions::nexus_gas_account_id().to_string();
+        let gas_account_id = instructions::nexus_gas_account_id()?.to_string();
         builder = builder.with_config_layer(move |layer| {
             layer
                 .write(
@@ -2753,7 +2754,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                     .map(|profile| profile.bootstrap_public_lanes.as_slice())
                     .unwrap_or(&[]),
                 npos_params.min_self_bond(),
-            ));
+            )?);
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
         let filter = filter.trim();
@@ -3234,24 +3235,27 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         }
     }
 
-    builder
+    Ok(builder)
 }
 
 fn extract_nexus_bootstrap_post_topology(
     genesis: &mut Vec<Vec<InstructionBox>>,
     peer_count: usize,
     profile: &crate::config::NexusProfile,
-) -> Vec<Vec<InstructionBox>> {
+) -> Result<Vec<Vec<InstructionBox>>> {
     let nexus_domain: DomainId =
         DomainId::parse_fully_qualified("nexus.universal").expect("nexus domain");
     let ivm_domain: DomainId =
         DomainId::parse_fully_qualified("ivm.universal").expect("ivm domain");
     let universal_domain: DomainId =
         DomainId::parse_fully_qualified("universal.universal").expect("universal domain");
-    let gas_account = instructions::nexus_gas_account_id();
-    let validator_accounts: BTreeSet<_> = (0..peer_count.max(1))
-        .map(|index| AccountId::new(instructions::peer_keypair(index).public_key().clone()))
-        .collect();
+    let gas_account = instructions::nexus_gas_account_id()?;
+    let mut validator_accounts = BTreeSet::new();
+    for index in 0..peer_count.max(1) {
+        validator_accounts.insert(AccountId::new(
+            instructions::peer_keypair(index)?.public_key().clone(),
+        ));
+    }
     let stake_asset = profile.stake_asset_id.clone();
     let fee_asset = profile.fee_asset_id.clone();
     let mut neutral_tx = Vec::new();
@@ -3300,7 +3304,7 @@ fn extract_nexus_bootstrap_post_topology(
     if !fee_grant_tx.is_empty() {
         bootstrap.push(fee_grant_tx);
     }
-    bootstrap
+    Ok(bootstrap)
 }
 
 fn compact_nexus_retained_genesis(genesis: &mut Vec<Vec<InstructionBox>>) {
@@ -3646,7 +3650,7 @@ impl IzanamiRunner {
         )?;
         let base_domain = state.base_domain().clone();
 
-        let builder = make_network_builder(&config, genesis);
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = builder.start().await?;
         if config.nexus.is_some() {
@@ -3684,7 +3688,7 @@ impl IzanamiRunner {
     }
 
     pub async fn run(self) -> Result<()> {
-        let mut rng = self.seeded_rng();
+        let mut rng = self.seeded_rng()?;
         let config_layers = Arc::new(
             self.network
                 .config_layers()
@@ -4040,7 +4044,7 @@ impl IzanamiRunner {
         }
     }
 
-    fn seeded_rng(&self) -> StdRng {
+    fn seeded_rng(&self) -> Result<StdRng> {
         seeded_rng_from_seed(self.config.seed)
     }
 
@@ -4998,13 +5002,10 @@ async fn await_worker_shutdown_with_timeout(
     }
 }
 
-fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
+fn seeded_rng_from_seed(seed: Option<u64>) -> Result<StdRng> {
     seed.map_or_else(
-        || {
-            let mut thread_rng = rand::rng();
-            StdRng::from_rng(&mut thread_rng)
-        },
-        StdRng::seed_from_u64,
+        || StdRng::try_from_os_rng().wrap_err("failed to seed Izanami chaos RNG from OS"),
+        |seed| Ok(StdRng::seed_from_u64(seed)),
     )
 }
 
@@ -9042,7 +9043,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let mut builder = make_network_builder(&config, genesis);
+        let mut builder = make_network_builder(&config, genesis)?;
         builder = builder.with_config_layer(|layer| {
             layer.write(["sumeragi", "consensus_mode"], "npos");
         });
@@ -9124,7 +9125,7 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
 
-        let network = make_network_builder(&config, genesis).build();
+        let network = make_network_builder(&config, genesis)?.build();
         let timing = derive_npos_timing(&config);
         let mut block_time = None;
         let mut commit_time = None;
@@ -9208,7 +9209,7 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
 
-        let network = make_network_builder(&config, genesis).build();
+        let network = make_network_builder(&config, genesis)?.build();
         let mut commit_pos = None;
         let mut block_pos = None;
         let mut idx = 0usize;
@@ -9457,7 +9458,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let network = make_network_builder(&config, genesis).build();
+        let network = make_network_builder(&config, genesis)?.build();
         let summary = audit_npos_genesis_preflight(
             &network.genesis(),
             config.peer_count,
@@ -9537,7 +9538,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let network = make_network_builder(&config, genesis).build();
+        let network = make_network_builder(&config, genesis)?.build();
 
         let mut bootstrap_tx_index = None;
         let mut validator_tx_index = None;
@@ -9631,7 +9632,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let network = make_network_builder(&config, genesis).build();
+        let network = make_network_builder(&config, genesis)?.build();
 
         let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
         let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
@@ -11111,8 +11112,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -11268,7 +11270,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let builder = make_network_builder(&config, genesis);
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = match builder.start().await {
             Ok(network) => network,
@@ -12432,8 +12434,8 @@ mod tests {
 
     #[test]
     fn seeded_rng_is_deterministic_for_same_seed() {
-        let mut rng_a = seeded_rng_from_seed(Some(777));
-        let mut rng_b = seeded_rng_from_seed(Some(777));
+        let mut rng_a = seeded_rng_from_seed(Some(777)).expect("seeded RNG A");
+        let mut rng_b = seeded_rng_from_seed(Some(777)).expect("seeded RNG B");
 
         let sample_a: [u64; 3] = [rng_a.next_u64(), rng_a.next_u64(), rng_a.next_u64()];
         let sample_b: [u64; 3] = [rng_b.next_u64(), rng_b.next_u64(), rng_b.next_u64()];
@@ -12446,8 +12448,8 @@ mod tests {
 
     #[test]
     fn seeded_rng_diverges_for_different_seeds() {
-        let mut rng_a = seeded_rng_from_seed(Some(1));
-        let mut rng_b = seeded_rng_from_seed(Some(2));
+        let mut rng_a = seeded_rng_from_seed(Some(1)).expect("seeded RNG A");
+        let mut rng_b = seeded_rng_from_seed(Some(2)).expect("seeded RNG B");
 
         let sample_a: [u64; 3] = [rng_a.next_u64(), rng_a.next_u64(), rng_a.next_u64()];
         let sample_b: [u64; 3] = [rng_b.next_u64(), rng_b.next_u64(), rng_b.next_u64()];
@@ -12828,7 +12830,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let builder = make_network_builder(&config, genesis);
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = match builder.start().await {
             Ok(network) => network,
@@ -12923,7 +12925,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let builder = make_network_builder(&config, genesis);
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = match builder.start().await {
             Ok(network) => network,
@@ -13025,7 +13027,7 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let builder = make_network_builder(&config, genesis);
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = match builder.start().await {
             Ok(network) => network,
@@ -14201,8 +14203,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -14758,8 +14761,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -14798,6 +14802,58 @@ mod tests {
             .find_map(|layer| read_str(layer, &["logger", "level"]));
         assert_eq!(level.as_deref(), Some(IZANAMI_PEER_LOG_BASE_LEVEL));
 
+        Ok(())
+    }
+
+    #[test]
+    fn make_network_builder_derives_nexus_keys() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: Some(23),
+            tps: 1.0,
+            max_inflight: 4,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
+            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            sumeragi_proposal_queue_scan_multiplier:
+                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
+            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+            sumeragi_inline_block_created_backup_rbc:
+                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile),
+            diagnostic_dir: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let _builder = make_network_builder(&config, genesis)?;
         Ok(())
     }
 
@@ -14849,8 +14905,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -14906,7 +14963,7 @@ mod tests {
             None
         };
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let expected_gas_account = instructions::nexus_gas_account_id().to_string();
+        let expected_gas_account = instructions::nexus_gas_account_id()?.to_string();
         for path in [
             &["pipeline", "gas", "tech_account_id"][..],
             &["nexus", "fees", "fee_sink_account_id"][..],
@@ -14972,8 +15029,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -15043,8 +15101,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -15112,8 +15171,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {
@@ -15265,8 +15325,9 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
+        let builder = make_network_builder(&config, genesis)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            make_network_builder(&config, genesis).build()
+            builder.build()
         })) {
             Ok(network) => network,
             Err(payload) => {

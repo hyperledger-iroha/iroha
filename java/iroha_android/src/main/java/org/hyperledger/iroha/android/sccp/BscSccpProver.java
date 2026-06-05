@@ -156,6 +156,8 @@ public final class BscSccpProver {
         input.destinationBindingHash(),
         input.backend(),
         input.sourceDomain(),
-        input.destinationBinding());
+        input.destinationBinding(),
+        input.proofArtifactHash(),
+        input.provingKeyHash());
   }
 }

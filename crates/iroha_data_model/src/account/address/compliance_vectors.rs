@@ -74,7 +74,9 @@ const MULTISIG_FIXTURES: &[MultisigFixture] = &[
 
 fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
     let seed = vec![seed_byte; 32];
-    let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+    let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("fixed account-address compliance Ed25519 seed must derive")
+        .into_parts();
     public_key
 }
 
@@ -513,6 +515,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ed25519_pk_with_uses_checked_seed_derivation() {
+        assert_eq!(
+            ed25519_pk_with(0x42)
+                .try_algorithm()
+                .expect("compliance vector key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
+
+    #[test]
     fn compliance_vectors_build_with_checked_public_key_payloads() {
         let Value::Object(root) = compliance_vectors_json() else {
             panic!("compliance vectors root must be an object");
@@ -525,7 +537,8 @@ mod tests {
         };
 
         assert!(!positive.is_empty());
-        let public_key = KeyPair::from_seed(vec![0x00; 32], Algorithm::Ed25519)
+        let public_key = KeyPair::try_from_seed(vec![0x00; 32], Algorithm::Ed25519)
+            .expect("fixed compliance vector Ed25519 seed must derive")
             .public_key()
             .clone();
         let Some(controller) = positive

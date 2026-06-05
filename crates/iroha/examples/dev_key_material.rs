@@ -5,8 +5,8 @@ use iroha::{
     data_model::prelude::AccountId,
 };
 
-fn main() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let key_pair = dev_key_pair()?;
     let (public_key, private_key) = key_pair.into_parts();
     let (algorithm, public_key_raw) = public_key
         .try_to_bytes()
@@ -30,4 +30,28 @@ fn main() {
         ExposedPrivateKey(private_key).to_string(),
         hex::encode(public_key_raw),
     );
+
+    Ok(())
+}
+
+fn dev_key_pair() -> Result<KeyPair, iroha::crypto::Error> {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_key_pair_uses_checked_ed25519_generation() {
+        let key_pair = dev_key_pair().expect("checked Ed25519 dev key generation");
+
+        assert_eq!(
+            key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("generated public key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }

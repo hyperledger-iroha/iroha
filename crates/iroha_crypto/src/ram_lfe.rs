@@ -33,7 +33,8 @@ use rand_chacha::ChaCha20Rng;
 use crate::{
     BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8, BfvAffineCircuit, BfvCiphertext, BfvError,
     BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters,
-    BfvRnsModulusChain, Hash, RAM_LFE_BFV_PLAINTEXT_MODULUS, add_ciphertexts_rns_exact,
+    BfvRnsModulusChain, Hash, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+    RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT, RAM_LFE_BFV_PLAINTEXT_MODULUS, add_ciphertexts_rns_exact,
     add_plain_scalar, decrypt, derive_identifier_key_material_from_seed, evaluate_affine_circuit,
     multiply_ciphertexts_rns_exact, multiply_plain_scalar, registered_bfv_parameter_digest,
     registered_bfv_rns_modulus_chain, subtract_ciphertexts_rns_exact,
@@ -63,8 +64,8 @@ const BFV_PROGRAM_REGISTER_COUNT: usize = 4;
 const BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS: u64 = 1_u64 << 52;
 const BFV_PROGRAM_REGISTER_COUNT_U16: u16 = 4;
 const BFV_PROGRAM_STATE_WIDTH_U16: u16 = 32;
-const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = 64;
-const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16: u16 = 64;
+const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT;
+const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16: u16 = RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES + 1;
 const BFV_PROGRAM_MAX_INSTRUCTIONS: usize = BFV_PROGRAM_IDENTIFIER_SLOT_COUNT * 4;
 const RAM_LFE_PROOF_BACKEND_MAX_BYTES: usize = 128;
 const RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES: usize = 256;

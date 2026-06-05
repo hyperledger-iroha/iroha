@@ -14,7 +14,7 @@ use std::{
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake3::Hasher;
-use rand::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use thiserror::Error;
 
 use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
@@ -263,6 +263,14 @@ pub enum MintError {
     /// Requested TTL cannot be represented as a `SystemTime` expiry.
     #[error("requested ttl {0:?} overflows system time")]
     ExpiryTimestampOverflow(Duration),
+    /// Random byte generation failed while minting the ticket.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// System clock could not be queried.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -275,6 +283,18 @@ pub enum MintError {
     /// Binding material has an invalid field length.
     #[error("malformed puzzle binding: {0}")]
     MalformedBinding(String),
+}
+
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), MintError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| MintError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
 }
 
 /// Verify a puzzle ticket using the supplied policy.
@@ -346,9 +366,9 @@ pub fn verify_at(
 /// derive their own solution search strategy.
 ///
 /// # Errors
-/// Returns [`MintError`] when the requested TTL falls outside policy bounds or when digest
-/// derivation fails.
-pub fn mint_ticket<R: RngCore + CryptoRng>(
+/// Returns [`MintError`] when the requested TTL falls outside policy bounds,
+/// random bytes cannot be generated, or digest derivation fails.
+pub fn mint_ticket<R: TryCryptoRng>(
     params: &Parameters,
     binding: &ChallengeBinding<'_>,
     ttl: Duration,
@@ -374,12 +394,12 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
         .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
     let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
     let mut client_nonce = [0u8; 32];
-    rng.fill_bytes(&mut client_nonce);
+    fill_random(rng, "minting puzzle client nonce", &mut client_nonce)?;
     let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
 
     loop {
         let mut solution = [0u8; 32];
-        rng.fill_bytes(&mut solution);
+        fill_random(rng, "minting puzzle solution nonce", &mut solution)?;
         let digest =
             derive_solution_digest(&challenge, &solution, params).map_err(|err| match err {
                 DigestError::Parameters(msg) => MintError::Parameters(msg),
@@ -510,6 +530,7 @@ impl fmt::Display for DigestError {
 mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
+    use rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
 
@@ -526,6 +547,35 @@ mod tests {
             Duration::from_secs(5),
         )
     }
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing puzzle ticket RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn parameters_try_new_rejects_invalid_runtime_bounds() {
@@ -635,6 +685,30 @@ mod tests {
 
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
+    }
+
+    #[test]
+    fn mint_ticket_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+
+        let err = mint_ticket(
+            &test_parameters(),
+            &binding(),
+            Duration::from_secs(5),
+            &mut rng,
+        )
+        .expect_err("failing RNG must abort ticket minting");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting puzzle client nonce");
+                assert!(
+                    message.contains("failing puzzle ticket RNG"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

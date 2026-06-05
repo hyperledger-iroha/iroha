@@ -34,4 +34,17 @@ class JsonParserTest {
         val raw = "184467440737095516160000000000000000000"
         assertEquals(BigInteger(raw), JsonParser.parse(raw))
     }
+
+    @Test
+    fun duplicateObjectKeysAreRejectedBeforeLastKeyWinsParsing() {
+        assertFailsWith<IllegalStateException> {
+            JsonParser.parse("""{"bundle_id":"forged","bundle_id":"trusted"}""")
+        }
+        assertFailsWith<IllegalStateException> {
+            JsonParser.parse("""{"outer":{"key":1,"key":2}}""")
+        }
+        assertFailsWith<IllegalStateException> {
+            JsonParser.parse("""{"bundle\u005fid":"forged","bundle_id":"trusted"}""")
+        }
+    }
 }

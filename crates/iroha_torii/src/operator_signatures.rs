@@ -22,6 +22,7 @@
 
 use std::{
     collections::{HashSet, VecDeque},
+    fmt,
     num::NonZeroUsize,
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,7 +39,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{KeyPair, PublicKey, Signature};
-use rand::RngCore as _;
+use rand::{
+    rand_core::{TryCryptoRng, TryRngCore},
+    rngs::OsRng,
+};
 
 use crate::{JsonBody, SharedAppState, canonical_request_message, json_entry, json_object};
 
@@ -48,7 +52,7 @@ const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 
 #[derive(Debug, Clone)]
-struct OperatorSignatureError {
+pub(crate) struct OperatorSignatureError {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -117,6 +121,20 @@ impl OperatorSignatureError {
             "operator_signature_body_too_large",
             "operator request body exceeds configured maximum",
         )
+    }
+
+    fn random_nonce(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_signature_nonce_rng",
+            format!("operator signature nonce RNG failed: {}", message.into()),
+        )
+    }
+}
+
+impl fmt::Display for OperatorSignatureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 
@@ -366,15 +384,46 @@ pub(crate) fn signed_request_headers(
     method: &crate::Method,
     uri: &crate::Uri,
     body: &[u8],
-) -> HeaderMap {
+) -> Result<HeaderMap, OperatorSignatureError> {
+    signed_request_headers_with_rng(key_pair, method, uri, body, &mut OsRng)
+}
+
+fn signed_request_headers_with_rng<R: TryCryptoRng>(
+    key_pair: &KeyPair,
+    method: &crate::Method,
+    uri: &crate::Uri,
+    body: &[u8],
+    rng: &mut R,
+) -> Result<HeaderMap, OperatorSignatureError> {
     let timestamp_ms = OperatorSignatures::now_unix_ms();
-    let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill_bytes(&mut nonce_bytes);
-    let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+    let nonce = operator_signature_nonce_with_rng(rng)?;
 
     let msg = OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, &nonce);
     let signature = Signature::new(key_pair.private_key(), &msg);
 
+    Ok(operator_signature_headers(
+        key_pair,
+        timestamp_ms,
+        &nonce,
+        &signature,
+    ))
+}
+
+fn operator_signature_nonce_with_rng<R: TryCryptoRng>(
+    rng: &mut R,
+) -> Result<String, OperatorSignatureError> {
+    let mut nonce_bytes = [0u8; 12];
+    rng.try_fill_bytes(&mut nonce_bytes)
+        .map_err(|error| OperatorSignatureError::random_nonce(error.to_string()))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes))
+}
+
+fn operator_signature_headers(
+    key_pair: &KeyPair,
+    timestamp_ms: u64,
+    nonce: &str,
+    signature: &Signature,
+) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         HEADER_OPERATOR_PUBLIC_KEY,
@@ -450,8 +499,37 @@ mod tests {
     use super::*;
     use axum::routing::get;
     use iroha_crypto::KeyPair;
-    use rand::RngCore as _;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use tower::ServiceExt as _;
+
+    struct FailingOperatorNonceRng;
+
+    #[derive(Debug)]
+    struct FailingOperatorNonceRngError;
+
+    impl fmt::Display for FailingOperatorNonceRngError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("failing operator nonce RNG")
+        }
+    }
+
+    impl TryRngCore for FailingOperatorNonceRng {
+        type Error = FailingOperatorNonceRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingOperatorNonceRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingOperatorNonceRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingOperatorNonceRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingOperatorNonceRng {}
 
     #[test]
     fn operator_signatures_rejects_replay() {
@@ -533,7 +611,8 @@ mod tests {
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body);
+        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+            .expect("operator signature headers");
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
@@ -557,10 +636,33 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         );
         let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION.parse().unwrap();
-        let headers = signed_request_headers(&key_pair, &crate::Method::GET, &uri, &[]);
+        let headers = signed_request_headers(&key_pair, &crate::Method::GET, &uri, &[])
+            .expect("operator signature headers");
 
         auth.authorize_bytes(&headers, &crate::Method::GET, &uri, &[])
             .expect("generated headers should verify");
+    }
+
+    #[test]
+    fn signed_request_headers_reports_nonce_rng_failure() {
+        let key_pair = KeyPair::random();
+        let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+            .parse()
+            .expect("configuration URI");
+        let mut rng = FailingOperatorNonceRng;
+
+        let error =
+            signed_request_headers_with_rng(&key_pair, &crate::Method::GET, &uri, &[], &mut rng)
+                .expect_err("RNG failure must be reported");
+
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, "operator_signature_nonce_rng");
+        assert!(
+            error
+                .message
+                .contains("operator signature nonce RNG failed")
+        );
+        assert!(error.message.contains("failing operator nonce RNG"));
     }
 
     #[tokio::test]

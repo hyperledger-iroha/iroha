@@ -247,6 +247,80 @@ test("BscMainnetSccp collects receipt evidence from BSC execution and Parlia pro
   );
 });
 
+test("BscMainnetSccp collectInboundEvidenceFromReceipt snapshots consensus evidence", async () => {
+  const mutableTopics = [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST];
+  const receiptLogs = [sourceEventLog({ topics: mutableTopics })];
+  const receipt = {
+    transactionHash: TX_HASH,
+    blockHash: BLOCK_HASH,
+    blockNumber: "0x1234",
+    status: "0x1",
+    logs: receiptLogs,
+  };
+  const blockWitness = { branch: [hex32("e1")], bytes: new Uint8Array([0xbb]) };
+  const block = {
+    hash: BLOCK_HASH,
+    number: "0x1234",
+    receiptsRoot: RECEIPTS_ROOT,
+    mutableWitness: blockWitness,
+  };
+  const finalityWitness = {
+    branch: [hex32("e2")],
+    bytes: new Uint8Array([0xcc]),
+  };
+  const mutablePayload = new Uint8Array([0xaa]);
+  const sdk = new BscMainnetSccp({
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+    consensusProvider: {
+      async collectFinalityEvidence(evidence) {
+        assert.equal(Object.isFrozen(evidence), true);
+        assert.equal(Object.isFrozen(evidence.receipt), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs[0].topics), true);
+        assert.equal(Object.isFrozen(evidence.block), true);
+        assert.equal(Object.isFrozen(evidence.block.mutableWitness.branch), true);
+        assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+        assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+        assert.throws(() => {
+          evidence.receipt.logs.push(sourceEventLog());
+        }, TypeError);
+        assert.throws(() => {
+          evidence.block.mutableWitness.branch.push(hex32("99"));
+        }, TypeError);
+
+        receiptLogs.push(sourceEventLog());
+        mutableTopics[1] = hex32("99");
+        blockWitness.branch.push(hex32("99"));
+        blockWitness.bytes[0] = 0x7c;
+        return sampleParliaFinality({ mutableWitness: finalityWitness });
+      },
+    },
+  });
+
+  const evidence = await sdk.collectInboundEvidenceFromReceipt({
+    receipt,
+    block,
+    mutablePayload,
+  });
+  finalityWitness.branch.push(hex32("99"));
+  finalityWitness.bytes[0] = 0x7d;
+  mutablePayload[0] = 0x7e;
+
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+  assert.equal(Object.isFrozen(evidence.parliaFinality.mutableWitness.branch), true);
+  assert.throws(() => {
+    evidence.receipt.logs.push(sourceEventLog());
+  }, TypeError);
+  assert.equal(evidence.mutablePayload[0], 0xaa);
+  assert.equal(evidence.receipt.logs.length, 1);
+  assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+  assert.deepEqual(evidence.block.mutableWitness.branch, [hex32("e1")]);
+  assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+  assert.deepEqual(evidence.parliaFinality.mutableWitness.branch, [hex32("e2")]);
+  assert.deepEqual([...evidence.parliaFinality.mutableWitness.bytes], [0xcc]);
+});
+
 test("BscMainnetSccp rejects failed or drifted receipt evidence before proving", async () => {
   const providerForReceipt = (
     receipt,

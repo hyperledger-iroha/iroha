@@ -23,6 +23,7 @@ internal object IdentifierBfvEnvelopeBuilder {
     private val E2_DOMAIN = "iroha.sdk.identifier.bfv.e2.v1".toByteArray(StandardCharsets.UTF_8)
     private val NORITO_MAGIC = byteArrayOf('N'.code.toByte(), 'R'.code.toByte(), 'T'.code.toByte(), '0'.code.toByte())
     private const val NORITO_COMPACT_LEN_FLAG = 0x02
+    private const val BFV_IDENTIFIER_MAX_INPUT_BYTES = 63
     private const val CRC64_POLY = -0x3693a86a2878f0beL // 0xC96C5795D7870F42L
     private val CRC64_TABLE = buildCrc64Table()
     private val SECURE_RANDOM = SecureRandom()
@@ -69,6 +70,9 @@ internal object IdentifierBfvEnvelopeBuilder {
         val maxInputBytes = publicParameters.maxInputBytes
         require(maxInputBytes >= 1) { "BFV maxInputBytes must be at least 1" }
         require(BigInteger.valueOf(maxInputBytes.toLong()) < plaintextModulus) { "BFV maxInputBytes must fit into one plaintext slot" }
+        require(maxInputBytes <= BFV_IDENTIFIER_MAX_INPUT_BYTES) {
+            "BFV maxInputBytes must be at most $BFV_IDENTIFIER_MAX_INPUT_BYTES for the registered RAM-LFE BFV identifier profile"
+        }
         val rawA = publicParameters.publicKey.a
         val rawB = publicParameters.publicKey.b
         require(rawA.size == polynomialDegree && rawB.size == polynomialDegree) {

@@ -3342,6 +3342,16 @@ public final class HttpClientTransportTests {
             sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
+                        base.publicKey(),
+                        64))
+                .encryptInput("ab", seed),
+        "max input byte count above registered RAM-LFE profile must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        base.parameters(),
                         new IdentifierBfvPublicParameters.PublicKey(
                             List.of(16_842_752L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
                             base.publicKey().a()),

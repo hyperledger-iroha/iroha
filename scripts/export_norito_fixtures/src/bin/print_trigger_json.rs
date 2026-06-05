@@ -15,8 +15,8 @@ use iroha_primitives::json::Json;
 use norito::json;
 use std::time::Duration;
 
-fn main() {
-    let keypair = KeyPair::from_seed(b"trigger-fixture-authority".to_vec(), Algorithm::Ed25519);
+fn main() -> anyhow::Result<()> {
+    let keypair = trigger_fixture_keypair()?;
     let authority = AccountId::new(keypair.public_key().clone());
 
     let trigger_id: TriggerId = "mint_rose".parse().unwrap();
@@ -47,4 +47,32 @@ fn main() {
     println!("{value}");
     let encoded = instruction.encode();
     println!("{}", BASE64.encode(encoded));
+    Ok(())
+}
+
+fn trigger_fixture_keypair() -> anyhow::Result<KeyPair> {
+    KeyPair::try_from_seed(b"trigger-fixture-authority".to_vec(), Algorithm::Ed25519).map_err(
+        |err| {
+            anyhow::anyhow!(
+                "failed to derive trigger fixture authority Ed25519 key from fixed seed: {err}"
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_fixture_keypair_uses_checked_ed25519_derivation() {
+        let keypair = trigger_fixture_keypair().expect("trigger fixture keypair");
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("trigger fixture public-key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }

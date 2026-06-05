@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import {
@@ -68,7 +69,15 @@ import {
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
+  SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   ethereumMainnetSccpDestinationBinding,
+  parseEthereumMainnetNativeEvmProverBundleManifest,
+  validateEthereumMainnetNativeEvmProverBundle,
+  verifyEthereumMainnetNativeEvmProverArtifacts,
   BscMainnetSccp,
   BscMainnetSccpProver,
   bscMainnetSccpDestinationBinding,
@@ -268,6 +277,8 @@ const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.ur
 const DIST_SCCP_TEXT = readFileSync(new URL("../dist/sccp.js", import.meta.url), "utf8");
 const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
 const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+const sha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 
 function publicSccpSourceExports() {
   return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
@@ -793,6 +804,14 @@ test("package declarations expose SCCP local-prover result metadata", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export interface EvmSccpProveResult[\s\S]*publicInputs\?: SccpMessageTransparentPublicInputsInput;[\s\S]*proofContext\?: SolanaSccpProofContextInput;[\s\S]*publicSignalWords\?: readonly string\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EvmSccpProofRequestInput[\s\S]*proofArtifactHash\?: string;[\s\S]*provingKeyHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EvmSccpProveResult[\s\S]*proofArtifactHash\?: string;[\s\S]*provingKeyHash\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -1948,12 +1967,6 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
 test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async () => {
   const proofBytes = sampleGroth16ProofBytes();
   const destinationBinding = sampleEvmDestinationBinding();
-  const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
-    verifierAddress: `0x${"11".repeat(20)}`,
-    bridgeAddress: `0x${"22".repeat(20)}`,
-    verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash: `0x${"cc".repeat(32)}`,
-  });
   const publicInputs = {
     version: 1,
     message_id: `0x${"11".repeat(32)}`,
@@ -1964,7 +1977,103 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     finality_block_hash: `0x${"44".repeat(32)}`,
   };
   assert.equal(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
+  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
+  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
+  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
+  const implementationBytes = Buffer.from("sccp package pure typescript prover artifact v1", "utf8");
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
+    verifierAddress: `0x${"11".repeat(20)}`,
+    bridgeAddress: `0x${"22".repeat(20)}`,
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash,
+  });
   assert.equal(SCCP_ETH_MAINNET_NETWORK_ID, ethereumMainnetBinding.networkId);
+  const nativeProverBundle = {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/eth-mainnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+    })),
+    audit_hashes: [`0x${"a1".repeat(32)}`],
+  };
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
+      destinationBinding: ethereumMainnetBinding,
+    }).browserImplementation,
+    "pure-typescript",
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle), {
+      destinationBinding: ethereumMainnetBinding,
+    }).proofArtifactHash,
+    proofArtifactHash,
+  );
+  const verifiedNativeArtifacts = verifyEthereumMainnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: nativeProverBundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding: ethereumMainnetBinding },
+  );
+  assert.equal(
+    verifiedNativeArtifacts.hashAlgorithm,
+    SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+  );
+  assert.equal(verifiedNativeArtifacts.implementation, "pure-typescript");
+  assert.equal(verifiedNativeArtifacts.implementationHash, implementationHash);
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: nativeProverBundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          sdk: "javascript",
+          implementationBytes: Buffer.from("tampered", "utf8"),
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /implementationBytes sha256/u,
+  );
+  assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: ethereumMainnetBinding,
+    native_prover_bundle: nativeProverBundle,
+  }).proofArtifactHash, proofArtifactHash);
   assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -2029,8 +2138,24 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     request.requestHash,
     "0x4a7c71c3c1838f5d30e1641a32984999a71f9c6cfdff9151ac7d77ca60b64d5e",
   );
+  const artifactRequest = buildEvmSccpProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: destinationBinding,
+    proof_artifact_hash: `0x${"91".repeat(32)}`,
+    proving_key_hash: `0x${"92".repeat(32)}`,
+  });
+  assert.equal(artifactRequest.proofArtifactHash, `0x${"91".repeat(32)}`);
+  assert.equal(artifactRequest.provingKeyHash, `0x${"92".repeat(32)}`);
+  assert.notEqual(artifactRequest.requestHash, request.requestHash);
   const proofResult = wrapEvmSccpProofResult(proofBytes, request);
   assert.equal(proofResult.requestHash, request.requestHash);
+  const artifactProofResult = wrapEvmSccpProofResult(proofBytes, artifactRequest);
+  assert.equal(artifactProofResult.proofArtifactHash, artifactRequest.proofArtifactHash);
+  assert.equal(artifactProofResult.provingKeyHash, artifactRequest.provingKeyHash);
   assert.throws(
     () =>
       buildEvmSccpSubmission({

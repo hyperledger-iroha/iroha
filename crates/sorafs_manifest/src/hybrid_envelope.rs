@@ -17,7 +17,7 @@ use iroha_crypto::{
     hybrid_decapsulate, hybrid_encapsulate,
 };
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use rand::{CryptoRng, RngCore};
+use rand::rand_core::TryCryptoRng;
 use thiserror::Error;
 
 /// Envelope schema version.
@@ -52,13 +52,21 @@ pub enum HybridEnvelopeError {
     /// AEAD sealing or opening failed.
     #[error("chacha20-poly1305 operation failed")]
     AeadFailure,
+    /// Random byte generation failed while producing the envelope.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// Envelope version is not supported by this helper.
     #[error("unsupported hybrid payload envelope version {0}")]
     UnsupportedVersion(u8),
 }
 
 /// Encrypt bytes into a hybrid payload envelope using the default suite.
-pub fn encrypt_payload<R: CryptoRng + RngCore>(
+pub fn encrypt_payload<R: TryCryptoRng>(
     payload: &[u8],
     aad: &[u8],
     recipient: &HybridPublicKey,
@@ -68,7 +76,7 @@ pub fn encrypt_payload<R: CryptoRng + RngCore>(
     let (kem_ciphertext, derived) = hybrid_encapsulate(suite, recipient, rng)?;
 
     let mut nonce_bytes = [0_u8; 12];
-    rng.fill_bytes(&mut nonce_bytes);
+    fill_random(rng, "generating hybrid payload nonce", &mut nonce_bytes)?;
     let nonce = chacha20poly1305::Nonce::from(nonce_bytes);
     let key = chacha20poly1305::Key::from(derived.encryption_key());
     let cipher = ChaCha20Poly1305::new(&key);
@@ -86,6 +94,18 @@ pub fn encrypt_payload<R: CryptoRng + RngCore>(
         nonce: nonce_bytes,
         ciphertext,
     })
+}
+
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), HybridEnvelopeError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| HybridEnvelopeError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
 }
 
 /// Decrypt a hybrid payload envelope with the provided recipient keys.
@@ -123,9 +143,52 @@ pub fn decrypt_payload(
 mod tests {
     use iroha_crypto::HybridKeyPair;
     use rand::SeedableRng as _;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
+
+    struct FailingAfterFills {
+        remaining_ok_fills: usize,
+    }
+
+    #[derive(Debug)]
+    struct FailingAfterFillsError;
+
+    impl std::fmt::Display for FailingAfterFillsError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing hybrid envelope RNG")
+        }
+    }
+
+    impl TryRngCore for FailingAfterFills {
+        type Error = FailingAfterFillsError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            let mut bytes = [0u8; 4];
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            let mut bytes = [0u8; 8];
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_le_bytes(bytes))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            if self.remaining_ok_fills == 0 {
+                return Err(FailingAfterFillsError);
+            }
+            self.remaining_ok_fills -= 1;
+            for (idx, byte) in dst.iter_mut().enumerate() {
+                *byte = 0xA5_u8.wrapping_add(idx as u8);
+            }
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FailingAfterFills {}
 
     #[test]
     fn envelope_roundtrip() {
@@ -140,6 +203,25 @@ mod tests {
             decrypt_payload(&envelope, aad, pair.secret()).expect("decryption succeeds");
 
         assert_eq!(decrypted, payload);
+    }
+
+    #[test]
+    fn encrypt_payload_reports_nonce_rng_failure() {
+        let mut key_rng = ChaCha20Rng::from_seed([0x33; 32]);
+        let pair = HybridKeyPair::generate(&mut key_rng).expect("generated hybrid keypair");
+        let mut rng = FailingAfterFills {
+            remaining_ok_fills: 2,
+        };
+
+        let err = encrypt_payload(b"payload", b"aad", pair.public(), &mut rng)
+            .expect_err("nonce RNG failure must be reported");
+        match err {
+            HybridEnvelopeError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid payload nonce");
+                assert!(message.contains("failing hybrid envelope RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

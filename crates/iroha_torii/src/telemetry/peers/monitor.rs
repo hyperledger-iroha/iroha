@@ -514,7 +514,8 @@ async fn get_config_with_retry(
                 &crate::Method::GET,
                 &config_uri,
                 &[],
-            );
+            )
+            .map_err(|error| eyre!("failed to sign /v1/configuration operator request: {error}"))?;
             request = request.headers(headers);
         }
         let response = request.send().await?;

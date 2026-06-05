@@ -9894,6 +9894,22 @@ fn zk_ivm_prove_now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn zk_ivm_prove_job_id() -> Result<String, Error> {
+    zk_ivm_prove_job_id_with_rng(&mut rand::rngs::OsRng)
+}
+
+fn zk_ivm_prove_job_id_with_rng<R: rand::rand_core::TryCryptoRng>(
+    rng: &mut R,
+) -> Result<String, Error> {
+    let mut job_id_bytes = [0_u8; 16];
+    rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut job_id_bytes).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "zk IVM prove job-id OS RNG failed: {error}"
+        )))
+    })?;
+    Ok(hex::encode(job_id_bytes))
+}
+
 fn zk_ivm_prove_gc_jobs_at(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     now_ms: u64,
@@ -10394,8 +10410,7 @@ async fn handler_zk_ivm_prove(
             retry_after_secs,
         })?;
 
-    let job_id_bytes: [u8; 16] = rand::random();
-    let job_id = hex::encode(job_id_bytes);
+    let job_id = zk_ivm_prove_job_id()?;
     let created_ms = zk_ivm_prove_now_ms();
 
     let vk_ref = req.vk_ref.clone();
@@ -18901,7 +18916,13 @@ async fn execute_torii_proxy_request_via_http_bridge(
         &crate::Method::POST,
         &uri,
         &body,
-    );
+    )
+    .map_err(|error| {
+        format!(
+            "failed to sign Torii proxy request `{}` for authoritative HTTP bridge to peer `{target_peer_id}`: {error}",
+            request.request_id
+        )
+    })?;
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/x-norito"),
@@ -55353,7 +55374,8 @@ pub(crate) mod tests_runtime_handlers {
             &crate::Method::POST,
             &uri,
             &body,
-        );
+        )
+        .expect("operator signature headers");
         let operator_layer = axum::middleware::from_fn_with_state::<
             _,
             _,
@@ -58846,6 +58868,52 @@ mod tests {
     };
 
     use super::*;
+
+    struct FailingZkJobIdRng;
+
+    #[derive(Debug)]
+    struct FailingZkJobIdRngError;
+
+    impl std::fmt::Display for FailingZkJobIdRngError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("failing zk job-id RNG")
+        }
+    }
+
+    impl rand::rand_core::TryRngCore for FailingZkJobIdRng {
+        type Error = FailingZkJobIdRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingZkJobIdRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingZkJobIdRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingZkJobIdRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingZkJobIdRng {}
+
+    #[test]
+    fn zk_ivm_prove_job_id_reports_rng_failure() {
+        let mut rng = FailingZkJobIdRng;
+
+        let error =
+            zk_ivm_prove_job_id_with_rng(&mut rng).expect_err("RNG failure must be reported");
+
+        match error {
+            Error::Query(ValidationFail::InternalError(message)) => {
+                assert!(message.contains("zk IVM prove job-id OS RNG failed"));
+                assert!(message.contains("failing zk job-id RNG"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[cfg(feature = "push")]
     use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
     #[cfg(feature = "telemetry")]

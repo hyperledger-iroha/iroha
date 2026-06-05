@@ -35,13 +35,13 @@ use iroha_core::soracloud_runtime::{
     SoracloudHostedHttpReplicaRuntimeStateV1, SoracloudHostedHttpRuntimeStateV1,
     SoracloudLocalReadRequest, SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
     SoracloudOrderedMailboxExecutionResult, SoracloudRuntime, SoracloudRuntimeApartmentPlan,
-    SoracloudRuntimeArtifactPlan,
-    SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-    SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan,
-    SoracloudRuntimeLeaseVolumePlan, SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle,
-    SoracloudRuntimeReplicaPlan, SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan,
-    SoracloudRuntimeSnapshot, SoracloudUploadedModelEncryptionRecipient,
-    soracloud_hf_generated_bundle_payload_if_applicable, soracloud_hf_generated_source_binding,
+    SoracloudRuntimeArtifactPlan, SoracloudRuntimeExecutionError,
+    SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeHfSourcePlan,
+    SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan, SoracloudRuntimeLeaseVolumePlan,
+    SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle, SoracloudRuntimeReplicaPlan,
+    SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
+    SoracloudUploadedModelEncryptionRecipient, soracloud_hf_generated_bundle_payload_if_applicable,
+    soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{State, StateView, WorldReadOnly};
 use iroha_core::{queue::Queue, tx::AcceptedTransaction};
@@ -69,10 +69,9 @@ use iroha_data_model::{
         SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
         SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraNetworkPolicyV1,
         SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
-        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
-        SoraStateMutationOperationV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
+        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraStateBindingV1, SoraStateMutationOperationV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
         SoracloudAppendJournalResponseV1, SoracloudEgressFetchRequestV1,
         SoracloudEgressFetchResponseV1, SoracloudEmitMailboxMessageRequestV1,
@@ -108,6 +107,7 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::{Mutex, RwLock};
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use sorafs_node::store::StoredManifest;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -313,10 +313,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     }
 }
 
-fn soracloud_runtime_submission_metadata(
-    state: &State,
-    gas_asset_id: Option<&str>,
-) -> Metadata {
+fn soracloud_runtime_submission_metadata(state: &State, gas_asset_id: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(asset_id) = gas_asset_id
         .map(str::trim)
@@ -471,6 +468,7 @@ fn default_zero_capacity_inrou_backends() -> BTreeSet<SoraInrouRuntimeBackendV1>
     BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm])
 }
 
+#[cfg(test)]
 fn inrou_host_platform_supports_local_materialization() -> bool {
     !supported_inrou_backends_for_host().is_empty()
 }
@@ -964,6 +962,18 @@ fn uploaded_model_encryption_key_path(state_dir: &Path) -> PathBuf {
     uploaded_model_encryption_key_dir(state_dir).join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE)
 }
 
+fn generate_uploaded_model_encryption_secret_with_rng<R: TryCryptoRng>(
+    rng: &mut R,
+) -> io::Result<[u8; 32]> {
+    let mut secret_bytes = [0_u8; 32];
+    rng.try_fill_bytes(&mut secret_bytes).map_err(|error| {
+        io::Error::other(format!(
+            "uploaded model encryption key OS RNG failed: {error}"
+        ))
+    })?;
+    Ok(X25519StaticSecret::from(secret_bytes).to_bytes())
+}
+
 fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Result<[u8; 32]> {
     let key_dir = uploaded_model_encryption_key_dir(state_dir);
     fs::create_dir_all(&key_dir)?;
@@ -979,8 +989,7 @@ fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Resu
             )
         }),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let secret = X25519StaticSecret::from(rand::random::<[u8; 32]>());
-            let bytes = secret.to_bytes();
+            let bytes = generate_uploaded_model_encryption_secret_with_rng(&mut OsRng)?;
             fs::write(&key_path, bytes)?;
             Ok(bytes)
         }
@@ -1337,7 +1346,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             ),
         })
     }
-
 }
 
 #[derive(Clone, Debug)]
@@ -1608,6 +1616,8 @@ impl SoracloudIvmHost {
                         payload_bytes: std::num::NonZeroU64::new(payload_bytes)
                             .ok_or(VMError::NoritoInvalid)?,
                         payload_commitment,
+                        fhe_residual_multiple_bound: None,
+                        fhe_bound_mode: None,
                         last_update_sequence: self.request.execution_sequence,
                         governance_tx_hash: self.request.mailbox_message.payload_commitment,
                         source_action: SoraServiceLifecycleActionV1::StateMutation,
@@ -12680,8 +12690,7 @@ fn build_inrou_user_data(
                     );
                     prepare_script.push_str("    exit 1\n");
                     prepare_script.push_str("  fi\n");
-                    prepare_script
-                        .push_str("  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
+                    prepare_script.push_str("  if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
                     prepare_script.push_str(
                         "    echo 'Inrou PortableVm block volumes require mkfs.ext4 in the guest image' >&2\n",
                     );
@@ -13899,6 +13908,7 @@ mod tests {
 
     use super::*;
     use std::{
+        fmt,
         io::{Read as _, Write as _},
         net::TcpListener,
         num::NonZeroU64,
@@ -13943,6 +13953,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use serial_test::serial;
     use sorafs_car::CarBuildPlan;
     use sorafs_chunker::ChunkProfile;
@@ -13970,6 +13981,52 @@ mod tests {
         assert!(summary.contains("Inrou PortableVm failed healthcheck during startup"));
         assert!(summary.contains("serial console: missing python3"));
     }
+
+    struct FailingUploadedModelRng;
+
+    #[derive(Debug)]
+    struct FailingUploadedModelRngError;
+
+    impl fmt::Display for FailingUploadedModelRngError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("failing uploaded model RNG")
+        }
+    }
+
+    impl TryRngCore for FailingUploadedModelRng {
+        type Error = FailingUploadedModelRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingUploadedModelRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingUploadedModelRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingUploadedModelRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingUploadedModelRng {}
+
+    #[test]
+    fn uploaded_model_encryption_secret_reports_rng_failure() {
+        let mut rng = FailingUploadedModelRng;
+
+        let error = generate_uploaded_model_encryption_secret_with_rng(&mut rng)
+            .expect_err("RNG failure must be reported");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(
+            error
+                .to_string()
+                .contains("uploaded model encryption key OS RNG failed")
+        );
+        assert!(error.to_string().contains("failing uploaded model RNG"));
+    }
+
     use sorafs_node::{NodeHandle, config::StorageConfig};
 
     #[test]
@@ -16970,7 +17027,7 @@ mod tests {
                     autonomy_budget_remaining_units: 1_000,
                     artifact_allowlist: BTreeMap::new(),
                     autonomy_run_history: Vec::new(),
-                        },
+                },
             );
             world.soracloud_hf_sources_mut_for_testing().insert(
                 source_id,
@@ -20979,6 +21036,8 @@ mod tests {
                         payload: b"alice-session".to_vec(),
                         payload_bytes: std::num::NonZeroU64::new(13).expect("nonzero"),
                         payload_commitment: Hash::new(b"alice-session"),
+                        fhe_residual_multiple_bound: None,
+                        fhe_bound_mode: None,
                         last_update_sequence: 4,
                         governance_tx_hash: Hash::new(b"gov-session"),
                         source_action: SoraServiceLifecycleActionV1::StateMutation,
@@ -21499,6 +21558,8 @@ mod tests {
             payload: b"alice-session".to_vec(),
             payload_bytes: std::num::NonZeroU64::new(13).expect("non-zero"),
             payload_commitment: Hash::new(b"alice-session"),
+            fhe_residual_multiple_bound: None,
+            fhe_bound_mode: None,
             last_update_sequence: 4,
             governance_tx_hash: Hash::new(b"gov-session"),
             source_action: SoraServiceLifecycleActionV1::StateMutation,
@@ -21892,9 +21953,11 @@ mod tests {
             "grep -qxF \"$line\" /tmp/soracloud-hosts || echo \"$line\" >> /tmp/soracloud-hosts"
         ));
         assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
-        assert!(user_data.contains(
-            "Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path"
-        ));
+        assert!(
+            user_data.contains(
+                "Inrou PortableVm volume mount path is unhealthy; unmounting $mount_path"
+            )
+        );
         assert!(user_data.contains("mkfs.ext4 -F \"$device_path\""));
         assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
         assert!(user_data.contains("chown inrou:inrou '/var/lib/ton-indexer'"));

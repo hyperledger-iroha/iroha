@@ -687,7 +687,7 @@ pub const fn sccp_eth_mainnet_sync_committee_period_for_slot(slot: u64) -> u64 {
 }
 const SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = 1
     + 4
-    + SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
+    + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
         * (4 + SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
             + 8
             + 4
@@ -7836,6 +7836,28 @@ fn sccp_source_adapter_external_engines_ready_for_domain(_domain: u32) -> bool {
     false
 }
 
+fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+    domain: u32,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
+        && material.source_domain == domain
+        && deployment.source_domain == domain
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && deployment.source_proof_plan == material.source_proof_plan
+        && deployment.finality_model == material.finality_model
+        && sccp_source_proof_plan_for_domain(domain) == Some(material.source_proof_plan)
+        && sccp_proof_finality_model_for_domain(domain) == Some(material.finality_model)
+        && deployment.source_bridge_emitter_id == material.source_bridge_emitter_id
+        && deployment.source_bridge_emitter_address == material.source_bridge_emitter_address
+        && deployment.source_bridge_emitter_code_hash == material.source_bridge_emitter_code_hash
+        && deployment.source_bridge_network_id == material.source_bridge_network_id
+        && deployment.source_bridge_owner_address == material.source_bridge_owner_address
+        && deployment.source_bridge_config_hash == material.source_bridge_config_hash
+        && sccp_source_bridge_config_hash_is_production_ready(material)
+}
+
 fn sccp_source_adapter_deployment_unblocks_production_for_domain(
     domain: u32,
     material: &SccpSourceVerifierMaterialV1,
@@ -7873,7 +7895,11 @@ fn sccp_source_adapter_deployment_unblocks_production_for_domain(
             sccp_substrate_runtime_storage_gate_hash_from_deployment_v1(material, deployment)
                 .is_some()
         }
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => true,
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+                domain, material, deployment,
+            )
+        }
         _ => false,
     }
 }
@@ -8292,14 +8318,29 @@ pub fn sccp_destination_binding_for_domain(domain: u32) -> Option<SccpDestinatio
 
 pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under cryptographic trust anchors";
 
+fn sccp_lane_production_ready_under_launch_policy_v1(
+    policy: &SccpProductionPolicyV1,
+    domain: u32,
+    lane_ready: bool,
+    all_lanes_ready: bool,
+) -> bool {
+    if !lane_ready {
+        return false;
+    }
+    match policy.launch_mode {
+        SccpLaunchModeV1::AllLanesAtOnce => all_lanes_ready,
+        SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH,
+        SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC,
+    }
+}
+
 pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
     let lane_ready = sccp_lane_production_readiness_for_domain(domain)
         .is_some_and(|readiness| readiness.production_ready);
-    match sccp_production_policy_v1().launch_mode {
-        SccpLaunchModeV1::AllLanesAtOnce => sccp_all_lanes_launch_ready_v1() && lane_ready,
-        SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH && lane_ready,
-        SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC && lane_ready,
-    }
+    let policy = sccp_production_policy_v1();
+    let all_lanes_ready = matches!(policy.launch_mode, SccpLaunchModeV1::AllLanesAtOnce)
+        && sccp_all_lanes_launch_ready_v1();
+    sccp_lane_production_ready_under_launch_policy_v1(&policy, domain, lane_ready, all_lanes_ready)
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
@@ -55495,6 +55536,84 @@ mod tests {
     }
 
     #[test]
+    fn ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes() {
+        let eth_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "EthereumMainnetLane must let production-ready ETH open before all lanes are ready"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_BSC,
+                true,
+                false,
+            ),
+            "EthereumMainnetLane must not open BSC even when BSC-shaped components are ready"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_ETH,
+                false,
+                true,
+            ),
+            "EthereumMainnetLane must still fail closed when ETH evidence is incomplete"
+        );
+
+        let all_lanes_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::AllLanesAtOnce,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &all_lanes_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "AllLanesAtOnce must continue to wait for every advertised lane"
+        );
+        assert!(sccp_lane_production_ready_under_launch_policy_v1(
+            &all_lanes_policy,
+            SCCP_DOMAIN_ETH,
+            true,
+            true,
+        ));
+
+        let bsc_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::BscMainnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            sccp_lane_production_ready_under_launch_policy_v1(
+                &bsc_policy,
+                SCCP_DOMAIN_BSC,
+                true,
+                false,
+            ),
+            "BscMainnetLane remains explicitly scoped to BSC"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &bsc_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "BscMainnetLane must not open ETH"
+        );
+    }
+
+    #[test]
     fn production_readiness_lists_source_destination_and_route_blockers() {
         let readiness =
             sccp_lane_production_readiness_for_domain(SCCP_DOMAIN_ETH).expect("eth readiness");
@@ -66248,6 +66367,59 @@ mod tests {
         .expect("ETH mainnet source verifier material");
         let deployment = build_sccp_eth_mainnet_source_adapter_deployment(&material, [0xE6; 32])
             .expect("ETH source adapter deployment");
+        assert!(
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &deployment,
+            )
+        );
+
+        let mut wrong_network_deployment = deployment.clone();
+        wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_network_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_network_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed non-mainnet network ids"
+        );
+
+        let mut wrong_config_deployment = deployment.clone();
+        wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_config_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_config_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed source bridge config hashes"
+        );
+
+        let mut wrong_emitter_deployment = deployment.clone();
+        wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_emitter_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_emitter_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed source bridge emitters"
+        );
+
         let bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_ETH,
             SCCP_DOMAIN_SORA,

@@ -810,7 +810,9 @@ fn domain_id(label: &str) -> DomainId {
 
 fn ed25519_pk_with(byte: u8) -> PublicKey {
     let seed = vec![byte; 32];
-    let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+    let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("fixed account-address vector Ed25519 seed must derive")
+        .into_parts();
     public_key
 }
 
@@ -867,6 +869,16 @@ impl fmt::Display for AddressVectorBundle {
 mod tests {
     use super::*;
     use crate::account::address::AccountAddress;
+
+    #[test]
+    fn ed25519_pk_with_uses_checked_seed_derivation() {
+        assert_eq!(
+            ed25519_pk_with(0x42)
+                .try_algorithm()
+                .expect("address vector key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 
     #[test]
     fn json_value_serialises_borrowed_inputs() {

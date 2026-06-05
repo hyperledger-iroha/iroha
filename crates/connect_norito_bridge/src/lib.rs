@@ -171,6 +171,7 @@ enum BridgeError {
     SecpParse,
     SecpSign,
     SecpVerify,
+    ConnectKeypair,
 }
 
 impl BridgeError {
@@ -211,6 +212,7 @@ impl BridgeError {
             BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
+            BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,
         }
     }
 }
@@ -1147,7 +1149,8 @@ pub unsafe extern "C" fn connect_norito_keypair_from_seed(
         }
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let seed_bytes = unsafe { slice::from_raw_parts(seed_ptr, seed_len as usize) };
-        let key_pair = KeyPair::from_seed(seed_bytes.to_vec(), algorithm);
+        let key_pair = KeyPair::try_from_seed(seed_bytes.to_vec(), algorithm)
+            .map_err(|_| BridgeError::ConnectKeypair)?;
         let (public_key, private_key) = key_pair.into_parts();
         let (_alg, private_bytes) = private_key.to_bytes();
         let public_bytes = checked_public_key_payload(&public_key)?;
@@ -12874,7 +12877,8 @@ fn java_keypair_from_seed_bytes(
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let algorithm = parse_algorithm_code(algorithm_code as u8)
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
-    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), algorithm)
+        .map_err(|err| format!("failed to derive key pair: {err}"))?;
     let (public_key, private_key) = key_pair.into_parts();
     let public_bytes = public_key
         .try_to_bytes()

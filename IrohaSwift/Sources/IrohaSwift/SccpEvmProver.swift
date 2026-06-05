@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -5,6 +6,21 @@ import FoundationNetworking
 
 /// Proof backend id expected by EVM-family SCCP Groth16 verifier contracts.
 public let sccpEvmGroth16Bn254ProofBackendV1 = "evm-groth16-bn254-v1"
+/// Schema id for audited native EVM Groth16 prover bundle manifests.
+public let sccpNativeEvmProverBundleSchemaV1 = "sccp-native-evm-groth16-prover-bundle-v1"
+/// Ethereum mainnet native EVM Groth16 prover bundle id.
+public let sccpEthNativeEvmProverBundleIdV1 =
+    "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1"
+/// Required native-only SDK implementations for the Ethereum mainnet prover bundle.
+public let sccpEthNativeEvmProverRequiredImplementationsV1: [String: String] = [
+    "javascript": "pure-typescript",
+    "swift": "native-swift",
+    "kotlin": "native-kotlin",
+    "java-android": "native-java",
+    "dotnet": "native-csharp"
+]
+/// Hash algorithm used for native EVM prover bundle artifact bytes.
+public let sccpNativeEvmProverArtifactHashAlgorithmV1 = "sha256"
 /// Canonical byte length of the static BN254 Groth16 ABI proof tuple.
 public let sccpGroth16Bn254ProofAbiByteLengthV1 = 384
 /// EVM-family contract-call envelope encoding used by SCCP verifier submissions.
@@ -33,6 +49,41 @@ private let sccpEvmSubmitMessageProofEntrypointV1 =
 private let ethereumMainnetBeaconRestMaxResponseBytes = 1024 * 1024
 private let ethereumMainnetSecondsPerSlot: UInt64 = 12
 
+private func sccpCallbackDictionarySnapshot(_ value: [String: Any]) -> [String: Any] {
+    var snapshot: [String: Any] = [:]
+    snapshot.reserveCapacity(value.count)
+    for (key, item) in value {
+        snapshot[key] = sccpCallbackAnySnapshot(item)
+    }
+    return snapshot
+}
+
+private func sccpCallbackAnySnapshot(_ value: Any) -> Any {
+    switch value {
+    case let data as Data:
+        return Data(data)
+    case let data as NSData:
+        return Data(bytes: data.bytes, count: data.length)
+    case let dictionary as [String: Any]:
+        return sccpCallbackDictionarySnapshot(dictionary)
+    case let dictionary as NSDictionary:
+        var snapshot: [String: Any] = [:]
+        snapshot.reserveCapacity(dictionary.count)
+        for (key, item) in dictionary {
+            if let stringKey = key as? String {
+                snapshot[stringKey] = sccpCallbackAnySnapshot(item)
+            }
+        }
+        return snapshot
+    case let array as [Any]:
+        return array.map { sccpCallbackAnySnapshot($0) }
+    case let array as NSArray:
+        return array.map { sccpCallbackAnySnapshot($0) }
+    default:
+        return value
+    }
+}
+
 /// SCCP public inputs shared by EVM-family Groth16 proof requests.
 public struct EvmSccpPublicInputsInput: Equatable {
     public let version: UInt8
@@ -60,6 +111,937 @@ public struct EvmSccpPublicInputsInput: Equatable {
     }
 }
 
+/// One native SDK artifact row inside an Ethereum mainnet native EVM prover bundle.
+public struct EthereumMainnetNativeEvmProverBundleSdkArtifact: Equatable {
+    public let sdk: String
+    public let implementation: String
+    public let proofArtifactHash: String
+    public let provingKeyHash: String
+    public let implementationArtifact: String?
+    public let implementationHash: String
+
+    public init(sdk: String,
+                implementation: String,
+                proofArtifactHash: String,
+                provingKeyHash: String,
+                implementationArtifact: String? = nil,
+                implementationHash: String) throws {
+        guard !sdk.isEmpty else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.sdk")
+        }
+        guard sccpEthNativeEvmProverRequiredImplementationsV1[sdk] == implementation else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.implementation")
+        }
+        self.sdk = sdk
+        self.implementation = implementation
+        self.proofArtifactHash = try evmNormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            field: "proofArtifactHash"
+        )
+        self.provingKeyHash = try evmNormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            field: "provingKeyHash"
+        )
+        self.implementationArtifact = try implementationArtifact.map {
+            try evmNormalizeNativeEvmProverArtifactPath(
+                $0,
+                field: "implementationArtifact"
+            )
+        }
+        self.implementationHash = try evmNormalizeNativeEvmProverBundleHex32(
+            implementationHash,
+            field: "implementationHash"
+        )
+    }
+
+    fileprivate init(jsonObject: [String: Any],
+                     index: Int,
+                     proofArtifactHash: String,
+                     provingKeyHash: String) throws {
+        let label = "nativeSdkArtifacts[\(index)]"
+        try Self.requireManifestKeys(
+            jsonObject,
+            label: label,
+            allowed: Self.manifestKeys
+        )
+        let sdk = try Self.manifestString(
+            try Self.manifestField(jsonObject, label: "\(label).sdk", aliases: ["sdk"]),
+            field: "\(label).sdk"
+        )
+        let sdkProofArtifactHash = try Self.manifestString(
+            try Self.manifestField(
+                jsonObject,
+                label: "\(label).proofArtifactHash",
+                aliases: ["proofArtifactHash", "proof_artifact_hash", "proverArtifactHash", "prover_artifact_hash"]
+            ),
+            field: "\(label).proofArtifactHash"
+        )
+        guard try evmNormalizeNativeEvmProverBundleHex32(
+            sdkProofArtifactHash,
+            field: "\(label).proofArtifactHash"
+        ) ==
+              proofArtifactHash else {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).proofArtifactHash")
+        }
+        let sdkProvingKeyHash = try Self.manifestString(
+            try Self.manifestField(
+                jsonObject,
+                label: "\(label).provingKeyHash",
+                aliases: ["provingKeyHash", "proving_key_hash"]
+            ),
+            field: "\(label).provingKeyHash"
+        )
+        guard try evmNormalizeNativeEvmProverBundleHex32(
+            sdkProvingKeyHash,
+            field: "\(label).provingKeyHash"
+        ) ==
+              provingKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).provingKeyHash")
+        }
+        try self.init(
+            sdk: sdk,
+            implementation: Self.manifestString(
+                try Self.manifestField(jsonObject, label: "\(label).implementation", aliases: ["implementation"]),
+                field: "\(label).implementation"
+            ),
+            proofArtifactHash: sdkProofArtifactHash,
+            provingKeyHash: sdkProvingKeyHash,
+            implementationArtifact: Self.manifestString(
+                try Self.manifestField(
+                    jsonObject,
+                    label: "\(label).implementationArtifact",
+                    aliases: ["implementationArtifact", "implementation_artifact", "implementationPath", "implementation_path"]
+                ),
+                field: "\(label).implementationArtifact"
+            ),
+            implementationHash: Self.manifestString(
+                try Self.manifestField(
+                    jsonObject,
+                    label: "\(label).implementationHash",
+                    aliases: ["implementationHash", "implementation_hash"]
+                ),
+                field: "\(label).implementationHash"
+            )
+        )
+    }
+
+    private static let manifestKeys: Set<String> = [
+        "sdk",
+        "implementation",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
+        "implementationArtifact",
+        "implementation_artifact",
+        "implementationPath",
+        "implementation_path",
+        "implementationHash",
+        "implementation_hash"
+    ]
+
+    private static func requireManifestKeys(_ object: [String: Any],
+                                            label: String,
+                                            allowed: Set<String>) throws {
+        for key in object.keys where !allowed.contains(key) {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).\(key)")
+        }
+    }
+
+    private static func manifestField(_ object: [String: Any],
+                                      label: String,
+                                      aliases: [String]) throws -> Any {
+        let present = aliases.filter { object.keys.contains($0) }
+        guard present.count <= 1 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        if let alias = present.first, let value = object[alias] {
+            return value
+        }
+        throw EvmSccpProverError.invalidPublicInputs(label)
+    }
+
+    private static func manifestString(_ value: Any, field: String) throws -> String {
+        guard let text = value as? String else {
+            throw EvmSccpProverError.invalidPublicInputs(field)
+        }
+        return text
+    }
+}
+
+/// Audited native-only EVM Groth16 prover bundle for the Ethereum mainnet SCCP lane.
+public struct EthereumMainnetNativeEvmProverBundle: Equatable {
+    public let schema: String
+    public let bundleId: String
+    public let domain: UInt32
+    public let chain: String
+    public let proofBackend: String
+    public let proofArtifact: String?
+    public let proofArtifactHash: String
+    public let provingKey: String?
+    public let provingKeyHash: String
+    public let verifierKey: String?
+    public let verifierKeyHash: String
+    public let destinationBindingHash: String
+    public let noWasm: Bool
+    public let remoteProverRequired: Bool
+    public let browserImplementation: String
+    public let nativeSdkArtifacts: [EthereumMainnetNativeEvmProverBundleSdkArtifact]
+    public let auditHashes: [String]
+
+    public init(schema: String = sccpNativeEvmProverBundleSchemaV1,
+                bundleId: String = sccpEthNativeEvmProverBundleIdV1,
+                domain: UInt32 = sccpDomainEthereum,
+                chain: String = "eth",
+                proofBackend: String = sccpEvmGroth16Bn254ProofBackendV1,
+                proofArtifact: String? = nil,
+                proofArtifactHash: String,
+                provingKey: String? = nil,
+                provingKeyHash: String,
+                verifierKey: String? = nil,
+                verifierKeyHash: String,
+                destinationBindingHash: String,
+                noWasm: Bool = true,
+                remoteProverRequired: Bool = false,
+                browserImplementation: String = "pure-typescript",
+                nativeSdkArtifacts: [EthereumMainnetNativeEvmProverBundleSdkArtifact],
+                auditHashes: [String],
+                expectedDestinationBindingHash: String? = nil) throws {
+        guard schema == sccpNativeEvmProverBundleSchemaV1 else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.schema")
+        }
+        guard bundleId == sccpEthNativeEvmProverBundleIdV1 else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.bundleId")
+        }
+        guard domain == sccpDomainEthereum else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.domain")
+        }
+        guard chain == "eth" else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.chain")
+        }
+        guard proofBackend == sccpEvmGroth16Bn254ProofBackendV1 else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.proofBackend")
+        }
+        guard noWasm else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.noWasm")
+        }
+        guard !remoteProverRequired else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.remoteProverRequired")
+        }
+        guard browserImplementation == "pure-typescript" else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.browserImplementation")
+        }
+        let normalizedProofArtifactHash = try evmNormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            field: "proofArtifactHash"
+        )
+        let normalizedProvingKeyHash = try evmNormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            field: "provingKeyHash"
+        )
+        let normalizedDestinationBindingHash = try evmNormalizeNativeEvmProverBundleHex32(
+            destinationBindingHash,
+            field: "destinationBindingHash"
+        )
+        if let expectedDestinationBindingHash {
+            guard try evmNormalizeNativeEvmProverBundleHex32(
+                expectedDestinationBindingHash,
+                field: "expectedDestinationBindingHash"
+            ) == normalizedDestinationBindingHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.destinationBindingHash")
+            }
+        }
+        guard !auditHashes.isEmpty else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.auditHashes")
+        }
+        let normalizedAuditHashes = try auditHashes.enumerated().map { index, value in
+            try evmNormalizeNativeEvmProverBundleHex32(value, field: "auditHashes[\(index)]")
+        }
+        var artifactsBySdk: [String: EthereumMainnetNativeEvmProverBundleSdkArtifact] = [:]
+        for artifact in nativeSdkArtifacts {
+            guard artifactsBySdk[artifact.sdk] == nil else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.duplicate")
+            }
+            guard artifact.proofArtifactHash == normalizedProofArtifactHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.proofArtifactHash")
+            }
+            guard artifact.provingKeyHash == normalizedProvingKeyHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.provingKeyHash")
+            }
+            artifactsBySdk[artifact.sdk] = artifact
+        }
+        for sdk in sccpEthNativeEvmProverRequiredImplementationsV1.keys {
+            guard artifactsBySdk[sdk] != nil else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.missing")
+            }
+        }
+        try evmRequireNativeEvmProverBundleHashRoleSeparation(
+            [
+                ("proofArtifactHash", normalizedProofArtifactHash),
+                ("provingKeyHash", normalizedProvingKeyHash),
+                ("verifierKeyHash", try evmNormalizeNativeEvmProverBundleHex32(
+                    verifierKeyHash,
+                    field: "verifierKeyHash"
+                )),
+                ("destinationBindingHash", normalizedDestinationBindingHash)
+            ]
+            + artifactsBySdk.values
+                .sorted { $0.sdk < $1.sdk }
+                .map { ("nativeSdkArtifacts[\($0.sdk)].implementationHash", $0.implementationHash) }
+            + normalizedAuditHashes.enumerated().map { index, hash in
+                ("auditHashes[\(index)]", hash)
+            }
+        )
+        self.schema = schema
+        self.bundleId = bundleId
+        self.domain = domain
+        self.chain = chain
+        self.proofBackend = proofBackend
+        self.proofArtifact = try proofArtifact.map {
+            try evmNormalizeNativeEvmProverArtifactPath($0, field: "proofArtifact")
+        }
+        self.proofArtifactHash = normalizedProofArtifactHash
+        self.provingKey = try provingKey.map {
+            try evmNormalizeNativeEvmProverArtifactPath($0, field: "provingKey")
+        }
+        self.provingKeyHash = normalizedProvingKeyHash
+        self.verifierKey = try verifierKey.map {
+            try evmNormalizeNativeEvmProverArtifactPath($0, field: "verifierKey")
+        }
+        self.verifierKeyHash = try evmNormalizeNativeEvmProverBundleHex32(
+            verifierKeyHash,
+            field: "verifierKeyHash"
+        )
+        self.destinationBindingHash = normalizedDestinationBindingHash
+        self.noWasm = noWasm
+        self.remoteProverRequired = remoteProverRequired
+        self.browserImplementation = browserImplementation
+        self.nativeSdkArtifacts = nativeSdkArtifacts.sorted { $0.sdk < $1.sdk }
+        self.auditHashes = normalizedAuditHashes
+    }
+
+    public init(jsonData: Data,
+                expectedDestinationBindingHash: String? = nil) throws {
+        try Self.rejectDuplicateJsonObjectKeys(jsonData)
+        let parsed = try JSONSerialization.jsonObject(with: jsonData, options: [])
+        guard let object = parsed as? [String: Any] else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle")
+        }
+        try self.init(
+            jsonObject: object,
+            expectedDestinationBindingHash: expectedDestinationBindingHash
+        )
+    }
+
+    public init(jsonString: String,
+                expectedDestinationBindingHash: String? = nil) throws {
+        guard let data = jsonString.data(using: .utf8) else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle")
+        }
+        try self.init(jsonData: data, expectedDestinationBindingHash: expectedDestinationBindingHash)
+    }
+
+    private static func rejectDuplicateJsonObjectKeys(_ data: Data) throws {
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle")
+        }
+        let characters = Array(text)
+        var index = 0
+
+        func fail() throws -> Never {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle")
+        }
+
+        func skipWhitespace() {
+            while index < characters.count {
+                let character = characters[index]
+                if character == " " || character == "\t" || character == "\n" || character == "\r" {
+                    index += 1
+                } else {
+                    return
+                }
+            }
+        }
+
+        func parseString() throws -> String {
+            guard index < characters.count, characters[index] == "\"" else {
+                try fail()
+            }
+            index += 1
+            var value = ""
+            while index < characters.count {
+                let character = characters[index]
+                index += 1
+                if character == "\"" {
+                    return value
+                }
+                if character != "\\" {
+                    value.append(character)
+                    continue
+                }
+                guard index < characters.count else {
+                    try fail()
+                }
+                let escaped = characters[index]
+                index += 1
+                switch escaped {
+                case "\"", "\\", "/":
+                    value.append(escaped)
+                case "b":
+                    value.append("\u{8}")
+                case "f":
+                    value.append("\u{c}")
+                case "n":
+                    value.append("\n")
+                case "r":
+                    value.append("\r")
+                case "t":
+                    value.append("\t")
+                case "u":
+                    guard index + 4 <= characters.count else {
+                        try fail()
+                    }
+                    let hex = String(characters[index..<(index + 4)])
+                    guard let scalarValue = UInt32(hex, radix: 16),
+                          let scalar = UnicodeScalar(scalarValue) else {
+                        try fail()
+                    }
+                    index += 4
+                    value.append(Character(scalar))
+                default:
+                    try fail()
+                }
+            }
+            try fail()
+        }
+
+        func parseToken() throws {
+            let start = index
+            while index < characters.count {
+                let character = characters[index]
+                if character == " " || character == "\t" || character == "\n" || character == "\r" ||
+                    character == "," || character == "]" || character == "}" {
+                    break
+                }
+                index += 1
+            }
+            guard start != index else {
+                try fail()
+            }
+        }
+
+        func parseValue() throws {
+            skipWhitespace()
+            guard index < characters.count else {
+                try fail()
+            }
+            if characters[index] == "{" {
+                try parseObject()
+            } else if characters[index] == "[" {
+                try parseArray()
+            } else if characters[index] == "\"" {
+                _ = try parseString()
+            } else {
+                try parseToken()
+            }
+        }
+
+        func parseArray() throws {
+            index += 1
+            skipWhitespace()
+            if index < characters.count, characters[index] == "]" {
+                index += 1
+                return
+            }
+            while index < characters.count {
+                try parseValue()
+                skipWhitespace()
+                if index < characters.count, characters[index] == "]" {
+                    index += 1
+                    return
+                }
+                guard index < characters.count, characters[index] == "," else {
+                    try fail()
+                }
+                index += 1
+                skipWhitespace()
+            }
+            try fail()
+        }
+
+        func parseObject() throws {
+            index += 1
+            var keys = Set<String>()
+            skipWhitespace()
+            if index < characters.count, characters[index] == "}" {
+                index += 1
+                return
+            }
+            while index < characters.count {
+                let key = try parseString()
+                guard !keys.contains(key) else {
+                    throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.duplicateJsonKey")
+                }
+                keys.insert(key)
+                skipWhitespace()
+                guard index < characters.count, characters[index] == ":" else {
+                    try fail()
+                }
+                index += 1
+                try parseValue()
+                skipWhitespace()
+                if index < characters.count, characters[index] == "}" {
+                    index += 1
+                    return
+                }
+                guard index < characters.count, characters[index] == "," else {
+                    try fail()
+                }
+                index += 1
+                skipWhitespace()
+            }
+            try fail()
+        }
+
+        try parseValue()
+        skipWhitespace()
+        guard index == characters.count else {
+            try fail()
+        }
+    }
+
+    public init(jsonObject object: [String: Any],
+                expectedDestinationBindingHash: String? = nil) throws {
+        try Self.requireManifestKeys(
+            object,
+            label: "nativeProverBundle",
+            allowed: Self.manifestKeys
+        )
+        let proofArtifactHash = try Self.manifestHexString(
+            object,
+            label: "proofArtifactHash",
+            aliases: ["proofArtifactHash", "proof_artifact_hash", "proverArtifactHash", "prover_artifact_hash",
+                      "circuitArtifactHash", "circuit_artifact_hash"]
+        )
+        let provingKeyHash = try Self.manifestHexString(
+            object,
+            label: "provingKeyHash",
+            aliases: ["provingKeyHash", "proving_key_hash"]
+        )
+        let artifactsInput = try Self.manifestField(
+            object,
+            label: "nativeSdkArtifacts",
+            aliases: ["nativeSdkArtifacts", "native_sdk_artifacts", "sdkArtifacts", "sdk_artifacts"]
+        )
+        guard let artifactObjects = artifactsInput as? [[String: Any]] else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts")
+        }
+        let artifacts = try artifactObjects.enumerated().map { index, artifact in
+            try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                jsonObject: artifact,
+                index: index,
+                proofArtifactHash: evmNormalizeNativeEvmProverBundleHex32(
+                    proofArtifactHash,
+                    field: "proofArtifactHash"
+                ),
+                provingKeyHash: evmNormalizeNativeEvmProverBundleHex32(
+                    provingKeyHash,
+                    field: "provingKeyHash"
+                )
+            )
+        }
+        try self.init(
+            schema: Self.manifestString(
+                try Self.manifestField(object, label: "schema", aliases: ["schema"]),
+                field: "schema"
+            ),
+            bundleId: Self.manifestString(
+                try Self.manifestField(object, label: "bundleId", aliases: ["bundleId", "bundle_id"]),
+                field: "bundleId"
+            ),
+            domain: Self.manifestDomain(
+                try Self.manifestField(object, label: "domain", aliases: ["domain"]),
+                field: "domain"
+            ),
+            chain: Self.manifestString(
+                try Self.manifestField(object, label: "chain", aliases: ["chain"]),
+                field: "chain"
+            ),
+            proofBackend: Self.manifestString(
+                try Self.manifestField(
+                    object,
+                    label: "proofBackend",
+                    aliases: ["proofBackend", "proof_backend", "backend"]
+                ),
+                field: "proofBackend"
+            ),
+            proofArtifact: Self.manifestString(
+                try Self.manifestField(
+                    object,
+                    label: "proofArtifact",
+                    aliases: ["proofArtifact", "proof_artifact", "proverArtifact", "prover_artifact",
+                              "circuitArtifact", "circuit_artifact"]
+                ),
+                field: "proofArtifact"
+            ),
+            proofArtifactHash: proofArtifactHash,
+            provingKey: Self.manifestString(
+                try Self.manifestField(object, label: "provingKey", aliases: ["provingKey", "proving_key"]),
+                field: "provingKey"
+            ),
+            provingKeyHash: provingKeyHash,
+            verifierKey: Self.manifestString(
+                try Self.manifestField(object, label: "verifierKey", aliases: ["verifierKey", "verifier_key"]),
+                field: "verifierKey"
+            ),
+            verifierKeyHash: Self.manifestHexString(
+                object,
+                label: "verifierKeyHash",
+                aliases: ["verifierKeyHash", "verifier_key_hash"]
+            ),
+            destinationBindingHash: Self.manifestHexString(
+                object,
+                label: "destinationBindingHash",
+                aliases: ["destinationBindingHash", "destination_binding_hash"]
+            ),
+            noWasm: Self.manifestBool(
+                try Self.manifestField(object, label: "noWasm", aliases: ["noWasm", "no_wasm"]),
+                field: "noWasm"
+            ),
+            remoteProverRequired: Self.manifestBool(
+                try Self.manifestField(
+                    object,
+                    label: "remoteProverRequired",
+                    aliases: ["remoteProverRequired", "remote_prover_required"]
+                ),
+                field: "remoteProverRequired"
+            ),
+            browserImplementation: Self.manifestString(
+                try Self.manifestField(
+                    object,
+                    label: "browserImplementation",
+                    aliases: ["browserImplementation", "browser_implementation"]
+                ),
+                field: "browserImplementation"
+            ),
+            nativeSdkArtifacts: artifacts,
+            auditHashes: try Self.manifestStringArray(
+                try Self.manifestField(object, label: "auditHashes", aliases: ["auditHashes", "audit_hashes"]),
+                field: "auditHashes"
+            ),
+            expectedDestinationBindingHash: expectedDestinationBindingHash
+        )
+    }
+
+    private static let manifestKeys: Set<String> = [
+        "schema",
+        "bundleId",
+        "bundle_id",
+        "domain",
+        "chain",
+        "proofBackend",
+        "proof_backend",
+        "backend",
+        "proofArtifact",
+        "proof_artifact",
+        "proverArtifact",
+        "prover_artifact",
+        "circuitArtifact",
+        "circuit_artifact",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "circuitArtifactHash",
+        "circuit_artifact_hash",
+        "provingKey",
+        "proving_key",
+        "provingKeyHash",
+        "proving_key_hash",
+        "verifierKey",
+        "verifier_key",
+        "verifierKeyHash",
+        "verifier_key_hash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+        "noWasm",
+        "no_wasm",
+        "remoteProverRequired",
+        "remote_prover_required",
+        "browserImplementation",
+        "browser_implementation",
+        "nativeSdkArtifacts",
+        "native_sdk_artifacts",
+        "sdkArtifacts",
+        "sdk_artifacts",
+        "auditHashes",
+        "audit_hashes"
+    ]
+
+    private static func requireManifestKeys(_ object: [String: Any],
+                                            label: String,
+                                            allowed: Set<String>) throws {
+        for key in object.keys where !allowed.contains(key) {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).\(key)")
+        }
+    }
+
+    public func applying(to input: EvmSccpProofRequestInput) throws -> EvmSccpProofRequestInput {
+        let requestDestinationBindingHash = try evmNormalizeHex32(
+            input.destinationBindingHash,
+            field: "destinationBindingHash"
+        )
+        guard requestDestinationBindingHash == destinationBindingHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.destinationBindingHash")
+        }
+        if let requestVerifierKeyHash = input.destinationBinding?.verifierKeyHash {
+            guard try evmNormalizeHex32(
+                requestVerifierKeyHash,
+                field: "verifierKeyHash"
+            ) == verifierKeyHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.verifierKeyHash")
+            }
+        }
+        if let existingProofArtifactHash = input.proofArtifactHash {
+            guard try evmNormalizeHex32(
+                existingProofArtifactHash,
+                field: "proofArtifactHash"
+            ) == proofArtifactHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.proofArtifactHash")
+            }
+        }
+        if let existingProvingKeyHash = input.provingKeyHash {
+            guard try evmNormalizeHex32(
+                existingProvingKeyHash,
+                field: "provingKeyHash"
+            ) == provingKeyHash else {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverBundle.provingKeyHash")
+            }
+        }
+        guard (input.proofArtifactHash == nil) == (input.provingKeyHash == nil) else {
+            throw EvmSccpProverError.invalidPublicInputs("proofArtifactHash/provingKeyHash")
+        }
+        return EvmSccpProofRequestInput(
+            publicInputs: input.publicInputs,
+            bundleBytes: input.bundleBytes,
+            sourceProofBytes: input.sourceProofBytes,
+            statementHash: input.statementHash,
+            destinationBindingHash: requestDestinationBindingHash,
+            backend: input.backend,
+            sourceDomain: input.sourceDomain,
+            destinationBinding: input.destinationBinding,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
+        )
+    }
+
+    private static func manifestField(_ object: [String: Any],
+                                      label: String,
+                                      aliases: [String]) throws -> Any {
+        let present = aliases.filter { object.keys.contains($0) }
+        guard present.count <= 1 else {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        if let alias = present.first, let value = object[alias] {
+            return value
+        }
+        throw EvmSccpProverError.invalidPublicInputs(label)
+    }
+
+    private static func manifestString(_ value: Any, field: String) throws -> String {
+        guard let text = value as? String else {
+            throw EvmSccpProverError.invalidPublicInputs(field)
+        }
+        return text
+    }
+
+    private static func manifestHexString(_ object: [String: Any],
+                                          label: String,
+                                          aliases: [String]) throws -> String {
+        try manifestString(try manifestField(object, label: label, aliases: aliases), field: label)
+    }
+
+    private static func manifestBool(_ value: Any, field: String) throws -> Bool {
+        if let number = value as? NSNumber,
+           CFGetTypeID(number) == CFBooleanGetTypeID() {
+            return number.boolValue
+        }
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+
+    private static func manifestDomain(_ value: Any, field: String) throws -> UInt32 {
+        if let number = value as? NSNumber,
+           CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let numeric = number.doubleValue
+            guard numeric.isFinite,
+                  numeric.rounded(.towardZero) == numeric,
+                  numeric >= 0,
+                  numeric <= Double(UInt32.max) else {
+                throw EvmSccpProverError.invalidPublicInputs(field)
+            }
+            return UInt32(numeric)
+        }
+        if let text = value as? String,
+           Self.isCanonicalDecimalText(text),
+           let parsed = UInt32(text) {
+            return parsed
+        }
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+
+    private static func isCanonicalDecimalText(_ value: String) -> Bool {
+        if value == "0" {
+            return true
+        }
+        guard let first = value.first, first >= "1", first <= "9" else {
+            return false
+        }
+        return value.allSatisfy { character in
+            character >= "0" && character <= "9"
+        }
+    }
+
+    private static func manifestStringArray(_ value: Any, field: String) throws -> [String] {
+        guard let array = value as? [Any], !array.isEmpty else {
+            throw EvmSccpProverError.invalidPublicInputs(field)
+        }
+        return try array.enumerated().map { index, item in
+            try manifestString(item, field: "\(field)[\(index)]")
+        }
+    }
+}
+
+/// Verified native EVM Groth16 prover artifact hashes for an Ethereum mainnet bundle.
+public struct EthereumMainnetNativeEvmProverArtifacts: Equatable {
+    public let hashAlgorithm: String
+    public let nativeProverBundle: EthereumMainnetNativeEvmProverBundle
+    public let proofArtifactHash: String
+    public let provingKeyHash: String
+    public let verifierKeyHash: String
+    public let sdk: String?
+    public let implementation: String?
+    public let implementationHash: String?
+}
+
+public extension EthereumMainnetNativeEvmProverBundle {
+    /// Verify local native prover artifact bytes against this bundle manifest.
+    func verifiedArtifacts(proofArtifactBytes: Data,
+                           provingKeyBytes: Data,
+                           verifierKeyBytes: Data,
+                           sdk: String? = nil,
+                           implementationBytes: Data? = nil) throws -> EthereumMainnetNativeEvmProverArtifacts {
+        let proofArtifactHash = sccpNativeEvmProverArtifactSha256Hex(proofArtifactBytes)
+        guard proofArtifactHash == self.proofArtifactHash else {
+            throw EvmSccpProverError.invalidPublicInputs("proofArtifactBytes")
+        }
+        let provingKeyHash = sccpNativeEvmProverArtifactSha256Hex(provingKeyBytes)
+        guard provingKeyHash == self.provingKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("provingKeyBytes")
+        }
+        let verifierKeyHash = sccpNativeEvmProverArtifactSha256Hex(verifierKeyBytes)
+        guard verifierKeyHash == self.verifierKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("verifierKeyBytes")
+        }
+        try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
+            proofArtifactBytes,
+            field: "proofArtifactBytes"
+        )
+        try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
+            provingKeyBytes,
+            field: "provingKeyBytes"
+        )
+        try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
+            verifierKeyBytes,
+            field: "verifierKeyBytes"
+        )
+
+        guard let sdk, !sdk.isEmpty else {
+            throw EvmSccpProverError.invalidPublicInputs("sdk")
+        }
+        guard let implementationBytes else {
+            throw EvmSccpProverError.invalidPublicInputs("implementationBytes")
+        }
+        guard let artifact = nativeSdkArtifacts.first(where: { $0.sdk == sdk }) else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.sdk")
+        }
+        let implementationHash = sccpNativeEvmProverArtifactSha256Hex(implementationBytes)
+        guard implementationHash == artifact.implementationHash else {
+            throw EvmSccpProverError.invalidPublicInputs("implementationBytes")
+        }
+        try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
+            implementationBytes,
+            field: "implementationBytes"
+        )
+        let implementation = artifact.implementation
+
+        return EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: self,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            sdk: sdk,
+            implementation: implementation,
+            implementationHash: implementationHash
+        )
+    }
+}
+
+private func sccpNativeEvmProverArtifactSha256Hex(_ data: Data) -> String {
+    "0x" + Data(SHA256.hash(data: data)).hexEncodedString()
+}
+
+private let sccpNativeEvmProverForbiddenArtifactMarkers: [[UInt8]] = [
+    [0x77, 0x65, 0x62, 0x61, 0x73, 0x73, 0x65, 0x6D, 0x62, 0x6C, 0x79],
+    [0x77, 0x61, 0x73, 0x6D],
+    [0x73, 0x6E, 0x61, 0x72, 0x6B, 0x6A, 0x73],
+    [0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72],
+    [0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x20, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72],
+    [0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x5F, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72],
+    [0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x5F, 0x75, 0x72, 0x6C],
+    [0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x2D, 0x75, 0x72, 0x6C],
+    [0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x65, 0x6E, 0x64, 0x70, 0x6F, 0x69, 0x6E, 0x74],
+    [0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x20, 0x65, 0x6E, 0x64, 0x70, 0x6F, 0x69, 0x6E, 0x74]
+]
+
+private func sccpNativeEvmProverLowerAsciiByte(_ byte: UInt8) -> UInt8 {
+    byte >= 0x41 && byte <= 0x5A ? byte + 0x20 : byte
+}
+
+private func sccpNativeEvmProverArtifactContainsMarker(
+    _ bytes: [UInt8],
+    marker: [UInt8]
+) -> Bool {
+    guard marker.count <= bytes.count else {
+        return false
+    }
+    for offset in 0...(bytes.count - marker.count) {
+        var matched = true
+        for index in 0..<marker.count
+        where sccpNativeEvmProverLowerAsciiByte(bytes[offset + index]) != marker[index] {
+            matched = false
+            break
+        }
+        if matched {
+            return true
+        }
+    }
+    return false
+}
+
+private func sccpNativeEvmProverRejectForbiddenArtifactMarkers(
+    _ data: Data,
+    field: String
+) throws {
+    let bytes = Array(data)
+    for marker in sccpNativeEvmProverForbiddenArtifactMarkers
+    where sccpNativeEvmProverArtifactContainsMarker(bytes, marker: marker) {
+        throw EvmSccpProverError.invalidPublicInputs("\(field).forbiddenMarker")
+    }
+}
+
 /// Inputs used to build a local EVM-family SCCP Groth16 proof request.
 public struct EvmSccpProofRequestInput: Equatable {
     public let publicInputs: EvmSccpPublicInputsInput
@@ -70,6 +1052,8 @@ public struct EvmSccpProofRequestInput: Equatable {
     public let backend: String
     public let sourceDomain: UInt32
     public let destinationBinding: EvmSccpDestinationBinding?
+    public let proofArtifactHash: String?
+    public let provingKeyHash: String?
 
     public init(publicInputs: EvmSccpPublicInputsInput,
                 bundleBytes: Data,
@@ -78,7 +1062,9 @@ public struct EvmSccpProofRequestInput: Equatable {
                 destinationBindingHash: String,
                 backend: String = sccpEvmGroth16Bn254ProofBackendV1,
                 sourceDomain: UInt32 = sccpDomainSora,
-                destinationBinding: EvmSccpDestinationBinding? = nil) {
+                destinationBinding: EvmSccpDestinationBinding? = nil,
+                proofArtifactHash: String? = nil,
+                provingKeyHash: String? = nil) {
         self.publicInputs = publicInputs
         self.bundleBytes = bundleBytes
         self.sourceProofBytes = sourceProofBytes
@@ -87,6 +1073,8 @@ public struct EvmSccpProofRequestInput: Equatable {
         self.backend = backend
         self.sourceDomain = sourceDomain
         self.destinationBinding = destinationBinding
+        self.proofArtifactHash = proofArtifactHash
+        self.provingKeyHash = provingKeyHash
     }
 
     public init(publicInputs: EvmSccpPublicInputsInput,
@@ -95,7 +1083,9 @@ public struct EvmSccpProofRequestInput: Equatable {
                 statementHash: String,
                 destinationBinding: EvmSccpDestinationBinding,
                 backend: String = sccpEvmGroth16Bn254ProofBackendV1,
-                sourceDomain: UInt32 = sccpDomainSora) throws {
+                sourceDomain: UInt32 = sccpDomainSora,
+                proofArtifactHash: String? = nil,
+                provingKeyHash: String? = nil) throws {
         let destinationBindingHash = try requireEvmDestinationBindingForProofRequest(
             publicInputs: publicInputs,
             destinationBinding: destinationBinding,
@@ -110,7 +1100,9 @@ public struct EvmSccpProofRequestInput: Equatable {
             destinationBindingHash: destinationBindingHash,
             backend: backend,
             sourceDomain: sourceDomain,
-            destinationBinding: destinationBinding
+            destinationBinding: destinationBinding,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
         )
     }
 }
@@ -136,6 +1128,8 @@ public struct EvmSccpProofRequest: Equatable {
     public let proofContext: EvmSccpProofContext
     public let statementHash: String
     public let destinationBindingHash: String
+    public let proofArtifactHash: String?
+    public let provingKeyHash: String?
     public let requestHash: String
     public let destinationBinding: EvmSccpDestinationBinding?
 
@@ -151,6 +1145,8 @@ public struct EvmSccpProofRequest: Equatable {
                 proofContext: EvmSccpProofContext,
                 statementHash: String,
                 destinationBindingHash: String,
+                proofArtifactHash: String? = nil,
+                provingKeyHash: String? = nil,
                 requestHash: String,
                 destinationBinding: EvmSccpDestinationBinding? = nil) {
         self.version = version
@@ -165,6 +1161,8 @@ public struct EvmSccpProofRequest: Equatable {
         self.proofContext = proofContext
         self.statementHash = statementHash
         self.destinationBindingHash = destinationBindingHash
+        self.proofArtifactHash = proofArtifactHash
+        self.provingKeyHash = provingKeyHash
         self.requestHash = requestHash
         self.destinationBinding = destinationBinding
     }
@@ -183,6 +1181,8 @@ public struct EvmSccpProofResult: Equatable {
     public let proofContext: EvmSccpProofContext
     public let statementHash: String
     public let destinationBindingHash: String
+    public let proofArtifactHash: String?
+    public let provingKeyHash: String?
     public let requestHash: String
     public let envelopeHash: String
     public let destinationBinding: EvmSccpDestinationBinding?
@@ -198,6 +1198,8 @@ public struct EvmSccpProofResult: Equatable {
                 proofContext: EvmSccpProofContext,
                 statementHash: String,
                 destinationBindingHash: String,
+                proofArtifactHash: String? = nil,
+                provingKeyHash: String? = nil,
                 requestHash: String,
                 envelopeHash: String,
                 destinationBinding: EvmSccpDestinationBinding? = nil) {
@@ -212,6 +1214,8 @@ public struct EvmSccpProofResult: Equatable {
         self.proofContext = proofContext
         self.statementHash = statementHash
         self.destinationBindingHash = destinationBindingHash
+        self.proofArtifactHash = proofArtifactHash
+        self.provingKeyHash = provingKeyHash
         self.requestHash = requestHash
         self.envelopeHash = envelopeHash
         self.destinationBinding = destinationBinding
@@ -1272,6 +2276,9 @@ public final class BscMainnetSccp {
             )
         }
 
+        receipt = receipt.map { sccpCallbackDictionarySnapshot($0) }
+        block = block.map { sccpCallbackDictionarySnapshot($0) }
+
         let selectedConsensusProvider = finalityProvider ?? consensusProvider
         let sourceParliaFinality: [String: Any]?
         if let supplied = input.parliaFinality {
@@ -1300,7 +2307,7 @@ public final class BscMainnetSccp {
             sourceEventDigest: sourceEventDigest
         )
 
-        return BscMainnetInboundEvidence(
+        return Self.inboundCallbackEvidenceSnapshot(BscMainnetInboundEvidence(
             sourceDomain: sccpDomainBsc,
             targetDomain: sccpDomainSora,
             transactionHash: transactionHash,
@@ -1314,7 +2321,7 @@ public final class BscMainnetSccp {
             ),
             sourceEventDigest: sourceEventDigest,
             sourceBridgeEmitterAddress: normalizedSourceBridgeEmitterAddress
-        )
+        ))
     }
 
     public func proveInboundToSora(
@@ -1339,23 +2346,14 @@ public final class BscMainnetSccp {
         guard evidence.sourceEventDigest != nil else {
             throw EvmSccpProverError.invalidPublicInputs("receipt.sourceEvent")
         }
-        let proofBytes = try await inboundProveFunction(evidence)
-        guard !proofBytes.isEmpty else {
-            throw EvmSccpProverError.emptyProof
-        }
-        guard proofBytes.contains(where: { $0 != 0 }) else {
-            throw EvmSccpProverError.allZeroProof
-        }
-        return Data(proofBytes)
+        return try requireEvmLocalAdmissionBytes(
+            try await inboundProveFunction(Self.inboundCallbackEvidenceSnapshot(evidence)),
+            field: "proofBytes"
+        )
     }
 
     public func submitInboundToIroha(_ proofBytes: Data) async throws -> Any {
-        guard !proofBytes.isEmpty else {
-            throw EvmSccpProverError.emptyProof
-        }
-        guard proofBytes.contains(where: { $0 != 0 }) else {
-            throw EvmSccpProverError.allZeroProof
-        }
+        let proofBytes = try requireEvmLocalAdmissionBytes(proofBytes, field: "proofBytes")
         guard let inboundSubmitFunction else {
             throw EvmSccpProverError.localProverUnavailable
         }
@@ -1523,6 +2521,37 @@ public final class BscMainnetSccp {
         }
         normalizedHash = computedHash
         return normalizedHash
+    }
+
+    private static func receiptProofCallbackSnapshot(_ receiptProof: BscMainnetReceiptProof) -> BscMainnetReceiptProof {
+        BscMainnetReceiptProof(
+            sourceDomain: receiptProof.sourceDomain,
+            sourceEventDigest: receiptProof.sourceEventDigest,
+            validatorEpoch: receiptProof.validatorEpoch,
+            blockNumber: receiptProof.blockNumber,
+            blockHash: receiptProof.blockHash,
+            receiptsRoot: receiptProof.receiptsRoot,
+            validatorSetHash: receiptProof.validatorSetHash,
+            commitSealHash: receiptProof.commitSealHash,
+            receiptRootIndex: receiptProof.receiptRootIndex,
+            receiptTrieProofNodes: receiptProof.receiptTrieProofNodes.map { Data($0) },
+            inclusionBranch: receiptProof.inclusionBranch.map { Data($0) }
+        )
+    }
+
+    private static func inboundCallbackEvidenceSnapshot(_ evidence: BscMainnetInboundEvidence) -> BscMainnetInboundEvidence {
+        BscMainnetInboundEvidence(
+            sourceDomain: evidence.sourceDomain,
+            targetDomain: evidence.targetDomain,
+            transactionHash: evidence.transactionHash,
+            receipt: evidence.receipt.map { sccpCallbackDictionarySnapshot($0) },
+            block: evidence.block.map { sccpCallbackDictionarySnapshot($0) },
+            parliaFinality: evidence.parliaFinality.map { sccpCallbackDictionarySnapshot($0) },
+            receiptProof: evidence.receiptProof.map { Self.receiptProofCallbackSnapshot($0) },
+            receiptProofHash: evidence.receiptProofHash,
+            sourceEventDigest: evidence.sourceEventDigest,
+            sourceBridgeEmitterAddress: evidence.sourceBridgeEmitterAddress
+        )
     }
 
     private static func requireReceiptProofMatchesEvidence(
@@ -2786,6 +3815,8 @@ public final class EthereumMainnetSccp {
     private let inboundSubmitFunction: InboundSubmitFunction?
     private let outboundSubmitFunction: OutboundSubmitFunction?
     private let sourceBridgeEmitterAddress: String?
+    private let nativeProverBundle: EthereumMainnetNativeEvmProverBundle?
+    private let nativeProverArtifacts: EthereumMainnetNativeEvmProverArtifacts?
 
     public init(witnessProvider: EvmSccpWitnessProvider? = nil,
                 proveFunction: ProveFunction? = nil,
@@ -2794,6 +3825,8 @@ public final class EthereumMainnetSccp {
                 inboundProveFunction: InboundProveFunction? = nil,
                 inboundSubmitFunction: InboundSubmitFunction? = nil,
                 outboundSubmitFunction: OutboundSubmitFunction? = nil,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle? = nil,
+                nativeProverArtifacts: EthereumMainnetNativeEvmProverArtifacts? = nil,
                 sourceBridgeEmitterAddress: String? = nil) {
         self.prover = EvmSccpProver(witnessProvider: witnessProvider, proveFunction: proveFunction)
         self.executionProvider = executionProvider
@@ -2801,6 +3834,8 @@ public final class EthereumMainnetSccp {
         self.inboundProveFunction = inboundProveFunction
         self.inboundSubmitFunction = inboundSubmitFunction
         self.outboundSubmitFunction = outboundSubmitFunction
+        self.nativeProverBundle = nativeProverArtifacts?.nativeProverBundle ?? nativeProverBundle
+        self.nativeProverArtifacts = nativeProverArtifacts
         self.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress
     }
 
@@ -3104,6 +4139,9 @@ public final class EthereumMainnetSccp {
             )
         }
 
+        receipt = receipt.map { sccpCallbackDictionarySnapshot($0) }
+        block = block.map { sccpCallbackDictionarySnapshot($0) }
+
         let selectedConsensusProvider = finalityProvider ?? consensusProvider
         let beaconFinality: [String: Any]?
         if let suppliedFinality = input.beaconFinality {
@@ -3322,7 +4360,7 @@ public final class EthereumMainnetSccp {
             sourceEventDigest: sourceEventDigest
         )
 
-        return EthereumMainnetInboundEvidence(
+        return Self.inboundCallbackEvidenceSnapshot(EthereumMainnetInboundEvidence(
             sourceDomain: sccpDomainEthereum,
             targetDomain: sccpDomainSora,
             transactionHash: transactionHash,
@@ -3338,7 +4376,7 @@ public final class EthereumMainnetSccp {
             ),
             sourceEventDigest: sourceEventDigest,
             sourceBridgeEmitterAddress: sourceBridgeEmitterAddress
-        )
+        ))
     }
 
     public func proveInboundToSora(
@@ -3383,7 +4421,7 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("beaconFinality.\(field)")
             }
         }
-        let proofBytes = try await inboundProveFunction(evidence)
+        let proofBytes = try await inboundProveFunction(Self.inboundCallbackEvidenceSnapshot(evidence))
         guard !proofBytes.isEmpty else {
             throw EvmSccpProverError.emptyProof
         }
@@ -3407,13 +4445,15 @@ public final class EthereumMainnetSccp {
     }
 
     public func buildOutboundProofRequest(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofRequest {
-        let request = try await prover.buildRequest(input)
+        let resolvedInput = try nativeProverBundle?.applying(to: input) ?? input
+        let request = try await prover.buildRequest(resolvedInput)
         try Self.requireEthereumMainnetRequest(request)
         return request
     }
 
     public func proveOutboundToEthereum(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
         let request = try await buildOutboundProofRequest(input)
+        try Self.requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request: request)
         let result = try await prover.prove(request)
         guard result.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.publicInputs.targetDomain")
@@ -3428,6 +4468,35 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
         }
         return result
+    }
+
+    private static func requireVerifiedNativeProverArtifacts(
+        _ artifacts: EthereumMainnetNativeEvmProverArtifacts?,
+        request: EvmSccpProofRequest
+    ) throws {
+        guard let artifacts else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts")
+        }
+        guard artifacts.nativeProverBundle.destinationBindingHash == request.destinationBindingHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.destinationBindingHash")
+        }
+        guard artifacts.proofArtifactHash == request.proofArtifactHash,
+              artifacts.provingKeyHash == request.provingKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.proofArtifactHash")
+        }
+        guard artifacts.verifierKeyHash == artifacts.nativeProverBundle.verifierKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.verifierKeyHash")
+        }
+        guard let sdk = artifacts.sdk,
+              !sdk.isEmpty,
+              let implementation = artifacts.implementation,
+              !implementation.isEmpty,
+              let implementationHash = artifacts.implementationHash,
+              let artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.first(where: { $0.sdk == sdk }),
+              artifact.implementation == implementation,
+              artifact.implementationHash == implementationHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.implementationHash")
+        }
     }
 
     public func buildEthereumCalldata(_ input: EvmSccpSubmissionInput) throws -> EvmSccpSubmission {
@@ -3533,6 +4602,43 @@ public final class EthereumMainnetSccp {
         }
         normalizedHash = computedHash
         return normalizedHash
+    }
+
+    private static func receiptProofCallbackSnapshot(
+        _ receiptProof: EthereumMainnetReceiptProof
+    ) -> EthereumMainnetReceiptProof {
+        EthereumMainnetReceiptProof(
+            sourceDomain: receiptProof.sourceDomain,
+            sourceEventDigest: receiptProof.sourceEventDigest,
+            beaconSlot: receiptProof.beaconSlot,
+            executionBlockNumber: receiptProof.executionBlockNumber,
+            executionBlockHash: receiptProof.executionBlockHash,
+            executionReceiptsRoot: receiptProof.executionReceiptsRoot,
+            beaconFinalizedRoot: receiptProof.beaconFinalizedRoot,
+            syncCommitteeRoot: receiptProof.syncCommitteeRoot,
+            receiptRootIndex: receiptProof.receiptRootIndex,
+            receiptTrieProofNodes: receiptProof.receiptTrieProofNodes.map { Data($0) },
+            inclusionBranch: receiptProof.inclusionBranch.map { Data($0) }
+        )
+    }
+
+    private static func inboundCallbackEvidenceSnapshot(
+        _ evidence: EthereumMainnetInboundEvidence
+    ) -> EthereumMainnetInboundEvidence {
+        EthereumMainnetInboundEvidence(
+            sourceDomain: evidence.sourceDomain,
+            targetDomain: evidence.targetDomain,
+            transactionHash: evidence.transactionHash,
+            receipt: evidence.receipt.map { sccpCallbackDictionarySnapshot($0) },
+            block: evidence.block.map { sccpCallbackDictionarySnapshot($0) },
+            beaconFinality: evidence.beaconFinality.map { sccpCallbackDictionarySnapshot($0) },
+            blockReceipts: evidence.blockReceipts?.map { sccpCallbackDictionarySnapshot($0) },
+            inclusionBranch: evidence.inclusionBranch?.map { Data($0) },
+            receiptProof: evidence.receiptProof.map { Self.receiptProofCallbackSnapshot($0) },
+            receiptProofHash: evidence.receiptProofHash,
+            sourceEventDigest: evidence.sourceEventDigest,
+            sourceBridgeEmitterAddress: evidence.sourceBridgeEmitterAddress
+        )
     }
 
     private static func requireReceiptProofMatchesEvidence(
@@ -4098,7 +5204,9 @@ private func evmSccpWitnessProviderInputSnapshot(_ input: EvmSccpProofRequestInp
         destinationBindingHash: input.destinationBindingHash,
         backend: input.backend,
         sourceDomain: input.sourceDomain,
-        destinationBinding: input.destinationBinding
+        destinationBinding: input.destinationBinding,
+        proofArtifactHash: input.proofArtifactHash,
+        provingKeyHash: input.provingKeyHash
     )
 }
 
@@ -4116,6 +5224,8 @@ private func evmSccpProofRequestCallbackSnapshot(_ request: EvmSccpProofRequest)
         proofContext: request.proofContext,
         statementHash: request.statementHash,
         destinationBindingHash: request.destinationBindingHash,
+        proofArtifactHash: request.proofArtifactHash,
+        provingKeyHash: request.provingKeyHash,
         requestHash: request.requestHash,
         destinationBinding: request.destinationBinding
     )
@@ -4202,6 +5312,10 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
         statementHash: input.statementHash,
         destinationBindingHash: input.destinationBindingHash
     )
+    let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(
+        proofArtifactHash: input.proofArtifactHash,
+        provingKeyHash: input.provingKeyHash
+    )
     let publicSignalWords = try sccpGroth16Bn254PublicSignalWords(
         publicInputs: input.publicInputs,
         sourceDomain: input.sourceDomain,
@@ -4216,6 +5330,10 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
     preimage.append(sourceProofBytes)
     try preimage.append(evmBytesFromHex32(proofContext.statementHash, field: "statementHash"))
     try preimage.append(evmBytesFromHex32(proofContext.destinationBindingHash, field: "destinationBindingHash"))
+    if let proverArtifacts {
+        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash, field: "proofArtifactHash"))
+        try preimage.append(evmBytesFromHex32(proverArtifacts.provingKeyHash, field: "provingKeyHash"))
+    }
     for signal in publicSignalWords {
         try preimage.append(evmBytesFromHex32(signal, field: "publicSignalWords"))
     }
@@ -4232,6 +5350,8 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
         proofContext: proofContext,
         statementHash: proofContext.statementHash,
         destinationBindingHash: proofContext.destinationBindingHash,
+        proofArtifactHash: proverArtifacts?.proofArtifactHash,
+        provingKeyHash: proverArtifacts?.provingKeyHash,
         requestHash: evmHashHex(prefix: "sccp:evm:groth16-proof-request:v1", payload: preimage),
         destinationBinding: input.destinationBinding
     )
@@ -4244,6 +5364,23 @@ private func normalizeEvmSccpProofContext(statementHash: String,
         statementHash: try evmNormalizeHex32(statementHash, field: "statementHash"),
         destinationBindingHash: try evmNormalizeHex32(destinationBindingHash, field: "destinationBindingHash")
     )
+}
+
+private func normalizeOptionalEvmGroth16ProverArtifacts(
+    proofArtifactHash: String?,
+    provingKeyHash: String?
+) throws -> (proofArtifactHash: String, provingKeyHash: String)? {
+    switch (proofArtifactHash, provingKeyHash) {
+    case (nil, nil):
+        return nil
+    case let (proofArtifactHash?, provingKeyHash?):
+        return (
+            proofArtifactHash: try evmNormalizeHex32(proofArtifactHash, field: "proofArtifactHash"),
+            provingKeyHash: try evmNormalizeHex32(provingKeyHash, field: "provingKeyHash")
+        )
+    default:
+        throw EvmSccpProverError.invalidPublicInputs("proofArtifactHash/provingKeyHash")
+    }
 }
 
 public func wrapEvmSccpProofResult(proofBytes: Data,
@@ -4268,6 +5405,8 @@ public func wrapEvmSccpProofResult(proofBytes: Data,
         proofContext: request.proofContext,
         statementHash: request.statementHash,
         destinationBindingHash: request.destinationBindingHash,
+        proofArtifactHash: request.proofArtifactHash,
+        provingKeyHash: request.provingKeyHash,
         requestHash: request.requestHash,
         envelopeHash: evmHashHex(prefix: "sccp:evm:groth16-proof-envelope:v1", payload: envelopePayload),
         destinationBinding: request.destinationBinding
@@ -4310,7 +5449,9 @@ private func requireWrappedEvmProofResultForSubmission(
         destinationBindingHash: proofResult.destinationBindingHash,
         backend: proofResult.backend,
         sourceDomain: sccpDomainSora,
-        destinationBinding: proofResult.destinationBinding
+        destinationBinding: proofResult.destinationBinding,
+        proofArtifactHash: proofResult.proofArtifactHash,
+        provingKeyHash: proofResult.provingKeyHash
     ))
     guard expectedRequest.requestHash == requestHash else {
         throw EvmSccpProverError.invalidPublicInputs("proofResult.requestHash")
@@ -4462,7 +5603,9 @@ private func requireCanonicalEvmSccpProofRequest(_ request: EvmSccpProofRequest)
         destinationBindingHash: request.destinationBindingHash,
         backend: request.backend,
         sourceDomain: request.sourceDomain,
-        destinationBinding: request.destinationBinding
+        destinationBinding: request.destinationBinding,
+        proofArtifactHash: request.proofArtifactHash,
+        provingKeyHash: request.provingKeyHash
     ))
     guard expected == request else {
         throw EvmSccpProverError.invalidPublicInputs("request")
@@ -4715,6 +5858,48 @@ private func evmBytesFromHex32(_ value: String, field: String) throws -> Data {
 
 private func evmNormalizeHex32(_ value: String, field: String) throws -> String {
     "0x" + (try evmNonZeroBytesFromHex32(value, field: field)).hexEncodedString()
+}
+
+private func evmNormalizeNativeEvmProverBundleHex32(_ value: String, field: String) throws -> String {
+    let normalized = try evmNormalizeHex32(value, field: field)
+    guard value == normalized else {
+        throw EvmSccpProverError.invalidHex32(field)
+    }
+    return normalized
+}
+
+private func evmRequireNativeEvmProverBundleHashRoleSeparation(
+    _ roles: [(String, String)]
+) throws {
+    var seen: [String: String] = [:]
+    for (label, hash) in roles {
+        if seen[hash] != nil {
+            throw EvmSccpProverError.invalidPublicInputs(label)
+        }
+        seen[hash] = label
+    }
+}
+
+private func evmNormalizeNativeEvmProverArtifactPath(_ value: String, field: String) throws -> String {
+    guard !value.isEmpty else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    guard value.unicodeScalars.allSatisfy({ scalar in
+        scalar.value >= 0x20 && scalar.value != 0x7f
+    }) else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    guard !value.hasPrefix("/"), !value.contains("\\") else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    let segments = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard !segments.isEmpty,
+          segments.allSatisfy({ segment in
+              !segment.isEmpty && segment != "." && segment != ".."
+          }) else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    return value
 }
 
 private func evmNonZeroBytesFromHex32(_ value: String, field: String) throws -> Data {

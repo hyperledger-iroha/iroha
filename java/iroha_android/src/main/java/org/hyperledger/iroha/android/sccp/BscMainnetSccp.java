@@ -228,6 +228,8 @@ public final class BscMainnetSccp {
               firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
     }
 
+    receipt = callbackMapSnapshot(receipt);
+    block = callbackMapSnapshot(block);
     Map<String, Object> parliaFinality = input.parliaFinality();
     if (parliaFinality == null && consensusProvider != null) {
       parliaFinality = consensusProvider.collectFinalityEvidence(receipt, block, transactionHash);
@@ -245,17 +247,18 @@ public final class BscMainnetSccp {
         normalizedParliaFinality,
         sourceEventDigest);
     final String receiptProofHash = normalizeReceiptProofHash(receiptProof, input.receiptProofHash());
-    return new InboundEvidence(
-        DOMAIN_BSC,
-        DOMAIN_SORA,
-        transactionHash,
-        receipt,
-        block,
-        normalizedParliaFinality,
-        receiptProofHash,
-        receiptProof,
-        sourceEventDigest,
-        normalizedSourceBridgeEmitterAddress);
+    return callbackEvidenceSnapshot(
+        new InboundEvidence(
+            DOMAIN_BSC,
+            DOMAIN_SORA,
+            transactionHash,
+            receipt,
+            block,
+            normalizedParliaFinality,
+            receiptProofHash,
+            receiptProof,
+            sourceEventDigest,
+            normalizedSourceBridgeEmitterAddress));
   }
 
   public byte[] proveInboundToSora(final InboundEvidence input) {
@@ -273,7 +276,7 @@ public final class BscMainnetSccp {
       throw new IllegalArgumentException(
           "BSC mainnet SCCP inbound proof requires receipt source event validation");
     }
-    final byte[] proofBytes = inboundProver.prove(evidence);
+    final byte[] proofBytes = inboundProver.prove(callbackEvidenceSnapshot(evidence));
     if (proofBytes == null || proofBytes.length == 0) {
       throw new IllegalArgumentException("proofBytes must not be empty");
     }
@@ -447,7 +450,9 @@ public final class BscMainnetSccp {
         input.destinationBindingHash(),
         input.backend(),
         input.sourceDomain(),
-        input.destinationBinding());
+        input.destinationBinding(),
+        input.proofArtifactHash(),
+        input.provingKeyHash());
   }
 
   private static long normalizeRpcChainId(final Object value) {
@@ -465,6 +470,87 @@ public final class BscMainnetSccp {
       throw new IllegalArgumentException(label + " must return an object");
     }
     return (Map<String, Object>) value;
+  }
+
+  private static InboundEvidence callbackEvidenceSnapshot(final InboundEvidence evidence) {
+    if (evidence == null) {
+      return null;
+    }
+    return new InboundEvidence(
+        evidence.sourceDomain(),
+        evidence.targetDomain(),
+        evidence.transactionHash(),
+        callbackMapSnapshot(evidence.receipt()),
+        callbackMapSnapshot(evidence.block()),
+        callbackMapSnapshot(evidence.parliaFinality()),
+        evidence.receiptProofHash(),
+        callbackReceiptProofSnapshot(evidence.receiptProof()),
+        evidence.sourceEventDigest(),
+        evidence.sourceBridgeEmitterAddress());
+  }
+
+  private static ReceiptProof callbackReceiptProofSnapshot(final ReceiptProof receiptProof) {
+    if (receiptProof == null) {
+      return null;
+    }
+    return new ReceiptProof(
+        receiptProof.sourceDomain(),
+        receiptProof.sourceEventDigest(),
+        receiptProof.validatorEpoch(),
+        receiptProof.blockNumber(),
+        receiptProof.blockHash(),
+        receiptProof.receiptsRoot(),
+        receiptProof.validatorSetHash(),
+        receiptProof.commitSealHash(),
+        receiptProof.receiptRootIndex(),
+        receiptProof.receiptTrieProofNodes(),
+        receiptProof.inclusionBranch());
+  }
+
+  private static Map<String, Object> callbackMapSnapshot(final Map<String, Object> value) {
+    if (value == null) {
+      return null;
+    }
+    final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+    for (final Map.Entry<String, Object> entry : value.entrySet()) {
+      copy.put(entry.getKey(), callbackAnySnapshot(entry.getValue()));
+    }
+    return Collections.unmodifiableMap(copy);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Object callbackAnySnapshot(final Object value) {
+    if (value instanceof byte[]) {
+      final byte[] bytes = (byte[]) value;
+      return Arrays.copyOf(bytes, bytes.length);
+    }
+    if (value instanceof Map) {
+      final Map<?, ?> map = (Map<?, ?>) value;
+      final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+      for (final Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() instanceof String) {
+          copy.put((String) entry.getKey(), callbackAnySnapshot(entry.getValue()));
+        }
+      }
+      return Collections.unmodifiableMap(copy);
+    }
+    if (value instanceof List) {
+      final List<?> list = (List<?>) value;
+      final ArrayList<Object> copy = new ArrayList<>(list.size());
+      for (final Object item : list) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    if (value instanceof Object[]) {
+      final Object[] array = (Object[]) value;
+      final ArrayList<Object> copy = new ArrayList<>(array.length);
+      for (final Object item : array) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    return value;
   }
 
   private static Object firstPresent(final Map<String, Object> input, final String... keys) {

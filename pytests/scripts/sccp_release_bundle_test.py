@@ -142,6 +142,97 @@ def active_evm_live_chain_id(report):
     }.get(report.ACTIVE_LAUNCH_CHAIN)
 
 
+def fixed_hex32(seed: int) -> str:
+    """Return a non-zero 32-byte hex fixture."""
+
+    return "0x" + f"{seed % 256:02x}" * 32
+
+
+def write_native_evm_prover_bundle(
+    tmp_path: Path,
+    evidence_path: Path,
+    *,
+    overrides: dict[str, object] | None = None,
+) -> Path:
+    """Write a synthetic audited native EVM prover bundle manifest."""
+
+    report = load_report_module()
+    evidence = report._load_evidence_summary([evidence_path])
+    active_lane = report._active_launch_lane(evidence)
+    assert active_lane is not None
+    destination_binding = active_lane["destination_binding"][
+        "destination_binding_hash"
+    ]
+    artifact_dir = tmp_path / "native-prover-artifacts"
+    artifact_dir.mkdir(exist_ok=True)
+
+    def write_artifact(name: str, content: bytes) -> tuple[str, str]:
+        path = artifact_dir / name
+        path.write_bytes(content)
+        return (
+            path.relative_to(tmp_path).as_posix(),
+            "0x" + hashlib.sha256(content).hexdigest(),
+        )
+
+    proof_artifact, proof_artifact_hash = write_artifact(
+        "proof-artifact.bin",
+        b"ethereum mainnet sccp proof artifact v1",
+    )
+    proving_key, proving_key_hash = write_artifact(
+        "proving-key.bin",
+        b"ethereum mainnet sccp proving key v1",
+    )
+    verifier_key, verifier_key_hash = write_artifact(
+        "verifier-key.bin",
+        b"ethereum mainnet sccp verifier key v1",
+    )
+    sdk_artifacts = []
+    for sdk, implementation in sorted(
+        report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.items()
+    ):
+        implementation_artifact, implementation_hash = write_artifact(
+            f"{sdk}-implementation.bin",
+            (
+                "ethereum mainnet sccp "
+                f"{sdk} {implementation} implementation v1"
+            ).encode("utf-8"),
+        )
+        sdk_artifacts.append(
+            {
+                "sdk": sdk,
+                "implementation": implementation,
+                "prover_artifact_hash": proof_artifact_hash,
+                "proving_key_hash": proving_key_hash,
+                "implementation_artifact": implementation_artifact,
+                "implementation_hash": implementation_hash,
+            }
+        )
+    payload: dict[str, object] = {
+        "schema": report.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
+        "bundle_id": report.NATIVE_EVM_PROVER_BUNDLE_ID,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact": proof_artifact,
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key": proving_key,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key": verifier_key,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "no_wasm": True,
+        "remote_prover_required": False,
+        "browser_implementation": "pure-typescript",
+        "native_sdk_artifacts": sdk_artifacts,
+        "audit_hashes": [fixed_hex32(0xA1), fixed_hex32(0xA2)],
+    }
+    if overrides:
+        payload.update(overrides)
+    path = tmp_path / "native-evm-prover-bundle.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     """Write a complete synthetic all-lanes evidence bundle."""
 
@@ -296,6 +387,7 @@ def complete_corridor_log() -> str:
 
 def build_ready_bundle(tmp_path: Path) -> Path:
     evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     write_phase_artifacts(tmp_path)
     output_dir = tmp_path / "bundle"
     completed = subprocess.run(
@@ -308,6 +400,8 @@ def build_ready_bundle(tmp_path: Path) -> Path:
             "all=passed",
             "--phase-evidence-dir",
             str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -485,6 +579,185 @@ def test_release_bundle_requires_hashed_phase_evidence(tmp_path: Path) -> None:
     assert not output_dir.exists()
 
 
+def test_release_bundle_requires_native_evm_prover_bundle(tmp_path: Path) -> None:
+    """The production bundle must not pass without native no-WASM prover evidence."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP release bundle is not production ready" in completed.stderr
+    assert "native EVM Groth16 prover bundle manifest is required" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must fail before publishing forbidden native prover bytes."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    marker_payload = b"native proof artifact imports proof.wasm\n"
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_path.write_bytes(marker_payload)
+    proof_hash = "0x" + hashlib.sha256(marker_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP release bundle is not production ready" in completed.stderr
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact contains forbidden "
+        "prover dependency marker: wasm"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_empty_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must fail before publishing empty native prover bytes."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_path.write_bytes(b"")
+    proof_hash = "0x" + hashlib.sha256(b"").hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP release bundle is not production ready" in completed.stderr
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact must not be empty"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_duplicate_native_evm_prover_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject ambiguous signed native prover manifests."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    manifest = native_bundle.read_text(encoding="utf-8")
+    native_bundle.write_text(
+        manifest.replace(
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1",',
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:forged",\n'
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1",',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "SCCP release bundle is not production ready" in completed.stderr
+    assert (
+        "native EVM Groth16 prover bundle JSON contains duplicate key: bundle_id"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
 def test_release_bundle_force_rejects_output_containing_inputs(
     tmp_path: Path,
 ) -> None:
@@ -529,6 +802,7 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     """A ready release produces report, summary, copied inputs, logs, and manifest."""
 
     evidence, evidence_payload = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     phase_payloads = write_phase_artifacts(tmp_path)
     output_dir = tmp_path / "bundle"
 
@@ -542,6 +816,8 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
             "all=passed",
             "--phase-evidence-dir",
             str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -581,9 +857,29 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     assert "sccp-all-lanes-summary.json" in artifact_by_path
     assert "sccp-release-notes-attachment.md" in artifact_by_path
     assert "evidence/00-complete.toml" in artifact_by_path
+    assert "native-prover/00-native-evm-prover-bundle.json" in artifact_by_path
+    native_payload_paths = {
+        "native-prover/native-prover-artifacts/proof-artifact.bin",
+        "native-prover/native-prover-artifacts/proving-key.bin",
+        "native-prover/native-prover-artifacts/verifier-key.bin",
+        "native-prover/native-prover-artifacts/dotnet-implementation.bin",
+        "native-prover/native-prover-artifacts/java-android-implementation.bin",
+        "native-prover/native-prover-artifacts/javascript-implementation.bin",
+        "native-prover/native-prover-artifacts/kotlin-implementation.bin",
+        "native-prover/native-prover-artifacts/swift-implementation.bin",
+    }
+    for relative_path in native_payload_paths:
+        assert relative_path in artifact_by_path
+        assert (output_dir / relative_path).is_file()
+        assert artifact_by_path[relative_path]["sha256"] == hashlib.sha256(
+            (output_dir / relative_path).read_bytes()
+        ).hexdigest()
     assert artifact_by_path["evidence/00-complete.toml"]["sha256"] == hashlib.sha256(
         evidence_payload.encode("utf-8")
     ).hexdigest()
+    assert artifact_by_path["native-prover/00-native-evm-prover-bundle.json"][
+        "sha256"
+    ] == hashlib.sha256(native_bundle.read_bytes()).hexdigest()
     for phase, payload in phase_payloads.items():
         artifact = artifact_by_path[f"corridor/{phase}.log"]
         assert artifact["sha256"] == hashlib.sha256(
@@ -594,6 +890,29 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     assert report["production_ready"] is True
     assert report["corridor"]["require_phase_evidence"] is True
     assert report["corridor"]["phases"]["contract-smoke"] == "passed"
+    native_report = report["native_evm_prover_bundle"]
+    assert native_report["validation_status"] == "passed"
+    assert native_report["proof_artifact"]["path"] == (
+        "native-prover/native-prover-artifacts/proof-artifact.bin"
+    )
+    assert native_report["proof_artifact_hash"] == (
+        "0x"
+        + artifact_by_path[
+            "native-prover/native-prover-artifacts/proof-artifact.bin"
+        ]["sha256"]
+    )
+    assert native_report["proving_key"]["path"] == (
+        "native-prover/native-prover-artifacts/proving-key.bin"
+    )
+    assert native_report["verifier_key"]["path"] == (
+        "native-prover/native-prover-artifacts/verifier-key.bin"
+    )
+    for row in native_report["sdk_artifacts"]:
+        artifact_path = row["implementation_artifact"]["path"]
+        assert artifact_path in native_payload_paths
+        assert row["implementation_hash"] == "0x" + artifact_by_path[artifact_path][
+            "sha256"
+        ]
     assert report["corridor"]["evidence_artifacts"]["rust-sccp"]["sha256"] == (
         artifact_by_path["corridor/rust-sccp.log"]["sha256"]
     )
@@ -607,6 +926,9 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     assert "`manifest.json` is the verifier root" in notes
     assert "`sccp-release-readiness.md`" in notes
     assert "`sccp-all-lanes-summary.json`" in notes
+    assert "`native-prover/00-native-evm-prover-bundle.json`" in notes
+    assert "`native-prover/native-prover-artifacts/proof-artifact.bin`" in notes
+    assert "`native-prover/native-prover-artifacts/swift-implementation.bin`" in notes
     assert "`corridor/contract-smoke.log`" in notes
 
     verified = subprocess.run(
@@ -637,6 +959,7 @@ def test_release_bundle_accepts_hash_bound_full_corridor_log(
     """A single full corridor transcript can be hash-bound for every phase."""
 
     evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     corridor_log = tmp_path / "sccp-production-corridor.log"
     corridor_payload = complete_corridor_log()
     corridor_log.write_text(corridor_payload, encoding="utf-8")
@@ -652,6 +975,8 @@ def test_release_bundle_accepts_hash_bound_full_corridor_log(
             "all=passed",
             "--phase-evidence",
             f"all={corridor_log}",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -687,6 +1012,7 @@ def test_release_bundle_accepts_active_launch_lane_without_future_lanes(
     """A release bundle can be ready when only the active lane is complete."""
 
     evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     write_phase_artifacts(tmp_path)
     output_dir = tmp_path / "bundle"
 
@@ -700,6 +1026,8 @@ def test_release_bundle_accepts_active_launch_lane_without_future_lanes(
             "all=passed",
             "--phase-evidence-dir",
             str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -737,6 +1065,7 @@ def test_release_bundle_verifier_rejects_tampered_artifact(tmp_path: Path) -> No
     """Published bundle verification must fail if a copied log changes."""
 
     evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     write_phase_artifacts(tmp_path)
     output_dir = tmp_path / "bundle"
     completed = subprocess.run(
@@ -749,6 +1078,8 @@ def test_release_bundle_verifier_rejects_tampered_artifact(tmp_path: Path) -> No
             "all=passed",
             "--phase-evidence-dir",
             str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -777,6 +1108,327 @@ def test_release_bundle_verifier_rejects_tampered_artifact(tmp_path: Path) -> No
     assert verified.returncode == 1
     assert "SCCP release bundle verification failed" in verified.stdout
     assert "corridor/contract-smoke.log sha256 mismatch" in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tampered_native_evm_prover_bundle(
+    tmp_path: Path,
+) -> None:
+    """Published bundles must fail if native prover evidence drifts after signing."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["remote_prover_required"] = True
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle remote_prover_required must be false"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tampered_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload bytes remain bound after the outer manifest is updated."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = "native-prover/native-prover-artifacts/proof-artifact.bin"
+    (output_dir / relative_path).write_bytes(b"tampered native proof artifact\n")
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact sha256 must match proof_artifact_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker(
+    tmp_path: Path,
+) -> None:
+    """Published native prover payloads must not contain WASM/remote-prover markers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = "native-prover/native-prover-artifacts/proof-artifact.bin"
+    marker_payload = b"native proof artifact imports proof.wasm\n"
+    (output_dir / relative_path).write_bytes(marker_payload)
+    rewrite_manifest_artifact(output_dir, relative_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    proof_hash = "0x" + hashlib.sha256(marker_payload).hexdigest()
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact contains forbidden prover dependency marker: wasm"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Published native prover payloads must not become empty after bundling."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = "native-prover/native-prover-artifacts/proof-artifact.bin"
+    (output_dir / relative_path).write_bytes(b"")
+    rewrite_manifest_artifact(output_dir, relative_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    proof_hash = "0x" + hashlib.sha256(b"").hexdigest()
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact must not be empty"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash(
+    tmp_path: Path,
+) -> None:
+    """Published native prover artifact/key/implementation hashes are separate roles."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["proving_key"] = payload["proof_artifact"]
+    payload["proving_key_hash"] = payload["proof_artifact_hash"]
+    payload["native_sdk_artifacts"][0]["proving_key_hash"] = (
+        payload["proving_key_hash"]
+    )
+    payload["native_sdk_artifacts"][0]["implementation_artifact"] = (
+        payload["proof_artifact"]
+    )
+    payload["native_sdk_artifacts"][0]["implementation_hash"] = (
+        payload["proof_artifact_hash"]
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proving_key_hash must not reuse proof_artifact_hash"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_sdk_artifacts[0].implementation_hash must not reuse "
+        "proof_artifact_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
+    tmp_path: Path,
+) -> None:
+    """Published native prover hashes must be canonical lowercase 0x-prefixed hex."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"] = ["0x" + "A1" * 32]
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes[0] must be a canonical non-zero 32-byte hex value"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash(
+    tmp_path: Path,
+) -> None:
+    """Published native prover audit hashes must stay unique and role-separated."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"] = [
+        payload["proof_artifact_hash"],
+        payload["native_sdk_artifacts"][0]["implementation_hash"],
+        "0x" + "a1" * 32,
+        "0x" + "a1" * 32,
+    ]
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes[0] must not reuse proof_artifact_hash"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes[1] must not reuse "
+        "native_sdk_artifacts[0].implementation_hash"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes[3] must not duplicate audit_hashes[2]"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_manifest_path_escape(tmp_path: Path) -> None:
@@ -7505,6 +8157,328 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
     )
 
 
+def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep EVM finalized block-tag guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_evm_block_tag_metadata_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
+    sparse_script.write_text(
+        '"sccp_evm_source_block_tag": "_comment_evm_source_block_tag"\n',
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
+        (
+            sparse_script,
+            (
+                '"sccp_evm_source_block_tag": "_comment_evm_source_block_tag"',
+                "Ethereum source live block-tag metadata must be finalized",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet EVM block-tag metadata source inventory" in error
+        and "missing marker: Ethereum source live block-tag metadata must be finalized"
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep EVM source-adapter gate checks."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_evm_source_adapter_deployment_gate_inventory_errors() == []
+
+    sparse_source = tmp_path / "lib.rs"
+    sparse_source.write_text(
+        "fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain()\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
+        (
+            sparse_source,
+            (
+                "fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(",
+                "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet EVM source-adapter deployment gate source inventory"
+        in error
+        and "missing marker: wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;"
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_launch_policy_selector(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep Ethereum launch selector coverage."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_launch_policy_selector_inventory_errors() == []
+
+    sparse_source = tmp_path / "lib.rs"
+    sparse_source.write_text(
+        "fn sccp_lane_production_ready_under_launch_policy_v1()\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
+        (
+            sparse_source,
+            (
+                "fn sccp_lane_production_ready_under_launch_policy_v1(",
+                "EthereumMainnetLane must let production-ready ETH open before all lanes are ready",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet launch-policy selector source inventory" in error
+        and (
+            "missing marker: EthereumMainnetLane must let production-ready ETH "
+            "open before all lanes are ready"
+        )
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep docs on the Ethereum launch lane."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_launch_policy_documentation_inventory_errors() == []
+
+    sparse_docs = tmp_path / "bridge_proofs.md"
+    sparse_docs.write_text(
+        "active launch policy is Ethereum-mainnet lane readiness\n"
+        "active launch policy is BSC-mainnet lane readiness\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS = (
+        (
+            sparse_docs,
+            (
+                "active launch policy is Ethereum-mainnet lane readiness",
+                "mainnet source-proof, source-adapter deployment",
+            ),
+        ),
+    )
+    verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
+        "active launch policy is BSC-mainnet lane readiness",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet launch-policy documentation source inventory" in error
+        and "missing marker: mainnet source-proof, source-adapter deployment" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet launch-policy documentation source inventory" in error
+        and (
+            "contains stale marker: active launch policy is BSC-mainnet "
+            "lane readiness"
+        )
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_core_range_finality_binding(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep SCCP proof range/finality binding."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_core_range_finality_binding_inventory_errors() == []
+
+    sparse_source = tmp_path / "world.rs"
+    sparse_source.write_text(
+        "fn validate_sccp_bridge_proof_range_matches_artifact()\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
+        (
+            sparse_source,
+            (
+                "fn validate_sccp_bridge_proof_range_matches_artifact(",
+                "SCCP message proof range must match finality height",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet SCCP range finality binding source inventory" in error
+        and "missing marker: SCCP message proof range must match finality height" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_core_message_replay_guard(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep SCCP message replay guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_core_message_replay_guard_inventory_errors() == []
+
+    sparse_source = tmp_path / "world.rs"
+    sparse_source.write_text(
+        "struct SccpMessageKey;\nfn find_existing_sccp_message_proof() {}\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS = (
+        (
+            sparse_source,
+            (
+                "struct SccpMessageKey",
+                "SCCP message proof replays existing message proof",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet SCCP message replay guard source inventory" in error
+        and "missing marker: SCCP message proof replays existing message proof" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_torii_pinned_message_proof(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep Torii SCCP message proofs pinned."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_torii_pinned_message_proof_inventory_errors() == []
+
+    sparse_source = tmp_path / "routing.rs"
+    sparse_source.write_text(
+        "fn bridge_proof_from_sccp_message_bundle() {}\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS = (
+        (
+            sparse_source,
+            (
+                "fn bridge_proof_from_sccp_message_bundle(",
+                "SCCP message bridge proofs must be pinned for core replay protection",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet Torii pinned message proof source inventory" in error
+        and (
+            "missing marker: SCCP message bridge proofs must be pinned for core replay protection"
+            in error
+        )
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep unready-proof toggles config-owned."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_unready_transparent_proof_config_inventory_errors() == []
+
+    sparse_config = tmp_path / "user.rs"
+    sparse_config.write_text(
+        "pub sccp_allow_unready_transparent_proofs: bool\n"
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS\n",
+        encoding="utf-8",
+    )
+    verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
+        (
+            sparse_config,
+            (
+                "pub sccp_allow_unready_transparent_proofs: bool",
+                "sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs",
+            ),
+        ),
+    )
+    verifier.SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV_PATHS = (sparse_config,)
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and (
+            "missing marker: sccp_allow_unready_transparent_proofs: "
+            "self.sccp_allow_unready_transparent_proofs"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and "contains forbidden environment override" in error
+        for error in verified["errors"]
+    )
+
+
 def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     tmp_path: Path,
 ) -> None:
@@ -7762,20 +8736,87 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     verifier = load_verify_helpers()
     assert verifier._native_sccp_no_wasm_readiness_inventory_errors() == []
 
+    sparse_report_script = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report_script.write_text(
+        "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = ()\n",
+        encoding="utf-8",
+    )
     sparse_readiness_test = tmp_path / "sccp_release_readiness_report_test.py"
     sparse_readiness_test.write_text(
         "BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS = {}\n"
         "def test_release_readiness_bsc_sdk_sources_are_native_local_prover_only(): pass\n",
         encoding="utf-8",
     )
+    sparse_bundle_test = tmp_path / "sccp_release_bundle_test.py"
+    sparse_bundle_test.write_text(
+        "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker(): pass\n",
+        encoding="utf-8",
+    )
     verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
+        (
+            sparse_report_script,
+            (
+                "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+                "def _native_evm_prover_forbidden_payload_blockers(",
+                "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+                "def _native_evm_prover_hash_role_blockers(",
+                "must not be empty",
+                "must not duplicate",
+                "must not reuse",
+                "canonical non-zero 32-byte hex value",
+                'b"snarkjs"',
+            ),
+        ),
         (
             sparse_readiness_test,
             (
                 "BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS = {",
                 "NATIVE_LOCAL_PROVER_SOURCE_GLOBS = {",
+                "NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {",
+                "NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {",
+                "normalizeCanonicalNativeEvmProverBundleHex32",
+                "requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation",
+                "requireNativeEvmProverBundleKnownFields",
+                "evmNormalizeNativeEvmProverBundleHex32",
+                "evmRequireNativeEvmProverBundleHashRoleSeparation",
+                "requireManifestKeys",
+                "normalizeNativeEvmProverBundleHex32",
+                "requireNativeEvmProverBundleHashRoleSeparation",
+                "NormalizeNativeEvmProverBundleHex32",
+                "RequireNativeEvmProverBundleHashRoleSeparation",
+                "RequireManifestKeys",
+                "canonical lowercase 0x-prefixed 32-byte hex",
+                "hashes must be role-separated",
+                "contains unknown field",
+                "must not use multiple aliases",
+                "isCanonicalDecimalText",
+                "canonical decimal integer",
+                "implementationBytes are required",
+                "nativeProverArtifacts must bind sdk implementation and implementationHash",
+                "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+                "nativeProverBundle.verifierKeyHash must match destinationBinding",
                 "def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only",
+                "def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned",
+                "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
+                "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
+                "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
+                "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
+                "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
+                "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
                 '"prover_endpoint"',
+            ),
+        ),
+        (
+            sparse_bundle_test,
+            (
+                "def test_release_bundle_rejects_empty_native_evm_prover_payload",
+                "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
+                "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
+                "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
+                "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
+                "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
+                "native proof artifact imports proof.wasm",
             ),
         ),
     )
@@ -7794,9 +8835,326 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def _native_evm_prover_forbidden_payload_blockers("
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def _native_evm_prover_hash_role_blockers("
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only"
             in error
         )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: normalizeCanonicalNativeEvmProverBundleHex32" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: requireNativeEvmProverBundleKnownFields" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: evmNormalizeNativeEvmProverBundleHex32" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: evmRequireNativeEvmProverBundleHashRoleSeparation" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: requireManifestKeys" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NormalizeNativeEvmProverBundleHex32" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: RequireNativeEvmProverBundleHashRoleSeparation" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: RequireManifestKeys" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: canonical lowercase 0x-prefixed 32-byte hex" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: contains unknown field" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: must not use multiple aliases" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: isCanonicalDecimalText" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: canonical decimal integer" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: implementationBytes are required" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: nativeProverArtifacts must bind sdk implementation and implementationHash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: nativeProverBundle.verifierKeyHash must match destinationBinding"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: hashes must be role-separated" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_empty_native_evm_prover_payload"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_rejects_empty_native_evm_prover_payload"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: native proof artifact imports proof.wasm" in error
+        for error in verified["errors"]
+    )
+
+    sparse_package_dist = tmp_path / "package_dist.test.js"
+    sparse_package_dist.write_text(
+        "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {}\n",
+        encoding="utf-8",
+    )
+    verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
+        (
+            sparse_package_dist,
+            (
+                "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned()",
+                '"dist/sccp.js": DIST_SCCP_TEXT',
+                '"dist/index.js": DIST_INDEX_TEXT',
+                '"index.d.ts": DECLARATIONS_TEXT',
+                "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
+                "parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)",
+                "verifyEthereumMainnetNativeEvmProverArtifacts",
+                "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+                "const proverEndpoint = endpoint",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle-package-dist"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and 'missing marker: "dist/sccp.js": DIST_SCCP_TEXT' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and 'missing marker: "dist/index.js": DIST_INDEX_TEXT' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and 'missing marker: "index.d.ts": DECLARATIONS_TEXT' in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: verifyEthereumMainnetNativeEvmProverArtifacts" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: const proverEndpoint = endpoint" in error
         for error in verified["errors"]
     )
 
@@ -8196,7 +9554,17 @@ def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests(
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text("failedReceipt\n", encoding="utf-8")
     verifier.ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
-        (sparse_test, ("failedReceipt", "duplicateReceipt", "/exactly 2 topics/u")),
+        (
+            sparse_test,
+            (
+                "failedReceipt",
+                "duplicateReceipt",
+                "/exactly 2 topics/u",
+                "testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot",
+                "/receiptProof\\.beaconFinalizedRoot must match beaconFinality\\.finalizedHeaderRoot/u",
+                "/receiptProof\\.sourceEventDigest must match receipt source event/u",
+            ),
+        ),
     )
 
     bundle_dir = tmp_path / "bundle"
@@ -8213,6 +9581,27 @@ def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests(
     assert any(
         "Ethereum mainnet inbound adversarial SDK test inventory" in error
         and "missing marker: /exactly 2 topics/u" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and (
+            "missing marker: /receiptProof\\.beaconFinalizedRoot must match "
+            "beaconFinality\\.finalizedHeaderRoot/u"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot"
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: /receiptProof\\.sourceEventDigest must match receipt source event/u"
+        in error
         for error in verified["errors"]
     )
 
@@ -8409,6 +9798,86 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
             "missing marker: assert.equal(outboundProverCalled, false)"
             in error
         )
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_local_admission_sdk_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH local-admission SDK guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_local_admission_sdk_test_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text(
+        "EthereumMainnetSccp builds ETH -> SORA local-admission submissions\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_LOCAL_ADMISSION_SDK_TEST_MARKERS = (
+        (
+            sparse_test,
+            (
+                "EthereumMainnetSccp builds ETH -> SORA local-admission submissions",
+                "sourceVerifierMaterialHash must not be zero",
+                "sourceAdapterEngineDeploymentHash must not be zero",
+                "metadata is not canonical",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet local-admission SDK test inventory" in error
+        and "missing marker: sourceVerifierMaterialHash must not be zero" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet local-admission SDK test inventory" in error
+        and "missing marker: metadata is not canonical" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH provider-before-submit guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_outbound_provider_validation_inventory_errors() == []
+
+    sparse_sdk = tmp_path / "sccp.js"
+    sparse_sdk.write_text("let providerValidated = false;\n", encoding="utf-8")
+    verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
+        (
+            sparse_sdk,
+            (
+                "let providerValidated = false;",
+                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet outbound provider validation source inventory" in error
+        and (
+            "missing marker: await this.validateExecutionProviderMainnet"
+            "({ executionProvider: provider });"
+        )
+        in error
         for error in verified["errors"]
     )
 
@@ -8695,6 +10164,184 @@ def test_release_bundle_verifier_guards_ethereum_block_receipt_transaction_hash_
         "Ethereum mainnet block receipt transactionHash SDK test inventory" in error
         and 'missing marker: receipts[1]["transactionHash"] = receipts[0]["transactionHash"]'
         in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_js_receipt_admission_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep JS receipt admission guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_js_receipt_admission_guard_inventory_errors() == []
+
+    sparse_dist = tmp_path / "sccp.js"
+    sparse_dist.write_text(
+        "eth_getBlockReceipts target receipt must match transactionHash\n",
+        encoding="utf-8",
+    )
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text(
+        'for (const field of ["finalizedHeaderRoot", "syncCommitteeRoot", "beaconSlot"])\n',
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_JS_RECEIPT_ADMISSION_GUARD_MARKERS = (
+        (
+            sparse_dist,
+            (
+                "eth_getBlockReceipts target receipt must match transactionHash",
+                "Ethereum mainnet receipt proof construction requires beaconFinality.",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+                "await prove(immutableProverCallbackValue(evidence), options)",
+            ),
+        ),
+        (
+            sparse_test,
+            (
+                'for (const field of ["finalizedHeaderRoot", "syncCommitteeRoot", "beaconSlot"])',
+                "receipt proof construction requires beaconFinality\\\\.${field}",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet JS receipt admission source inventory" in error
+        and (
+            "missing marker: Ethereum mainnet receipt proof construction "
+            "requires beaconFinality."
+            )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet JS receipt admission source inventory" in error
+        and (
+            "missing marker: await prove(immutableProverCallbackValue(evidence), "
+            "options)"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet JS receipt admission source inventory" in error
+        and (
+            "missing marker: typed receipt type is not supported "
+            "for Ethereum mainnet receipt proofs"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet JS receipt admission source inventory" in error
+        and (
+            "missing marker: receipt proof construction requires "
+            "beaconFinality\\\\.${field}"
+        )
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_sdk_receipt_metadata_sources(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep SDK receipt metadata guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_sdk_receipt_metadata_guard_inventory_errors() == []
+
+    sparse_source = tmp_path / "SourceSccpProofHashes.kt"
+    sparse_source.write_text(
+        "typed receipt type must fit one byte below 0x80\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS = (
+        (
+            sparse_source,
+            (
+                "typed receipt type must fit one byte below 0x80",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet SDK receipt metadata source inventory" in error
+        and (
+            "missing marker: typed receipt type is not supported "
+            "for Ethereum mainnet receipt proofs"
+        )
+        in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_native_receipt_finality_sources(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep native receipt finality guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_native_receipt_finality_guard_inventory_errors() == []
+
+    sparse_source = tmp_path / "EvmSccpProver.kt"
+    sparse_source.write_text(
+        "beaconFinality.beaconSlot is required for receiptProof\n",
+        encoding="utf-8",
+    )
+    sparse_test = tmp_path / "EvmSccpProverTest.kt"
+    sparse_test.write_text(
+        "for ((field, label) in listOf(\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS = (
+        (
+            sparse_source,
+            (
+                "beaconFinality.beaconSlot is required for receiptProof",
+                "beaconFinality.syncCommitteeRoot is required for receiptProof",
+            ),
+        ),
+        (
+            sparse_test,
+            (
+                "for ((field, label) in listOf(",
+                "beaconFinality = beaconFinality - field",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet native receipt finality source inventory" in error
+        and (
+            "missing marker: beaconFinality.syncCommitteeRoot "
+            "is required for receiptProof"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet native receipt finality source inventory" in error
+        and "missing marker: beaconFinality = beaconFinality - field" in error
         for error in verified["errors"]
     )
 

@@ -77,9 +77,17 @@ fn print_world_memory_usage() {
 }
 
 mod util {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use iroha_core::smartcontracts::Registrable;
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
+
+    static NEXT_SYNTHETIC_VALUE: AtomicU64 = AtomicU64::new(1);
+
+    fn next_synthetic_value() -> u64 {
+        NEXT_SYNTHETIC_VALUE.fetch_add(1, Ordering::Relaxed)
+    }
 
     pub fn genesis_domain_and_account() -> (Domain, Account) {
         let genesis_public_key: PublicKey =
@@ -93,21 +101,27 @@ mod util {
         (genesis_domain, genesis_account)
     }
 
-    pub fn gen_account_in(_domain: &DomainId) -> (AccountId, KeyPair) {
-        let key_pair = KeyPair::random();
+    pub fn gen_account_in(domain: &DomainId) -> (AccountId, KeyPair) {
+        try_gen_account_in(domain).expect("memory example account key generation should succeed")
+    }
+
+    pub fn try_gen_account_in(
+        _domain: &DomainId,
+    ) -> Result<(AccountId, KeyPair), iroha_crypto::Error> {
+        let key_pair = KeyPair::try_random()?;
         let account_id = AccountId::new(key_pair.public_key().clone());
-        (account_id, key_pair)
+        Ok((account_id, key_pair))
     }
 
     pub fn gen_asset(asset_definition: AssetDefinitionId) -> Asset {
         let account_id = gen_account_in(asset_definition.domain()).0;
         let asset_id = AssetId::new(asset_definition, account_id);
-        let value: u64 = rand::random();
+        let value = next_synthetic_value();
         Asset::new(asset_id, value)
     }
 
     pub fn gen_nft(owner: &AccountId, domain: &DomainId) -> Nft {
-        let value: u64 = rand::random();
+        let value = next_synthetic_value();
         let nft_id = format!("n{value}${domain}").parse().unwrap();
         Nft::new(nft_id, Metadata::default()).build(owner)
     }
@@ -116,5 +130,26 @@ mod util {
         eprintln!("Done");
         std::thread::sleep(std::time::Duration::from_secs(86400));
         std::hint::black_box(value);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use iroha_crypto::Algorithm;
+
+        use super::*;
+
+        #[test]
+        fn try_gen_account_in_uses_checked_default_generation() {
+            let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+            let (_account, key_pair) =
+                try_gen_account_in(&domain).expect("memory example account key pair");
+            assert_eq!(
+                key_pair
+                    .public_key()
+                    .try_algorithm()
+                    .expect("memory example public-key algorithm"),
+                Algorithm::default()
+            );
+        }
     }
 }

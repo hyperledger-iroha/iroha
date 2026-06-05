@@ -64,6 +64,25 @@ pub enum SamplingError {
     /// Merkle proof generation failed for the specified chunk index.
     #[error("Merkle proof generation failed for chunk {0}")]
     ProofGeneration(u32),
+    /// Random sampling RNG could not be seeded from OS entropy.
+    #[error("RBC chunk sampling RNG seed failed: {0}")]
+    RandomSeed(String),
+}
+
+fn sampling_rng(seed: Option<u64>) -> Result<StdRng, SamplingError> {
+    match seed {
+        Some(seed) => Ok(StdRng::seed_from_u64(seed)),
+        None => {
+            StdRng::try_from_os_rng().map_err(|error| SamplingError::RandomSeed(error.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+fn sampling_rng_from_rng<R: rand::rand_core::TryCryptoRng>(
+    rng: &mut R,
+) -> Result<StdRng, SamplingError> {
+    StdRng::try_from_rng(rng).map_err(|error| SamplingError::RandomSeed(error.to_string()))
 }
 
 /// Load a persisted session from disk and sample `count` randomly selected chunks, returning
@@ -102,13 +121,7 @@ pub fn sample_from_store(
     }
     let sample_count = count;
 
-    let mut rng = seed.map_or_else(
-        || {
-            let mut thread_rng = rand::rng();
-            StdRng::from_rng(&mut thread_rng)
-        },
-        StdRng::seed_from_u64,
-    );
+    let mut rng = sampling_rng(seed)?;
     let mut indices: Vec<u32> = (0..total_chunks).collect();
     indices.shuffle(&mut rng);
     let sample_limit = usize::try_from(sample_count).expect("sample count fits in usize");
@@ -165,7 +178,7 @@ pub fn sample_from_store(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{fmt, time::Duration};
 
     use iroha_crypto::Hash;
     use iroha_data_model::prelude::BlockHeader;
@@ -174,6 +187,47 @@ mod tests {
 
     use super::*;
     use crate::sumeragi::{main_loop::RbcSession, rbc_store::ChunkStore};
+
+    struct FailingSamplingRng;
+
+    #[derive(Debug)]
+    struct FailingSamplingRngError;
+
+    impl fmt::Display for FailingSamplingRngError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("failing RBC sampling RNG")
+        }
+    }
+
+    impl rand::rand_core::TryRngCore for FailingSamplingRng {
+        type Error = FailingSamplingRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingSamplingRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingSamplingRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingSamplingRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingSamplingRng {}
+
+    #[test]
+    fn sampling_rng_reports_seed_failure() {
+        let mut rng = FailingSamplingRng;
+
+        let error =
+            sampling_rng_from_rng(&mut rng).expect_err("failing RNG must report seed failure");
+
+        assert!(
+            matches!(error, SamplingError::RandomSeed(message) if message.contains("failing RBC sampling RNG"))
+        );
+    }
 
     #[test]
     fn sampling_generates_proof_from_store() {

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using Hyperledger.Iroha.Sccp;
 
@@ -197,11 +198,41 @@ public sealed class SccpEthereumMainnetTests
             CancellationToken cancellationToken = default)
         {
             Calls++;
-            Assert.Same(expectedReceipt, receipt);
-            Assert.Same(expectedBlock, block);
+            Assert.NotSame(expectedReceipt, receipt);
+            Assert.NotSame(expectedBlock, block);
+            Assert.Equal(expectedReceipt["blockHash"], receipt?["blockHash"]);
+            Assert.Equal(expectedBlock["hash"], block?["hash"]);
             Assert.Equal(expectedTransactionHash, transactionHash);
             return ValueTask.FromResult<IReadOnlyDictionary<string, object?>?>(finality);
         }
+    }
+
+    private sealed class DelegateConsensusProvider(
+        Func<IReadOnlyDictionary<string, object?>?,
+            IReadOnlyDictionary<string, object?>?,
+            string?,
+            IReadOnlyDictionary<string, object?>?> collect) : IEthereumMainnetConsensusProvider
+    {
+        public ValueTask<IReadOnlyDictionary<string, object?>?> CollectFinalityEvidenceAsync(
+            IReadOnlyDictionary<string, object?>? receipt,
+            IReadOnlyDictionary<string, object?>? block,
+            string? transactionHash,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(collect(receipt, block, transactionHash));
+    }
+
+    private sealed class DelegateBscConsensusProvider(
+        Func<IReadOnlyDictionary<string, object?>?,
+            IReadOnlyDictionary<string, object?>?,
+            string?,
+            IReadOnlyDictionary<string, object?>> collect) : IBscMainnetConsensusProvider
+    {
+        public ValueTask<IReadOnlyDictionary<string, object?>> CollectFinalityEvidenceAsync(
+            IReadOnlyDictionary<string, object?>? receipt,
+            IReadOnlyDictionary<string, object?>? block,
+            string? transactionHash,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(collect(receipt, block, transactionHash));
     }
 
     private sealed class BeaconRestTransportStub(
@@ -271,7 +302,9 @@ public sealed class SccpEthereumMainnetTests
         }
     }
 
-    private sealed class OutboundProverStub(byte[] proofBytes) : IEthereumMainnetOutboundProver
+    private sealed class OutboundProverStub(
+        byte[] proofBytes,
+        Action<EthereumMainnetOutboundProofRequest>? onRequest = null) : IEthereumMainnetOutboundProver
     {
         public EthereumMainnetOutboundProofRequest? Request { get; private set; }
 
@@ -283,6 +316,7 @@ public sealed class SccpEthereumMainnetTests
             Assert.Equal(ExpectedRequestHash, request.RequestHash);
             Assert.Equal(ExpectedBindingHash, request.DestinationBindingHash);
             Assert.Equal(ExpectedPublicSignalWords, request.PublicSignalWords);
+            onRequest?.Invoke(request);
             return ValueTask.FromResult(proofBytes);
         }
     }
@@ -352,6 +386,88 @@ public sealed class SccpEthereumMainnetTests
             DestinationBindingHash = (binding ?? SampleDestinationBinding()).BindingHash,
             SourceDomain = EthereumMainnetSccp.DomainSora,
         };
+
+    private static EthereumMainnetNativeEvmProverBundle SampleNativeEvmProverBundle(
+        string destinationBindingHash,
+        bool noWasm = true,
+        bool remoteProverRequired = false,
+        string? expectedDestinationBindingHash = null)
+    {
+        var proofArtifactHash = "0x" + new string('9', 64);
+        var provingKeyHash = "0x" + new string('a', 64);
+        var artifacts = EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select((entry, index) => new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                entry.Key,
+                entry.Value,
+                proofArtifactHash,
+                provingKeyHash,
+                "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32)),
+                implementationArtifact: $"artifacts/eth-mainnet/{entry.Key}-implementation.bin"))
+            .ToArray();
+        return new EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            "0x" + new string('c', 64),
+            destinationBindingHash,
+            artifacts,
+            ["0x" + new string('d', 64), "0x" + new string('e', 64)],
+            noWasm: noWasm,
+            remoteProverRequired: remoteProverRequired,
+            expectedDestinationBindingHash: expectedDestinationBindingHash,
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin");
+    }
+
+    private static string Sha256Hex(byte[] value) =>
+        "0x" + Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
+
+    private static string SampleNativeEvmProverBundleJson(
+        string destinationBindingHash,
+        bool noWasm = true,
+        bool remoteProverRequired = false,
+        string proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin")
+    {
+        var proofArtifactHash = "0x" + new string('9', 64);
+        var provingKeyHash = "0x" + new string('a', 64);
+        var artifacts = string.Join(
+            ",",
+            EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select((entry, index) =>
+                    $$"""
+                    {
+                      "sdk": "{{entry.Key}}",
+                      "implementation": "{{entry.Value}}",
+                      "prover_artifact_hash": "{{proofArtifactHash}}",
+                      "proving_key_hash": "{{provingKeyHash}}",
+                      "implementation_artifact": "artifacts/eth-mainnet/{{entry.Key}}-implementation.bin",
+                      "implementation_hash": "0x{{string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32))}}"
+                    }
+                    """));
+        return $$"""
+        {
+          "schema": "{{EthereumMainnetSccp.NativeEvmProverBundleSchemaV1}}",
+          "bundle_id": "{{EthereumMainnetSccp.EthNativeEvmProverBundleIdV1}}",
+          "domain": {{EthereumMainnetSccp.DomainEthereum}},
+          "chain": "eth",
+          "proof_backend": "{{EthereumMainnetSccp.EvmGroth16Bn254ProofBackend}}",
+          "proof_artifact": "{{proofArtifact}}",
+          "proof_artifact_hash": "{{proofArtifactHash}}",
+          "proving_key": "artifacts/eth-mainnet/proving-key.bin",
+          "proving_key_hash": "{{provingKeyHash}}",
+          "verifier_key": "artifacts/eth-mainnet/verifier-key.bin",
+          "verifier_key_hash": "0x{{new string('c', 64)}}",
+          "destination_binding_hash": "{{destinationBindingHash}}",
+          "no_wasm": {{noWasm.ToString().ToLowerInvariant()}},
+          "remote_prover_required": {{remoteProverRequired.ToString().ToLowerInvariant()}},
+          "browser_implementation": "pure-typescript",
+          "native_sdk_artifacts": [{{artifacts}}],
+          "audit_hashes": ["0x{{new string('d', 64)}}", "0x{{new string('e', 64)}}"]
+        }
+        """;
+    }
 
     private static byte[] Groth16ProofBytes()
         => Concat(
@@ -1314,6 +1430,28 @@ public sealed class SccpEthereumMainnetTests
                 autoReceiptEvidence.ReceiptProof.ReceiptTrieProofNodes,
                 autoReceiptEvidence.ReceiptProof.InclusionBranch),
             autoReceiptEvidence.ReceiptProofHash);
+        foreach (var (missingField, label) in new[]
+        {
+            ("finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot"),
+            ("syncCommitteeRoot", "beaconFinality.syncCommitteeRoot"),
+            ("beaconSlot", "beaconFinality.beaconSlot"),
+        })
+        {
+            var incompleteFinality = new Dictionary<string, object?>(autoReceiptFinality);
+            incompleteFinality.Remove(missingField);
+            var missingFinality = await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                    new EthereumMainnetInboundEvidence
+                    {
+                        Receipt = rlpSourceReceipt,
+                        Block = autoReceiptBlock,
+                        BeaconFinality = incompleteFinality,
+                        BlockReceipts = blockReceipts,
+                        InclusionBranch = [RepeatByte(0x44, 32)],
+                        SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    }).AsTask());
+            Assert.Contains(label, missingFinality.Message);
+        }
         foreach (var (alias, value, label) in new[]
         {
             ("transaction_hash", "0x" + new string('a', 64), "receipt.transactionHash"),
@@ -1806,6 +1944,23 @@ public sealed class SccpEthereumMainnetTests
             },
             new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest));
         Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
+        var oversizedInboundProof = Enumerable
+            .Repeat((byte)1, EthereumMainnetSccp.NativeRecursiveMaxProofBytes + 1)
+            .ToArray();
+        var oversizedProof = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ProveInboundToSoraAsync(
+                sourceEventEvidence with
+                {
+                    ReceiptProof = receiptProof,
+                    ReceiptProofHash = ExpectedReceiptProofHash,
+                },
+                new DelegateInboundProver(_ => oversizedInboundProof)).AsTask());
+        Assert.Contains("proofBytes must be at most", oversizedProof.Message);
+        var oversizedSubmit = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.SubmitInboundToIrohaAsync(
+                oversizedInboundProof,
+                new InboundSubmitterStub()).AsTask());
+        Assert.Contains("proofBytes must be at most", oversizedSubmit.Message);
         Assert.Equal(
             "submitted",
             await EthereumMainnetSccp.SubmitInboundToIrohaAsync(
@@ -2486,6 +2641,417 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
+    public async Task InboundProverReceivesCallbackEvidenceSnapshot()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var sourceEventDigest = "0x" + new string('e', 64);
+        var sourceBridgeEmitterAddress = "0x" + string.Concat(Enumerable.Repeat("44", 20));
+        var receiptsRoot = "0x" + new string('c', 64);
+        var finalizedRoot = "0x" + new string('d', 64);
+        var syncCommitteeRoot = "0x" + new string('a', 64);
+        var receiptNested = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "keep",
+            ["bytes"] = new byte[] { 0xbb },
+        };
+        var receiptWitness = new List<object?> { receiptNested };
+        var blockWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "block",
+            ["bytes"] = new byte[] { 0xcc },
+        };
+        var finalityBranchWitness = EthereumFinalityBranch.ToList();
+        var finalityBytes = new byte[] { 0xaa };
+        var finalityWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["branch"] = finalityBranchWitness,
+            ["bytes"] = finalityBytes,
+        };
+        var blockReceiptsWitness = new List<object?> { "receipt-list" };
+        var sourceEventLog = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["address"] = sourceBridgeEmitterAddress,
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["topics"] = new object?[] { EthereumMainnetSccp.SourceEventTopic, sourceEventDigest },
+            ["data"] = "0x",
+        };
+        var receipt = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["status"] = "0x1",
+            ["logs"] = new object?[] { sourceEventLog },
+            ["mutableWitness"] = receiptWitness,
+        };
+        var block = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = receiptsRoot,
+            ["mutableWitness"] = blockWitness,
+        };
+        var beaconFinality = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["executionBlockNumber"] = "0x1234",
+            ["executionBlockHash"] = blockHash,
+            ["executionReceiptsRoot"] = receiptsRoot,
+            ["finalizedHeaderRoot"] = finalizedRoot,
+            ["syncCommitteeRoot"] = syncCommitteeRoot,
+            ["beaconSlot"] = "0x20",
+            ["finalityBranch"] = EthereumFinalityBranch,
+            ["syncCommitteeBits"] = EthereumSyncCommitteeSupermajorityBits,
+            ["syncCommitteeSignature"] = "0x" + string.Concat(Enumerable.Repeat("34", 96)),
+            ["syncCommitteeParticipation"] = EthereumSyncCommitteeSupermajorityParticipation,
+            ["syncSignatureSlot"] = "65",
+            ["mutableWitness"] = finalityWitness,
+        };
+        var blockReceipt = new Dictionary<string, object?>(receipt, StringComparer.Ordinal)
+        {
+            ["mutableWitness"] = blockReceiptsWitness,
+        };
+        var mutableReceiptProofNode = new byte[] { 0x01, 0x02 };
+        var mutableReceiptProofBranch = RepeatByte(0x11, 32);
+        var mutableInputBranch = new byte[] { 0x44 };
+        var receiptProof = new EthereumMainnetReceiptProof
+        {
+            SourceEventDigest = sourceEventDigest,
+            BeaconSlot = 32,
+            ExecutionBlockNumber = 0x1234,
+            ExecutionBlockHash = blockHash,
+            ExecutionReceiptsRoot = receiptsRoot,
+            BeaconFinalizedRoot = finalizedRoot,
+            SyncCommitteeRoot = syncCommitteeRoot,
+            ReceiptRootIndex = 0,
+            ReceiptTrieProofNodes = [mutableReceiptProofNode],
+            InclusionBranch = [mutableReceiptProofBranch],
+        };
+        var receiptProofHash = EthereumMainnetSccp.EvmSccpReceiptProofHash(
+            receiptProof.SourceEventDigest,
+            receiptProof.BeaconSlot,
+            receiptProof.ExecutionBlockNumber,
+            receiptProof.ExecutionBlockHash,
+            receiptProof.ExecutionReceiptsRoot,
+            receiptProof.BeaconFinalizedRoot,
+            receiptProof.SyncCommitteeRoot,
+            receiptProof.ReceiptRootIndex,
+            receiptProof.ReceiptTrieProofNodes,
+            receiptProof.InclusionBranch);
+
+        var proofBytes = await EthereumMainnetSccp.ProveInboundToSoraAsync(
+            new EthereumMainnetInboundEvidence
+            {
+                Receipt = receipt,
+                Block = block,
+                BeaconFinality = beaconFinality,
+                ReceiptProof = receiptProof,
+                ReceiptProofHash = receiptProofHash,
+                SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                BlockReceipts = [blockReceipt],
+                InclusionBranch = [mutableInputBranch],
+            },
+            new DelegateInboundProver(evidence =>
+            {
+                receiptWitness.Add("changed");
+                receiptNested["value"] = "changed";
+                ((byte[])receiptNested["bytes"]!)[0] = 0x7f;
+                blockWitness["value"] = "changed";
+                ((byte[])blockWitness["bytes"]!)[0] = 0x7e;
+                finalityBranchWitness.Add("0x" + new string('9', 64));
+                finalityBytes[0] = 0x7d;
+                finalityWitness["new"] = "changed";
+                blockReceiptsWitness.Add("changed");
+                mutableReceiptProofNode[0] = 0x7c;
+                mutableReceiptProofBranch[0] = 0x7b;
+                mutableInputBranch[0] = 0x45;
+
+                var receiptSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+                    evidence.Receipt?["mutableWitness"]);
+                Assert.Single(receiptSnapshot);
+                var receiptNestedSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                    receiptSnapshot[0]);
+                Assert.Equal("keep", receiptNestedSnapshot["value"]);
+                Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]));
+
+                var blockSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                    evidence.Block?["mutableWitness"]);
+                Assert.Equal("block", blockSnapshot["value"]);
+                Assert.Equal(new byte[] { 0xcc }, Assert.IsType<byte[]>(blockSnapshot["bytes"]));
+
+                var finalitySnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                    evidence.BeaconFinality?["mutableWitness"]);
+                var branchSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(finalitySnapshot["branch"]);
+                Assert.Equal(EthereumFinalityBranch.Length, branchSnapshot.Count);
+                Assert.Equal(EthereumFinalityBranch[0], branchSnapshot[0]);
+                Assert.Equal(new byte[] { 0xaa }, Assert.IsType<byte[]>(finalitySnapshot["bytes"]));
+
+                var blockReceiptsSnapshot = Assert.NotNull(evidence.BlockReceipts);
+                var blockReceiptWitnessSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+                    blockReceiptsSnapshot[0]["mutableWitness"]);
+                Assert.Equal(new object?[] { "receipt-list" }, blockReceiptWitnessSnapshot);
+
+                Assert.Equal(new byte[] { 0x44 }, Assert.NotNull(evidence.InclusionBranch)[0]);
+                Assert.Equal(new byte[] { 0x01, 0x02 }, Assert.NotNull(evidence.ReceiptProof).ReceiptTrieProofNodes[0]);
+                Assert.Equal(RepeatByte(0x11, 32), evidence.ReceiptProof.InclusionBranch[0]);
+                Assert.Equal(receiptProofHash, evidence.ReceiptProofHash);
+                return new byte[] { 9, 8, 7 };
+            }));
+
+        Assert.Equal(new byte[] { 9, 8, 7 }, proofBytes);
+    }
+
+    [Fact]
+    public async Task CollectInboundEvidenceSnapshotsConsensusBoundary()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var sourceEventDigest = "0x" + new string('e', 64);
+        var sourceBridgeEmitterAddress = "0x" + string.Concat(Enumerable.Repeat("44", 20));
+        var receiptsRoot = "0x" + new string('c', 64);
+        var finalizedRoot = "0x" + new string('d', 64);
+        var syncCommitteeRoot = "0x" + new string('a', 64);
+        var receiptNested = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "keep",
+            ["bytes"] = new byte[] { 0xbb },
+        };
+        var receiptWitness = new List<object?> { receiptNested };
+        var blockWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "block",
+            ["bytes"] = new byte[] { 0xcc },
+        };
+        var finalityBranchWitness = EthereumFinalityBranch.ToList();
+        var finalityBytes = new byte[] { 0xaa };
+        var finalityWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["branch"] = finalityBranchWitness,
+            ["bytes"] = finalityBytes,
+        };
+        var sourceEventLog = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["address"] = sourceBridgeEmitterAddress,
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["topics"] = new object?[] { EthereumMainnetSccp.SourceEventTopic, sourceEventDigest },
+            ["data"] = "0x",
+        };
+        var receipt = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["status"] = "0x1",
+            ["logs"] = new object?[] { sourceEventLog },
+            ["mutableWitness"] = receiptWitness,
+        };
+        var block = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = receiptsRoot,
+            ["mutableWitness"] = blockWitness,
+        };
+        var beaconFinality = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["executionBlockNumber"] = "0x1234",
+            ["executionBlockHash"] = blockHash,
+            ["executionReceiptsRoot"] = receiptsRoot,
+            ["finalizedHeaderRoot"] = finalizedRoot,
+            ["syncCommitteeRoot"] = syncCommitteeRoot,
+            ["beaconSlot"] = "0x20",
+            ["finalityBranch"] = EthereumFinalityBranch,
+            ["syncCommitteeBits"] = EthereumSyncCommitteeSupermajorityBits,
+            ["syncCommitteeSignature"] = "0x" + string.Concat(Enumerable.Repeat("34", 96)),
+            ["syncCommitteeParticipation"] = EthereumSyncCommitteeSupermajorityParticipation,
+            ["syncSignatureSlot"] = "65",
+            ["mutableWitness"] = finalityWitness,
+        };
+        var consensusCalls = 0;
+        var consensusProvider = new DelegateConsensusProvider((collectedReceipt, collectedBlock, transactionHash) =>
+        {
+            consensusCalls++;
+            Assert.Equal(txHash, transactionHash);
+            Assert.NotSame(receiptWitness, collectedReceipt?["mutableWitness"]);
+            var receiptSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+                collectedReceipt?["mutableWitness"]);
+            var receiptNestedSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                receiptSnapshot[0]);
+            Assert.Equal("keep", receiptNestedSnapshot["value"]);
+            Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]));
+            Assert.NotSame(blockWitness, collectedBlock?["mutableWitness"]);
+            var blockSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                collectedBlock?["mutableWitness"]);
+            Assert.Equal("block", blockSnapshot["value"]);
+            Assert.Equal(new byte[] { 0xcc }, Assert.IsType<byte[]>(blockSnapshot["bytes"]));
+
+            receiptWitness.Add("changed");
+            receiptNested["value"] = "changed";
+            ((byte[])receiptNested["bytes"]!)[0] = 0x7f;
+            blockWitness["value"] = "changed";
+            ((byte[])blockWitness["bytes"]!)[0] = 0x7e;
+            return beaconFinality;
+        });
+
+        var evidence = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new EthereumMainnetInboundEvidence
+            {
+                Receipt = receipt,
+                Block = block,
+                SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            },
+            consensusProvider: consensusProvider);
+        finalityBranchWitness.Add("0x" + new string('9', 64));
+        finalityBytes[0] = 0x7d;
+        finalityWitness["new"] = "changed";
+
+        Assert.Equal(1, consensusCalls);
+        var returnedReceiptSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+            evidence.Receipt?["mutableWitness"]);
+        Assert.Single(returnedReceiptSnapshot);
+        var returnedReceiptNested = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            returnedReceiptSnapshot[0]);
+        Assert.Equal("keep", returnedReceiptNested["value"]);
+        Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(returnedReceiptNested["bytes"]));
+        var returnedBlockSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            evidence.Block?["mutableWitness"]);
+        Assert.Equal("block", returnedBlockSnapshot["value"]);
+        Assert.Equal(new byte[] { 0xcc }, Assert.IsType<byte[]>(returnedBlockSnapshot["bytes"]));
+        var returnedFinalitySnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            evidence.BeaconFinality?["mutableWitness"]);
+        var branchSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(returnedFinalitySnapshot["branch"]);
+        Assert.Equal(EthereumFinalityBranch.Length, branchSnapshot.Count);
+        Assert.Equal(EthereumFinalityBranch[0], branchSnapshot[0]);
+        Assert.Equal(new byte[] { 0xaa }, Assert.IsType<byte[]>(returnedFinalitySnapshot["bytes"]));
+        Assert.False(returnedFinalitySnapshot.ContainsKey("new"));
+    }
+
+    [Fact]
+    public async Task BscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var sourceEventDigest = "0x" + new string('e', 64);
+        var sourceBridgeEmitterAddress = "0x" + string.Concat(Enumerable.Repeat("44", 20));
+        var receiptsRoot = "0x" + new string('c', 64);
+        var validatorSetHash = "0x" + string.Concat(Enumerable.Repeat("ab", 32));
+        var commitSealHash = "0x" + new string('d', 64);
+        var receiptNested = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "keep",
+            ["bytes"] = new byte[] { 0xbb },
+        };
+        var receiptWitness = new List<object?> { receiptNested };
+        var blockWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["value"] = "block",
+            ["bytes"] = new byte[] { 0xcc },
+        };
+        var finalityBranchWitness = new List<object?> { validatorSetHash };
+        var finalityBytes = new byte[] { 0xaa };
+        var finalityWitness = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["branch"] = finalityBranchWitness,
+            ["bytes"] = finalityBytes,
+        };
+        var sourceEventLog = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["address"] = sourceBridgeEmitterAddress,
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["topics"] = new object?[] { BscMainnetSccp.SourceEventTopic, sourceEventDigest },
+            ["data"] = "0x",
+        };
+        var receipt = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["status"] = "0x1",
+            ["logs"] = new object?[] { sourceEventLog },
+            ["mutableWitness"] = receiptWitness,
+        };
+        var block = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = receiptsRoot,
+            ["mutableWitness"] = blockWitness,
+        };
+        var parliaFinality = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["executionBlockNumber"] = "0x1234",
+            ["executionBlockHash"] = blockHash,
+            ["executionReceiptsRoot"] = receiptsRoot,
+            ["validatorEpoch"] = "0x24",
+            ["validatorSetHash"] = validatorSetHash,
+            ["commitSealHash"] = commitSealHash,
+            ["mutableWitness"] = finalityWitness,
+        };
+        var consensusCalls = 0;
+        var consensusProvider = new DelegateBscConsensusProvider((collectedReceipt, collectedBlock, transactionHash) =>
+        {
+            consensusCalls++;
+            Assert.Equal(txHash, transactionHash);
+            Assert.NotSame(receiptWitness, collectedReceipt?["mutableWitness"]);
+            var receiptSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+                collectedReceipt?["mutableWitness"]);
+            var receiptNestedSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                receiptSnapshot[0]);
+            Assert.Equal("keep", receiptNestedSnapshot["value"]);
+            Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]));
+            Assert.NotSame(blockWitness, collectedBlock?["mutableWitness"]);
+            var blockSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+                collectedBlock?["mutableWitness"]);
+            Assert.Equal("block", blockSnapshot["value"]);
+            Assert.Equal(new byte[] { 0xcc }, Assert.IsType<byte[]>(blockSnapshot["bytes"]));
+
+            receiptWitness.Add("changed");
+            receiptNested["value"] = "changed";
+            ((byte[])receiptNested["bytes"]!)[0] = 0x7f;
+            blockWitness["value"] = "changed";
+            ((byte[])blockWitness["bytes"]!)[0] = 0x7e;
+            return parliaFinality;
+        });
+
+        var evidence = await BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new BscMainnetInboundEvidence
+            {
+                Receipt = receipt,
+                Block = block,
+                SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            },
+            consensusProvider: consensusProvider);
+        finalityBranchWitness.Add("0x" + new string('9', 64));
+        finalityBytes[0] = 0x7d;
+        finalityWitness["new"] = "changed";
+
+        Assert.Equal(1, consensusCalls);
+        var returnedReceiptSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(
+            evidence.Receipt?["mutableWitness"]);
+        Assert.Single(returnedReceiptSnapshot);
+        var returnedReceiptNested = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            returnedReceiptSnapshot[0]);
+        Assert.Equal("keep", returnedReceiptNested["value"]);
+        Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(returnedReceiptNested["bytes"]));
+        var returnedBlockSnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            evidence.Block?["mutableWitness"]);
+        Assert.Equal("block", returnedBlockSnapshot["value"]);
+        Assert.Equal(new byte[] { 0xcc }, Assert.IsType<byte[]>(returnedBlockSnapshot["bytes"]));
+        var returnedFinalitySnapshot = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(
+            evidence.ParliaFinality?["mutableWitness"]);
+        var branchSnapshot = Assert.IsAssignableFrom<IReadOnlyList<object?>>(returnedFinalitySnapshot["branch"]);
+        Assert.Equal(new object?[] { validatorSetHash }, branchSnapshot);
+        Assert.Equal(new byte[] { 0xaa }, Assert.IsType<byte[]>(returnedFinalitySnapshot["bytes"]));
+        Assert.False(returnedFinalitySnapshot.ContainsKey("new"));
+    }
+
+    [Fact]
     public async Task BeaconRestConsensusProviderCollectsFinalizedTargetEvidence()
     {
         var txHash = "0x" + new string('a', 64);
@@ -2937,8 +3503,318 @@ public sealed class SccpEthereumMainnetTests
         Assert.NotSame(input.BundleBytes, request.BundleBytes);
         Assert.NotSame(input.SourceProofBytes, request.SourceProofBytes);
 
+        var artifactInput = input with
+        {
+            ProofArtifactHash = "0x" + new string('9', 64),
+            ProvingKeyHash = "0x" + new string('a', 64),
+        };
+        var artifactRequest = EthereumMainnetSccp.BuildOutboundProofRequest(artifactInput);
+        Assert.Equal("0x" + new string('9', 64), artifactRequest.ProofArtifactHash);
+        Assert.Equal("0x" + new string('a', 64), artifactRequest.ProvingKeyHash);
+        Assert.NotEqual(ExpectedRequestHash, artifactRequest.RequestHash);
+        var artifactResult = EthereumMainnetSccp.WrapOutboundProofResult(Groth16ProofBytes(), artifactRequest);
+        Assert.Equal(artifactRequest.ProofArtifactHash, artifactResult.ProofArtifactHash);
+        Assert.Equal(artifactRequest.ProvingKeyHash, artifactResult.ProvingKeyHash);
+
+        var nativeProverBundle = SampleNativeEvmProverBundle(ExpectedBindingHash);
+        var parsedNativeProverBundle = EthereumMainnetNativeEvmProverBundle.FromJson(
+            SampleNativeEvmProverBundleJson(ExpectedBindingHash),
+            ExpectedBindingHash);
+        Assert.Equal(nativeProverBundle.ProofArtifactHash, parsedNativeProverBundle.ProofArtifactHash);
+        Assert.Equal("artifacts/eth-mainnet/proof-artifact.bin", parsedNativeProverBundle.ProofArtifact);
+        Assert.Equal(nativeProverBundle.ProvingKeyHash, parsedNativeProverBundle.ProvingKeyHash);
+        Assert.Equal("artifacts/eth-mainnet/proving-key.bin", parsedNativeProverBundle.ProvingKey);
+        Assert.Equal("artifacts/eth-mainnet/verifier-key.bin", parsedNativeProverBundle.VerifierKey);
+        Assert.Equal(nativeProverBundle.DestinationBindingHash, parsedNativeProverBundle.DestinationBindingHash);
+        Assert.Equal(
+            nativeProverBundle.NativeSdkArtifacts.Select(artifact => artifact.Sdk),
+            parsedNativeProverBundle.NativeSdkArtifacts.Select(artifact => artifact.Sdk));
+        Assert.Contains(
+            parsedNativeProverBundle.NativeSdkArtifacts,
+            artifact => artifact.Sdk == "dotnet"
+                && artifact.ImplementationArtifact == "artifacts/eth-mainnet/dotnet-implementation.bin");
+        Assert.Contains(
+            "noWasm",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                    SampleNativeEvmProverBundleJson(ExpectedBindingHash, noWasm: false),
+                    ExpectedBindingHash)).Message);
+        Assert.Contains(
+            "destinationBindingHash",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                    SampleNativeEvmProverBundleJson("0x" + new string('b', 64)),
+                    ExpectedBindingHash)).Message);
+        var noncanonicalDomain = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"domain\": 1",
+                    "\"domain\": \"01\"",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("domain", noncanonicalDomain.Message);
+        Assert.Contains("canonical decimal integer", noncanonicalDomain.Message);
+        var duplicateJsonKey = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"bundle_id\": \"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
+                    "\"bundle_id\": \"forged\", \"bundle_id\": \"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("duplicate JSON key: bundle_id", duplicateJsonKey.Message);
+        Assert.Contains(
+            "proofArtifact",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                    SampleNativeEvmProverBundleJson(
+                        ExpectedBindingHash,
+                        proofArtifact: "../proof-artifact.bin"),
+                    ExpectedBindingHash)).Message);
+        var unknownManifestField = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"audit_hashes\":",
+                    "\"experimental_manifest_note\": true, \"audit_hashes\":",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("nativeProverBundle", unknownManifestField.Message);
+        Assert.Contains("experimental_manifest_note", unknownManifestField.Message);
+        Assert.Contains("unknown field", unknownManifestField.Message);
+        var duplicateManifestAlias = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"proof_artifact_hash\": \"0x" + new string('9', 64) + "\"",
+                    "\"proofArtifactHash\": \"0x" + new string('9', 64)
+                        + "\", \"proof_artifact_hash\": \"0x" + new string('9', 64) + "\"",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("proofArtifactHash", duplicateManifestAlias.Message);
+        Assert.Contains("multiple aliases", duplicateManifestAlias.Message);
+        var unknownArtifactField = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"implementation_hash\":",
+                    "\"experimental_manifest_note\": true, \"implementation_hash\":",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("nativeSdkArtifacts[0]", unknownArtifactField.Message);
+        Assert.Contains("experimental_manifest_note", unknownArtifactField.Message);
+        Assert.Contains("unknown field", unknownArtifactField.Message);
+        var noncanonicalAuditHash = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"0x" + new string('d', 64) + "\"",
+                    "\"0x" + new string('D', 64) + "\"",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("auditHashes[0]", noncanonicalAuditHash.Message);
+        Assert.Contains("canonical lowercase", noncanonicalAuditHash.Message);
+        var replayedAuditHash = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(
+                    "\"0x" + new string('d', 64) + "\"",
+                    "\"0x" + new string('9', 64) + "\"",
+                    StringComparison.Ordinal),
+                ExpectedBindingHash));
+        Assert.Contains("auditHashes[0]", replayedAuditHash.Message);
+        Assert.Contains("proofArtifactHash", replayedAuditHash.Message);
+        Assert.Contains("role-separated", replayedAuditHash.Message);
+        var bundledRequest = EthereumMainnetSccp.BuildOutboundProofRequest(input, nativeProverBundle);
+        Assert.Equal("0x" + new string('9', 64), bundledRequest.ProofArtifactHash);
+        Assert.Equal("0x" + new string('a', 64), bundledRequest.ProvingKeyHash);
+        Assert.NotEqual(ExpectedRequestHash, bundledRequest.RequestHash);
+        Assert.Equal(
+            bundledRequest.RequestHash,
+            EthereumMainnetSccp.BuildOutboundProofRequest(nativeProverBundle.ApplyTo(input)).RequestHash);
+        Assert.Contains(
+            "nativeProverBundle.verifierKeyHash",
+            Assert.Throws<ArgumentException>(
+                () => new EthereumMainnetNativeEvmProverBundle(
+                    nativeProverBundle.ProofArtifactHash,
+                    nativeProverBundle.ProvingKeyHash,
+                    "0x" + new string('f', 64),
+                    ExpectedBindingHash,
+                    nativeProverBundle.NativeSdkArtifacts,
+                    nativeProverBundle.AuditHashes).ApplyTo(input)).Message);
+        var proofArtifactBytes = new byte[] { 1, 2, 3, 5, 8 };
+        var provingKeyBytes = new byte[] { 13, 21, 34, 55 };
+        var verifierKeyBytes = new byte[] { 89, 144, 233 };
+        var implementationBytes = Encoding.UTF8.GetBytes("sccp dotnet prover artifact v1");
+        var proofArtifactHash = Sha256Hex(proofArtifactBytes);
+        var provingKeyHash = Sha256Hex(provingKeyBytes);
+        var verifierKeyHash = Sha256Hex(verifierKeyBytes);
+        var implementationHash = Sha256Hex(implementationBytes);
+        var artifactBinding = EthereumMainnetSccp.DestinationBinding(
+            "0x" + new string('1', 40),
+            "0x" + new string('2', 40),
+            "0x" + new string('b', 64),
+            verifierKeyHash);
+        var artifactInput = SampleOutboundInput(artifactBinding, publicInputs);
+        var verifiedBundle = new EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.BindingHash,
+            EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select((entry, index) => new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                    entry.Key,
+                    entry.Value,
+                    proofArtifactHash,
+                    provingKeyHash,
+                    entry.Key == "dotnet"
+                        ? implementationHash
+                        : "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32))))
+                .ToArray(),
+            ["0x" + new string('d', 64)],
+            expectedDestinationBindingHash: artifactBinding.BindingHash);
+        var verifiedArtifacts = verifiedBundle.VerifiedArtifacts(
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            "dotnet",
+            implementationBytes);
+        Assert.Equal(EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1, verifiedArtifacts.HashAlgorithm);
+        Assert.Equal(proofArtifactHash, verifiedArtifacts.ProofArtifactHash);
+        Assert.Equal(provingKeyHash, verifiedArtifacts.ProvingKeyHash);
+        Assert.Equal(verifierKeyHash, verifiedArtifacts.VerifierKeyHash);
+        Assert.Equal("native-csharp", verifiedArtifacts.Implementation);
+        Assert.Equal(implementationHash, verifiedArtifacts.ImplementationHash);
+        var artifactBoundProver = new OutboundProverStub(Groth16ProofBytes());
+        var artifactBoundResult = await EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+            artifactInput,
+            artifactBoundProver,
+            verifiedArtifacts);
+        Assert.NotNull(artifactBoundProver.Request);
+        Assert.Equal(proofArtifactHash, artifactBoundProver.Request!.ProofArtifactHash);
+        Assert.Equal(provingKeyHash, artifactBoundProver.Request.ProvingKeyHash);
+        Assert.Equal(proofArtifactHash, artifactBoundResult.ProofArtifactHash);
+        Assert.Equal(provingKeyHash, artifactBoundResult.ProvingKeyHash);
+        var implementationUnboundArtifacts = new EthereumMainnetNativeEvmProverArtifacts(
+            EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1,
+            verifiedBundle,
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            "dotnet",
+            "native-csharp",
+            null);
+        var implementationUnboundProver = new OutboundProverStub(Groth16ProofBytes());
+        Assert.Contains(
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+                    artifactInput,
+                    implementationUnboundProver,
+                    implementationUnboundArtifacts))).Message);
+        Assert.Null(implementationUnboundProver.Request);
+        var verifierKeyUnboundArtifacts = new EthereumMainnetNativeEvmProverArtifacts(
+            EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1,
+            verifiedBundle,
+            proofArtifactHash,
+            provingKeyHash,
+            "0x" + new string('e', 64),
+            "dotnet",
+            "native-csharp",
+            implementationHash);
+        var verifierKeyUnboundProver = new OutboundProverStub(Groth16ProofBytes());
+        Assert.Contains(
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+                    artifactInput,
+                    verifierKeyUnboundProver,
+                    verifierKeyUnboundArtifacts))).Message);
+        Assert.Null(verifierKeyUnboundProver.Request);
+        Assert.Contains(
+            "proofArtifactBytes sha256",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    [0],
+                    provingKeyBytes,
+                    verifierKeyBytes)).Message);
+        Assert.Contains(
+            "sdk must be a non-empty string",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    implementationBytes: implementationBytes)).Message);
+        Assert.Contains(
+            "implementationBytes are required",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet")).Message);
+        Assert.Contains(
+            "implementationBytes sha256",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    Encoding.UTF8.GetBytes("tampered"))).Message);
+        var flaggedArtifactBytes = new byte[] { 0x77, 0x61, 0x73, 0x6D };
+        var flaggedArtifactHash = Sha256Hex(flaggedArtifactBytes);
+        var flaggedBundle = new EthereumMainnetNativeEvmProverBundle(
+            flaggedArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.BindingHash,
+            EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select((entry, index) => new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                    entry.Key,
+                    entry.Value,
+                    flaggedArtifactHash,
+                    provingKeyHash,
+                    entry.Key == "dotnet"
+                        ? implementationHash
+                        : "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32))))
+                .ToArray(),
+            ["0x" + new string('d', 64)],
+            expectedDestinationBindingHash: artifactBinding.BindingHash);
+        Assert.Contains(
+            "proofArtifactBytes contains forbidden",
+            Assert.Throws<ArgumentException>(
+                () => flaggedBundle.VerifiedArtifacts(
+                    flaggedArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes)).Message);
+        Assert.Contains(
+            "noWasm",
+            Assert.Throws<ArgumentException>(
+                () => SampleNativeEvmProverBundle(ExpectedBindingHash, noWasm: false)).Message);
+        Assert.Contains(
+            "destinationBindingHash",
+            Assert.Throws<ArgumentException>(
+                () => SampleNativeEvmProverBundle(
+                    "0x" + new string('b', 64),
+                    expectedDestinationBindingHash: ExpectedBindingHash)).Message);
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                ProofArtifactHash = "0x" + new string('9', 64),
+            }));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                ProofArtifactHash = "0x" + new string('0', 64),
+                ProvingKeyHash = "0x" + new string('a', 64),
+            }));
+
         var mutableProof = Groth16ProofBytes();
-        var prover = new OutboundProverStub(mutableProof);
+        var prover = new OutboundProverStub(mutableProof, callbackRequest =>
+        {
+            callbackRequest.PublicInputsBytes[0] ^= 0x7f;
+            callbackRequest.PublicSignalWords[0] = "0x" + new string('f', 64);
+            callbackRequest.BundleBytes[0] ^= 0x7f;
+            callbackRequest.SourceProofBytes[0] ^= 0x7f;
+        });
         var proofResult = await EthereumMainnetSccp.ProveOutboundToEthereumAsync(input, prover);
         mutableProof[31] = 9;
         Assert.NotNull(prover.Request);
@@ -2946,8 +3822,22 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(ExpectedRequestHash, proofResult.RequestHash);
         Assert.Equal(ExpectedEnvelopeHash, proofResult.EnvelopeHash);
         Assert.Equal(ExpectedPublicSignalWords, proofResult.PublicSignalWords);
+        Assert.Equal(ExpectedPublicInputsBytes, Convert.ToHexString(proofResult.Request.PublicInputsBytes).ToLowerInvariant());
+        Assert.Equal(ExpectedPublicSignalWords, proofResult.Request.PublicSignalWords);
+        Assert.Equal("eth-mainnet-bundle"u8.ToArray(), proofResult.Request.BundleBytes);
+        Assert.Equal("eth-source-proof"u8.ToArray(), proofResult.Request.SourceProofBytes);
+        Assert.NotEqual(ExpectedPublicInputsBytes, Convert.ToHexString(prover.Request.PublicInputsBytes).ToLowerInvariant());
+        Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);
         Assert.Equal(publicInputs, proofResult.PublicInputs);
         Assert.Equal(binding, proofResult.DestinationBinding);
+
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEthereumCalldata(
+                new EthereumMainnetSccpSubmissionInput(proofResult with
+                {
+                    ProofArtifactHash = "0x" + new string('9', 64),
+                    ProvingKeyHash = "0x" + new string('a', 64),
+                })));
 
         var submission = EthereumMainnetSccp.BuildEthereumCalldata(
             new EthereumMainnetSccpSubmissionInput(proofResult));

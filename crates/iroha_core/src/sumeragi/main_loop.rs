@@ -25846,6 +25846,7 @@ impl Actor {
         session: &RbcSession,
         missing_ready_peers: &[PeerId],
         ready_count: usize,
+        now: Instant,
     ) -> bool {
         if self.is_observer() || !self.runtime_da_enabled() {
             return false;
@@ -25893,7 +25894,6 @@ impl Actor {
 
         let mut sent = false;
 
-        let now = Instant::now();
         let payload_cooldown = self.targeted_payload_rescue_cooldown();
         let payload_due = self.rbc_targeted_payload_rescue_due(&key, now, payload_cooldown);
         let mut payload_session = session.clone();
@@ -26758,6 +26758,7 @@ impl Actor {
                         &session,
                         missing_ready_peers.as_slice(),
                         ready_count,
+                        now,
                     )
                 {
                     progress = true;
@@ -26855,6 +26856,7 @@ impl Actor {
                     &session,
                     missing_ready_peers.as_slice(),
                     ready_count,
+                    now,
                 )
             {
                 progress = true;
@@ -27342,6 +27344,7 @@ impl Actor {
                 &session,
                 missing_ready_peers.as_slice(),
                 ready_count,
+                now,
             );
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
@@ -27391,6 +27394,7 @@ impl Actor {
             &session,
             missing_ready_peers.as_slice(),
             ready_count,
+            now,
         );
 
         if first_deliver && let Some(bytes) = delivered_bytes {
@@ -38825,7 +38829,10 @@ impl Actor {
                 && !self.frontier_catchup_has_unresolved_dependency_beyond_passive_slot(height)
                 && !self.has_actionable_missing_block_requests()
                 && !self.has_actionable_deferred_missing_payload_qcs()
-                && !self.sidecar_quarantined_for_height(height);
+                && !self.sidecar_quarantined_for_height(height)
+                && (current_view > 0
+                    || local_round_leader
+                    || !pacemaker_attempted_after_queue_ready);
         let vote_backed_frontier_missing_proposal_direct_rotation =
             matches!(self.consensus_mode, ConsensusMode::Npos)
                 && self.config.resilience.enabled

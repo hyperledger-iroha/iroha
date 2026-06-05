@@ -19,7 +19,7 @@ use iroha_logger::prelude::*;
 use iroha_macro::*;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
-use rand::seq::SliceRandom;
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::sync::mpsc;
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -1066,6 +1066,7 @@ mod gossip_backoff_tests {
             gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
             gossip_backoff: Duration::from_secs(1),
             gossip_next_deadline: Instant::now(),
+            gossip_round: 0,
             network: crate::IrohaNetwork::closed_for_tests(),
             relay_ttl: 1,
             block_sync_frame_cap: 1024,
@@ -2084,6 +2085,7 @@ pub struct BlockSynchronizer {
     gossip_size: NonZeroU32,
     gossip_backoff: Duration,
     gossip_next_deadline: std::time::Instant,
+    gossip_round: u64,
     network: IrohaNetwork,
     relay_ttl: u8,
     block_sync_frame_cap: usize,
@@ -2293,8 +2295,18 @@ impl BlockSynchronizer {
             let (world_peers, lane_scoped, local_lane_ids) =
                 self.block_sync_gossip_world_scope(now_height.saturating_add(1));
             let candidate_peers = filter_block_sync_gossip_candidates(&peers, &world_peers);
-            let mut rng = rand::rng();
             let gossip_size = usize::try_from(self.gossip_size.get()).unwrap_or(usize::MAX);
+            let gossip_round = self.gossip_round;
+            self.gossip_round = self.gossip_round.wrapping_add(1);
+            let seed = block_sync_target_seed(
+                self.peer.id(),
+                now_height,
+                gossip_round,
+                gossip_size,
+                &candidate_peers,
+                &world_peers,
+            );
+            let mut rng = StdRng::seed_from_u64(seed);
             let (targets, stray_targets) =
                 select_block_sync_targets(&candidate_peers, &world_peers, gossip_size, &mut rng);
             if lane_scoped {
@@ -2393,6 +2405,7 @@ impl BlockSynchronizer {
             gossip_size: config.gossip_size,
             gossip_backoff: gossip_period,
             gossip_next_deadline: now,
+            gossip_round: 0,
             network,
             relay_ttl,
             block_sync_frame_cap,
@@ -2812,6 +2825,33 @@ fn sample_block_sync_targets(
     shuffled
 }
 
+fn block_sync_target_seed(
+    local_peer: &PeerId,
+    height: u64,
+    round: u64,
+    gossip_size: usize,
+    peers: &[PeerId],
+    world_peers: &BTreeSet<PeerId>,
+) -> u64 {
+    let mut material = format!(
+        "iroha:block-sync-target-seed:v1\n{local_peer}\n{height}\n{round}\n{gossip_size}\n"
+    );
+    for peer in peers {
+        material.push_str(&peer.to_string());
+        material.push('\n');
+    }
+    material.push_str("world\n");
+    for peer in world_peers {
+        material.push_str(&peer.to_string());
+        material.push('\n');
+    }
+
+    let digest = Hash::new(material.as_bytes());
+    let mut seed = [0_u8; 8];
+    seed.copy_from_slice(&digest.as_ref()[..8]);
+    u64::from_le_bytes(seed)
+}
+
 fn filter_block_sync_gossip_candidates(
     peers: &[PeerId],
     scoped_world_peers: &BTreeSet<PeerId>,
@@ -2999,6 +3039,31 @@ mod selection_tests {
                 .filter(|peer| world_peers.contains(*peer))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn block_sync_target_seed_is_stable_and_round_specific() {
+        let all_peers = peers(4);
+        let world_peers: BTreeSet<_> = all_peers.iter().take(2).cloned().collect();
+        let local_peer = all_peers[0].clone();
+        let other_peer = all_peers[1].clone();
+
+        let seed = block_sync_target_seed(&local_peer, 42, 7, 3, &all_peers, &world_peers);
+        assert_eq!(
+            seed,
+            block_sync_target_seed(&local_peer, 42, 7, 3, &all_peers, &world_peers),
+            "target seed should be stable for identical inputs"
+        );
+        assert_ne!(
+            seed,
+            block_sync_target_seed(&local_peer, 42, 8, 3, &all_peers, &world_peers),
+            "gossip round should rotate target seed"
+        );
+        assert_ne!(
+            seed,
+            block_sync_target_seed(&other_peer, 42, 7, 3, &all_peers, &world_peers),
+            "local peer identity should perturb target seed"
         );
     }
 
@@ -6302,6 +6367,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -6416,6 +6482,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -6500,6 +6567,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -6646,6 +6714,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 16 * 1024,
@@ -6829,6 +6898,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -6910,6 +6980,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -6999,6 +7070,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_millis(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -7101,6 +7173,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_millis(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -7189,6 +7262,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_millis(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -7267,6 +7341,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,
@@ -7347,6 +7422,7 @@ pub mod message {
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
                     gossip_backoff: Duration::from_secs(1),
                     gossip_next_deadline: Instant::now(),
+                    gossip_round: 0,
                     network: crate::IrohaNetwork::closed_for_tests(),
                     relay_ttl: 1,
                     block_sync_frame_cap: 1024,

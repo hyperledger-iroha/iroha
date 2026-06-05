@@ -8,6 +8,7 @@ use hex_literal::hex;
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
+use rand_core::TryCryptoRng;
 use sha2::{Digest, Sha512};
 use signature::Signer;
 use sm2::{
@@ -46,6 +47,7 @@ const SM2_GENERATOR_Y_BYTES: [u8; 32] =
 const SM2_DISTID_LEN_BYTES: usize = 2;
 const SM2_PRIVATE_KEY_LEN: usize = 32;
 const SM2_PUBLIC_KEY_UNCOMPRESSED_LEN: usize = 65;
+const SM2_RANDOM_KEY_ATTEMPTS: usize = 1024;
 
 fn validate_distid(distid: &str) -> Result<(), ParseError> {
     let bit_len = distid
@@ -452,6 +454,31 @@ impl Sm2PrivateKey {
     }
 
     /// Generate a random SM2 private key using the provided RNG.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid,
+    /// the RNG fails, or the RNG cannot produce valid scalar material within
+    /// the retry budget.
+    pub fn try_random<R>(distid: impl Into<String>, rng: &mut R) -> Result<Self, ParseError>
+    where
+        R: TryCryptoRng,
+    {
+        let distid = distid.into();
+        validate_distid(&distid)?;
+        let mut secret = Zeroizing::new([0u8; 32]);
+        for _ in 0..SM2_RANDOM_KEY_ATTEMPTS {
+            rng.try_fill_bytes(secret.as_mut())
+                .map_err(|err| ParseError(format!("SM2 RNG failed: {err}")))?;
+            if let Ok(private) = Self::from_bytes(distid.clone(), secret.as_ref()) {
+                return Ok(private);
+            }
+        }
+        Err(ParseError(
+            "SM2 RNG did not produce a valid private key".into(),
+        ))
+    }
+
+    /// Generate a random SM2 private key using an infallible compatibility RNG.
     ///
     /// # Errors
     /// Returns [`ParseError`] when the distinguishing identifier is invalid.
@@ -2918,6 +2945,7 @@ mod tests {
     use std::str::FromStr;
 
     use hex::decode as hex_decode;
+    use rand_core::{TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
     use sm2::elliptic_curve::{
         rand_core::OsRng,
@@ -2935,6 +2963,35 @@ mod tests {
     const SM4_GMT_VECTOR_KEY: &str = "0123456789abcdeffedcba9876543210";
     const SM4_GMT_VECTOR_BLOCK: &str = "0123456789abcdeffedcba9876543210";
     const SM4_GMT_VECTOR_CIPHERTEXT: &str = "681EDF34D206965E86B3E94F536E4246";
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing SM2 RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
@@ -3313,6 +3370,18 @@ mod tests {
         public
             .verify(message, &signature)
             .expect("signature verifies");
+    }
+
+    #[test]
+    fn sm2_try_random_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+        match Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng) {
+            Err(ParseError(message)) => {
+                assert!(message.contains("SM2 RNG failed"));
+                assert!(message.contains("failing SM2 RNG"));
+            }
+            Ok(_) => panic!("RNG failure must be reported"),
+        }
     }
 
     #[test]

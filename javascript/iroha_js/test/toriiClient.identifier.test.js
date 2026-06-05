@@ -1116,6 +1116,15 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
       })(),
     },
     {
+      name: "max input byte count exceeds registered RAM-LFE profile",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.max_input_bytes = 64;
+        return params;
+      })(),
+    },
+    {
       name: "public key coefficient outside modulus",
       expected: ValidationError,
       params: (() => {

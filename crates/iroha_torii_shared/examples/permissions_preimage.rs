@@ -8,6 +8,10 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{account::AccountId, domain::DomainId};
 use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
 
+fn deterministic_wallet_keypair() -> Result<KeyPair, iroha_crypto::Error> {
+    KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+}
+
 fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -18,13 +22,13 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample session parameters
     let sid = [0x11u8; 32];
     let app_pk = [0x22u8; 32];
     let wallet_pk = [0x33u8; 32];
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
-    let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+    let keypair = deterministic_wallet_keypair()?;
     let account_id = AccountId::new(keypair.public_key().clone()).to_string();
 
     // Request permissions in Open (app → wallet)
@@ -100,4 +104,24 @@ fn main() {
     println!("proof_hash_b2_256 = {}", hex(&proof_hash));
     println!("approve_preimage_len = {}", preimage.len());
     println!("approve_preimage_hex = {}", hex(&preimage));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_wallet_keypair_uses_checked_ed25519_derivation() {
+        let keypair =
+            deterministic_wallet_keypair().expect("checked deterministic wallet key derivation");
+
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("wallet public key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }

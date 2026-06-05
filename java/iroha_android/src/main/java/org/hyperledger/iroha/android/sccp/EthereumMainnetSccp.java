@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -119,10 +120,22 @@ public final class EthereumMainnetSccp {
   private final InboundProver inboundProver;
   private final InboundSubmitter inboundSubmitter;
   private final OutboundSubmitter outboundSubmitter;
+  private final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle;
+  private final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts;
   private final String sourceBridgeEmitterAddress;
 
   public EthereumMainnetSccp() {
     this(null, null, null, null, null);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    this(null, null, null, null, null, null, null, nativeProverBundle, null);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts) {
+    this(null, null, null, null, null, null, null, null, nativeProverArtifacts, null);
   }
 
   public EthereumMainnetSccp(
@@ -185,6 +198,52 @@ public final class EthereumMainnetSccp {
       final InboundSubmitter inboundSubmitter,
       final OutboundSubmitter outboundSubmitter,
       final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        nativeProverBundle,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+      final String sourceBridgeEmitterAddress) {
     this.witnessProvider = witnessProvider;
     this.proofEngine = proofEngine;
     this.executionProvider = executionProvider;
@@ -192,6 +251,9 @@ public final class EthereumMainnetSccp {
     this.inboundProver = inboundProver;
     this.inboundSubmitter = inboundSubmitter;
     this.outboundSubmitter = outboundSubmitter;
+    this.nativeProverArtifacts = nativeProverArtifacts;
+    this.nativeProverBundle =
+        nativeProverArtifacts == null ? nativeProverBundle : nativeProverArtifacts.nativeProverBundle();
     this.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress;
   }
 
@@ -318,6 +380,8 @@ public final class EthereumMainnetSccp {
               32);
     }
 
+    receipt = callbackMapSnapshot(receipt);
+    block = callbackMapSnapshot(block);
     final Map<String, Object> rawBeaconFinality =
         input.beaconFinality() != null
             ? input.beaconFinality()
@@ -456,9 +520,10 @@ public final class EthereumMainnetSccp {
         sourceEvent.sourceEventDigest());
     final String receiptProofHash =
         normalizeReceiptProofHash(receiptProof, input.receiptProofHash());
-    return new InboundEvidence(
-        DOMAIN_ETH,
-        DOMAIN_SORA,
+    return callbackEvidenceSnapshot(
+        new InboundEvidence(
+            DOMAIN_ETH,
+            DOMAIN_SORA,
             transactionHash,
             receipt,
             block,
@@ -468,7 +533,7 @@ public final class EthereumMainnetSccp {
             sourceEvent.sourceEventDigest(),
             sourceEvent.sourceBridgeEmitterAddress(),
             blockReceipts,
-            input.inclusionBranch());
+            input.inclusionBranch()));
   }
 
   public byte[] proveInboundToSora(final InboundEvidence input) {
@@ -520,32 +585,12 @@ public final class EthereumMainnetSccp {
             "Ethereum mainnet SCCP inbound proof requires beaconFinality." + field);
       }
     }
-    final byte[] proofBytes = inboundProver.prove(evidence);
-    if (proofBytes == null || proofBytes.length == 0) {
-      throw new IllegalArgumentException("proofBytes must not be empty");
-    }
-    boolean nonzero = false;
-    for (final byte value : proofBytes) {
-      nonzero |= value != 0;
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException("proofBytes must not be all zero");
-    }
-    return Arrays.copyOf(proofBytes, proofBytes.length);
+    return requireNativeRecursiveBytes(
+        inboundProver.prove(callbackEvidenceSnapshot(evidence)), "proofBytes");
   }
 
   public Object submitInboundToIroha(final byte[] proofBytes) {
-    final byte[] proof = Objects.requireNonNull(proofBytes, "proofBytes");
-    if (proof.length == 0) {
-      throw new IllegalArgumentException("proofBytes must not be empty");
-    }
-    boolean nonzero = false;
-    for (final byte value : proof) {
-      nonzero |= value != 0;
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException("proofBytes must not be all zero");
-    }
+    final byte[] proof = requireNativeRecursiveBytes(proofBytes, "proofBytes");
     if (inboundSubmitter == null) {
       throw new IllegalStateException("Ethereum mainnet SCCP inbound submitter is not linked");
     }
@@ -576,6 +621,12 @@ public final class EthereumMainnetSccp {
     final EvmSccpProver.ProofRequest request = EvmSccpProver.buildProofRequest(input);
     requireEthereumProofRequest(request);
     return request;
+  }
+
+  public static EvmSccpProver.ProofRequest buildProofRequest(
+      final EvmSccpProver.ProofRequestInput input,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    return buildProofRequest(Objects.requireNonNull(nativeProverBundle, "nativeProverBundle").applyTo(input));
   }
 
   public static EvmSccpProver.ProofResult wrapProofResult(
@@ -674,16 +725,66 @@ public final class EthereumMainnetSccp {
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequestInput resolved =
         witnessProvider == null ? input : witnessProvider.resolveWitness(inputSnapshot(input));
-    return buildProofRequest(resolved);
+    return buildProofRequest(nativeProverBundle == null ? resolved : nativeProverBundle.applyTo(resolved));
   }
 
   public EvmSccpProver.ProofResult proveOutboundToEthereum(
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequest request = buildOutboundProofRequest(input);
+    requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request);
     if (proofEngine == null) {
       throw new IllegalStateException("Ethereum mainnet SCCP Groth16 prover is not linked");
     }
-    return wrapProofResult(proofEngine.prove(request), request);
+    return wrapProofResult(
+        proofEngine.prove(EvmSccpProver.callbackRequestSnapshot(request)), request);
+  }
+
+  private static void requireVerifiedNativeProverArtifacts(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+      final EvmSccpProver.ProofRequest request) {
+    if (artifacts == null) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet SCCP outbound proof requires verified native EVM prover artifacts");
+    }
+    if (!artifacts.nativeProverBundle().destinationBindingHash().equals(request.destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts destinationBindingHash must match proof request");
+    }
+    if (!artifacts.proofArtifactHash().equals(request.proofArtifactHash())
+        || !artifacts.provingKeyHash().equals(request.provingKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts artifact hashes must match proof request");
+    }
+    if (!artifacts.verifierKeyHash().equals(artifacts.nativeProverBundle().verifierKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    if (artifacts.sdk() == null
+        || artifacts.sdk().isEmpty()
+        || artifacts.implementation() == null
+        || artifacts.implementation().isEmpty()
+        || artifacts.implementationHash() == null
+        || artifacts.implementationHash().isEmpty()) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts must bind sdk implementation and implementationHash");
+    }
+    EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact artifact = null;
+    for (final EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact row :
+        artifacts.nativeProverBundle().nativeSdkArtifacts()) {
+      if (artifacts.sdk().equals(row.sdk())) {
+        artifact = row;
+        break;
+      }
+    }
+    if (artifact == null) {
+      throw new IllegalArgumentException(
+          "nativeProverBundle has no artifact row for sdk: " + artifacts.sdk());
+    }
+    if (!artifacts.implementation().equals(artifact.implementation())
+        || !artifacts.implementationHash().equals(artifact.implementationHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts implementation binding must match nativeProverBundle");
+    }
   }
 
   public EvmSccpProver.Submission buildEthereumCalldata(
@@ -772,7 +873,9 @@ public final class EthereumMainnetSccp {
         input.destinationBindingHash(),
         input.backend(),
         input.sourceDomain(),
-        input.destinationBinding());
+        input.destinationBinding(),
+        input.proofArtifactHash(),
+        input.provingKeyHash());
   }
 
   private static long normalizeRpcChainId(final Object value) {
@@ -1110,6 +1213,100 @@ public final class EthereumMainnetSccp {
             "receiptProof.sourceEventDigest must match receipt source event");
       }
     }
+  }
+
+  private static InboundEvidence callbackEvidenceSnapshot(final InboundEvidence evidence) {
+    return new InboundEvidence(
+        evidence.sourceDomain(),
+        evidence.targetDomain(),
+        evidence.transactionHash(),
+        callbackMapSnapshot(evidence.receipt()),
+        callbackMapSnapshot(evidence.block()),
+        callbackMapSnapshot(evidence.beaconFinality()),
+        callbackReceiptProofSnapshot(evidence.receiptProof()),
+        evidence.receiptProofHash(),
+        evidence.sourceEventDigest(),
+        evidence.sourceBridgeEmitterAddress(),
+        callbackMapListSnapshot(evidence.blockReceipts()),
+        evidence.inclusionBranch() == null
+            ? null
+            : copyByteArrayList(evidence.inclusionBranch(), "inclusionBranch"));
+  }
+
+  private static ReceiptProof callbackReceiptProofSnapshot(final ReceiptProof receiptProof) {
+    if (receiptProof == null) {
+      return null;
+    }
+    return new ReceiptProof(
+        receiptProof.sourceDomain(),
+        receiptProof.sourceEventDigest(),
+        receiptProof.beaconSlot(),
+        receiptProof.executionBlockNumber(),
+        receiptProof.executionBlockHash(),
+        receiptProof.executionReceiptsRoot(),
+        receiptProof.beaconFinalizedRoot(),
+        receiptProof.syncCommitteeRoot(),
+        receiptProof.receiptRootIndex(),
+        receiptProof.receiptTrieProofNodes(),
+        receiptProof.inclusionBranch());
+  }
+
+  private static List<Map<String, Object>> callbackMapListSnapshot(
+      final List<Map<String, Object>> values) {
+    if (values == null) {
+      return null;
+    }
+    final ArrayList<Map<String, Object>> copy = new ArrayList<>(values.size());
+    for (final Map<String, Object> value : values) {
+      copy.add(callbackMapSnapshot(value));
+    }
+    return Collections.unmodifiableList(copy);
+  }
+
+  private static Map<String, Object> callbackMapSnapshot(final Map<String, Object> value) {
+    if (value == null) {
+      return null;
+    }
+    final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+    for (final Map.Entry<String, Object> entry : value.entrySet()) {
+      copy.put(entry.getKey(), callbackAnySnapshot(entry.getValue()));
+    }
+    return Collections.unmodifiableMap(copy);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Object callbackAnySnapshot(final Object value) {
+    if (value instanceof byte[]) {
+      final byte[] bytes = (byte[]) value;
+      return Arrays.copyOf(bytes, bytes.length);
+    }
+    if (value instanceof Map) {
+      final Map<?, ?> map = (Map<?, ?>) value;
+      final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+      for (final Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() instanceof String) {
+          copy.put((String) entry.getKey(), callbackAnySnapshot(entry.getValue()));
+        }
+      }
+      return Collections.unmodifiableMap(copy);
+    }
+    if (value instanceof List) {
+      final List<?> list = (List<?>) value;
+      final ArrayList<Object> copy = new ArrayList<>(list.size());
+      for (final Object item : list) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    if (value instanceof Object[]) {
+      final Object[] array = (Object[]) value;
+      final ArrayList<Object> copy = new ArrayList<>(array.length);
+      for (final Object item : array) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    return value;
   }
 
   private static List<byte[]> copyByteArrayList(final List<byte[]> values, final String label) {

@@ -35,6 +35,10 @@
     "param_set_version": 1,
     "evaluation_key_digest": "hash:6018ED3CB8315DF01D8E1F7910AFAB8BD02C978CBF96570FF9561F5812A8874B#00FA",
     "evaluation_key_refresh_transcript_digest": "hash:5C5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B#543B",
+    "refresh_transcript_mode": {
+      "refresh_transcript_mode": "ExactLift",
+      "value": null
+    },
     "max_ciphertext_bytes": 131072,
     "max_plaintext_bytes": 512,
     "max_input_ciphertexts": 4,

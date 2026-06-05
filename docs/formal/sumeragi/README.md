@@ -8,6 +8,9 @@ This directory contains bounded formal models for Sumeragi safety and liveness.
 - phase progression (`Propose`, `Prepare`, `CommitVote`, `NewView`, `Committed`),
 - vote and quorum thresholds (`CommitQuorum`, `ViewQuorum`),
 - latched view-change quorum evidence for nonzero active views,
+- proposal handoff from genesis or quorum-backed NewView evidence into Prepare
+  and RBC initialization,
+- timeout-triggered view-change reset of live per-view evidence,
 - weighted stake quorum (`StakeQuorum`) for NPoS-style commit guards,
 - RBC causality (`Init -> Chunk -> Ready -> Deliver`) with header/digest evidence,
 - GST and weak fairness assumptions over honest progress actions.
@@ -7751,23 +7754,36 @@ Invariants:
 - `CommitImpliesRbcEvidence`
 - `FinalityCertificateStackComplete`
 - `FinalityCertificateStackMatchesFinality`
+- `FinalityClearsNewViewHandoff`
 - `CommitDisablesProgressActions`
 - `CommittedPhaseMatchesFinality`
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
+- `GstElapsedGateMatchesPreGst`
+- `TimeoutTickGateMatchesStalledProgress`
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
 - `LiveNewViewVotesStayInHandoff`
+- `HonestProposeGateMatchesHandoffEvidence`
 - `NewViewVoteGateMatchesFreshViewEvidence`
+- `NewViewVoteQuorumGateMatchesNextEvidence`
+- `NewViewVotePendingGateMatchesMissingNextEvidence`
 - `ViewEvidenceIsCompleteOrEmpty`
 - `PreCommitPhasesHaveNoCommitVotes`
 - `PrePreparePhasesHaveNoPrepareVotes`
 - `LivePrepareVotesStayInHandoff`
 - `PrepareVoteGateMatchesProposalEvidence`
+- `PrepareVoteQuorumGateMatchesNextEvidence`
+- `PrepareVotePendingGateMatchesMissingNextEvidence`
 - `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
 - `LiveCommitVotesRequirePrepareQuorum`
 - `CommitVoteGateMatchesPrepareEvidence`
+- `ByzantineCommitVoteGateMatchesPrepareEvidence`
+- `HonestCommitVoteFinalityGateMatchesNextEvidence`
+- `HonestCommitVotePendingGateMatchesMissingNextEvidence`
+- `ByzantineCommitVoteFinalityGateMatchesNextEvidence`
+- `ByzantineCommitVotePendingGateMatchesMissingNextEvidence`
 - `LiveCommitVotesStayInCommitHandoff`
 - `CommitImpliesPrepareQuorum`
 - `CommitEvidenceMatchesVoteCounters`
@@ -7779,9 +7795,13 @@ Invariants:
 - `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
 - `RbcProgressEvidenceMatchesState`
+- `ByzantineFaultGateMatchesCorruptibleRbc`
+- `RbcInitGateMatchesRepairableState`
 - `RbcChunkGateMatchesHeaderDigestEvidence`
 - `RbcReadyGateMatchesChunkEvidence`
 - `RbcDeliverGateMatchesCompleteEvidence`
+- `RbcDeliverFinalityGateMatchesBufferedCommitEvidence`
+- `RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence`
 - `LiveHeaderDigestEvidenceStayInRbcHandoff`
 - `LiveChunkEvidenceStayInRbcHandoff`
 - `LiveReadyVotesStayInRbcHandoff`
@@ -8684,6 +8704,18 @@ Temporal properties:
   the active view after finality.
 - `CommitViewNeverLeadsCurrentView` proves that the latched commit-view witness
   never points to a future view.
+- `GstElapsedGateNeverBypassesPreGst` proves that the GST-elapsed gate is
+  enabled exactly before the GST flag is set.
+- `GstElapsedStepAlwaysOnlySetsGst` proves that a GST-elapsed step flips only
+  the GST flag while preserving phase, view, vote, RBC, commit-certificate,
+  and finality state.
+- `TimeoutTickGateNeverBypassesStalledProgress` proves that the timeout-driven
+  view-change gate is enabled only before finality, and only before GST or when
+  every post-GST honest/RBC progress action is disabled.
+- `TimeoutTickStepAlwaysStartsFreshNewView` proves that a timeout step enters
+  `NewView`, monotonically advances or clamps the view, clears live
+  prepare/commit/NewView/view-evidence counters, preserves RBC evidence, and
+  leaves finality and commit-certificate artifacts absent.
 - `ViewQuorumEvidenceNeverDiverges` proves that proposals, vote phases, and
   finality in nonzero views remain backed by a latched view-change quorum
   witness.
@@ -8694,10 +8726,36 @@ Temporal properties:
   remain confined to the NewView collection phase or the immediate proposal
   handoff with quorum evidence, and never leak into prepare, commit-vote, or
   committed execution.
+- `HonestProposeGateNeverBypassesHandoffEvidence` proves that the live proposal
+  gate is enabled only in a clean proposal-ready state: either genesis or a
+  quorum-backed NewView handoff, with prepare, commit-vote, and finality
+  artifacts cleared.
+- `HonestProposeStepAlwaysStartsPrepareAndRbc` proves that a proposal step
+  enters prepare, clears the transient NewView counter, initializes RBC from
+  idle state, preserves existing non-idle RBC evidence, and leaves commit
+  artifacts absent.
 - `NewViewVoteGateNeverBypassesFreshViewEvidence` proves that the live NewView
   vote gate is enabled exactly while a nonzero view is collecting fresh
   view-change votes with no installed view evidence, below quorum and roster
   budgets, and with prepare/commit vote state reset before the next proposal.
+- `NewViewVoteQuorumGateNeverBypassesNextEvidence` proves that the NewView vote
+  transition can leave the view-change handoff only when the next honest
+  NewView vote reaches view quorum while the active nonzero view still has no
+  latched view evidence, no stale finality artifacts, and cleared
+  prepare/commit handoff state.
+- `NewViewVoteQuorumStepAlwaysInstallsViewEvidence` proves that a quorum-forming
+  NewView vote transition moves back to proposal, increments the NewView
+  counter exactly, latches the exact view-change quorum witness, and preserves
+  RBC and absent commit-certificate artifacts.
+- `NewViewVotePendingGateNeverBypassesMissingNextEvidence` proves that an
+  enabled NewView vote transition remains in the view-change handoff exactly
+  while the next honest NewView vote still lacks view quorum, with fresh view
+  evidence collection, cleared prepare/commit handoff state, and no stale
+  finality artifacts.
+- `NewViewVotePendingStepNeverInstallsViewEvidence` proves that a non-quorum
+  NewView vote transition increments the transient NewView counter exactly
+  while preserving phase, RBC evidence, absent view evidence, and absent
+  commit-certificate artifacts.
 - `ViewEvidenceNeverPartial` proves that the latched view-change witness is
   either absent or quorum-complete, never a partial vote count.
 - `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
@@ -8714,6 +8772,22 @@ Temporal properties:
   vote gate is enabled exactly while a proposal-backed prepare phase is below
   prepare quorum and roster budget, with NewView counters cleared, no stale
   commit-vote state, and view-change evidence installed for nonzero views.
+- `PrepareVoteQuorumGateNeverBypassesNextEvidence` proves that a prepare vote
+  can hand off to commit-vote only when the next honest prepare vote reaches
+  prepare quorum, with proposal/view evidence in place and no stale NewView,
+  commit-vote, or finality artifacts.
+- `PrepareVoteQuorumStepAlwaysEntersCommitVote` proves that a quorum-forming
+  prepare-vote transition increments the prepare counter exactly, enters the
+  commit-vote phase, and preserves view/RBC evidence plus absent commit
+  artifacts.
+- `PrepareVotePendingGateNeverBypassesMissingNextEvidence` proves that a
+  prepare vote remains in the prepare phase exactly while the next honest
+  prepare vote still lacks prepare quorum, with proposal/view evidence in place
+  and no stale NewView, commit-vote, or finality artifacts.
+- `PrepareVotePendingStepNeverMutatesCommitArtifacts` proves that a non-quorum
+  prepare-vote transition increments only the prepare counter while preserving
+  phase, view/RBC evidence, absent commit-vote state, and absent commit
+  artifacts.
 - `CommitEvidenceNeverPartial` proves that latched commit-certificate
   vote/stake evidence is either absent or quorum-complete, never a partial
   certificate artifact.
@@ -8727,6 +8801,50 @@ Temporal properties:
   gate is enabled exactly while a prepare-backed commit-vote phase is below the
   honest roster budget, with NewView counters cleared, no stale finality
   artifacts, and view-change evidence installed for nonzero views.
+- `ByzantineCommitVoteGateNeverBypassesPrepareEvidence` proves that Byzantine
+  commit-vote equivocation is enabled exactly while a prepare-backed commit-vote
+  phase is below the Byzantine fault budget, with NewView counters cleared, no
+  stale finality artifacts, and view-change evidence installed for nonzero views.
+- `HonestCommitVoteFinalityGateNeverBypassesNextEvidence` proves that the
+  honest commit-vote transition can flip finality only when the next honest
+  vote would complete vote and stake quorum over delivered RBC evidence, with
+  prepare quorum, cleared NewView handoff state, no stale finality artifacts,
+  and view-change evidence installed for nonzero views.
+- `HonestCommitVoteFinalityStepAlwaysInstallsCommitArtifacts` proves that a
+  finalizing honest commit-vote transition increments the honest vote and
+  signed-stake counters exactly, moves to committed, latches exact certificate
+  artifacts, records the active commit view, and preserves the RBC and
+  view-change evidence it used.
+- `HonestCommitVotePendingGateNeverBypassesMissingNextEvidence` proves that an
+  enabled honest commit-vote transition remains non-final exactly while the
+  next honest vote still lacks vote quorum, stake quorum, or delivered RBC
+  evidence, with prepare quorum, cleared NewView handoff state, no stale
+  finality artifacts, and view-change evidence installed for nonzero views.
+- `HonestCommitVotePendingStepNeverMutatesCommitArtifacts` proves that a
+  non-final honest commit-vote transition increments the honest vote and
+  signed-stake counters exactly while preserving phase, RBC/view evidence, and
+  absent commit-certificate artifacts.
+- `ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence` proves that the
+  Byzantine commit-vote transition can flip finality only when the next
+  Byzantine vote stays within the fault budget and completes vote and stake
+  quorum over delivered RBC evidence, with enough honest support after
+  discounting Byzantine votes, prepare quorum, cleared NewView handoff state,
+  no stale finality artifacts, and view-change evidence installed for nonzero
+  views.
+- `ByzantineCommitVoteFinalityStepAlwaysInstallsCommitArtifacts` proves that a
+  finalizing Byzantine commit-vote transition increments the Byzantine vote and
+  signed-stake counters exactly, moves to committed, latches exact certificate
+  artifacts, preserves enough honest support after discounting the Byzantine
+  vote, and keeps the RBC/view evidence it used.
+- `ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence` proves that
+  an enabled Byzantine commit-vote transition remains non-final exactly while
+  the next Byzantine vote still lacks vote quorum, stake quorum, or delivered
+  RBC evidence, with prepare quorum, cleared NewView handoff state, no stale
+  finality artifacts, and view-change evidence installed for nonzero views.
+- `ByzantineCommitVotePendingStepNeverMutatesCommitArtifacts` proves that a
+  non-final Byzantine commit-vote transition increments the Byzantine vote and
+  signed-stake counters exactly while preserving phase, RBC/view evidence, and
+  absent commit-certificate artifacts.
 - `LiveCommitVotesNeverBypassCommitHandoff` proves that live commit-vote and
   signed-stake evidence stays confined to commit-vote or committed phases, and
   cannot cross into finality unless both vote and stake quorum are already met.
@@ -8740,6 +8858,9 @@ Temporal properties:
   finality certificate stack is exact: it appears if and only if the abstract
   finality latch is set, so a latent full certificate stack cannot exist before
   finality.
+- `FinalityNeverRetainsNewViewHandoff` proves that finalized states keep the
+  transient NewView vote handoff counter cleared, leaving only the latched
+  view-change quorum witness for nonzero commit views.
 - `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
   their view-change quorum witness after commit.
 - `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required
@@ -8773,20 +8894,58 @@ Temporal properties:
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
   coverage, and ready/delivered states keep ready quorum.
+- `ByzantineFaultGateNeverBypassesCorruptibleRbc` proves that Byzantine RBC
+  corruption is enabled only against non-final initialized/chunk/ready RBC
+  states carrying the matching evidence, and only before GST or once all
+  post-GST honest/RBC progress actions are disabled.
+- `ByzantineFaultStepAlwaysCorruptsOnlyRbcDigest` proves that a Byzantine fault
+  step only moves RBC to `Corrupted` and clears digest validity while preserving
+  phase, view, vote, certificate, chunk, READY, header, finality, and GST state.
+- `RbcInitGateNeverBypassesRepairableState` proves that the live RBC INIT gate
+  is enabled only from idle, withheld, or corrupted RBC states, so INIT cannot
+  restart an already progressed valid session.
+- `RbcInitStepAlwaysInstallsHeaderDigestEvidence` proves that an RBC INIT step
+  enters `Init`, resets chunk and READY counters, installs header and digest
+  evidence, and preserves consensus-phase, vote, view, finality, and GST state.
 - `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
   CHUNK transition is enabled exactly when the session is in an INIT,
   CHUNKING, or post-GST withheld recovery state carrying header evidence,
   validated digest evidence for non-withheld paths, and incomplete chunk
   progress while chunking, so CHUNK cannot bypass header/digest causality.
+- `RbcChunkStepAlwaysAdvancesChunkEvidence` proves that an RBC CHUNK step
+  monotonically advances the chunk counter up to `MaxChunks`, enters
+  `ChunksComplete` exactly when full coverage is reached, otherwise remains in
+  `Chunking`, refreshes valid digest evidence, and preserves consensus-phase,
+  vote, view, READY, finality, and GST state.
 - `RbcReadyGateNeverBypassesChunkEvidence` proves that the live RBC READY
   transition is enabled exactly when the session is chunk-complete or already
   in a READY handoff state with full chunk coverage, header evidence, a valid
   digest, and remaining READY vote capacity, so READY cannot bypass chunk
   completion.
+- `RbcReadyStepAlwaysAdvancesReadyEvidence` proves that an RBC READY step
+  increments READY evidence exactly, enters `ReadyQuorum` once commit quorum is
+  reached, otherwise stays `ReadyPartial`, keeps chunk/header/digest evidence,
+  and preserves consensus-phase, vote, view, finality, and GST state.
 - `RbcDeliverGateNeverBypassesCompleteEvidence` proves that the live RBC
   DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
   with READY quorum, full chunk coverage, header evidence, and a valid digest,
   so DELIVER cannot bypass complete RBC evidence.
+- `RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence` proves that RBC
+  delivery can trigger finality only when buffered commit-vote/stake evidence,
+  prepare quorum, cleared NewView handoff state, and nonzero-view quorum evidence
+  are already present.
+- `RbcDeliverFinalityStepAlwaysInstallsCommitArtifacts` proves that a finalizing
+  RBC DELIVER transition moves the phase to committed, latches the exact
+  commit-vote and signed-stake certificate artifacts, records the active commit
+  view, and preserves the live vote, RBC, and view evidence it used.
+- `RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence` proves that
+  RBC delivery remains non-final exactly when complete RBC evidence is present
+  but buffered commit-vote or signed-stake quorum is still missing, leaving
+  commit-certificate artifacts absent until a later commit-vote transition.
+- `RbcDeliverPendingStepNeverMutatesCommitArtifacts` proves that a non-final
+  RBC DELIVER transition only moves the RBC session from ready quorum to
+  delivered while preserving phase, vote/stake counters, view evidence, and
+  absent commit-certificate artifacts.
 - `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
   and digest evidence remains confined to initialized, withheld, corrupted, or
   delivered handoff states; digest evidence always implies a seen header and an

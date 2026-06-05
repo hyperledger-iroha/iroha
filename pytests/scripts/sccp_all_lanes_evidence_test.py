@@ -742,6 +742,18 @@ def fake_evm_source_live_opener(module, *, domain):
                 }
             )
         if method == "eth_getBlockByNumber":
+            if params == ["finalized", False]:
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": "0x" + "99" * 32,
+                            "number": "0x1234",
+                            "receiptsRoot": "0x" + "bc" * 32,
+                        },
+                    }
+                )
             assert params == ["0x1234", False]
             return FakeResponse(
                 {

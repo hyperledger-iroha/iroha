@@ -89,7 +89,7 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
     to_bytes,
 };
-use rand::RngCore as _;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
@@ -9094,9 +9094,15 @@ struct SoracloudTempDir {
 
 impl SoracloudTempDir {
     fn new(prefix: &str) -> Result<Self> {
+        Self::new_with_rng(prefix, &mut OsRng)
+    }
+
+    fn new_with_rng<R: TryCryptoRng + ?Sized>(prefix: &str, rng: &mut R) -> Result<Self> {
         for _ in 0..8 {
             let mut suffix = [0_u8; 8];
-            rand::rng().fill_bytes(&mut suffix);
+            rng.try_fill_bytes(&mut suffix).map_err(|error| {
+                eyre!("Soracloud temporary directory suffix OS RNG failed: {error}")
+            })?;
             let path = std::env::temp_dir().join(format!("{prefix}-{}", hex::encode(suffix)));
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Self { path }),
@@ -13015,6 +13021,15 @@ fn build_soracloud_mutation_auth_headers(
     endpoint: &reqwest::Url,
     body: &[u8],
 ) -> Result<Vec<(&'static str, String)>> {
+    build_soracloud_mutation_auth_headers_with_rng(submission_config, endpoint, body, &mut OsRng)
+}
+
+fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
+    submission_config: &ClientConfig,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+    rng: &mut R,
+) -> Result<Vec<(&'static str, String)>> {
     if let Some(witness_file) = submission_config.soracloud_http_witness_file.as_deref() {
         let witness = load_soracloud_http_witness(witness_file)?;
         if witness.subject_account != submission_config.account {
@@ -13048,7 +13063,8 @@ fn build_soracloud_mutation_auth_headers(
         .try_into()
         .unwrap_or(u64::MAX);
     let mut nonce_bytes = [0_u8; 16];
-    rand::rng().fill_bytes(&mut nonce_bytes);
+    rng.try_fill_bytes(&mut nonce_bytes)
+        .map_err(|error| eyre!("Soracloud mutation signature nonce OS RNG failed: {error}"))?;
     let nonce = hex::encode(nonce_bytes);
     let message = canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
     let signature = Signature::new(submission_config.key_pair.private_key(), &message);
@@ -13117,7 +13133,9 @@ fn submit_soracloud_draft_transaction(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
     let client = Client::new(config);
-    let transaction = client.build_transaction(instructions, soracloud_submission_metadata());
+    let transaction = client
+        .try_build_transaction(instructions, soracloud_submission_metadata())
+        .wrap_err("failed to build Soracloud mutation transaction")?;
     client
         .submit_transaction_blocking(&transaction)
         .map(Into::into)
@@ -21095,8 +21113,10 @@ mod tests {
     use iroha::data_model::soracloud::{
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
         collections::{BTreeMap, BTreeSet},
+        fmt,
         io::Write as _,
         net::{TcpListener, TcpStream},
         path::Path,
@@ -21110,6 +21130,35 @@ mod tests {
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
 
+    struct FailingSoracloudSignatureNonceRng;
+
+    #[derive(Debug)]
+    struct FailingSoracloudSignatureNonceRngError;
+
+    impl fmt::Display for FailingSoracloudSignatureNonceRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing Soracloud signature nonce RNG")
+        }
+    }
+
+    impl TryRngCore for FailingSoracloudSignatureNonceRng {
+        type Error = FailingSoracloudSignatureNonceRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingSoracloudSignatureNonceRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingSoracloudSignatureNonceRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingSoracloudSignatureNonceRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingSoracloudSignatureNonceRng {}
+
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -21118,6 +21167,23 @@ mod tests {
         let path = std::env::temp_dir().join(format!("iroha_soracloud_cli_{name}_{nanos}"));
         fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+
+    #[test]
+    fn soracloud_temp_dir_reports_suffix_rng_failure() {
+        let mut rng = FailingSoracloudSignatureNonceRng;
+
+        let error = match SoracloudTempDir::new_with_rng("iroha-soracloud-temp", &mut rng) {
+            Ok(tempdir) => panic!(
+                "temporary directory suffix RNG unexpectedly succeeded at `{}`",
+                tempdir.path().display()
+            ),
+            Err(error) => error,
+        };
+        let message = format!("{error:?}");
+
+        assert!(message.contains("Soracloud temporary directory suffix OS RNG failed"));
+        assert!(message.contains("failing Soracloud signature nonce RNG"));
     }
 
     fn assert_manifest_pair_service_plan(output: &norito::json::Value) {
@@ -25369,6 +25435,26 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert!(header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
         assert!(header_map.contains_key(HEADER_IROHA_NONCE));
         assert!(!header_map.contains_key(HEADER_IROHA_WITNESS));
+    }
+
+    #[test]
+    fn build_soracloud_mutation_auth_headers_reports_nonce_rng_failure() {
+        let config = crate::fallback_config();
+        let endpoint =
+            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
+        let mut rng = FailingSoracloudSignatureNonceRng;
+
+        let error = build_soracloud_mutation_auth_headers_with_rng(
+            &config,
+            &endpoint,
+            br#"{"noop":true}"#,
+            &mut rng,
+        )
+        .expect_err("signature nonce RNG failure");
+        let message = format!("{error:?}");
+
+        assert!(message.contains("Soracloud mutation signature nonce OS RNG failed"));
+        assert!(message.contains("failing Soracloud signature nonce RNG"));
     }
 
     #[test]

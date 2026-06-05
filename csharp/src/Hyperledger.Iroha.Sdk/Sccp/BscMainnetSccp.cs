@@ -224,6 +224,9 @@ public static partial class BscMainnetSccp
                 32);
         }
 
+        receipt = SnapshotDictionary(receipt);
+        block = SnapshotDictionary(block);
+
         var parliaFinality = input.ParliaFinality;
         if (parliaFinality is null && consensusProvider is not null)
         {
@@ -248,7 +251,7 @@ public static partial class BscMainnetSccp
             normalizedParliaFinality,
             sourceEventDigest);
 
-        return input with
+        return SnapshotInboundEvidence(input with
         {
             SourceDomain = DomainBsc,
             TargetDomain = DomainSora,
@@ -260,7 +263,7 @@ public static partial class BscMainnetSccp
             ReceiptProofHash = NormalizeReceiptProofHash(receiptProof, input.ReceiptProofHash),
             SourceEventDigest = sourceEventDigest,
             SourceBridgeEmitterAddress = normalizedSourceBridgeEmitterAddress,
-        };
+        });
     }
 
     public static async ValueTask<byte[]> ProveInboundToSoraAsync(
@@ -296,7 +299,7 @@ public static partial class BscMainnetSccp
                 nameof(input));
         }
         var proofBytes = await inboundProver.ProveAsync(
-            evidence,
+            SnapshotInboundEvidence(evidence),
             cancellationToken).ConfigureAwait(false);
         return RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
     }
@@ -1282,6 +1285,43 @@ public static partial class BscMainnetSccp
 
         return normalized;
     }
+
+    private static BscMainnetInboundEvidence SnapshotInboundEvidence(BscMainnetInboundEvidence evidence)
+        => evidence with
+        {
+            Receipt = SnapshotDictionary(evidence.Receipt),
+            Block = SnapshotDictionary(evidence.Block),
+            ParliaFinality = SnapshotDictionary(evidence.ParliaFinality),
+            ReceiptProof = SnapshotReceiptProof(evidence.ReceiptProof),
+        };
+
+    private static IReadOnlyDictionary<string, object?>? SnapshotDictionary(
+        IReadOnlyDictionary<string, object?>? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var copy = new Dictionary<string, object?>(value.Count, StringComparer.Ordinal);
+        foreach (var (key, item) in value)
+        {
+            copy[key] = SnapshotObject(item);
+        }
+
+        return copy;
+    }
+
+    private static object? SnapshotObject(object? value)
+        => value switch
+        {
+            byte[] bytes => bytes.ToArray(),
+            IReadOnlyDictionary<string, object?> dictionary => SnapshotDictionary(dictionary),
+            IReadOnlyList<object?> list => list.Select(SnapshotObject).ToArray(),
+            System.Collections.IEnumerable enumerable when value is not string
+                => enumerable.Cast<object?>().Select(SnapshotObject).ToArray(),
+            _ => value,
+        };
 
     private static BscMainnetReceiptProof? SnapshotReceiptProof(BscMainnetReceiptProof? receiptProof)
     {

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
@@ -255,6 +256,28 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    private final class EthereumMainnetMutatingConsensusProviderStub: EthereumMainnetConsensusProvider {
+        private let finality: [String: Any]
+        private let onCollect: ([String: Any]?, [String: Any]?, String?) throws -> Void
+        private(set) var calls = 0
+
+        init(finality: [String: Any],
+             onCollect: @escaping ([String: Any]?, [String: Any]?, String?) throws -> Void) {
+            self.finality = finality
+            self.onCollect = onCollect
+        }
+
+        func collectFinalityEvidence(
+            receipt: [String: Any]?,
+            block: [String: Any]?,
+            transactionHash: String?
+        ) async throws -> [String: Any] {
+            calls += 1
+            try onCollect(receipt, block, transactionHash)
+            return finality
+        }
+    }
+
     private final class EthereumMainnetBeaconRestTransportStub: EthereumMainnetBeaconRestTransport {
         private let responses: [String: EthereumMainnetBeaconRestResponse]
         private(set) var calls: [(url: String, headers: [String: String])] = []
@@ -492,6 +515,28 @@ final class SccpSolanaProverTests: XCTestCase {
             calls += 1
             XCTAssertEqual(receipt?["blockHash"] as? String, block?["hash"] as? String)
             XCTAssertEqual(transactionHash, receipt?["transactionHash"] as? String)
+            return finality
+        }
+    }
+
+    private final class BscMainnetMutatingConsensusProviderStub: BscMainnetConsensusProvider {
+        private let finality: [String: Any]
+        private let onCollect: ([String: Any]?, [String: Any]?, String?) throws -> Void
+        private(set) var calls = 0
+
+        init(finality: [String: Any],
+             onCollect: @escaping ([String: Any]?, [String: Any]?, String?) throws -> Void) {
+            self.finality = finality
+            self.onCollect = onCollect
+        }
+
+        func collectFinalityEvidence(
+            receipt: [String: Any]?,
+            block: [String: Any]?,
+            transactionHash: String?
+        ) async throws -> [String: Any] {
+            calls += 1
+            try onCollect(receipt, block, transactionHash)
             return finality
         }
     }
@@ -8814,6 +8859,25 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: Data([10])
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
+        let artifactRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10]),
+            proofArtifactHash: String(repeating: "91", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        ))
+        XCTAssertEqual(artifactRequest.proofArtifactHash, "0x" + String(repeating: "91", count: 32))
+        XCTAssertEqual(artifactRequest.provingKeyHash, "0x" + String(repeating: "92", count: 32))
+        XCTAssertNotEqual(artifactRequest.requestHash, request.requestHash)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            proofArtifactHash: String(repeating: "91", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactHash/provingKeyHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            proofArtifactHash: String(repeating: "00", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .zeroField("proofArtifactHash"))
+        }
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(statementHash: ""))) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("statementHash"))
         }
@@ -8918,6 +8982,381 @@ final class SccpSolanaProverTests: XCTestCase {
         let ethRequest = try await facade.buildOutboundProofRequest(input)
         XCTAssertEqual(ethRequest.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(ethRequest.destinationBindingHash, binding.hash)
+        let nativeProverBundle = try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash
+        )
+        let parsedNativeProverBundle = try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(destinationBindingHash: binding.hash),
+            expectedDestinationBindingHash: binding.hash
+        )
+        XCTAssertEqual(parsedNativeProverBundle, nativeProverBundle)
+        XCTAssertEqual(parsedNativeProverBundle.proofArtifact, "artifacts/eth-mainnet/proof-artifact.bin")
+        XCTAssertEqual(parsedNativeProverBundle.provingKey, "artifacts/eth-mainnet/proving-key.bin")
+        XCTAssertEqual(parsedNativeProverBundle.verifierKey, "artifacts/eth-mainnet/verifier-key.bin")
+        XCTAssertEqual(
+            parsedNativeProverBundle.nativeSdkArtifacts.first { $0.sdk == "swift" }?.implementationArtifact,
+            "artifacts/eth-mainnet/swift-implementation.bin"
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                noWasm: false
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.noWasm"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: "0x" + String(repeating: "95", count: 32)
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.destinationBindingHash"))
+        }
+        let noncanonicalDomainManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"domain\": \(sccpDomainEthereum)",
+            with: "\"domain\": \"01\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: noncanonicalDomainManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("domain"))
+        }
+        let duplicateJsonKeyManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"bundle_id\": \"\(sccpEthNativeEvmProverBundleIdV1)\"",
+            with: """
+            "bundle_id": "forged",
+                      "bundle_id": "\(sccpEthNativeEvmProverBundleIdV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: duplicateJsonKeyManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.duplicateJsonKey"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                proofArtifact: "../proof-artifact.bin"
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifact"))
+        }
+        let unknownManifestField = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"audit_hashes\":",
+            with: "\"experimental_manifest_note\": true,\n          \"audit_hashes\":"
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: unknownManifestField,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverBundle.experimental_manifest_note")
+            )
+        }
+        let duplicateManifestAlias = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"proof_artifact_hash\": \"0x\(String(repeating: "91", count: 32))\"",
+            with: """
+            "proofArtifactHash": "0x\(String(repeating: "91", count: 32))",
+                      "proof_artifact_hash": "0x\(String(repeating: "91", count: 32))"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: duplicateManifestAlias,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactHash"))
+        }
+        let unknownArtifactField = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"implementation_hash\":",
+            with: "\"experimental_manifest_note\": true,\n                  \"implementation_hash\":"
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: unknownArtifactField,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeSdkArtifacts[0].experimental_manifest_note")
+            )
+        }
+        let noncanonicalAuditManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"0x\(String(repeating: "a1", count: 32))\"",
+            with: "\"0x\(String(repeating: "A1", count: 32))\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: noncanonicalAuditManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("auditHashes[0]"))
+        }
+        let replayedAuditManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"0x\(String(repeating: "a1", count: 32))\"",
+            with: "\"0x\(String(repeating: "91", count: 32))\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: replayedAuditManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("auditHashes[0]"))
+        }
+        let bundledFacade = EthereumMainnetSccp(nativeProverBundle: nativeProverBundle)
+        let bundledRequest = try await bundledFacade.buildOutboundProofRequest(input)
+        XCTAssertEqual(bundledRequest.proofArtifactHash, "0x" + String(repeating: "91", count: 32))
+        XCTAssertEqual(bundledRequest.provingKeyHash, "0x" + String(repeating: "92", count: 32))
+        XCTAssertNotEqual(bundledRequest.requestHash, ethRequest.requestHash)
+        XCTAssertEqual(
+            try nativeProverBundle.applying(to: input).proofArtifactHash,
+            "0x" + String(repeating: "91", count: 32)
+        )
+        let verifierKeyMismatchedBundle = try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash,
+            verifierKeyHash: "0x" + String(repeating: "dd", count: 32)
+        )
+        XCTAssertThrowsError(try verifierKeyMismatchedBundle.applying(to: input)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.verifierKeyHash"))
+        }
+        let proofArtifactBytes = Data([1, 2, 3, 5, 8])
+        let provingKeyBytes = Data([13, 21, 34, 55])
+        let verifierKeyBytes = Data([89, 144, 233])
+        let implementationBytes = Data("sccp swift prover artifact v1".utf8)
+        let proofArtifactHash = Self.sha256Hex(proofArtifactBytes)
+        let provingKeyHash = Self.sha256Hex(provingKeyBytes)
+        let verifierKeyHash = Self.sha256Hex(verifierKeyBytes)
+        let implementationHash = Self.sha256Hex(implementationBytes)
+        let artifactBinding = try EthereumMainnetSccp.destinationBinding(
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: verifierKeyHash
+        )
+        let artifactInput = try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainEthereum),
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: artifactBinding
+        )
+        let verifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: proofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            auditHashes: ["0x" + String(repeating: "a1", count: 32)],
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let verifiedArtifacts = try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes
+        )
+        XCTAssertEqual(verifiedArtifacts.hashAlgorithm, sccpNativeEvmProverArtifactHashAlgorithmV1)
+        XCTAssertEqual(verifiedArtifacts.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(verifiedArtifacts.provingKeyHash, provingKeyHash)
+        XCTAssertEqual(verifiedArtifacts.verifierKeyHash, verifierKeyHash)
+        XCTAssertEqual(verifiedArtifacts.implementation, "native-swift")
+        XCTAssertEqual(verifiedArtifacts.implementationHash, implementationHash)
+        var missingArtifactsProverCalled = false
+        let missingArtifactsFacade = EthereumMainnetSccp(proveFunction: { _ in
+            missingArtifactsProverCalled = true
+            return Self.sampleGroth16ProofBytes()
+        })
+        do {
+            _ = try await missingArtifactsFacade.proveOutboundToEthereum(input)
+            XCTFail("Ethereum outbound prover must require verified native artifacts")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("nativeProverArtifacts"))
+        }
+        XCTAssertFalse(missingArtifactsProverCalled)
+        var artifactBoundRequest: EvmSccpProofRequest?
+        let artifactBoundFacade = EthereumMainnetSccp(
+            proveFunction: { request in
+                artifactBoundRequest = request
+                XCTAssertEqual(request.proofArtifactHash, proofArtifactHash)
+                XCTAssertEqual(request.provingKeyHash, provingKeyHash)
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        let artifactBoundResult = try await artifactBoundFacade.proveOutboundToEthereum(artifactInput)
+        XCTAssertEqual(artifactBoundRequest?.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(artifactBoundResult.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(artifactBoundResult.provingKeyHash, provingKeyHash)
+        let implementationUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: nil
+        )
+        var implementationUnboundProverCalled = false
+        let implementationUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                implementationUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: implementationUnboundArtifacts
+        )
+        do {
+            _ = try await implementationUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject implementation-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.implementationHash")
+            )
+        }
+        XCTAssertFalse(implementationUnboundProverCalled)
+        let verifierKeyUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: "0x" + String(repeating: "ef", count: 32),
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: implementationHash
+        )
+        var verifierKeyUnboundProverCalled = false
+        let verifierKeyUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                verifierKeyUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: verifierKeyUnboundArtifacts
+        )
+        do {
+            _ = try await verifierKeyUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject verifier-key-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.verifierKeyHash")
+            )
+        }
+        XCTAssertFalse(verifierKeyUnboundProverCalled)
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: Data([0]),
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            implementationBytes: implementationBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sdk"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift"
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: Data("tampered".utf8)
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
+        }
+        let flaggedArtifactBytes = Data([0x77, 0x61, 0x73, 0x6D])
+        let flaggedArtifactHash = Self.sha256Hex(flaggedArtifactBytes)
+        let flaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash: flaggedArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: flaggedArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            auditHashes: ["0x" + String(repeating: "a1", count: 32)],
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        XCTAssertThrowsError(try flaggedBundle.verifiedArtifacts(
+            proofArtifactBytes: flaggedArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("proofArtifactBytes.forbiddenMarker")
+            )
+        }
+        XCTAssertThrowsError(try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash,
+            noWasm: false
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.noWasm"))
+        }
+        XCTAssertThrowsError(try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: "0x" + String(repeating: "95", count: 32),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.destinationBindingHash"))
+        }
 
         let proofBytes = Self.sampleGroth16ProofBytes()
         let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: ethRequest)
@@ -10016,6 +10455,26 @@ final class SccpSolanaProverTests: XCTestCase {
                 inclusionBranch: autoReceiptProof.inclusionBranch
             )
         )
+        for (missingField, label) in [
+            ("finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot"),
+            ("syncCommitteeRoot", "beaconFinality.syncCommitteeRoot"),
+            ("beaconSlot", "beaconFinality.beaconSlot"),
+        ] {
+            var incompleteFinality = autoReceiptFinality
+            incompleteFinality.removeValue(forKey: missingField)
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: incompleteFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
         for (alias, value, label) in [
             ("transaction_hash", "0x" + String(repeating: "ab", count: 32), "receipt.transactionHash"),
             ("block_hash", "0x" + String(repeating: "ab", count: 32), "receipt.blockHash"),
@@ -10465,6 +10924,14 @@ final class SccpSolanaProverTests: XCTestCase {
         await assertEvmError(.allZeroProof) {
             _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in Data([0, 0]) })
                 .proveInboundToSora(proofReadyEvidence)
+        }
+        let oversizedInboundProof = Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1)
+        await assertEvmError(.invalidPublicInputs("proofBytes")) {
+            _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in oversizedInboundProof })
+                .proveInboundToSora(proofReadyEvidence)
+        }
+        await assertEvmError(.invalidPublicInputs("proofBytes")) {
+            _ = try await sdk.submitInboundToIroha(oversizedInboundProof)
         }
         let submitResult = try await sdk.submitInboundToIroha(Data([1, 2, 3]))
         XCTAssertEqual(submitResult as? String, "submitted")
@@ -11156,6 +11623,258 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let finalizedRoot = "0x" + String(repeating: "dd", count: 32)
+        let syncCommitteeRoot = "0x" + String(repeating: "aa", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: Self.ethereumFinalityBranch)
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let blockReceiptsWitness = NSMutableArray(array: ["receipt-list"])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let beaconFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "finalizedHeaderRoot": finalizedRoot,
+            "syncCommitteeRoot": syncCommitteeRoot,
+            "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "syncSignatureSlot": "65",
+            "mutableWitness": finalityWitness,
+        ]
+        var blockReceipt = receipt
+        blockReceipt["mutableWitness"] = blockReceiptsWitness
+        var mutableReceiptProofNode = Data([0x01, 0x02])
+        var mutableReceiptProofBranch = Data(repeating: 0x11, count: 32)
+        var mutableInputBranch = Data([0x44])
+        let receiptProof = EthereumMainnetReceiptProof(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 32,
+            executionBlockNumber: 0x1234,
+            executionBlockHash: blockHash,
+            executionReceiptsRoot: receiptsRoot,
+            beaconFinalizedRoot: finalizedRoot,
+            syncCommitteeRoot: syncCommitteeRoot,
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [mutableReceiptProofNode],
+            inclusionBranch: [mutableReceiptProofBranch]
+        )
+        let receiptProofHash = try evmSccpReceiptProofHash(
+            sourceEventDigest: receiptProof.sourceEventDigest,
+            beaconSlot: receiptProof.beaconSlot,
+            executionBlockNumber: receiptProof.executionBlockNumber,
+            executionBlockHash: receiptProof.executionBlockHash,
+            executionReceiptsRoot: receiptProof.executionReceiptsRoot,
+            beaconFinalizedRoot: receiptProof.beaconFinalizedRoot,
+            syncCommitteeRoot: receiptProof.syncCommitteeRoot,
+            receiptRootIndex: receiptProof.receiptRootIndex,
+            receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+            inclusionBranch: receiptProof.inclusionBranch
+        )
+        let proofBytes = try await EthereumMainnetSccp(
+            inboundProveFunction: { evidence in
+                receiptWitness.add("changed")
+                receiptNested.setObject("changed", forKey: "value" as NSString)
+                blockWitness.setObject("changed", forKey: "value" as NSString)
+                finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+                finalityBytes.setData(Data([0xff]))
+                finalityWitness.setObject("changed", forKey: "new" as NSString)
+                blockReceiptsWitness.add("changed")
+                mutableReceiptProofNode[0] = 0xff
+                mutableReceiptProofBranch[0] = 0xee
+                mutableInputBranch[0] = 0x45
+
+                XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+                let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+                XCTAssertEqual(receiptSnapshot.count, 1)
+                let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+                XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+                XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+
+                XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+                let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+                XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+                XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+                XCTAssertNil(evidence.beaconFinality?["mutableWitness"] as? NSMutableDictionary)
+                let finalitySnapshot = try XCTUnwrap(evidence.beaconFinality?["mutableWitness"] as? [String: Any])
+                let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+                XCTAssertEqual(branchSnapshot.count, Self.ethereumFinalityBranch.count)
+                XCTAssertEqual(branchSnapshot.first as? String, Self.ethereumFinalityBranch.first)
+                XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+
+                let blockReceiptsSnapshot = try XCTUnwrap(evidence.blockReceipts)
+                XCTAssertNil(blockReceiptsSnapshot[0]["mutableWitness"] as? NSMutableArray)
+                let blockReceiptWitnessSnapshot = try XCTUnwrap(blockReceiptsSnapshot[0]["mutableWitness"] as? [Any])
+                XCTAssertEqual(blockReceiptWitnessSnapshot.count, 1)
+                XCTAssertEqual(blockReceiptWitnessSnapshot[0] as? String, "receipt-list")
+
+                XCTAssertEqual(evidence.inclusionBranch?[0], Data([0x44]))
+                XCTAssertEqual(evidence.receiptProof?.receiptTrieProofNodes[0], Data([0x01, 0x02]))
+                XCTAssertEqual(evidence.receiptProof?.inclusionBranch[0], Data(repeating: 0x11, count: 32))
+                XCTAssertEqual(evidence.receiptProofHash, receiptProofHash)
+                return Data([9, 8, 7])
+            }
+        ).proveInboundToSora(
+            EthereumMainnetInboundEvidence(
+                receipt: receipt,
+                block: block,
+                beaconFinality: beaconFinality,
+                blockReceipts: [blockReceipt],
+                inclusionBranch: [mutableInputBranch],
+                receiptProof: receiptProof,
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
+            )
+        )
+        XCTAssertEqual(proofBytes, Data([9, 8, 7]))
+    }
+
+    func testEthereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let finalizedRoot = "0x" + String(repeating: "dd", count: 32)
+        let syncCommitteeRoot = "0x" + String(repeating: "aa", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: Self.ethereumFinalityBranch)
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let beaconFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "finalizedHeaderRoot": finalizedRoot,
+            "syncCommitteeRoot": syncCommitteeRoot,
+            "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "syncSignatureSlot": "65",
+            "mutableWitness": finalityWitness,
+        ]
+        let consensusProvider = EthereumMainnetMutatingConsensusProviderStub(finality: beaconFinality) { receipt, block, transactionHash in
+            XCTAssertEqual(transactionHash, txHash)
+            XCTAssertNil(receipt?["mutableWitness"] as? NSMutableArray)
+            let receiptSnapshot = try XCTUnwrap(receipt?["mutableWitness"] as? [Any])
+            let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+            XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+            XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+            XCTAssertNil(block?["mutableWitness"] as? NSMutableDictionary)
+            let blockSnapshot = try XCTUnwrap(block?["mutableWitness"] as? [String: Any])
+            XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+            XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+            receiptWitness.add("changed")
+            receiptNested.setObject("changed", forKey: "value" as NSString)
+            blockWitness.setObject("changed", forKey: "value" as NSString)
+        }
+
+        let evidence = try await EthereumMainnetSccp(
+            consensusProvider: consensusProvider,
+            sourceBridgeEmitterAddress: sourceBridgeAddress
+        ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt, block: block))
+        finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+        finalityBytes.setData(Data([0xff]))
+        finalityWitness.setObject("changed", forKey: "new" as NSString)
+
+        XCTAssertEqual(consensusProvider.calls, 1)
+        XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+        let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+        XCTAssertEqual(receiptSnapshot.count, 1)
+        let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+        XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+        XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+        XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+        let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+        XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+        XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+        XCTAssertNil(evidence.beaconFinality?["mutableWitness"] as? NSMutableDictionary)
+        let finalitySnapshot = try XCTUnwrap(evidence.beaconFinality?["mutableWitness"] as? [String: Any])
+        let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+        XCTAssertEqual(branchSnapshot.count, Self.ethereumFinalityBranch.count)
+        XCTAssertEqual(branchSnapshot.first as? String, Self.ethereumFinalityBranch.first)
+        XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+        XCTAssertNil(finalitySnapshot["new"])
+    }
+
     func testBscMainnetSccpFacadeRequiresChainId56AndBscTarget() async throws {
         let binding = try sccpBscMainnetDestinationBinding(
             verifierAddress: "0x" + String(repeating: "11", count: 20),
@@ -11823,6 +12542,105 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testBscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let validatorSetHash = "0x" + String(repeating: "ab", count: 32)
+        let commitSealHash = "0x" + String(repeating: "dd", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: [validatorSetHash])
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let parliaFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "validatorEpoch": "0x24",
+            "validatorSetHash": validatorSetHash,
+            "commitSealHash": commitSealHash,
+            "mutableWitness": finalityWitness,
+        ]
+        let consensusProvider = BscMainnetMutatingConsensusProviderStub(finality: parliaFinality) { receipt, block, transactionHash in
+            XCTAssertEqual(transactionHash, txHash)
+            XCTAssertNil(receipt?["mutableWitness"] as? NSMutableArray)
+            let receiptSnapshot = try XCTUnwrap(receipt?["mutableWitness"] as? [Any])
+            let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+            XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+            XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+            XCTAssertNil(block?["mutableWitness"] as? NSMutableDictionary)
+            let blockSnapshot = try XCTUnwrap(block?["mutableWitness"] as? [String: Any])
+            XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+            XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+            receiptWitness.add("changed")
+            receiptNested.setObject("changed", forKey: "value" as NSString)
+            blockWitness.setObject("changed", forKey: "value" as NSString)
+        }
+
+        let evidence = try await BscMainnetSccp(
+            consensusProvider: consensusProvider,
+            sourceBridgeEmitterAddress: sourceBridgeAddress
+        ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt: receipt, block: block))
+        finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+        finalityBytes.setData(Data([0xff]))
+        finalityWitness.setObject("changed", forKey: "new" as NSString)
+
+        XCTAssertEqual(consensusProvider.calls, 1)
+        XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+        let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+        XCTAssertEqual(receiptSnapshot.count, 1)
+        let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+        XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+        XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+        XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+        let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+        XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+        XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+        XCTAssertNil(evidence.parliaFinality?["mutableWitness"] as? NSMutableDictionary)
+        let finalitySnapshot = try XCTUnwrap(evidence.parliaFinality?["mutableWitness"] as? [String: Any])
+        let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+        XCTAssertEqual(branchSnapshot.count, 1)
+        XCTAssertEqual(branchSnapshot.first as? String, validatorSetHash)
+        XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+        XCTAssertNil(finalitySnapshot["new"])
+    }
+
     func testEvmProverRequiresLinkedProofEngine() async throws {
         let prover = EvmSccpProver()
 
@@ -11883,6 +12701,16 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
         XCTAssertEqual(result.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
         XCTAssertEqual(result.envelopeHash.count, 66)
+        let artifactInput = try Self.sampleProductionEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10]),
+            proofArtifactHash: String(repeating: "91", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        )
+        let artifactRequest = try buildEvmSccpProofRequest(artifactInput)
+        let artifactResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: artifactRequest)
+        XCTAssertEqual(artifactResult.proofArtifactHash, artifactRequest.proofArtifactHash)
+        XCTAssertEqual(artifactResult.provingKeyHash, artifactRequest.provingKeyHash)
+        XCTAssertNotEqual(artifactRequest.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
 
         let hashOnlyRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
         XCTAssertThrowsError(try wrapEvmSccpProofResult(
@@ -15445,7 +16273,9 @@ final class SccpSolanaProverTests: XCTestCase {
         statementHash: String = String(repeating: "56", count: 32),
         destinationBindingHash: String = String(repeating: "78", count: 32),
         backend: String = sccpEvmGroth16Bn254ProofBackendV1,
-        sourceDomain: UInt32 = sccpDomainSora
+        sourceDomain: UInt32 = sccpDomainSora,
+        proofArtifactHash: String? = nil,
+        provingKeyHash: String? = nil
     ) -> EvmSccpProofRequestInput {
         EvmSccpProofRequestInput(
             publicInputs: publicInputs,
@@ -15454,7 +16284,9 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: statementHash,
             destinationBindingHash: destinationBindingHash,
             backend: backend,
-            sourceDomain: sourceDomain
+            sourceDomain: sourceDomain,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
         )
     }
 
@@ -15482,7 +16314,9 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceProofBytes: Data = Data(),
         statementHash: String = String(repeating: "56", count: 32),
         backend: String = sccpEvmGroth16Bn254ProofBackendV1,
-        sourceDomain: UInt32 = sccpDomainSora
+        sourceDomain: UInt32 = sccpDomainSora,
+        proofArtifactHash: String? = nil,
+        provingKeyHash: String? = nil
     ) throws -> EvmSccpProofRequestInput {
         try EvmSccpProofRequestInput(
             publicInputs: publicInputs,
@@ -15491,8 +16325,108 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: statementHash,
             destinationBinding: try sampleEvmDestinationBinding(targetDomain: publicInputs.targetDomain),
             backend: backend,
-            sourceDomain: sourceDomain
+            sourceDomain: sourceDomain,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
         )
+    }
+
+    private static func sampleEthereumNativeEvmProverBundle(
+        destinationBindingHash: String,
+        verifierKeyHash: String = "0x" + String(repeating: "cc", count: 32),
+        noWasm: Bool = true,
+        remoteProverRequired: Bool = false,
+        expectedDestinationBindingHash: String? = nil
+    ) throws -> EthereumMainnetNativeEvmProverBundle {
+        let proofArtifactHash = "0x" + String(repeating: "91", count: 32)
+        let provingKeyHash = "0x" + String(repeating: "92", count: 32)
+        let artifacts = try sccpEthNativeEvmProverRequiredImplementationsV1
+            .sorted { $0.key < $1.key }
+            .enumerated()
+            .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: proofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: "0x" + String(
+                            repeating: String(format: "%02x", index + 1),
+                            count: 32
+                    )
+                )
+            }
+        return try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: destinationBindingHash,
+            noWasm: noWasm,
+            remoteProverRequired: remoteProverRequired,
+            nativeSdkArtifacts: artifacts,
+            auditHashes: [
+                "0x" + String(repeating: "a1", count: 32),
+                "0x" + String(repeating: "a2", count: 32)
+            ],
+            expectedDestinationBindingHash: expectedDestinationBindingHash
+        )
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        "0x" + Data(SHA256.hash(data: data)).hexEncodedString()
+    }
+
+    private static func sampleEthereumNativeEvmProverBundleJson(
+        destinationBindingHash: String,
+        proofArtifact: String = "artifacts/eth-mainnet/proof-artifact.bin",
+        noWasm: Bool = true,
+        remoteProverRequired: Bool = false
+    ) -> String {
+        let proofArtifactHash = "0x" + String(repeating: "91", count: 32)
+        let provingKeyHash = "0x" + String(repeating: "92", count: 32)
+        let artifacts = sccpEthNativeEvmProverRequiredImplementationsV1
+            .sorted { $0.key < $1.key }
+            .enumerated()
+            .map { index, entry in
+                """
+                {
+                  "sdk": "\(entry.key)",
+                  "implementation": "\(entry.value)",
+                  "prover_artifact_hash": "\(proofArtifactHash)",
+                  "proving_key_hash": "\(provingKeyHash)",
+                  "implementation_artifact": "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                  "implementation_hash": "0x\(String(repeating: String(format: "%02x", index + 1), count: 32))"
+                }
+                """
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpNativeEvmProverBundleSchemaV1)",
+          "bundle_id": "\(sccpEthNativeEvmProverBundleIdV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact": "\(proofArtifact)",
+          "proof_artifact_hash": "\(proofArtifactHash)",
+          "proving_key": "artifacts/eth-mainnet/proving-key.bin",
+          "proving_key_hash": "\(provingKeyHash)",
+          "verifier_key": "artifacts/eth-mainnet/verifier-key.bin",
+          "verifier_key_hash": "0x\(String(repeating: "cc", count: 32))",
+          "destination_binding_hash": "\(destinationBindingHash)",
+          "no_wasm": \(noWasm),
+          "remote_prover_required": \(remoteProverRequired),
+          "browser_implementation": "pure-typescript",
+          "native_sdk_artifacts": [\(artifacts)],
+          "audit_hashes": [
+            "0x\(String(repeating: "a1", count: 32))",
+            "0x\(String(repeating: "a2", count: 32))"
+          ]
+        }
+        """
     }
 
     private static func sampleEvmPublicInputs(

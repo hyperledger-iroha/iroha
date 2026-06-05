@@ -1047,15 +1047,12 @@ pub fn build_kaigi_roster_join_proof(
 
 /// Generate an Ed25519 key pair using `iroha_crypto`.
 #[napi]
-#[allow(clippy::unnecessary_wraps)]
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
-    let keypair = seed.map_or_else(
-        || KeyPair::random_with_algorithm(Algorithm::Ed25519),
-        |seed| {
-            let bytes = seed.to_vec();
-            KeyPair::from_seed(bytes, Algorithm::Ed25519)
-        },
-    );
+    let keypair = match seed {
+        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519),
+        None => KeyPair::try_random_with_algorithm(Algorithm::Ed25519),
+    }
+    .map_err(norito_to_napi)?;
 
     let public_bytes = checked_public_key_payload(keypair.public_key())?;
     let (_, private_bytes) = keypair.private_key().to_bytes();
@@ -1146,10 +1143,11 @@ pub fn crypto_keypair(
     seed: Option<Uint8Array>,
 ) -> napi::Result<JsKeyPair> {
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
-    let keypair = seed.map_or_else(
-        || KeyPair::random_with_algorithm(algorithm),
-        |seed| KeyPair::from_seed(seed.to_vec(), algorithm),
-    );
+    let keypair = match seed {
+        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), algorithm),
+        None => KeyPair::try_random_with_algorithm(algorithm),
+    }
+    .map_err(norito_to_napi)?;
     js_keypair_from_keypair(keypair)
 }
 
@@ -1711,7 +1709,8 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let validator_set = vec![PeerId::from(KeyPair::random().public_key().clone())];
+    let validator_key = KeyPair::try_random().map_err(norito_to_napi)?;
+    let validator_set = vec![PeerId::from(validator_key.public_key().clone())];
     let qc = Qc {
         phase: CertPhase::Commit,
         subject_block_hash: header.hash(),
@@ -10491,9 +10490,19 @@ mod tests {
     }
 
     #[test]
+    fn lane_relay_envelope_sample_uses_checked_validator_generation() {
+        let sample =
+            lane_relay_envelope_sample().expect("checked validator generation for relay sample");
+
+        assert!(!sample.valid.is_empty());
+        assert!(!sample.tampered.is_empty());
+    }
+
+    #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
         let seed = vec![0xA5; 32];
-        let expected = KeyPair::from_seed(seed.clone(), Algorithm::Ed25519);
+        let expected =
+            KeyPair::try_from_seed(seed.clone(), Algorithm::Ed25519).expect("checked seed keypair");
         let (_, expected_public_key) = expected
             .public_key()
             .try_to_bytes()
@@ -10504,6 +10513,31 @@ mod tests {
 
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn ed25519_keypair_derives_checked_public_key_payload() {
+        let seed = vec![0x5C; 32];
+        let expected =
+            KeyPair::try_from_seed(seed.clone(), Algorithm::Ed25519).expect("checked seed keypair");
+        let (_, expected_public_key) = expected
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+
+        let keypair = ed25519_keypair(Some(Uint8Array::from(seed))).expect("derive keypair");
+
+        assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
+        assert_eq!(keypair.public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn crypto_keypair_random_path_uses_checked_generation() {
+        let keypair = crypto_keypair(Some("ed25519".to_owned()), None)
+            .expect("checked random keypair generation");
+
+        assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
+        assert_eq!(keypair.public_key.len(), 32);
     }
 
     #[test]

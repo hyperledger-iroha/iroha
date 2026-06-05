@@ -24,7 +24,7 @@ use crate::{
         SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheInputAdmissionProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -338,6 +338,9 @@ pub struct MutateSoracloudState {
     pub encryption: SoraStateEncryptionV1,
     /// Governance transaction hash attached to the mutation.
     pub governance_tx_hash: Hash,
+    /// Optional verifier-backed proof admitting FHE ciphertext input metadata.
+    #[norito(default)]
+    pub fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     /// Provenance attestation over the mutation payload.
     pub provenance: ManifestProvenance,
 }
@@ -1553,6 +1556,7 @@ impl_soracloud_decode_from_slice!(MutateSoracloudState {
     value_payload: Option<Vec<u8>>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
+    fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     provenance: ManifestProvenance,
 });
 

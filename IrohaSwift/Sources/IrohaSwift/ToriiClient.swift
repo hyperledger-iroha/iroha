@@ -2083,6 +2083,7 @@ private enum ToriiIdentifierBfvEnvelopeBuilder {
     private static let e1Domain = "iroha.sdk.identifier.bfv.e1.v1"
     private static let e2Domain = "iroha.sdk.identifier.bfv.e2.v1"
     private static let schemaName = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext"
+    private static let maxRegisteredInputBytes = 63
 
     static func encrypt(policy: ToriiIdentifierPolicySummary,
                         input: String,
@@ -2151,6 +2152,11 @@ private enum ToriiIdentifierBfvEnvelopeBuilder {
         }
         guard UInt64(publicParameters.maxInputBytes) < params.plaintextModulus else {
             throw ToriiClientError.invalidPayload("BFV maxInputBytes must fit into one plaintext slot.")
+        }
+        guard maxInputBytes <= maxRegisteredInputBytes else {
+            throw ToriiClientError.invalidPayload(
+                "BFV maxInputBytes must be at most \(maxRegisteredInputBytes) for the registered RAM-LFE BFV identifier profile."
+            )
         }
         guard publicParameters.publicKey.a.count == polynomialDegree,
               publicParameters.publicKey.b.count == polynomialDegree else {

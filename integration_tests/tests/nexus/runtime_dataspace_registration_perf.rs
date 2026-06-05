@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -45,7 +46,6 @@ use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManife
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
-use rand::Rng;
 use reqwest::StatusCode;
 use sha2::{Digest as _, Sha256};
 use tokio::{
@@ -71,6 +71,8 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
@@ -849,7 +851,9 @@ fn operator_signature_headers(
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-    let nonce_bytes: [u8; 12] = rand::rng().random();
+    let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut nonce_bytes = [0_u8; 12];
+    nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
     let mut hasher = Sha256::new();

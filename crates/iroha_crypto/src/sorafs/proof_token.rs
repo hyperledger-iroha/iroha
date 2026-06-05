@@ -14,7 +14,7 @@ use std::{
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blake3::Hasher;
 use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
-use rand::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use thiserror::Error;
 
 const FRAME_MAGIC: &[u8; 4] = b"SFGT";
@@ -143,7 +143,7 @@ impl ProofToken {
 
     /// Mint a new proof token.
     #[allow(clippy::missing_errors_doc)]
-    pub fn mint<R: RngCore + CryptoRng>(
+    pub fn mint<R: TryCryptoRng>(
         rng: &mut R,
         digest_key: &ProofTokenDigestKey,
         signing_key: &SigningKey,
@@ -172,7 +172,7 @@ impl ProofToken {
         };
 
         let mut token_id = [0u8; 16];
-        rng.fill_bytes(&mut token_id);
+        fill_random(rng, "minting proof token id", &mut token_id)?;
 
         let mut entry_ids: Vec<String> = Vec::with_capacity(params.entry_ids.len());
         for &entry in params.entry_ids {
@@ -516,7 +516,7 @@ pub enum EncodeError {
 }
 
 /// Errors surfaced when minting new tokens.
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum MintError {
     /// Caller attempted to mint a token without any denylist entries.
     #[error("at least one entry id is required")]
@@ -546,6 +546,14 @@ pub enum MintError {
     /// `expires_at` was equal to or earlier than `issued_at`.
     #[error("expires_at must be strictly greater than issued_at")]
     InvalidExpiry,
+    /// Random byte generation failed while minting the token.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// Token body could not be represented in the v1 frame.
     #[error("proof token body encoding failed: {0}")]
     Encoding(EncodeError),
@@ -628,6 +636,18 @@ fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), MintError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| MintError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
+}
+
 fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
     let Some(encoded_len) = base64::encoded_len(bytes.len(), false) else {
         return String::new();
@@ -687,6 +707,7 @@ mod tests {
     use ed25519_dalek::Verifier as _;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
+    use rand_core::{TryCryptoRng, TryRngCore};
     use sha2::{Digest, Sha512};
 
     use super::*;
@@ -694,6 +715,35 @@ mod tests {
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[7u8; 32])
     }
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing proof token RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn mint_roundtrip() {
@@ -717,6 +767,31 @@ mod tests {
         decoded
             .verify_blinded_digest(&digest_key, &evidence)
             .unwrap();
+    }
+
+    #[test]
+    fn mint_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+        let digest_key = ProofTokenDigestKey::new([3; 32]);
+        let signing = test_signing_key();
+        let evidence = [9u8; 32];
+        let params = ProofTokenParams {
+            moderation: ModerationAction::Block,
+            entry_ids: &["denylist/global"],
+            evidence_digest: &evidence,
+            issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_000),
+            expires_at: None,
+        };
+
+        let err = ProofToken::mint(&mut rng, &digest_key, &signing, &params)
+            .expect_err("mint should surface RNG failure");
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting proof token id");
+                assert!(message.contains("failing proof token RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

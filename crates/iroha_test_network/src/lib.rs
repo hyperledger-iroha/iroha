@@ -88,7 +88,6 @@ use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
 // no external dependency needed: versioned encoding is a single leading byte (1)
-use rand::prelude::IteratorRandom;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
@@ -2299,6 +2298,7 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
 pub struct Network {
     env: Environment,
     peers: Vec<NetworkPeer>,
+    next_peer_index: AtomicUsize,
 
     block_time: Duration,
     commit_time: Duration,
@@ -2481,13 +2481,12 @@ impl Network {
         &self.peers
     }
 
-    /// Get a random peer in the network
+    /// Get the next peer in deterministic round-robin order.
     pub fn peer(&self) -> &NetworkPeer {
-        let mut rng = rand::rng();
-        self.peers
-            .iter()
-            .choose(&mut rng)
-            .expect("there is at least one peer")
+        let len = self.peers.len();
+        assert!(len > 0, "there is at least one peer");
+        let index = self.next_peer_index.fetch_add(1, Ordering::Relaxed) % len;
+        &self.peers[index]
     }
 
     /// Access the environment of the network
@@ -5638,6 +5637,7 @@ impl NetworkBuilder {
         Network {
             env,
             peers,
+            next_peer_index: AtomicUsize::new(0),
             block_time,
             commit_time,
             block_sync_gossip_period,
@@ -12516,6 +12516,26 @@ exit 0
             let port: u16 = port_str.parse().unwrap();
             assert_eq!(port, peer.api_address().port());
         }
+    }
+
+    #[test]
+    fn network_peer_round_robins_deterministically() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let peers = network.peers();
+        let expected = [
+            peers[0].api_address(),
+            peers[1].api_address(),
+            peers[2].api_address(),
+            peers[0].api_address(),
+        ];
+        let actual = [
+            network.peer().api_address(),
+            network.peer().api_address(),
+            network.peer().api_address(),
+            network.peer().api_address(),
+        ];
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

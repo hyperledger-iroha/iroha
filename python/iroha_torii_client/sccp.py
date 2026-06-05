@@ -19069,9 +19069,13 @@ async def _evm_facade_collect_finality(
     for method_name in ("collect_finality_evidence", "collectFinalityEvidence"):
         if hasattr(consensus_provider, method_name):
             collector = getattr(consensus_provider, method_name)
-            return await _maybe_await(collector(dict(evidence), options))
+            return await _maybe_await(
+                collector(_clone_prover_callback_request(evidence), options)
+            )
     if callable(consensus_provider):
-        return await _maybe_await(consensus_provider(dict(evidence), options))
+        return await _maybe_await(
+            consensus_provider(_clone_prover_callback_request(evidence), options)
+        )
     raise TypeError(f"{label} must collect finality evidence")
 
 
@@ -27073,6 +27077,9 @@ class EthereumMainnetSccp:
             raise EvmSccpProverUnavailableError(
                 "Ethereum mainnet SCCP outbound submitter is not linked"
             )
+        provider = options.get("execution_provider", self.execution_provider)
+        if provider is not None:
+            await self.validate_execution_provider_mainnet(provider)
         return await _maybe_await(submitter(dict(submission), options))
 
     async def validate_execution_provider_mainnet(
@@ -27420,6 +27427,7 @@ class EthereumMainnetSccp:
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
 
+        evidence = dict(_clone_prover_callback_request(evidence))
         if supplied_finality is not None:
             evidence["beacon_finality"] = _normalize_ethereum_mainnet_beacon_finality(
                 supplied_finality,
@@ -27456,7 +27464,7 @@ class EthereumMainnetSccp:
             beacon_finality=evidence.get("beacon_finality"),
             source_event_digest=evidence.get("source_event_digest"),
         )
-        return evidence
+        return _clone_prover_callback_request(evidence)
 
     async def prove_inbound_to_sora(
         self,
@@ -27485,8 +27493,12 @@ class EthereumMainnetSccp:
             raise TypeError(
                 "Ethereum mainnet SCCP inbound proof requires receipt source event validation"
             )
-        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
-        return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        proof_bytes = await _maybe_await(
+            self.inbound_prove_fn(_clone_prover_callback_request(evidence), options)
+        )
+        proof_copy = bytes(_to_bytes(proof_bytes, "proofBytes"))
+        _require_native_recursive_proof_bytes(proof_copy, "proofBytes")
+        return proof_copy
 
     async def submit_inbound_to_iroha(
         self,
@@ -27500,7 +27512,8 @@ class EthereumMainnetSccp:
             raise EvmSccpProverUnavailableError(
                 "Ethereum mainnet SCCP inbound submitter is not linked"
             )
-        proof_copy = bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        proof_copy = bytes(_to_bytes(proof_bytes, "proofBytes"))
+        _require_native_recursive_proof_bytes(proof_copy, "proofBytes")
         return await _maybe_await(submitter(proof_copy, options))
 
 
@@ -27923,9 +27936,10 @@ class BscMainnetSccp:
             evidence["receipt_proof"] = _immutable_prover_envelope_value(receipt_proof)
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
+        evidence = dict(_clone_prover_callback_request(evidence))
         if supplied_finality is not None:
             if isinstance(supplied_finality, Mapping) and not supplied_finality:
-                return evidence
+                return _clone_prover_callback_request(evidence)
             evidence["parlia_finality"] = _normalize_bsc_mainnet_parlia_finality(
                 supplied_finality,
                 expected_block_hash=block_hash,
@@ -27957,7 +27971,7 @@ class BscMainnetSccp:
             parlia_finality=evidence.get("parlia_finality"),
             source_event_digest=evidence.get("source_event_digest"),
         )
-        return evidence
+        return _clone_prover_callback_request(evidence)
 
     async def prove_inbound_to_sora(
         self,
@@ -27981,7 +27995,9 @@ class BscMainnetSccp:
             raise TypeError(
                 "BSC mainnet SCCP inbound proof requires receipt source event validation"
             )
-        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
+        proof_bytes = await _maybe_await(
+            self.inbound_prove_fn(_clone_prover_callback_request(evidence), options)
+        )
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
 
     async def submit_inbound_to_iroha(

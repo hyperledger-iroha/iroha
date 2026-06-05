@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -29,6 +31,9 @@ public final class EvmSccpProverTests {
     bscMainnetFacadeRequiresChainId56AndBscTarget();
     bscMainnetFacadeBuildsLocalAdmissionSubmission();
     ethereumMainnetFacadeRequiresChainId1AndEthTarget();
+    ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot();
+    ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary();
+    bscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary();
     ethereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys();
     ethereumInboundCollectionBuildsReceiptProofFromBlockReceipts();
     ethereumMainnetFacadeBuildsLocalAdmissionSubmission();
@@ -121,6 +126,63 @@ public final class EvmSccpProverTests {
         : "request hash must distinguish shifted EVM bundle/proof splits";
 
     boolean threw = false;
+    final EvmSccpProver.ProofRequest artifactRequest =
+        EvmSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+                new byte[] {5, 6, 7},
+                new byte[] {9, 10},
+                repeat("56", 32),
+                repeat("78", 32),
+                EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                SolanaSccpProver.DOMAIN_SORA,
+                null,
+                repeat("91", 32),
+                repeat("92", 32)));
+    assert ("0x" + repeat("91", 32)).equals(artifactRequest.proofArtifactHash())
+        : "proof artifact hash must be normalized";
+    assert ("0x" + repeat("92", 32)).equals(artifactRequest.provingKeyHash())
+        : "proving key hash must be normalized";
+    assert !request.requestHash().equals(artifactRequest.requestHash())
+        : "request hash must bind proof artifact metadata";
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+              new byte[] {5, 6, 7},
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA,
+              null,
+              repeat("91", 32),
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifactHash and provingKeyHash");
+    }
+    assert threw : "partial proof artifact metadata must be rejected";
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+              new byte[] {5, 6, 7},
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA,
+              null,
+              repeat("00", 32),
+              repeat("92", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifactHash");
+    }
+    assert threw : "zero proof artifact hash must be rejected";
+
+    threw = false;
     try {
       EvmSccpProver.buildProofRequest(
           sampleProofRequestInput(samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], ""));
@@ -388,6 +450,26 @@ public final class EvmSccpProverTests {
     assert request.requestHash().equals(result.requestHash()) : "result must expose the request hash";
     assert result.envelopeHash().matches("0x[0-9a-f]{64}")
         : "result must bind proof bytes to the EVM request";
+    final EvmSccpProver.ProofRequest artifactRequest =
+        EvmSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+                new byte[] {5, 6, 7},
+                new byte[] {9, 10},
+                repeat("56", 32),
+                sampleDestinationBinding(samplePublicInputs(EvmSccpProver.DOMAIN_ETH)),
+                EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                SolanaSccpProver.DOMAIN_SORA,
+                repeat("91", 32),
+                repeat("92", 32)));
+    final EvmSccpProver.ProofResult artifactResult =
+        EvmSccpProver.wrapProofResult(proofBytes, artifactRequest);
+    assert artifactRequest.proofArtifactHash().equals(artifactResult.proofArtifactHash())
+        : "proof result must carry proof artifact hash";
+    assert artifactRequest.provingKeyHash().equals(artifactResult.provingKeyHash())
+        : "proof result must carry proving key hash";
+    assert !artifactRequest.requestHash().equals(request.requestHash())
+        : "artifact-bound request hash must differ";
 
     assert seenRequestCount[0] == 2 : "proof engine must receive both EVM callback requests";
     assert seenRequests[0] != request : "EVM proof engine must receive a request snapshot";
@@ -1115,6 +1197,456 @@ public final class EvmSccpProverTests {
         : "Ethereum facade request builder must preserve bundle bytes";
     assert Arrays.equals(request.sourceProofBytes(), instanceRequest.sourceProofBytes())
         : "Ethereum facade request builder must preserve source proof bytes";
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle =
+        sampleEthereumNativeEvmProverBundle(binding.hash, true, false);
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle parsedNativeProverBundle =
+        EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+            sampleEthereumNativeEvmProverBundleJson(binding.hash), binding.hash);
+    assert nativeProverBundle.proofArtifactHash().equals(parsedNativeProverBundle.proofArtifactHash())
+        : "Ethereum native prover bundle parser must preserve proofArtifactHash";
+    assert "artifacts/eth-mainnet/proof-artifact.bin".equals(parsedNativeProverBundle.proofArtifact())
+        : "Ethereum native prover bundle parser must preserve proofArtifact";
+    assert nativeProverBundle.provingKeyHash().equals(parsedNativeProverBundle.provingKeyHash())
+        : "Ethereum native prover bundle parser must preserve provingKeyHash";
+    assert "artifacts/eth-mainnet/proving-key.bin".equals(parsedNativeProverBundle.provingKey())
+        : "Ethereum native prover bundle parser must preserve provingKey";
+    assert "artifacts/eth-mainnet/verifier-key.bin".equals(parsedNativeProverBundle.verifierKey())
+        : "Ethereum native prover bundle parser must preserve verifierKey";
+    assert nativeProverBundle
+        .destinationBindingHash()
+        .equals(parsedNativeProverBundle.destinationBindingHash())
+        : "Ethereum native prover bundle parser must preserve destinationBindingHash";
+    assert parsedNativeProverBundle.nativeSdkArtifacts().stream()
+        .anyMatch(row -> "java-android".equals(row.sdk())
+            && "artifacts/eth-mainnet/java-android-implementation.bin"
+                .equals(row.implementationArtifact()))
+        : "Ethereum native prover bundle parser must preserve implementationArtifact";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash, false, false), binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("noWasm");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject WASM manifests";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson("0x" + repeat("95", 32), true, false),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "Ethereum native prover bundle parser must match destinationBindingHash";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace("\"domain\":1", "\"domain\":\"01\""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("domain")
+              && ex.getMessage().contains("canonical decimal integer");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject noncanonical domain text";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace(
+                  "\"bundle_id\":\"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
+                  "\"bundle_id\":\"forged\","
+                      + "\"bundle_id\":\"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("Duplicate JSON object key: bundle_id");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject duplicate JSON keys";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(
+              binding.hash, true, false, "../proof-artifact.bin"),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifact");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject escaping artifact paths";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace("\"audit_hashes\":", "\"experimental_manifest_note\":true,\"audit_hashes\":"),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("nativeProverBundle")
+              && ex.getMessage().contains("experimental_manifest_note")
+              && ex.getMessage().contains("unknown field");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject unknown manifest fields";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace(
+                  "\"proof_artifact_hash\":\"0x" + repeat("91", 32) + "\"",
+                  "\"proofArtifactHash\":\"0x"
+                      + repeat("91", 32)
+                      + "\",\"proof_artifact_hash\":\"0x"
+                      + repeat("91", 32)
+                      + "\""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("proofArtifactHash")
+              && ex.getMessage().contains("multiple aliases");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject duplicate manifest aliases";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace(
+                  "\"implementation_hash\":",
+                  "\"experimental_manifest_note\":true,\"implementation_hash\":"),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("nativeSdkArtifacts[0]")
+              && ex.getMessage().contains("experimental_manifest_note")
+              && ex.getMessage().contains("unknown field");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject unknown artifact fields";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace("\"0x" + repeat("a1", 32) + "\"", "\"0x" + repeat("A1", 32) + "\""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("auditHashes[0]")
+              && ex.getMessage().contains("canonical lowercase");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject noncanonical audit hashes";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace("\"0x" + repeat("a1", 32) + "\"", "\"0x" + repeat("91", 32) + "\""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("auditHashes[0]")
+              && ex.getMessage().contains("proofArtifactHash")
+              && ex.getMessage().contains("role-separated");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject replayed audit hash roles";
+    final EvmSccpProver.ProofRequest bundledRequest =
+        EthereumMainnetSccp.buildProofRequest(input, nativeProverBundle);
+    assert ("0x" + repeat("91", 32)).equals(bundledRequest.proofArtifactHash())
+        : "Ethereum native prover bundle must bind proofArtifactHash";
+    assert ("0x" + repeat("92", 32)).equals(bundledRequest.provingKeyHash())
+        : "Ethereum native prover bundle must bind provingKeyHash";
+    assert !request.requestHash().equals(bundledRequest.requestHash())
+        : "Ethereum native prover bundle hashes must enter the request hash";
+    assert bundledRequest
+        .requestHash()
+        .equals(new EthereumMainnetSccp(nativeProverBundle).buildOutboundProofRequest(input).requestHash())
+        : "Ethereum facade must apply configured native prover bundle";
+    threw = false;
+    try {
+      new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+              EvmSccpProver.NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+              EvmSccpProver.ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+              EvmSccpProver.DOMAIN_ETH,
+              "eth",
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              "artifacts/eth-mainnet/proof-artifact.bin",
+              "0x" + repeat("91", 32),
+              "artifacts/eth-mainnet/proving-key.bin",
+              "0x" + repeat("92", 32),
+              "artifacts/eth-mainnet/verifier-key.bin",
+              "0x" + repeat("dd", 32),
+              binding.hash,
+              true,
+              false,
+              "pure-typescript",
+              nativeProverBundle.nativeSdkArtifacts(),
+              nativeProverBundle.auditHashes())
+          .applyTo(input);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverBundle.verifierKeyHash");
+    }
+    assert threw : "Ethereum native prover bundle must match destination verifierKeyHash";
+    final byte[] proofArtifactBytes = new byte[] {1, 2, 3, 5, 8};
+    final byte[] provingKeyBytes = new byte[] {13, 21, 34, 55};
+    final byte[] verifierKeyBytes = new byte[] {89, (byte) 144, (byte) 233};
+    final byte[] implementationBytes =
+        "sccp java android prover artifact v1".getBytes(StandardCharsets.UTF_8);
+    final String proofArtifactHash = sha256Hex(proofArtifactBytes);
+    final String provingKeyHash = sha256Hex(provingKeyBytes);
+    final String verifierKeyHash = sha256Hex(verifierKeyBytes);
+    final String implementationHash = sha256Hex(implementationBytes);
+    final SourceSccpProofs.EvmDestinationBinding artifactBinding =
+        EthereumMainnetSccp.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            verifierKeyHash);
+    final EvmSccpProver.ProofRequestInput artifactInput =
+        new EvmSccpProver.ProofRequestInput(
+            input.publicInputs(),
+            input.bundleBytes(),
+            input.sourceProofBytes(),
+            input.statementHash(),
+            artifactBinding);
+    final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
+        verifiedSdkArtifacts = new ArrayList<>();
+    int artifactIndex = 0;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      artifactIndex++;
+      verifiedSdkArtifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              proofArtifactHash,
+              provingKeyHash,
+              "java-android".equals(entry.getKey())
+                  ? implementationHash
+                  : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle verifiedBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.hash,
+            verifiedSdkArtifacts,
+            Collections.singletonList("0x" + repeat("a1", 32)));
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts =
+        verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            "java-android",
+            implementationBytes);
+    assert EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1.equals(
+            verifiedArtifacts.hashAlgorithm())
+        : "Android native prover artifact verifier must report sha256";
+    assert proofArtifactHash.equals(verifiedArtifacts.proofArtifactHash())
+        : "Android native prover artifact verifier must bind proof artifact bytes";
+    assert provingKeyHash.equals(verifiedArtifacts.provingKeyHash())
+        : "Android native prover artifact verifier must bind proving key bytes";
+    assert verifierKeyHash.equals(verifiedArtifacts.verifierKeyHash())
+        : "Android native prover artifact verifier must bind verifier key bytes";
+    assert "native-java".equals(verifiedArtifacts.implementation())
+        : "Android native prover artifact verifier must select java implementation";
+    assert implementationHash.equals(verifiedArtifacts.implementationHash())
+        : "Android native prover artifact verifier must bind implementation bytes";
+    final boolean[] missingArtifactsProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                missingArtifactsProverCalled[0] = true;
+                return proofBytes;
+              })
+          .proveOutboundToEthereum(input);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("verified native EVM prover artifacts");
+    }
+    assert threw : "Ethereum outbound prove facade must require verified native artifacts";
+    assert !missingArtifactsProverCalled[0]
+        : "Ethereum outbound prover callback must not run without verified artifacts";
+    final EvmSccpProver.ProofRequest[] artifactBoundRequest =
+        new EvmSccpProver.ProofRequest[] {null};
+    final EvmSccpProver.ProofResult artifactBoundResult =
+        new EthereumMainnetSccp(
+                null,
+                proofRequest -> {
+                  artifactBoundRequest[0] = proofRequest;
+                  assert proofArtifactHash.equals(proofRequest.proofArtifactHash())
+                      : "verified artifacts must bind proofArtifactHash before callback";
+                  assert provingKeyHash.equals(proofRequest.provingKeyHash())
+                      : "verified artifacts must bind provingKeyHash before callback";
+                  return proofBytes;
+                },
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                verifiedArtifacts,
+                null)
+            .proveOutboundToEthereum(artifactInput);
+    assert proofArtifactHash.equals(artifactBoundRequest[0].proofArtifactHash())
+        : "Ethereum artifact-bound prover callback must see proofArtifactHash";
+    assert proofArtifactHash.equals(artifactBoundResult.proofArtifactHash())
+        : "Ethereum artifact-bound proof result must carry proofArtifactHash";
+    assert provingKeyHash.equals(artifactBoundResult.provingKeyHash())
+        : "Ethereum artifact-bound proof result must carry provingKeyHash";
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts implementationUnboundArtifacts =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts(
+            EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+            verifiedBundle,
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            "java-android",
+            "native-java",
+            null);
+    final boolean[] implementationUnboundProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                implementationUnboundProverCalled[0] = true;
+                return proofBytes;
+              },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              implementationUnboundArtifacts,
+              null)
+            .proveOutboundToEthereum(artifactInput);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage()
+              .contains("nativeProverArtifacts must bind sdk implementation and implementationHash");
+    }
+    assert threw : "Android native prover artifacts must bind implementation hash";
+    assert !implementationUnboundProverCalled[0]
+        : "Android prover callback must not run with unbound implementation artifacts";
+    threw = false;
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifierKeyUnboundArtifacts =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts(
+            EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+            verifiedBundle,
+            proofArtifactHash,
+            provingKeyHash,
+            "0x" + repeat("ef", 32),
+            "java-android",
+            "native-java",
+            implementationHash);
+    final boolean[] verifierKeyUnboundProverCalled = new boolean[] {false};
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                verifierKeyUnboundProverCalled[0] = true;
+                return proofBytes;
+              },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              verifierKeyUnboundArtifacts,
+              null)
+            .proveOutboundToEthereum(artifactInput);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage()
+              .contains("nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    assert threw : "Android native prover artifacts must bind verifier key hash";
+    assert !verifierKeyUnboundProverCalled[0]
+        : "Android prover callback must not run with verifier-key-unbound artifacts";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(new byte[] {0}, provingKeyBytes, verifierKeyBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifactBytes sha256");
+    }
+    assert threw : "Android native prover artifact verifier must reject tampered artifacts";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes, provingKeyBytes, verifierKeyBytes, null, implementationBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sdk must be a non-empty string");
+    }
+    assert threw : "Android native prover artifact verifier must require sdk for implementation bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes, provingKeyBytes, verifierKeyBytes, "java-android", null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("implementationBytes are required");
+    }
+    assert threw : "Android native prover artifact verifier must require implementation bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          "tampered".getBytes(StandardCharsets.UTF_8));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("implementationBytes sha256");
+    }
+    assert threw : "Android native prover artifact verifier must reject tampered implementations";
+    final byte[] flaggedArtifactBytes = new byte[] {0x77, 0x61, 0x73, 0x6d};
+    final String flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
+    final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
+        flaggedSdkArtifacts = new ArrayList<>();
+    artifactIndex = 0;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      artifactIndex++;
+      flaggedSdkArtifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              flaggedArtifactHash,
+              provingKeyHash,
+              "java-android".equals(entry.getKey())
+                  ? implementationHash
+                  : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle flaggedBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            flaggedArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.hash,
+            flaggedSdkArtifacts,
+            Collections.singletonList("0x" + repeat("a1", 32)));
+    threw = false;
+    try {
+      flaggedBundle.verifiedArtifacts(flaggedArtifactBytes, provingKeyBytes, verifierKeyBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifactBytes contains forbidden");
+    }
+    assert threw
+        : "Android native prover artifact verifier must reject forbidden dependency markers";
+    threw = false;
+    try {
+      sampleEthereumNativeEvmProverBundle(binding.hash, false, false);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("noWasm");
+    }
+    assert threw : "Ethereum native prover bundle must reject WASM manifests";
+    threw = false;
+    try {
+      sampleEthereumNativeEvmProverBundle("0x" + repeat("95", 32), true, false)
+          .applyTo(input);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "Ethereum native prover bundle must match destinationBindingHash";
 
     final EvmSccpProver.ProofResult result =
         EthereumMainnetSccp.wrapProofResult(proofBytes, request);
@@ -1600,8 +2132,17 @@ public final class EvmSccpProverTests {
                     null));
     assert receiptProofHash.equals(receiptProofEvidence.receiptProofHash())
         : "Ethereum inbound collection must derive receiptProofHash from receiptProof";
-    assert receiptProof == receiptProofEvidence.receiptProof()
+    assert receiptProofEvidence.receiptProof() != null
         : "Ethereum inbound collection must retain app-collected receiptProof";
+    assert receiptProof != receiptProofEvidence.receiptProof()
+        : "Ethereum inbound collection must detach app-collected receiptProof";
+    assert receiptProof.sourceEventDigest().equals(receiptProofEvidence.receiptProof().sourceEventDigest())
+        : "Ethereum inbound collection must preserve receiptProof source event digest";
+    assert receiptProof.receiptRootIndex().equals(receiptProofEvidence.receiptProof().receiptRootIndex())
+        : "Ethereum inbound collection must preserve receiptProof index";
+    assert receiptProof.receiptTrieProofNodes().size()
+            == receiptProofEvidence.receiptProof().receiptTrieProofNodes().size()
+        : "Ethereum inbound collection must preserve receiptProof trie nodes";
     final EthereumMainnetSccp.InboundEvidence receiptProofHashOnlyEvidence =
         new EthereumMainnetSccp()
             .collectInboundEvidenceFromReceipt(
@@ -1867,6 +2408,7 @@ public final class EvmSccpProverTests {
     aliasOnlyFinality.put("finalized_header_root", "0x" + repeat("dd", 32));
     aliasOnlyFinality.put("sync_committee_root", "0x" + repeat("aa", 32));
     aliasOnlyFinality.put("beacon_slot", "0x20");
+    aliasOnlyFinality.put("finality_branch", ETHEREUM_FINALITY_BRANCH);
     aliasOnlyFinality.put("sync_committee_bits", ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS);
     aliasOnlyFinality.put("sync_committee_signature", "0x" + repeat("34", 96));
     aliasOnlyFinality.put(
@@ -1893,6 +2435,8 @@ public final class EvmSccpProverTests {
                       : "alias-only finality must normalize sync root";
                   assert "32".equals(finality.get("beaconSlot"))
                       : "alias-only finality must normalize beacon slot";
+                  assert ETHEREUM_FINALITY_BRANCH.equals(finality.get("finalityBranch"))
+                      : "alias-only finality must normalize finality branch";
                   assert ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS.equals(
                           finality.get("syncCommitteeBits"))
                       : "alias-only finality must normalize sync bits";
@@ -1914,6 +2458,7 @@ public final class EvmSccpProverTests {
                           "finalized_header_root",
                           "sync_committee_root",
                           "beacon_slot",
+                          "finality_branch",
                           "sync_committee_bits",
                           "sync_committee_signature",
                           "sync_committee_participation",
@@ -1988,6 +2533,25 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("proofBytes must not be all zero");
     }
     assert threw : "Ethereum inbound prover output must reject all-zero proof bytes";
+    final byte[] oversizedInboundProof =
+        new byte[EthereumMainnetSccp.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedInboundProof, (byte) 1);
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null, null, null, null, oversizedProofEvidence -> oversizedInboundProof, null)
+          .proveInboundToSora(proofReadyEvidence);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must be at most");
+    }
+    assert threw : "Ethereum inbound prover output must reject oversized proof bytes";
+    threw = false;
+    try {
+      sdk.submitInboundToIroha(oversizedInboundProof);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must be at most");
+    }
+    assert threw : "Ethereum inbound submitter must reject oversized proof bytes";
     threw = false;
     try {
       new EthereumMainnetSccp()
@@ -3109,6 +3673,456 @@ public final class EvmSccpProverTests {
     assert threw : "Ethereum inbound submitter must reject zero proof bytes";
   }
 
+  @SuppressWarnings("unchecked")
+  private static void ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot() {
+    final String txHash = "0x" + repeat("aa", 32);
+    final String blockHash = "0x" + repeat("bb", 32);
+    final String sourceEventDigest = "0x" + repeat("ee", 32);
+    final String sourceBridgeEmitterAddress = "0x" + repeat("44", 20);
+    final String receiptsRoot = "0x" + repeat("cc", 32);
+    final String finalizedRoot = "0x" + repeat("dd", 32);
+    final String syncCommitteeRoot = "0x" + repeat("aa", 32);
+    final Map<String, Object> receiptNested =
+        linkedMap("value", "keep", "bytes", new byte[] {(byte) 0xbb});
+    final ArrayList<Object> receiptWitness = new ArrayList<>();
+    receiptWitness.add(receiptNested);
+    final Map<String, Object> blockWitness =
+        linkedMap("value", "block", "bytes", new byte[] {(byte) 0xcc});
+    final ArrayList<String> finalityBranchWitness = new ArrayList<>(ETHEREUM_FINALITY_BRANCH);
+    final byte[] finalityBytes = new byte[] {(byte) 0xaa};
+    final Map<String, Object> finalityWitness =
+        linkedMap("branch", finalityBranchWitness, "bytes", finalityBytes);
+    final ArrayList<Object> blockReceiptsWitness = new ArrayList<>();
+    blockReceiptsWitness.add("receipt-list");
+    final Map<String, Object> sourceEventLog =
+        linkedMap(
+            "address", sourceBridgeEmitterAddress,
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "topics", Arrays.asList(EthereumMainnetSccp.sourceEventTopic(), sourceEventDigest),
+            "data", "0x");
+    final Map<String, Object> receipt =
+        linkedMap(
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "status", "0x1",
+            "logs", Collections.singletonList(sourceEventLog),
+            "mutableWitness", receiptWitness);
+    final Map<String, Object> block =
+        linkedMap(
+            "hash", blockHash,
+            "number", "0x1234",
+            "receiptsRoot", receiptsRoot,
+            "mutableWitness", blockWitness);
+    final Map<String, Object> beaconFinality =
+        linkedMap(
+            "executionBlockNumber", "0x1234",
+            "executionBlockHash", blockHash,
+            "executionReceiptsRoot", receiptsRoot,
+            "finalizedHeaderRoot", finalizedRoot,
+            "syncCommitteeRoot", syncCommitteeRoot,
+            "beaconSlot", "0x20",
+            "finalityBranch", ETHEREUM_FINALITY_BRANCH,
+            "syncCommitteeBits", ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS,
+            "syncCommitteeSignature", "0x" + repeat("34", 96),
+            "syncCommitteeParticipation", ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_PARTICIPATION,
+            "syncSignatureSlot", "65",
+            "mutableWitness", finalityWitness);
+    final Map<String, Object> blockReceipt = new LinkedHashMap<>(receipt);
+    blockReceipt.put("mutableWitness", blockReceiptsWitness);
+    final byte[] mutableReceiptProofNode = new byte[] {0x01, 0x02};
+    final byte[] mutableReceiptProofBranch = repeatedByteArray(0x11, 32);
+    final byte[] mutableInputBranch = new byte[] {0x44};
+    final EthereumMainnetSccp.ReceiptProof receiptProof =
+        new EthereumMainnetSccp.ReceiptProof(
+            sourceEventDigest,
+            "32",
+            "4660",
+            blockHash,
+            receiptsRoot,
+            finalizedRoot,
+            syncCommitteeRoot,
+            "0",
+            Collections.singletonList(mutableReceiptProofNode),
+            Collections.singletonList(mutableReceiptProofBranch));
+    final String receiptProofHash =
+        SourceSccpProofs.evmReceiptProofHash(
+            receiptProof.sourceEventDigest(),
+            receiptProof.beaconSlot(),
+            receiptProof.executionBlockNumber(),
+            receiptProof.executionBlockHash(),
+            receiptProof.executionReceiptsRoot(),
+            receiptProof.beaconFinalizedRoot(),
+            receiptProof.syncCommitteeRoot(),
+            receiptProof.receiptRootIndex(),
+            receiptProof.receiptTrieProofNodes(),
+            receiptProof.inclusionBranch());
+
+    final byte[] proofBytes =
+        new EthereumMainnetSccp(
+                null,
+                null,
+                null,
+                null,
+                evidence -> {
+                  receiptWitness.add("changed");
+                  receiptNested.put("value", "changed");
+                  ((byte[]) receiptNested.get("bytes"))[0] = 0x7f;
+                  blockWitness.put("value", "changed");
+                  ((byte[]) blockWitness.get("bytes"))[0] = 0x7e;
+                  finalityBranchWitness.add("0x" + repeat("99", 32));
+                  finalityBytes[0] = 0x7d;
+                  finalityWitness.put("new", "changed");
+                  blockReceiptsWitness.add("changed");
+                  mutableReceiptProofNode[0] = 0x7c;
+                  mutableReceiptProofBranch[0] = 0x7b;
+                  mutableInputBranch[0] = 0x45;
+
+                  final List<Object> receiptSnapshot =
+                      (List<Object>) evidence.receipt().get("mutableWitness");
+                  assert receiptSnapshot.size() == 1
+                      : "Ethereum inbound callback receipt witness must be snapshotted";
+                  final Map<String, Object> receiptNestedSnapshot =
+                      (Map<String, Object>) receiptSnapshot.get(0);
+                  assert "keep".equals(receiptNestedSnapshot.get("value"))
+                      : "Ethereum inbound callback receipt map must be detached";
+                  assert Arrays.equals(
+                          new byte[] {(byte) 0xbb},
+                          (byte[]) receiptNestedSnapshot.get("bytes"))
+                      : "Ethereum inbound callback receipt bytes must be detached";
+
+                  final Map<String, Object> blockSnapshot =
+                      (Map<String, Object>) evidence.block().get("mutableWitness");
+                  assert "block".equals(blockSnapshot.get("value"))
+                      : "Ethereum inbound callback block map must be detached";
+                  assert Arrays.equals(new byte[] {(byte) 0xcc}, (byte[]) blockSnapshot.get("bytes"))
+                      : "Ethereum inbound callback block bytes must be detached";
+
+                  final Map<String, Object> finalitySnapshot =
+                      (Map<String, Object>) evidence.beaconFinality().get("mutableWitness");
+                  final List<String> branchSnapshot =
+                      (List<String>) finalitySnapshot.get("branch");
+                  assert branchSnapshot.size() == ETHEREUM_FINALITY_BRANCH.size()
+                      : "Ethereum inbound callback finality branch must be detached";
+                  assert ETHEREUM_FINALITY_BRANCH.get(0).equals(branchSnapshot.get(0))
+                      : "Ethereum inbound callback finality branch contents must be stable";
+                  assert Arrays.equals(new byte[] {(byte) 0xaa}, (byte[]) finalitySnapshot.get("bytes"))
+                      : "Ethereum inbound callback finality bytes must be detached";
+
+                  final List<Map<String, Object>> blockReceiptsSnapshot = evidence.blockReceipts();
+                  final List<Object> blockReceiptWitnessSnapshot =
+                      (List<Object>) blockReceiptsSnapshot.get(0).get("mutableWitness");
+                  assert blockReceiptWitnessSnapshot.equals(Collections.singletonList("receipt-list"))
+                      : "Ethereum inbound callback block receipts must be detached";
+
+                  assert Arrays.equals(new byte[] {0x44}, evidence.inclusionBranch().get(0))
+                      : "Ethereum inbound callback inclusionBranch must be snapshotted";
+                  assert Arrays.equals(
+                          new byte[] {0x01, 0x02},
+                          evidence.receiptProof().receiptTrieProofNodes().get(0))
+                      : "Ethereum inbound callback trie nodes must be snapshotted";
+                  assert Arrays.equals(
+                          repeatedByteArray(0x11, 32),
+                          evidence.receiptProof().inclusionBranch().get(0))
+                      : "Ethereum inbound callback proof branches must be snapshotted";
+                  assert receiptProofHash.equals(evidence.receiptProofHash())
+                      : "Ethereum inbound callback must retain receiptProofHash";
+                  return new byte[] {9, 8, 7};
+                },
+                null,
+                null,
+                null)
+            .proveInboundToSora(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    receipt,
+                    block,
+                    beaconFinality,
+                    receiptProof,
+                    receiptProofHash,
+                    null,
+                    sourceBridgeEmitterAddress,
+                    Collections.singletonList(blockReceipt),
+                    Collections.singletonList(mutableInputBranch)));
+
+    assert Arrays.equals(new byte[] {9, 8, 7}, proofBytes)
+        : "Ethereum inbound callback snapshot test must return proof bytes";
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() {
+    final String txHash = "0x" + repeat("aa", 32);
+    final String blockHash = "0x" + repeat("bb", 32);
+    final String sourceEventDigest = "0x" + repeat("ee", 32);
+    final String sourceBridgeEmitterAddress = "0x" + repeat("44", 20);
+    final String receiptsRoot = "0x" + repeat("cc", 32);
+    final String finalizedRoot = "0x" + repeat("dd", 32);
+    final String syncCommitteeRoot = "0x" + repeat("aa", 32);
+    final Map<String, Object> receiptNested =
+        linkedMap("value", "keep", "bytes", new byte[] {(byte) 0xbb});
+    final ArrayList<Object> receiptWitness = new ArrayList<>();
+    receiptWitness.add(receiptNested);
+    final Map<String, Object> blockWitness =
+        linkedMap("value", "block", "bytes", new byte[] {(byte) 0xcc});
+    final ArrayList<String> finalityBranchWitness = new ArrayList<>(ETHEREUM_FINALITY_BRANCH);
+    final byte[] finalityBytes = new byte[] {(byte) 0xaa};
+    final Map<String, Object> finalityWitness =
+        linkedMap("branch", finalityBranchWitness, "bytes", finalityBytes);
+    final Map<String, Object> sourceEventLog =
+        linkedMap(
+            "address", sourceBridgeEmitterAddress,
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "topics", Arrays.asList(EthereumMainnetSccp.sourceEventTopic(), sourceEventDigest),
+            "data", "0x");
+    final Map<String, Object> receipt =
+        linkedMap(
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "status", "0x1",
+            "logs", Collections.singletonList(sourceEventLog),
+            "mutableWitness", receiptWitness);
+    final Map<String, Object> block =
+        linkedMap(
+            "hash", blockHash,
+            "number", "0x1234",
+            "receiptsRoot", receiptsRoot,
+            "mutableWitness", blockWitness);
+    final Map<String, Object> beaconFinality =
+        linkedMap(
+            "executionBlockNumber", "0x1234",
+            "executionBlockHash", blockHash,
+            "executionReceiptsRoot", receiptsRoot,
+            "finalizedHeaderRoot", finalizedRoot,
+            "syncCommitteeRoot", syncCommitteeRoot,
+            "beaconSlot", "0x20",
+            "finalityBranch", ETHEREUM_FINALITY_BRANCH,
+            "syncCommitteeBits", ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS,
+            "syncCommitteeSignature", "0x" + repeat("34", 96),
+            "syncCommitteeParticipation", ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_PARTICIPATION,
+            "syncSignatureSlot", "65",
+            "mutableWitness", finalityWitness);
+    final int[] consensusCalls = new int[] {0};
+    final EthereumMainnetSccp.ConsensusProvider consensusProvider =
+        (collectedReceipt, collectedBlock, collectedTransactionHash) -> {
+          consensusCalls[0] += 1;
+          assert txHash.equals(collectedTransactionHash)
+              : "Ethereum collection consensus callback must receive transactionHash";
+          assert collectedReceipt.get("mutableWitness") != receiptWitness
+              : "Ethereum collection consensus callback must receive a receipt witness snapshot";
+          final List<Object> receiptSnapshot =
+              (List<Object>) collectedReceipt.get("mutableWitness");
+          final Map<String, Object> receiptNestedSnapshot =
+              (Map<String, Object>) receiptSnapshot.get(0);
+          assert "keep".equals(receiptNestedSnapshot.get("value"))
+              : "Ethereum collection consensus receipt map must be detached";
+          assert Arrays.equals(new byte[] {(byte) 0xbb}, (byte[]) receiptNestedSnapshot.get("bytes"))
+              : "Ethereum collection consensus receipt bytes must be detached";
+          assert collectedBlock.get("mutableWitness") != blockWitness
+              : "Ethereum collection consensus callback must receive a block witness snapshot";
+          final Map<String, Object> blockSnapshot =
+              (Map<String, Object>) collectedBlock.get("mutableWitness");
+          assert "block".equals(blockSnapshot.get("value"))
+              : "Ethereum collection consensus block map must be detached";
+          assert Arrays.equals(new byte[] {(byte) 0xcc}, (byte[]) blockSnapshot.get("bytes"))
+              : "Ethereum collection consensus block bytes must be detached";
+
+          receiptWitness.add("changed");
+          receiptNested.put("value", "changed");
+          ((byte[]) receiptNested.get("bytes"))[0] = 0x7f;
+          blockWitness.put("value", "changed");
+          ((byte[]) blockWitness.get("bytes"))[0] = 0x7e;
+          return beaconFinality;
+        };
+
+    final EthereumMainnetSccp.InboundEvidence evidence =
+        new EthereumMainnetSccp(
+                null,
+                null,
+                null,
+                consensusProvider,
+                null,
+                null,
+                null,
+                sourceBridgeEmitterAddress)
+            .collectInboundEvidenceFromReceipt(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    receipt,
+                    block,
+                    null,
+                    null));
+    finalityBranchWitness.add("0x" + repeat("99", 32));
+    finalityBytes[0] = 0x7d;
+    finalityWitness.put("new", "changed");
+
+    assert consensusCalls[0] == 1 : "Ethereum collection consensus callback must run once";
+    final List<Object> receiptSnapshot = (List<Object>) evidence.receipt().get("mutableWitness");
+    assert receiptSnapshot.size() == 1 : "Ethereum collection receipt witness must be snapshotted";
+    final Map<String, Object> receiptNestedSnapshot = (Map<String, Object>) receiptSnapshot.get(0);
+    assert "keep".equals(receiptNestedSnapshot.get("value"))
+        : "Ethereum collection receipt snapshot must not see callback mutation";
+    assert Arrays.equals(new byte[] {(byte) 0xbb}, (byte[]) receiptNestedSnapshot.get("bytes"))
+        : "Ethereum collection receipt bytes must not see callback mutation";
+    final Map<String, Object> blockSnapshot =
+        (Map<String, Object>) evidence.block().get("mutableWitness");
+    assert "block".equals(blockSnapshot.get("value"))
+        : "Ethereum collection block snapshot must not see callback mutation";
+    assert Arrays.equals(new byte[] {(byte) 0xcc}, (byte[]) blockSnapshot.get("bytes"))
+        : "Ethereum collection block bytes must not see callback mutation";
+    final Map<String, Object> finalitySnapshot =
+        (Map<String, Object>) evidence.beaconFinality().get("mutableWitness");
+    final List<String> branchSnapshot = (List<String>) finalitySnapshot.get("branch");
+    assert branchSnapshot.size() == ETHEREUM_FINALITY_BRANCH.size()
+        : "Ethereum collection finality branch must be snapshotted";
+    assert ETHEREUM_FINALITY_BRANCH.get(0).equals(branchSnapshot.get(0))
+        : "Ethereum collection finality branch contents must be stable";
+    assert Arrays.equals(new byte[] {(byte) 0xaa}, (byte[]) finalitySnapshot.get("bytes"))
+        : "Ethereum collection finality bytes must be snapshotted";
+    assert !finalitySnapshot.containsKey("new")
+        : "Ethereum collection finality snapshot must not see post-collection mutation";
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void bscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() {
+    final String txHash = "0x" + repeat("aa", 32);
+    final String blockHash = "0x" + repeat("bb", 32);
+    final String sourceEventDigest = "0x" + repeat("ee", 32);
+    final String sourceBridgeEmitterAddress = "0x" + repeat("44", 20);
+    final String receiptsRoot = "0x" + repeat("cc", 32);
+    final String validatorSetHash = "0x" + repeat("ab", 32);
+    final String commitSealHash = "0x" + repeat("dd", 32);
+    final Map<String, Object> receiptNested =
+        linkedMap("value", "keep", "bytes", new byte[] {(byte) 0xbb});
+    final ArrayList<Object> receiptWitness = new ArrayList<>();
+    receiptWitness.add(receiptNested);
+    final Map<String, Object> blockWitness =
+        linkedMap("value", "block", "bytes", new byte[] {(byte) 0xcc});
+    final ArrayList<Object> finalityBranchWitness = new ArrayList<>();
+    finalityBranchWitness.add(validatorSetHash);
+    final byte[] finalityBytes = new byte[] {(byte) 0xaa};
+    final Map<String, Object> finalityWitness =
+        linkedMap("branch", finalityBranchWitness, "bytes", finalityBytes);
+    final Map<String, Object> sourceEventLog =
+        linkedMap(
+            "address", sourceBridgeEmitterAddress,
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "topics", Arrays.asList(EthereumMainnetSccp.sourceEventTopic(), sourceEventDigest),
+            "data", "0x");
+    final Map<String, Object> receipt =
+        linkedMap(
+            "transactionHash", txHash,
+            "blockHash", blockHash,
+            "blockNumber", "0x1234",
+            "status", "0x1",
+            "logs", Collections.singletonList(sourceEventLog),
+            "mutableWitness", receiptWitness);
+    final Map<String, Object> block =
+        linkedMap(
+            "hash", blockHash,
+            "number", "0x1234",
+            "receiptsRoot", receiptsRoot,
+            "mutableWitness", blockWitness);
+    final Map<String, Object> parliaFinality =
+        linkedMap(
+            "executionBlockNumber", "0x1234",
+            "executionBlockHash", blockHash,
+            "executionReceiptsRoot", receiptsRoot,
+            "validatorEpoch", "0x24",
+            "validatorSetHash", validatorSetHash,
+            "commitSealHash", commitSealHash,
+            "mutableWitness", finalityWitness);
+    final int[] consensusCalls = new int[] {0};
+    final BscMainnetSccp.ConsensusProvider consensusProvider =
+        (collectedReceipt, collectedBlock, collectedTransactionHash) -> {
+          consensusCalls[0] += 1;
+          assert txHash.equals(collectedTransactionHash)
+              : "BSC collection consensus callback must receive transactionHash";
+          assert collectedReceipt.get("mutableWitness") != receiptWitness
+              : "BSC collection consensus callback must receive a receipt witness snapshot";
+          final List<Object> receiptSnapshot =
+              (List<Object>) collectedReceipt.get("mutableWitness");
+          final Map<String, Object> receiptNestedSnapshot =
+              (Map<String, Object>) receiptSnapshot.get(0);
+          assert "keep".equals(receiptNestedSnapshot.get("value"))
+              : "BSC collection consensus receipt map must be detached";
+          assert Arrays.equals(new byte[] {(byte) 0xbb}, (byte[]) receiptNestedSnapshot.get("bytes"))
+              : "BSC collection consensus receipt bytes must be detached";
+          assert collectedBlock.get("mutableWitness") != blockWitness
+              : "BSC collection consensus callback must receive a block witness snapshot";
+          final Map<String, Object> blockSnapshot =
+              (Map<String, Object>) collectedBlock.get("mutableWitness");
+          assert "block".equals(blockSnapshot.get("value"))
+              : "BSC collection consensus block map must be detached";
+          assert Arrays.equals(new byte[] {(byte) 0xcc}, (byte[]) blockSnapshot.get("bytes"))
+              : "BSC collection consensus block bytes must be detached";
+
+          receiptWitness.add("changed");
+          receiptNested.put("value", "changed");
+          ((byte[]) receiptNested.get("bytes"))[0] = 0x7f;
+          blockWitness.put("value", "changed");
+          ((byte[]) blockWitness.get("bytes"))[0] = 0x7e;
+          return parliaFinality;
+        };
+
+    final BscMainnetSccp.InboundEvidence evidence =
+        new BscMainnetSccp(
+                null,
+                null,
+                null,
+                consensusProvider,
+                null,
+                null,
+                null,
+                sourceBridgeEmitterAddress)
+            .collectInboundEvidenceFromReceipt(
+                new BscMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_BSC,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    receipt,
+                    block,
+                    (Map<String, Object>) null,
+                    null));
+    finalityBranchWitness.add("0x" + repeat("99", 32));
+    finalityBytes[0] = 0x7d;
+    finalityWitness.put("new", "changed");
+
+    assert consensusCalls[0] == 1 : "BSC collection consensus callback must run once";
+    final List<Object> receiptSnapshot = (List<Object>) evidence.receipt().get("mutableWitness");
+    assert receiptSnapshot.size() == 1 : "BSC collection receipt witness must be snapshotted";
+    final Map<String, Object> receiptNestedSnapshot = (Map<String, Object>) receiptSnapshot.get(0);
+    assert "keep".equals(receiptNestedSnapshot.get("value"))
+        : "BSC collection receipt snapshot must not see callback mutation";
+    assert Arrays.equals(new byte[] {(byte) 0xbb}, (byte[]) receiptNestedSnapshot.get("bytes"))
+        : "BSC collection receipt bytes must not see callback mutation";
+    final Map<String, Object> blockSnapshot =
+        (Map<String, Object>) evidence.block().get("mutableWitness");
+    assert "block".equals(blockSnapshot.get("value"))
+        : "BSC collection block snapshot must not see callback mutation";
+    assert Arrays.equals(new byte[] {(byte) 0xcc}, (byte[]) blockSnapshot.get("bytes"))
+        : "BSC collection block bytes must not see callback mutation";
+    final Map<String, Object> finalitySnapshot =
+        (Map<String, Object>) evidence.parliaFinality().get("mutableWitness");
+    final List<Object> branchSnapshot = (List<Object>) finalitySnapshot.get("branch");
+    assert branchSnapshot.equals(Collections.singletonList(validatorSetHash))
+        : "BSC collection finality branch must be snapshotted";
+    assert Arrays.equals(new byte[] {(byte) 0xaa}, (byte[]) finalitySnapshot.get("bytes"))
+        : "BSC collection finality bytes must be snapshotted";
+    assert !finalitySnapshot.containsKey("new")
+        : "BSC collection finality snapshot must not see post-collection mutation";
+  }
+
   private static void ethereumReceiptTrieProofBuilderUsesRlpTransactionIndexKeys() {
     final Map<String, Object> receipt =
         sampleEvmReceipt(0, "0x" + repeat("aa", 32), "0x" + repeat("bb", 32), "0x1234");
@@ -3429,6 +4443,36 @@ public final class EvmSccpProverTests {
         : "collection must derive receiptProofHash from the generated receiptProof";
 
     boolean threw = false;
+    for (final String[] missingFinalityCase :
+        new String[][] {
+          {"finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot"},
+          {"syncCommitteeRoot", "beaconFinality.syncCommitteeRoot"},
+          {"beaconSlot", "beaconFinality.beaconSlot"}
+        }) {
+      final Map<String, Object> incompleteFinality = new LinkedHashMap<>(beaconFinality);
+      incompleteFinality.remove(missingFinalityCase[0]);
+      threw = false;
+      try {
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                receipt,
+                block,
+                incompleteFinality,
+                null,
+                null,
+                null,
+                sourceBridgeEmitterAddress,
+                blockReceipts,
+                inclusionBranch));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains(missingFinalityCase[1]);
+      }
+      assert threw : "collection must reject missing " + missingFinalityCase[1];
+    }
+
     final String[][] receiptAliasConflicts =
         new String[][] {
           {"transaction_hash", "0x" + repeat("ac", 32), "receipt.transactionHash"},
@@ -4239,13 +5283,16 @@ public final class EvmSccpProverTests {
     }
     assert threw : "Beacon REST provider must require local sync committee material";
 
-    final byte[] publicKey = new byte[48];
-    Arrays.fill(publicKey, (byte) 0x11);
-    final byte[] pop = new byte[96];
-    Arrays.fill(pop, (byte) 0x22);
+    final List<byte[]> publicKeys = new ArrayList<>();
+    final List<String> weights = new ArrayList<>();
+    final List<byte[]> pops = new ArrayList<>();
+    for (int index = 0; index < 512; index++) {
+      publicKeys.add(indexedSyncCommitteeBytes(0x11, 48, index));
+      weights.add("1");
+      pops.add(indexedSyncCommitteeBytes(0x22, 96, index));
+    }
     final byte[] syncCommitteePayload =
-        SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(
-            Arrays.asList(publicKey), Arrays.asList("1"), Arrays.asList(pop));
+        SourceSccpProofs.canonicalEthSyncCommitteePayloadBytes(publicKeys, weights, pops);
     threw = false;
     try {
       beaconRestProvider(
@@ -5314,12 +6361,14 @@ public final class EvmSccpProverTests {
   private static void mainnetFacadesSnapshotWitnessProviderInputs() {
     final byte[] ethBundleBytes = new byte[] {5, 6, 7};
     final byte[] ethSourceProofBytes = new byte[] {9, 10};
+    final String ethNativeVerifierKeyHash =
+        sha256Hex(new byte[] {89, (byte) 144, (byte) 233});
     final SourceSccpProofs.EvmDestinationBinding ethBinding =
         EthereumMainnetSccp.destinationBinding(
             "0x" + repeat("11", 20),
             "0x" + repeat("22", 20),
             "0x" + repeat("bb", 32),
-            "0x" + repeat("cc", 32));
+            ethNativeVerifierKeyHash);
     final EvmSccpProver.ProofRequestInput ethInput =
         new EvmSccpProver.ProofRequestInput(
             samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
@@ -5353,6 +6402,42 @@ public final class EvmSccpProverTests {
         : "Ethereum facade must use witness-resolved bundle bytes";
     assert Arrays.equals(new byte[] {9, 9}, ethRequest.sourceProofBytes())
         : "Ethereum facade must use witness-resolved source proof bytes";
+    final EvmSccpProver.ProofRequest[] seenEthProofRequest =
+        new EvmSccpProver.ProofRequest[1];
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts ethNativeArtifacts =
+        sampleVerifiedEthereumNativeEvmProverArtifacts(ethBinding.hash);
+    final EvmSccpProver.ProofRequest directEthRequest =
+        EthereumMainnetSccp.buildProofRequest(ethInput, ethNativeArtifacts.nativeProverBundle());
+    final EvmSccpProver.ProofResult ethProofResult =
+        new EthereumMainnetSccp(
+                null,
+                request -> {
+                  seenEthProofRequest[0] = request;
+                  assert request != directEthRequest
+                      : "Ethereum proof engine must receive a callback request snapshot";
+                  assert request.requestHash().equals(directEthRequest.requestHash())
+                      : "Ethereum callback request snapshot must preserve the request hash";
+                  final byte[] callbackBundleBytes = request.bundleBytes();
+                  final byte[] callbackSourceProofBytes = request.sourceProofBytes();
+                  callbackBundleBytes[0] = 0x7d;
+                  callbackSourceProofBytes[0] = 0x7c;
+                  return sampleGroth16ProofBytes();
+                },
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ethNativeArtifacts,
+                null)
+            .proveOutboundToEthereum(ethInput);
+    assert seenEthProofRequest[0] != null
+        : "Ethereum proof engine must receive a callback request";
+    assert Arrays.equals(new byte[] {5, 6, 7}, ethProofResult.bundleBytes())
+        : "Ethereum proof result must keep the original bundle bytes";
+    assert Arrays.equals(new byte[] {9, 10}, ethProofResult.sourceProofBytes())
+        : "Ethereum proof result must keep the original source proof bytes";
 
     final byte[] bscBundleBytes = new byte[] {3, 4, 5};
     final byte[] bscSourceProofBytes = new byte[] {6, 7};
@@ -5486,6 +6571,14 @@ public final class EvmSccpProverTests {
       builder.append(String.format("%02x", b & 0xff));
     }
     return builder.toString();
+  }
+
+  private static String sha256Hex(final byte[] bytes) {
+    try {
+      return "0x" + hexLower(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 digest is unavailable", ex);
+    }
   }
 
   private static Map<String, Object> sampleEvmReceipt(
@@ -5981,6 +7074,191 @@ public final class EvmSccpProverTests {
     return out;
   }
 
+  private static EvmSccpProver.EthereumMainnetNativeEvmProverBundle
+      sampleEthereumNativeEvmProverBundle(
+          final String destinationBindingHash,
+          final boolean noWasm,
+          final boolean remoteProverRequired) {
+    final String proofArtifactHash = "0x" + repeat("91", 32);
+    final String provingKeyHash = "0x" + repeat("92", 32);
+    final List<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact> artifacts =
+        new ArrayList<>();
+    int index = 1;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      artifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              proofArtifactHash,
+              provingKeyHash,
+              "artifacts/eth-mainnet/" + entry.getKey() + "-implementation.bin",
+              "0x" + repeat(String.format("%02x", index), 32)));
+      index++;
+    }
+    return new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+        EvmSccpProver.NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+        EvmSccpProver.DOMAIN_ETH,
+        "eth",
+        EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+        "artifacts/eth-mainnet/proof-artifact.bin",
+        proofArtifactHash,
+        "artifacts/eth-mainnet/proving-key.bin",
+        provingKeyHash,
+        "artifacts/eth-mainnet/verifier-key.bin",
+        "0x" + repeat("cc", 32),
+        destinationBindingHash,
+        noWasm,
+        remoteProverRequired,
+        "pure-typescript",
+        artifacts,
+        Arrays.asList("0x" + repeat("a1", 32), "0x" + repeat("a2", 32)));
+  }
+
+  private static EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts
+      sampleVerifiedEthereumNativeEvmProverArtifacts(final String destinationBindingHash) {
+    final byte[] proofArtifactBytes = new byte[] {1, 2, 3, 5, 8};
+    final byte[] provingKeyBytes = new byte[] {13, 21, 34, 55};
+    final byte[] verifierKeyBytes = new byte[] {89, (byte) 144, (byte) 233};
+    final byte[] implementationBytes =
+        "sccp java android prover artifact v1".getBytes(StandardCharsets.UTF_8);
+    final String proofArtifactHash = sha256Hex(proofArtifactBytes);
+    final String provingKeyHash = sha256Hex(provingKeyBytes);
+    final String verifierKeyHash = sha256Hex(verifierKeyBytes);
+    final String implementationHash = sha256Hex(implementationBytes);
+    final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
+        artifacts = new ArrayList<>();
+    int index = 0;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      index++;
+      artifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              proofArtifactHash,
+              provingKeyHash,
+              "java-android".equals(entry.getKey())
+                  ? implementationHash
+                  : "0x" + repeat(String.format("%02x", index), 32)));
+    }
+    return new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            destinationBindingHash,
+            artifacts,
+            Collections.singletonList("0x" + repeat("a1", 32)))
+        .verifiedArtifacts(
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            "java-android",
+            implementationBytes);
+  }
+
+  private static String sampleEthereumNativeEvmProverBundleJson(
+      final String destinationBindingHash) {
+    return sampleEthereumNativeEvmProverBundleJson(destinationBindingHash, true, false);
+  }
+
+  private static String sampleEthereumNativeEvmProverBundleJson(
+      final String destinationBindingHash,
+      final boolean noWasm,
+      final boolean remoteProverRequired) {
+    return sampleEthereumNativeEvmProverBundleJson(
+        destinationBindingHash,
+        noWasm,
+        remoteProverRequired,
+        "artifacts/eth-mainnet/proof-artifact.bin");
+  }
+
+  private static String sampleEthereumNativeEvmProverBundleJson(
+      final String destinationBindingHash,
+      final boolean noWasm,
+      final boolean remoteProverRequired,
+      final String proofArtifact) {
+    final String proofArtifactHash = "0x" + repeat("91", 32);
+    final String provingKeyHash = "0x" + repeat("92", 32);
+    final StringBuilder artifacts = new StringBuilder();
+    int index = 1;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      if (artifacts.length() > 0) {
+        artifacts.append(',');
+      }
+      artifacts
+          .append("{")
+          .append("\"sdk\":\"")
+          .append(entry.getKey())
+          .append("\",")
+          .append("\"implementation\":\"")
+          .append(entry.getValue())
+          .append("\",")
+          .append("\"prover_artifact_hash\":\"")
+          .append(proofArtifactHash)
+          .append("\",")
+          .append("\"proving_key_hash\":\"")
+          .append(provingKeyHash)
+          .append("\",")
+          .append("\"implementation_artifact\":\"artifacts/eth-mainnet/")
+          .append(entry.getKey())
+          .append("-implementation.bin\",")
+          .append("\"implementation_hash\":\"0x")
+          .append(repeat(String.format("%02x", index), 32))
+          .append("\"}");
+      index++;
+    }
+    return "{"
+        + "\"schema\":\""
+        + EvmSccpProver.NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1
+        + "\","
+        + "\"bundle_id\":\""
+        + EvmSccpProver.ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1
+        + "\","
+        + "\"domain\":"
+        + EvmSccpProver.DOMAIN_ETH
+        + ","
+        + "\"chain\":\"eth\","
+        + "\"proof_backend\":\""
+        + EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1
+        + "\","
+        + "\"proof_artifact\":\""
+        + proofArtifact
+        + "\","
+        + "\"proof_artifact_hash\":\""
+        + proofArtifactHash
+        + "\","
+        + "\"proving_key\":\"artifacts/eth-mainnet/proving-key.bin\","
+        + "\"proving_key_hash\":\""
+        + provingKeyHash
+        + "\","
+        + "\"verifier_key\":\"artifacts/eth-mainnet/verifier-key.bin\","
+        + "\"verifier_key_hash\":\"0x"
+        + repeat("cc", 32)
+        + "\","
+        + "\"destination_binding_hash\":\""
+        + destinationBindingHash
+        + "\","
+        + "\"no_wasm\":"
+        + noWasm
+        + ","
+        + "\"remote_prover_required\":"
+        + remoteProverRequired
+        + ","
+        + "\"browser_implementation\":\"pure-typescript\","
+        + "\"native_sdk_artifacts\":["
+        + artifacts
+        + "],"
+        + "\"audit_hashes\":[\"0x"
+        + repeat("a1", 32)
+        + "\",\"0x"
+        + repeat("a2", 32)
+        + "\"]"
+        + "}";
+  }
+
   private static String repeat(final String value, final int count) {
     final StringBuilder out = new StringBuilder(value.length() * count);
     for (int i = 0; i < count; i++) {
@@ -5992,6 +7270,13 @@ public final class EvmSccpProverTests {
   private static byte[] repeatedByteArray(final int value, final int count) {
     final byte[] out = new byte[count];
     Arrays.fill(out, (byte) value);
+    return out;
+  }
+
+  private static byte[] indexedSyncCommitteeBytes(final int value, final int count, final int index) {
+    final byte[] out = repeatedByteArray(value, count);
+    out[count - 2] = (byte) ((index >>> 8) & 0xff);
+    out[count - 1] = (byte) (index & 0xff);
     return out;
   }
 }

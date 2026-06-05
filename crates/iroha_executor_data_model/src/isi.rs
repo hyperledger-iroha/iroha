@@ -215,10 +215,17 @@ pub mod multisig {
         /// Construct a multisig registration using a freshly generated domainless account id.
         /// The generated key is not meant for direct signing; it only anchors the registration
         /// step before the account is rekeyed to the canonical controller derived from the spec.
-        pub fn from_spec(home_domain: impl Into<Option<DomainId>>, spec: MultisigSpec) -> Self {
-            let key_pair = KeyPair::random();
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if fresh account key generation fails.
+        pub fn from_spec(
+            home_domain: impl Into<Option<DomainId>>,
+            spec: MultisigSpec,
+        ) -> Result<Self, iroha_crypto::Error> {
+            let key_pair = KeyPair::try_random()?;
             let account = AccountId::new(key_pair.public_key().clone());
-            Self::new(account, home_domain, spec)
+            Ok(Self::new(account, home_domain, spec))
         }
     }
 
@@ -772,8 +779,10 @@ pub mod multisig {
             let domain: DomainId =
                 DomainId::try_new("non-derived", "universal").expect("valid domain");
             let spec = sample_spec();
-            let first = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());
-            let second = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());
+            let first = MultisigRegister::from_spec(Some(domain.clone()), spec.clone())
+                .expect("checked multisig controller account generation");
+            let second = MultisigRegister::from_spec(Some(domain.clone()), spec.clone())
+                .expect("checked multisig controller account generation");
 
             assert_eq!(
                 first.home_domain.as_ref(),

@@ -122,16 +122,19 @@ impl BootstrapRegistrations {
     }
 }
 
-fn bootstrap_escrow_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> AccountId {
-    let escrow_key_pair = KeyPair::from_seed(
+fn bootstrap_escrow_account_id(
+    genesis_public_key: &iroha_crypto::PublicKey,
+) -> Result<AccountId, color_eyre::eyre::Error> {
+    let escrow_key_pair = KeyPair::try_from_seed(
         genesis_public_key
             .to_string()
             .bytes()
             .chain(DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED.iter().copied())
             .collect(),
         iroha_crypto::Algorithm::default(),
-    );
-    AccountId::new(escrow_key_pair.public_key().clone())
+    )
+    .wrap_err("failed to derive NPoS bootstrap escrow account key pair")?;
+    Ok(AccountId::new(escrow_key_pair.public_key().clone()))
 }
 
 fn manifest_has_npos_bootstrap(manifest: &RawGenesisTransaction) -> bool {
@@ -453,7 +456,7 @@ impl<T: Write> RunArgs<T> for Args {
             if needs_npos_bootstrap {
                 let ivm_domain =
                     DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN)?;
-                let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
+                let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key())?;
                 builder = append_npos_bootstrap(
                     builder,
                     &mut bootstrap_registrations,

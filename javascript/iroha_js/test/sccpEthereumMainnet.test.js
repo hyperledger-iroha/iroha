@@ -1,17 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SORA,
+  SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
   SCCP_ETH_MAINNET_NETWORK_ID,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
   SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
   SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
   SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+  SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+  SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
   buildEvmReceiptTrieProofFromReceipts,
   buildEthereumMainnetSccpLocalAdmissionSubmission,
   canonicalEvmReceiptRlp,
@@ -20,10 +27,21 @@ import {
   evmReceiptTrieKey,
   evmSccpReceiptProofHash,
   evmSccpSourceEventTopic,
+  parseEthereumMainnetNativeEvmProverBundleManifest,
+  validateEthereumMainnetNativeEvmProverBundle,
+  verifyEthereumMainnetNativeEvmProverArtifacts,
   wrapEvmSccpProofResult,
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const sha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
+const indexedHexBytes = (fillByte, length, index) => {
+  const bytes = new Uint8Array(length).fill(fillByte);
+  bytes[length - 2] = (index >>> 8) & 0xff;
+  bytes[length - 1] = index & 0xff;
+  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+};
 const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const SOURCE_EVENT_DIGEST = hex32("34");
@@ -108,6 +126,85 @@ const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_ETH, destinationBindingO
   sourceDomain: SCCP_DOMAIN_SORA,
   statementHash: hex32("66"),
 });
+
+const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => {
+  const proofArtifactHash = hex32("91");
+  const provingKeyHash = hex32("92");
+  return {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/eth-mainnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
+    verifier_key_hash: hex32("cc"),
+    destination_binding_hash: destinationBindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: hex32((index + 1).toString(16).padStart(2, "0")),
+    })),
+    audit_hashes: [hex32("a1"), hex32("a2")],
+    ...overrides,
+  };
+};
+
+const sampleVerifiedNativeEvmProverFixture = () => {
+  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
+  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
+  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
+  const implementationBytes = Buffer.from("sccp pure typescript prover artifact v1", "utf8");
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const destinationBinding = ethereumMainnetSccpDestinationBinding(
+    sampleDestinationBindingInput({ verifierKeyHash }),
+  );
+  const bundle = sampleNativeEvmProverBundle(destinationBinding.bindingHash, {
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : hex32((index + 1).toString(16).padStart(2, "0")),
+    })),
+  });
+  return {
+    destinationBinding,
+    nativeProverArtifacts: verifyEthereumMainnetNativeEvmProverArtifacts(
+      {
+        nativeProverBundle: bundle,
+        proofArtifactBytes,
+        provingKeyBytes,
+        verifierKeyBytes,
+        sdk: "javascript",
+        implementationBytes,
+      },
+      { destinationBinding },
+    ),
+  };
+};
 
 const abiWord = (value) => {
   let remaining = BigInt(value);
@@ -250,6 +347,87 @@ test("EthereumMainnetSccp collects receipt evidence from user execution and cons
     calls.map(([method]) => method),
     ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"],
   );
+});
+
+test("EthereumMainnetSccp collectInboundEvidenceFromReceipt snapshots consensus evidence", async () => {
+  const mutableTopics = [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST];
+  const receiptLogs = [sourceEventLog({ topics: mutableTopics })];
+  const receipt = fullReceipt(0, { logs: receiptLogs });
+  const blockWitness = { branch: [hex32("e1")], bytes: new Uint8Array([0xbb]) };
+  const block = {
+    hash: BLOCK_HASH,
+    number: "0x1234",
+    receiptsRoot: hex32("cc"),
+    mutableWitness: blockWitness,
+  };
+  const finalityBranch = [...SAMPLE_FINALITY_BRANCH];
+  const finalityWitness = {
+    branch: finalityBranch,
+    bytes: new Uint8Array([0xcc]),
+  };
+  const mutablePayload = new Uint8Array([0xaa]);
+  const sdk = new EthereumMainnetSccp({
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+    consensusProvider: {
+      async collectFinalityEvidence(evidence) {
+        assert.equal(Object.isFrozen(evidence), true);
+        assert.equal(Object.isFrozen(evidence.receipt), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs[0].topics), true);
+        assert.equal(Object.isFrozen(evidence.block), true);
+        assert.equal(Object.isFrozen(evidence.block.mutableWitness.branch), true);
+        assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+        assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+        assert.throws(() => {
+          evidence.receipt.logs.push(sourceEventLog());
+        }, TypeError);
+        assert.throws(() => {
+          evidence.block.mutableWitness.branch.push(hex32("99"));
+        }, TypeError);
+
+        receiptLogs.push(sourceEventLog());
+        mutableTopics[1] = hex32("99");
+        blockWitness.branch.push(hex32("99"));
+        blockWitness.bytes[0] = 0x7c;
+        return {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          finalityBranch,
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+          mutableWitness: finalityWitness,
+        };
+      },
+    },
+  });
+
+  const evidence = await sdk.collectInboundEvidenceFromReceipt({
+    receipt,
+    block,
+    mutablePayload,
+  });
+  finalityBranch[0] = hex32("99");
+  finalityWitness.branch.push(hex32("99"));
+  finalityWitness.bytes[0] = 0x7d;
+  mutablePayload[0] = 0x7e;
+
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+  assert.equal(Object.isFrozen(evidence.beaconFinality.finalityBranch), true);
+  assert.equal(Object.isFrozen(evidence.beaconFinality.mutableWitness.branch), true);
+  assert.throws(() => {
+    evidence.receipt.logs.push(sourceEventLog());
+  }, TypeError);
+  assert.equal(evidence.mutablePayload[0], 0xaa);
+  assert.equal(evidence.receipt.logs.length, 1);
+  assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+  assert.deepEqual(evidence.block.mutableWitness.branch, [hex32("e1")]);
+  assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+  assert.deepEqual(evidence.beaconFinality.finalityBranch, SAMPLE_FINALITY_BRANCH);
+  assert.deepEqual(evidence.beaconFinality.mutableWitness.branch, SAMPLE_FINALITY_BRANCH);
+  assert.deepEqual([...evidence.beaconFinality.mutableWitness.bytes], [0xcc]);
 });
 
 test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
@@ -514,6 +692,21 @@ test("EthereumMainnetSccp builds receipt proof nodes from user JSON-RPC receipts
   const localSdk = new EthereumMainnetSccp({
     sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
   });
+  for (const field of ["finalizedHeaderRoot", "syncCommitteeRoot", "beaconSlot"]) {
+    const incompleteFinality = { ...baseCollectionInput.beaconFinality };
+    delete incompleteFinality[field];
+    await assert.rejects(
+      () =>
+        localSdk.collectInboundEvidenceFromReceipt({
+          ...baseCollectionInput,
+          beaconFinality: incompleteFinality,
+        }),
+      new RegExp(
+        `receipt proof construction requires beaconFinality\\.${field}`,
+        "u",
+      ),
+    );
+  }
   for (const [alias, value, label] of [
     ["transaction_hash", hex32("ab"), "receipt.transactionHash"],
     ["block_hash", hex32("ab"), "receipt.blockHash"],
@@ -924,9 +1117,13 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     },
   });
   const syncCommitteePayload = {
-    syncCommitteePublicKeys: [`0x${"11".repeat(48)}`],
-    syncCommitteeWeights: ["1"],
-    syncCommitteePops: [`0x${"22".repeat(96)}`],
+    syncCommitteePublicKeys: Array.from({ length: 512 }, (_, index) =>
+      indexedHexBytes(0x11, 48, index),
+    ),
+    syncCommitteeWeights: Array.from({ length: 512 }, () => "1"),
+    syncCommitteePops: Array.from({ length: 512 }, (_, index) =>
+      indexedHexBytes(0x22, 96, index),
+    ),
   };
   const providerFor = (
     headerResponse,
@@ -1582,6 +1779,55 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
   );
   assert.equal(proveCalls, 1);
 
+  const proofReadyInput = {
+    receipt: {
+      transactionHash: TX_HASH,
+      blockHash: BLOCK_HASH,
+      blockNumber: "0x1234",
+      status: "0x1",
+      logs: [sourceEventLog()],
+    },
+    block: {
+      hash: BLOCK_HASH,
+      number: "0x1234",
+      receiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+    },
+    beaconFinality: {
+      finalizedHeaderRoot: sampleReceiptProof.beaconFinalizedRoot,
+      syncCommitteeRoot: sampleReceiptProof.syncCommitteeRoot,
+      beaconSlot: "0x40",
+      executionBlockNumber: "0x1234",
+      executionBlockHash: sampleReceiptProof.executionBlockHash,
+      executionReceiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+      ...sampleFinalityUpdateFields(),
+    },
+    receiptProof: sampleReceiptProof,
+    receiptProofHash: evmSccpReceiptProofHash(sampleReceiptProof),
+    sourceEventDigest: SOURCE_EVENT_DIGEST,
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+  };
+  const oversizedProofBytes = new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1);
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          return oversizedProofBytes;
+        },
+      }).proveInboundToSora(proofReadyInput),
+    /proofBytes must be at most/u,
+  );
+  let submitterCalled = false;
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        submitInboundToIroha() {
+          submitterCalled = true;
+        },
+      }).submitInboundToIroha(oversizedProofBytes),
+    /proofBytes must be at most/u,
+  );
+  assert.equal(submitterCalled, false);
+
   await assert.rejects(
     () =>
       new EthereumMainnetSccp({
@@ -2033,6 +2279,74 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
     );
   }
 
+  const matchingBeaconFinality = {
+    finalizedHeaderRoot: sampleReceiptProof.beaconFinalizedRoot,
+    syncCommitteeRoot: sampleReceiptProof.syncCommitteeRoot,
+    beaconSlot: "0x40",
+    executionBlockNumber: "0x1234",
+    executionBlockHash: sampleReceiptProof.executionBlockHash,
+    executionReceiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+    ...sampleFinalityUpdateFields(),
+  };
+  for (const [field, value, pattern] of [
+    [
+      "executionBlockNumber",
+      "0x1235",
+      /receiptProof\.executionBlockNumber must match beaconFinality\.executionBlockNumber/u,
+    ],
+    [
+      "executionBlockHash",
+      hex32("99"),
+      /receiptProof\.executionBlockHash must match beaconFinality\.executionBlockHash/u,
+    ],
+    [
+      "executionReceiptsRoot",
+      hex32("99"),
+      /receiptProof\.executionReceiptsRoot must match beaconFinality\.executionReceiptsRoot/u,
+    ],
+    [
+      "finalizedHeaderRoot",
+      hex32("99"),
+      /receiptProof\.beaconFinalizedRoot must match beaconFinality\.finalizedHeaderRoot/u,
+    ],
+    [
+      "syncCommitteeRoot",
+      hex32("99"),
+      /receiptProof\.syncCommitteeRoot must match beaconFinality\.syncCommitteeRoot/u,
+    ],
+    [
+      "beaconSlot",
+      "0x41",
+      /receiptProof\.beaconSlot must match beaconFinality\.beaconSlot/u,
+    ],
+  ]) {
+    await assert.rejects(
+      () =>
+        new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+          receiptProof: sampleReceiptProof,
+          beaconFinality: { ...matchingBeaconFinality, [field]: value },
+        }),
+      pattern,
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }).collectInboundEvidenceFromReceipt({
+        receipt: fullReceipt(0),
+        block: {
+          hash: BLOCK_HASH,
+          number: "0x1234",
+          receiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+        },
+        beaconFinality: matchingBeaconFinality,
+        receiptProof: { ...sampleReceiptProof, sourceEventDigest: hex32("99") },
+      }),
+    /receiptProof\.sourceEventDigest must match receipt source event/u,
+  );
+
   await assert.rejects(
     () =>
       new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
@@ -2390,6 +2704,87 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
     /receiptProof\.beaconSlot/u,
   );
   assert.equal(proveCalls, 1);
+});
+
+test("EthereumMainnetSccp inbound prover receives immutable evidence snapshots", async () => {
+  const mutableReceiptProof = {
+    ...sampleReceiptProof,
+    receiptTrieProofNodes: sampleReceiptProof.receiptTrieProofNodes.map((node) => [...node]),
+    inclusionBranch: [...sampleReceiptProof.inclusionBranch],
+  };
+  const mutableBeaconFinality = {
+    finalizedHeaderRoot: sampleReceiptProof.beaconFinalizedRoot,
+    syncCommitteeRoot: sampleReceiptProof.syncCommitteeRoot,
+    beaconSlot: "0x40",
+    executionBlockNumber: "0x1234",
+    executionBlockHash: sampleReceiptProof.executionBlockHash,
+    executionReceiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+    ...sampleFinalityUpdateFields(),
+    finalityBranch: [...SAMPLE_FINALITY_BRANCH],
+  };
+  const receipt = fullReceipt(0);
+  const sdk = new EthereumMainnetSccp({
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+    proveInbound(evidence) {
+      assert.equal(Object.isFrozen(evidence), true);
+      assert.equal(Object.isFrozen(evidence.receipt), true);
+      assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+      assert.equal(Object.isFrozen(evidence.receipt.logs[0]), true);
+      assert.equal(Object.isFrozen(evidence.receipt.logs[0].topics), true);
+      assert.equal(Object.isFrozen(evidence.receiptProof), true);
+      assert.equal(Object.isFrozen(evidence.receiptProof.receiptTrieProofNodes), true);
+      assert.equal(Object.isFrozen(evidence.receiptProof.receiptTrieProofNodes[0]), true);
+      assert.equal(Object.isFrozen(evidence.beaconFinality), true);
+      assert.equal(Object.isFrozen(evidence.beaconFinality.finalityBranch), true);
+      assert.notEqual(evidence.receipt, receipt);
+      assert.notEqual(evidence.receiptProof, mutableReceiptProof);
+      assert.notEqual(
+        evidence.receiptProof.receiptTrieProofNodes[0],
+        mutableReceiptProof.receiptTrieProofNodes[0],
+      );
+      assert.notEqual(evidence.beaconFinality, mutableBeaconFinality);
+      assert.notEqual(evidence.beaconFinality.finalityBranch, mutableBeaconFinality.finalityBranch);
+      assert.throws(
+        () => {
+          evidence.receipt.logs[0].topics.push(hex32("99"));
+        },
+        TypeError,
+      );
+      assert.throws(
+        () => {
+          evidence.receiptProof.receiptTrieProofNodes[0].push(0xff);
+        },
+        TypeError,
+      );
+      assert.throws(
+        () => {
+          evidence.beaconFinality.finalityBranch.push(hex32("99"));
+        },
+        TypeError,
+      );
+      return [1, 2, 3];
+    },
+  });
+
+  assert.deepEqual(
+    await sdk.proveInboundToSora({
+      receipt,
+      block: {
+        hash: BLOCK_HASH,
+        number: "0x1234",
+        receiptsRoot: sampleReceiptProof.executionReceiptsRoot,
+      },
+      beaconFinality: mutableBeaconFinality,
+      receiptProof: mutableReceiptProof,
+    }),
+    new Uint8Array([1, 2, 3]),
+  );
+  assert.equal(
+    mutableReceiptProof.receiptTrieProofNodes[0][0],
+    sampleReceiptProof.receiptTrieProofNodes[0][0],
+  );
+  assert.deepEqual(mutableBeaconFinality.finalityBranch, SAMPLE_FINALITY_BRANCH);
+  assert.deepEqual(receipt.logs[0].topics, [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST]);
 });
 
 test("EthereumMainnetSccp rejects failed or drifted receipt evidence before proving", async () => {
@@ -2891,11 +3286,18 @@ test("Ethereum outbound prover callback must not see BSC requests", async () => 
 
 test("EthereumMainnetSccp requires linked local prover functions", async () => {
   let executionRequests = 0;
+  let outboundProverCalled = false;
   const sdk = new EthereumMainnetSccp({
     executionProvider: {
       async request() {
         executionRequests += 1;
         throw new Error("unexpected execution-provider fallback");
+      },
+    },
+    outboundProver: {
+      async prove() {
+        outboundProverCalled = true;
+        return GROTH16_PROOF_BYTES;
       },
     },
     sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
@@ -2914,11 +3316,12 @@ test("EthereumMainnetSccp requires linked local prover functions", async () => {
   await assert.rejects(
     () => sdk.proveOutboundToEthereum(sampleOutboundInput()),
     (error) => {
-      assert.equal(error.code, "ERR_SCCP_ETH_OUTBOUND_PROVER_UNAVAILABLE");
-      assert.match(error.message, /local JS\/native EVM prover/u);
+      assert.equal(error.code, "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE");
+      assert.match(error.message, /verified native EVM prover artifacts/u);
       return true;
     },
   );
+  assert.equal(outboundProverCalled, false);
   assert.equal(executionRequests, 0);
 });
 
@@ -2958,16 +3361,21 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
 });
 
 test("EthereumMainnetSccp binds custom outbound proof results to the requested proof", async () => {
-  const input = sampleOutboundInput();
-  const referenceSdk = new EthereumMainnetSccp();
+  const { destinationBinding, nativeProverArtifacts } = sampleVerifiedNativeEvmProverFixture();
+  const input = {
+    ...sampleOutboundInput(),
+    destinationBinding,
+  };
+  const referenceSdk = new EthereumMainnetSccp({ nativeProverArtifacts });
   const expectedRequest = referenceSdk.buildOutboundProofRequest(input);
   const wrongRequest = referenceSdk.buildOutboundProofRequest({
-    ...sampleOutboundInput(),
+    ...input,
     bundleBytes: [9, 8, 7],
   });
   const wrongProofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, wrongRequest);
   let seenRequest;
   const rejectingSdk = new EthereumMainnetSccp({
+    nativeProverArtifacts,
     outboundProver: {
       async prove(request) {
         seenRequest = request;
@@ -2987,9 +3395,25 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
 
   let acceptedRequest;
   const acceptingSdk = new EthereumMainnetSccp({
+    nativeProverArtifacts,
     outboundProver: {
       async prove(request) {
         acceptedRequest = request;
+        assert.equal(Object.isFrozen(request.publicSignalWords), true);
+        assert.throws(() => {
+          request.publicSignalWords[0] = hex32("ff");
+        }, TypeError);
+        const callbackPublicInputsBytes = request.publicInputsBytes;
+        callbackPublicInputsBytes[0] ^= 0x7f;
+        assert.notDeepStrictEqual(
+          Array.from(callbackPublicInputsBytes),
+          Array.from(request.publicInputsBytes),
+        );
+        const callbackBundleBytes = request.bundleBytes;
+        callbackBundleBytes[0] ^= 0x7f;
+        assert.deepEqual(Array.from(request.bundleBytes), [1, 2, 3]);
+        const callbackSourceProofBytes = request.sourceProofBytes;
+        assert.deepEqual(Array.from(callbackSourceProofBytes), []);
         return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
       },
     },
@@ -2997,6 +3421,482 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
   const proofResult = await acceptingSdk.proveOutboundToEthereum(input);
   assert.equal(acceptedRequest.requestHash, expectedRequest.requestHash);
   assert.equal(proofResult.requestHash, expectedRequest.requestHash);
+  assert.deepEqual(Array.from(proofResult.bundleBytes), [1, 2, 3]);
+  assert.deepEqual(proofResult.publicSignalWords, expectedRequest.publicSignalWords);
+
+  const plainSdk = new EthereumMainnetSccp();
+  assert.throws(
+    () => plainSdk.buildOutboundProofRequest({
+      ...input,
+      proofArtifactHash: hex32("91"),
+    }),
+    /proofArtifactHash and provingKeyHash must be supplied together/u,
+  );
+  assert.throws(
+    () => plainSdk.buildOutboundProofRequest({
+      ...input,
+      proofArtifactHash: hex32("00"),
+      provingKeyHash: hex32("92"),
+    }),
+    /proof request\.proofArtifactHash/u,
+  );
+
+  const artifactInput = {
+    ...input,
+    proofArtifactHash: hex32("91"),
+    provingKeyHash: hex32("92"),
+  };
+  const artifactRequest = plainSdk.buildOutboundProofRequest(artifactInput);
+  assert.equal(artifactRequest.proofArtifactHash, hex32("91"));
+  assert.equal(artifactRequest.provingKeyHash, hex32("92"));
+  assert.notEqual(artifactRequest.requestHash, expectedRequest.requestHash);
+  const artifactResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, artifactRequest);
+  assert.equal(artifactResult.proofArtifactHash, hex32("91"));
+  assert.equal(artifactResult.provingKeyHash, hex32("92"));
+
+  const mismatchedArtifactSdk = new EthereumMainnetSccp({
+    nativeProverArtifacts,
+    outboundProver: {
+      async prove() {
+        return {
+          proofBytes: GROTH16_PROOF_BYTES,
+          proofArtifactHash: hex32("93"),
+          provingKeyHash: hex32("92"),
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    () => mismatchedArtifactSdk.proveOutboundToEthereum(input),
+    /proofArtifactHash and provingKeyHash must match request/u,
+  );
+});
+
+test("EthereumMainnetSccp validates native prover bundle and binds artifact hashes", () => {
+  const input = sampleOutboundInput();
+  const referenceSdk = new EthereumMainnetSccp();
+  const plainRequest = referenceSdk.buildOutboundProofRequest(input);
+  const bundle = sampleNativeEvmProverBundle(input.destinationBinding.bindingHash);
+  const descriptor = validateEthereumMainnetNativeEvmProverBundle(bundle, {
+    destinationBinding: input.destinationBinding,
+  });
+  const parsedDescriptor = parseEthereumMainnetNativeEvmProverBundleManifest(
+    JSON.stringify(bundle),
+    { destinationBinding: input.destinationBinding },
+  );
+
+  assert.equal(descriptor.schema, SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1);
+  assert.equal(descriptor.bundleId, SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1);
+  assert.deepEqual(parsedDescriptor, descriptor);
+  assert.equal(descriptor.proofArtifactHash, hex32("91"));
+  assert.equal(descriptor.proofArtifact, "artifacts/eth-mainnet/proof-artifact.bin");
+  assert.equal(descriptor.provingKeyHash, hex32("92"));
+  assert.equal(descriptor.provingKey, "artifacts/eth-mainnet/proving-key.bin");
+  assert.equal(descriptor.verifierKey, "artifacts/eth-mainnet/verifier-key.bin");
+  assert.equal(descriptor.noWasm, true);
+  assert.equal(descriptor.remoteProverRequired, false);
+  assert.equal(descriptor.browserImplementation, "pure-typescript");
+  assert.equal(Object.isFrozen(descriptor), true);
+  assert.equal(Object.isFrozen(descriptor.nativeSdkArtifacts), true);
+  assert.equal(
+    descriptor.nativeSdkArtifacts.find((artifact) => artifact.sdk === "javascript")
+      .implementationArtifact,
+    "artifacts/eth-mainnet/javascript-implementation.bin",
+  );
+  assert.throws(() => {
+    descriptor.nativeSdkArtifacts[0] = descriptor.nativeSdkArtifacts[1];
+  }, TypeError);
+
+  const request = referenceSdk.buildOutboundProofRequest({
+    ...input,
+    nativeProverBundle: bundle,
+  });
+  assert.equal(request.proofArtifactHash, descriptor.proofArtifactHash);
+  assert.equal(request.provingKeyHash, descriptor.provingKeyHash);
+  assert.notEqual(request.requestHash, plainRequest.requestHash);
+
+  const defaultBundleSdk = new EthereumMainnetSccp({
+    destinationBinding: input.destinationBinding,
+    nativeProverBundle: bundle,
+  });
+  assert.equal(defaultBundleSdk.buildOutboundProofRequest(input).requestHash, request.requestHash);
+  assert.equal(
+    referenceSdk.buildOutboundProofRequest({
+      ...input,
+      native_prover_bundle: bundle,
+    }).requestHash,
+    request.requestHash,
+  );
+
+  assert.throws(
+    () =>
+      referenceSdk.buildOutboundProofRequest({
+        ...input,
+        nativeProverBundle: bundle,
+        proofArtifactHash: hex32("94"),
+        provingKeyHash: hex32("92"),
+      }),
+    /nativeProverBundle artifact hashes must match proof request/u,
+  );
+});
+
+test("EthereumMainnetSccp verifies native prover artifact bytes against manifest hashes", async () => {
+  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
+  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
+  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
+  const implementationBytes = Buffer.from("sccp pure typescript prover artifact v1", "utf8");
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const input = sampleOutboundInput(SCCP_DOMAIN_ETH, { verifierKeyHash });
+  const bundle = sampleNativeEvmProverBundle(input.destinationBinding.bindingHash, {
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : hex32((index + 1).toString(16).padStart(2, "0")),
+    })),
+  });
+
+  const verified = verifyEthereumMainnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: JSON.stringify(bundle),
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding: input.destinationBinding },
+  );
+
+  assert.equal(verified.hashAlgorithm, SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1);
+  assert.equal(verified.proofArtifactHash, proofArtifactHash);
+  assert.equal(verified.provingKeyHash, provingKeyHash);
+  assert.equal(verified.verifierKeyHash, verifierKeyHash);
+  assert.equal(verified.nativeProverBundle.proofArtifactHash, proofArtifactHash);
+  assert.equal(verified.sdk, "javascript");
+  assert.equal(verified.implementation, "pure-typescript");
+  assert.equal(verified.implementationHash, implementationHash);
+  assert.equal(Object.isFrozen(verified), true);
+  const { implementationHash: _implementationHash, ...missingImplementationHash } = verified;
+  const missingImplementationHashMessage = "nativeProverArtifacts.implementationHash is required";
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp({
+        destinationBinding: input.destinationBinding,
+        nativeProverArtifacts: missingImplementationHash,
+      }),
+    (error) => error.message.includes(missingImplementationHashMessage),
+  );
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp({
+        destinationBinding: input.destinationBinding,
+        nativeProverArtifacts: {
+          ...verified,
+          verifierKeyHash: hex32("ef"),
+        },
+      }),
+    /nativeProverArtifacts verifierKeyHash must match nativeProverBundle/u,
+  );
+  let artifactBoundRequest;
+  const artifactBoundSdk = new EthereumMainnetSccp({
+    destinationBinding: input.destinationBinding,
+    nativeProverBundle: bundle,
+    proofArtifactBytes,
+    provingKeyBytes,
+    verifierKeyBytes,
+    sdk: "javascript",
+    implementationBytes,
+    outboundProver: {
+      async prove(request) {
+        artifactBoundRequest = request;
+        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+      },
+    },
+  });
+  const proofResult = await artifactBoundSdk.proveOutboundToEthereum(input);
+  assert.equal(artifactBoundRequest.proofArtifactHash, proofArtifactHash);
+  assert.equal(artifactBoundRequest.provingKeyHash, provingKeyHash);
+  assert.equal(proofResult.requestHash, artifactBoundRequest.requestHash);
+
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes: Uint8Array.from([0]),
+          provingKeyBytes,
+          verifierKeyBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /proofArtifactBytes sha256/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /verifierKeyBytes/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /sdk must be a non-empty string/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          sdk: "javascript",
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /implementationBytes are required/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          sdk: "javascript",
+          implementationBytes: Buffer.from("tampered", "utf8"),
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /implementationBytes sha256/u,
+  );
+  const flaggedArtifactBytes = Uint8Array.from([0x77, 0x61, 0x73, 0x6d]);
+  const flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
+  const flaggedBundle = sampleNativeEvmProverBundle(input.destinationBinding.bindingHash, {
+    proof_artifact_hash: flaggedArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) => ({
+      ...artifact,
+      prover_artifact_hash: flaggedArtifactHash,
+    })),
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: flaggedBundle,
+          proofArtifactBytes: flaggedArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /proofArtifactBytes contains forbidden prover dependency marker/u,
+  );
+});
+
+test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", () => {
+  const input = sampleOutboundInput();
+  const bundle = sampleNativeEvmProverBundle(input.destinationBinding.bindingHash);
+
+  assert.throws(
+    () =>
+      parseEthereumMainnetNativeEvmProverBundleManifest(
+        JSON.stringify(bundle).replace(
+          `"bundle_id":"${SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1}"`,
+          `"bundle_id":"forged","bundle_id":"${SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1}"`,
+        ),
+      ),
+    /nativeProverBundle contains duplicate JSON key: bundle_id/u,
+  );
+  assert.throws(
+    () =>
+      parseEthereumMainnetNativeEvmProverBundleManifest(
+        JSON.stringify(bundle).replace(
+          `"bundle_id":"${SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1}"`,
+          `"bundle\\u005fid":"forged","bundle_id":"${SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1}"`,
+        ),
+      ),
+    /nativeProverBundle contains duplicate JSON key: bundle_id/u,
+  );
+  assert.throws(
+    () => validateEthereumMainnetNativeEvmProverBundle({ ...bundle, no_wasm: false }),
+    /noWasm must be true/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        remote_prover_required: true,
+      }),
+    /remoteProverRequired must be false/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        domain: SCCP_DOMAIN_BSC,
+      }),
+    /domain must be Ethereum mainnet/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        domain: "01",
+      }),
+    /domain must be a u32 domain id/u,
+  );
+  assert.throws(
+    () => validateEthereumMainnetNativeEvmProverBundle({ ...bundle, chain: "bsc" }),
+    /chain must be eth/u,
+  );
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp().buildOutboundProofRequest({
+        ...input,
+        nativeProverBundle: {
+          ...bundle,
+          destination_binding_hash: hex32("95"),
+        },
+      }),
+    /nativeProverBundle destinationBindingHash must match destinationBinding/u,
+  );
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp().buildOutboundProofRequest({
+        ...input,
+        nativeProverBundle: {
+          ...bundle,
+          verifier_key_hash: hex32("dd"),
+        },
+      }),
+    /nativeProverBundle verifierKeyHash must match destinationBinding/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        proof_artifact: "../proof-artifact.bin",
+      }),
+    /proofArtifact must stay under the manifest directory/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        verifier_key: "/tmp/verifier-key.bin",
+      }),
+    /verifierKey must be a relative POSIX path/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        audit_hashes: [hex32("a1").toUpperCase()],
+      }),
+    /auditHashes\[0\] must be canonical lowercase 0x-prefixed 32-byte hex/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        audit_hashes: [bundle.proof_artifact_hash],
+      }),
+    /nativeProverBundle hashes must be role-separated: auditHashes\[0\] matches proofArtifactHash/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        experimental_manifest_note: "ignored fields must fail",
+      }),
+    /nativeProverBundle contains unknown field: experimental_manifest_note/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        proofArtifactHash: bundle.proof_artifact_hash,
+      }),
+    /proofArtifactHash must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? { ...artifact, experimental_manifest_note: "ignored fields must fail" }
+            : artifact,
+        ),
+      }),
+    /nativeSdkArtifacts\[0\] contains unknown field: experimental_manifest_note/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? { ...artifact, implementation_artifact: "native\\javascript.bin" }
+            : artifact,
+        ),
+      }),
+    /implementationArtifact must be a relative POSIX path/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.filter(
+          (artifact) => artifact.sdk !== "swift",
+        ),
+      }),
+    /nativeSdkArtifacts missing sdk: swift/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? { ...artifact, implementation: "wasm-witness" }
+            : artifact,
+        ),
+      }),
+    /javascript implementation must be pure-typescript/u,
+  );
 });
 
 test("EthereumMainnetSccp outbound provider path derives target from wrapped proof result", async () => {
@@ -3157,6 +4057,14 @@ test("EthereumMainnetSccp builds ETH -> SORA local-admission submissions", () =>
       buildEthereumMainnetSccpLocalAdmissionSubmission({
         ...input,
         envelopeEncoding: "abi_tuple_v1",
+      }),
+    /metadata is not canonical/u,
+  );
+  assert.throws(
+    () =>
+      buildEthereumMainnetSccpLocalAdmissionSubmission({
+        ...input,
+        proofFamily: "debug-proof-family",
       }),
     /metadata is not canonical/u,
   );

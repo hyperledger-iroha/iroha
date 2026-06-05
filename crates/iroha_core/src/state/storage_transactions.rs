@@ -402,12 +402,16 @@ mod serialization {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
 
+    static NEXT_TEST_HASH: AtomicU64 = AtomicU64::new(1);
+
     fn random_hash() -> Key {
-        use rand::Rng;
-        let mut rng = rand::rng();
-        let bytes = rng.random();
+        let counter = NEXT_TEST_HASH.fetch_add(1, Ordering::Relaxed);
+        let mut bytes = [0_u8; iroha_crypto::Hash::LENGTH];
+        bytes[..8].copy_from_slice(&counter.to_le_bytes());
         let hash = iroha_crypto::Hash::prehashed(bytes);
         HashOf::from_untyped_unchecked(hash)
     }

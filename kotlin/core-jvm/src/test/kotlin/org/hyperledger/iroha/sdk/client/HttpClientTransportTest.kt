@@ -362,6 +362,15 @@ class HttpClientTransportTest {
             sampleBfvPolicy(zeroInputLimit).encryptInput("ab", seed)
         }
 
+        val overwideInputLimit = IdentifierBfvPublicParameters(
+            baseParameters.parameters,
+            baseParameters.publicKey,
+            64,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(overwideInputLimit).encryptInput("ab", seed)
+        }
+
         val oversizedCoefficient = IdentifierBfvPublicParameters(
             baseParameters.parameters,
             IdentifierBfvPublicParameters.PublicKey(

@@ -402,7 +402,9 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
     let message = canary_message();
     let instruction = Log::new(LogLevel::INFO, message.clone());
-    let transaction = client.build_transaction([instruction], metadata);
+    let transaction = client
+        .try_build_transaction([instruction], metadata)
+        .wrap_err("failed to build Taira canary transaction")?;
     let signed_hash = transaction.hash();
     let entrypoint_hash = HashOf::new(&TransactionEntrypoint::External(transaction.clone()));
 
@@ -745,7 +747,8 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
     let key_pair = if use_config_signer {
         config.key_pair.clone()
     } else {
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .wrap_err("failed to generate Taira canary Ed25519 signer")?
     };
     let (algorithm, public_key_bytes) = key_pair
         .public_key()
@@ -1642,6 +1645,20 @@ mod tests {
             AccountId::new(key_pair.public_key().clone())
         );
         assert_eq!(signer.public_key_raw_hex, hex::encode(public_key_bytes));
+    }
+
+    #[test]
+    fn resolve_canary_signer_generates_checked_ed25519_signer() {
+        let config = crate::fallback_config();
+        let signer = resolve_canary_signer(&config, false).expect("generated signer");
+
+        assert!(signer.generated);
+        assert_eq!(signer.key_pair.algorithm(), Algorithm::Ed25519);
+        assert_eq!(
+            signer.account_id,
+            AccountId::new(signer.key_pair.public_key().clone())
+        );
+        assert_eq!(signer.public_key_raw_hex.len(), 64);
     }
 
     #[test]

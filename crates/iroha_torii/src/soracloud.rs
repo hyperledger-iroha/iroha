@@ -30,7 +30,10 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, PublicKey, Signature, fhe_bfv::BfvEvaluationKeyBundle};
+use iroha_crypto::{
+    Hash, PublicKey, Signature,
+    fhe_bfv::{BfvEvaluationKeyBundle, BfvPublicKey},
+};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -40,12 +43,12 @@ use iroha_data_model::{
     prelude::ExposedPrivateKey,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        AgentApartmentManifestV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
-        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CiphertextInclusionProofV1,
-        CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
-        CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobSpecV1, FheParamSetV1,
-        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
+        AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1,
+        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+        CiphertextInclusionProofV1, CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1,
+        CiphertextQueryResultItemV1, CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1,
+        DecryptionRequestV1, FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobSpecV1,
+        FheParamSetV1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
         SoraAppInfraAuditEventV1, SoraAppInfraManifestV1, SoraAppInfraStateV1,
@@ -67,7 +70,8 @@ use iroha_data_model::{
         SoraStateMutationOperationV1, SoraTlsModeV1, SoraTrainingJobActionV1,
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
-        SoraUploadedModelRuntimeFormatV1, encode_agent_artifact_allow_provenance_payload,
+        SoraUploadedModelRuntimeFormatV1, SoracloudFheInputAdmissionProofV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -402,6 +406,8 @@ pub(crate) struct StateMutationRequest {
     pub value_payload_hex: Option<String>,
     pub encryption: SoraStateEncryptionV1,
     pub governance_tx_hash: Hash,
+    #[norito(default)]
+    pub fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -834,6 +840,7 @@ pub(crate) struct FheJobRunPayload {
     pub policy: FheExecutionPolicyV1,
     pub param_set: FheParamSetV1,
     pub evaluation_keys: BfvEvaluationKeyBundle,
+    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     pub governance_tx_hash: Hash,
 }
 
@@ -4572,6 +4579,7 @@ fn encode_state_mutation_signature_payload(
         payload_commitment,
         payload.encryption,
         payload.governance_tx_hash,
+        payload.fhe_input_admission_proof.clone(),
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode state mutation payload: {err}"))
@@ -5108,6 +5116,7 @@ fn encode_fhe_job_run_signature_payload(
         payload.policy.clone(),
         payload.param_set.clone(),
         payload.evaluation_keys.clone(),
+        payload.evaluation_key_refresh_transcript.clone(),
         payload.governance_tx_hash.clone(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
@@ -10384,6 +10393,7 @@ pub(crate) async fn handle_state_mutation(
             value_payload,
             encryption: request.payload.encryption,
             governance_tx_hash: request.payload.governance_tx_hash,
+            fhe_input_admission_proof: request.payload.fhe_input_admission_proof,
             provenance: request.provenance,
         }),
         "/v1/soracloud/state/mutate",
@@ -10836,6 +10846,7 @@ pub(crate) async fn handle_fhe_job_run(
             policy: request.payload.policy,
             param_set: request.payload.param_set,
             evaluation_keys: request.payload.evaluation_keys,
+            evaluation_key_refresh_transcript: request.payload.evaluation_key_refresh_transcript,
             governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
         }),
@@ -13645,6 +13656,17 @@ mod tests {
         }
     }
 
+    fn fixture_bfv_evaluation_key_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
+        BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: BfvPublicKey {
+                b: Vec::new(),
+                a: Vec::new(),
+            },
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        }
+    }
+
     fn fixture_decryption_authority_policy() -> DecryptionAuthorityPolicyV1 {
         load_json(&workspace_fixture(
             "fixtures/soracloud/decryption_authority_policy_v1.json",
@@ -14777,6 +14799,8 @@ mod tests {
                         payload: b"ciphertext".to_vec(),
                         payload_bytes: NonZeroU64::new(10).expect("nonzero"),
                         payload_commitment: Hash::new(b"ciphertext"),
+                        fhe_residual_multiple_bound: None,
+                        fhe_bound_mode: None,
                         last_update_sequence: 1,
                         governance_tx_hash,
                         source_action: SoraServiceLifecycleActionV1::StateMutation,
@@ -16879,6 +16903,7 @@ mod tests {
             value_payload_hex: Some("010203".to_string()),
             encryption: SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
+            fhe_input_admission_proof: None,
         };
         let payload_commitment = Hash::new([1_u8, 2, 3]);
         let encoded =
@@ -16892,6 +16917,7 @@ mod tests {
             Some(payload_commitment),
             payload.encryption,
             governance_tx_hash,
+            None::<SoracloudFheInputAdmissionProofV1>,
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
@@ -16909,6 +16935,7 @@ mod tests {
             value_payload_hex: None,
             encryption: SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
+            fhe_input_admission_proof: None,
         };
         let encoded =
             encode_state_mutation_signature_payload(&payload).expect("encode signature payload");
@@ -16921,6 +16948,7 @@ mod tests {
             None::<Hash>,
             payload.encryption,
             governance_tx_hash,
+            None::<SoracloudFheInputAdmissionProofV1>,
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
@@ -16932,6 +16960,7 @@ mod tests {
         let policy = fixture_fhe_execution_policy();
         let param_set = fixture_fhe_param_set();
         let evaluation_keys = fixture_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = fixture_bfv_evaluation_key_refresh_transcript();
         let governance_tx_hash = Hash::new(b"governance");
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
@@ -16940,6 +16969,7 @@ mod tests {
             policy: policy.clone(),
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -16951,6 +16981,7 @@ mod tests {
             policy,
             param_set,
             evaluation_keys,
+            evaluation_key_refresh_transcript,
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");

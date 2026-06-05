@@ -28,7 +28,16 @@
 //! separate guards keep product-ring arithmetic from being used as
 //! ciphertext-modulus arithmetic unless the chain is wide enough. The full
 //! bounded-noise BFV-RNS evaluator and basis-extension key-switching path is
-//! still pending.
+//! still pending, but an exact CRT basis-extension bridge, RNS key-switch digit
+//! decomposition and digit-specific basis extension, centered RNS raw-product
+//! reconstruction for rounded multiplication, rounded plaintext scaling,
+//! small-noise public-key encryption, decryption, bounded-noise scalar
+//! operation propagation, and a scalar exact-product
+//! multiplication/relinearization bridge with packed Galois rotation schedules
+//! plus RNS Galois/packed-rotation, basis-extension key-switch, and
+//! bounded-noise outer-slot rotation/bootstrap-refresh bridges are available
+//! for explicitly bounded runtime metadata. Full approximate BFV-RNS basis
+//! extension and security-complete bootstrapping remain pending.
 
 use std::{fmt, string::String, vec::Vec};
 
@@ -52,8 +61,11 @@ const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_dige
 const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
 const BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.refresh_transcript_digest.v1";
+const BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bounded_noise_refresh_transcript_digest.v1";
 const BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.rns_modulus_chain_digest.v1";
+const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = 64;
 const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
 const BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS: u16 = 1;
 const BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS: u16 = 1_024;
@@ -61,6 +73,7 @@ const BFV_EVALUATION_KEY_MAX_ROTATION_KEYS: usize = 64;
 const BFV_EVALUATION_KEY_MAX_GALOIS_KEYS: usize = 64;
 const BFV_RNS_MODULUS_CHAIN_MAX_LIMBS: usize = 8;
 const BFV_ERROR_MULTIPLE_BOUND: u8 = 1;
+const BFV_BOUNDED_NOISE_COEFFICIENT_BOUND: u8 = 1;
 
 /// First-release multiplicative-depth budget for compact profile descriptors.
 pub const BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8: u8 = 16;
@@ -75,6 +88,12 @@ pub const RAM_LFE_BFV_PLAINTEXT_MODULUS: u64 = 257;
 
 /// Registered RAM-LFE BFV ciphertext modulus.
 pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * (1_u64 << 48);
+
+/// Number of BFV ciphertext slots in the registered RAM-LFE identifier envelope.
+pub const RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT: usize = 64;
+
+/// Maximum raw UTF-8 bytes accepted by the registered RAM-LFE identifier envelope.
+pub const RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES: u16 = 63;
 
 /// Registered RAM-LFE BFV RNS coefficient-modulus chain.
 ///
@@ -366,10 +385,22 @@ impl BfvParameters {
             ));
         }
         let max_raw_coefficient = u128::from(self.polynomial_degree)
-            .saturating_mul(u128::from(self.ciphertext_modulus))
-            .saturating_mul(u128::from(self.ciphertext_modulus));
-        let max_scaled_coefficient =
-            max_raw_coefficient.saturating_mul(u128::from(self.plaintext_modulus));
+            .checked_mul(u128::from(self.ciphertext_modulus))
+            .and_then(|value| value.checked_mul(u128::from(self.ciphertext_modulus)))
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "parameter set exceeds the deterministic BFV exact-arithmetic raw coefficient bounds"
+                        .to_owned(),
+                )
+            })?;
+        let max_scaled_coefficient = max_raw_coefficient
+            .checked_mul(u128::from(self.plaintext_modulus))
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "parameter set exceeds the deterministic BFV exact-arithmetic scaled coefficient bounds"
+                        .to_owned(),
+                )
+            })?;
         if max_scaled_coefficient > i128::MAX as u128 {
             return Err(BfvError::InvalidParameters(
                 "parameter set exceeds the deterministic BFV exact-arithmetic overflow bounds"
@@ -413,16 +444,25 @@ impl BfvParameters {
         1_u64 << self.decomposition_base_log
     }
 
-    fn decomposition_digits(&self) -> usize {
+    fn decomposition_digits(&self) -> Result<usize, BfvError> {
+        self.validate()?;
         let mut digits = 0_usize;
         let mut covered = 1_u128;
         let base = u128::from(self.decomposition_base());
         let modulus = u128::from(self.ciphertext_modulus);
         while covered < modulus {
-            covered = covered.saturating_mul(base);
-            digits = digits.saturating_add(1);
+            covered = covered.checked_mul(base).ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "BFV decomposition digit coverage exceeds deterministic limits".to_owned(),
+                )
+            })?;
+            digits = digits.checked_add(1).ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "BFV decomposition digit count exceeds deterministic limits".to_owned(),
+                )
+            })?;
         }
-        digits.max(1)
+        Ok(digits.max(1))
     }
 }
 
@@ -561,6 +601,65 @@ impl BfvRnsModulusChain {
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
 
+    /// Decompose a `Z_q` polynomial into centered limb-major RNS residues.
+    ///
+    /// Coefficients above the centered modulus midpoint are first interpreted
+    /// as negative representatives. This is the decomposition used by rounded
+    /// BFV raw-product reconstruction, where `q - a` must multiply as `-a`
+    /// before `t/q` scale-and-rounding.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the chain, parameter set, or source polynomial
+    /// shape is invalid.
+    pub fn decompose_centered_ciphertext_modulus_polynomial(
+        &self,
+        params: &BfvParameters,
+        coefficients: &[u64],
+    ) -> Result<BfvRnsPolynomial, BfvError> {
+        self.validate_for_parameters(params)?;
+        validate_poly(params, coefficients, "centered RNS source polynomial")?;
+        let residues_by_limb = self
+            .moduli
+            .iter()
+            .map(|&modulus| {
+                coefficients
+                    .iter()
+                    .map(|&coefficient| {
+                        mod_q(center_lift(coefficient, params.ciphertext_modulus), modulus)
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(BfvRnsPolynomial { residues_by_limb })
+    }
+
+    /// Decompose a key-switch component into base digits in this RNS chain.
+    ///
+    /// Each returned RNS polynomial contains one base-`2^decomposition_base_log`
+    /// digit of `switching_component`, ordered from least- to
+    /// most-significant. Keeping these digit polynomials in RNS form is the
+    /// bridge needed for basis-extension-aware key switching.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the chain, parameter set, source polynomial, or
+    /// decomposition profile is invalid.
+    pub fn decompose_key_switch_component_polynomial(
+        &self,
+        params: &BfvParameters,
+        switching_component: &[u64],
+    ) -> Result<Vec<BfvRnsPolynomial>, BfvError> {
+        self.validate_for_parameters(params)?;
+        validate_poly(
+            params,
+            switching_component,
+            "RNS key-switch component polynomial",
+        )?;
+        decompose_poly(params, switching_component)?
+            .into_iter()
+            .map(|digit| self.decompose_polynomial(params, &digit))
+            .collect()
+    }
+
     /// Reconstruct coefficient values from limb-major RNS residues.
     ///
     /// # Errors
@@ -583,6 +682,108 @@ impl BfvRnsModulusChain {
                 reconstruct_rns_coefficient(&residues, &self.moduli)
             })
             .collect()
+    }
+
+    /// Extend an RNS polynomial from this chain into another modulus chain.
+    ///
+    /// This is an exact CRT basis-extension bridge: coefficients are
+    /// reconstructed from the source chain, then reduced into each target limb.
+    /// The target chain product must cover the source chain product so the
+    /// converted polynomial can be reconstructed without aliasing. It is a
+    /// deterministic building block for the future BFV-RNS key-switch path, not
+    /// the final approximate basis-extension algorithm.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when either chain is malformed for the parameter
+    /// set, when the source polynomial shape is invalid, when the target chain
+    /// cannot exactly cover the source chain product, or when CRT
+    /// reconstruction overflows.
+    pub fn basis_extend_polynomial(
+        &self,
+        params: &BfvParameters,
+        polynomial: &BfvRnsPolynomial,
+        target_chain: &BfvRnsModulusChain,
+    ) -> Result<BfvRnsPolynomial, BfvError> {
+        self.validate_for_parameters(params)?;
+        target_chain.validate_for_parameters(params)?;
+        validate_rns_polynomial(params, self, polynomial)?;
+        let source_product = self.product()?;
+        let target_product = target_chain.product()?;
+        if target_product < source_product {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV RNS basis-extension target product {target_product} does not cover source product {source_product}"
+            )));
+        }
+        let coefficients = self.reconstruct_polynomial(params, polynomial)?;
+        let residues_by_limb = target_chain
+            .moduli
+            .iter()
+            .map(|&modulus| {
+                coefficients
+                    .iter()
+                    .map(|&coefficient| reduce_u128_to_u64_mod(coefficient, modulus))
+                    .collect::<Result<Vec<_>, BfvError>>()
+            })
+            .collect::<Result<Vec<_>, BfvError>>()?;
+        Ok(BfvRnsPolynomial { residues_by_limb })
+    }
+
+    /// Extend one canonical key-switch digit polynomial into another RNS chain.
+    ///
+    /// Unlike [`Self::basis_extend_polynomial`], this helper is specialized to
+    /// base-decomposition digits. It reconstructs each coefficient from the
+    /// source chain, verifies that the coefficient is a canonical
+    /// `0..decomposition_base` digit, then reduces that digit into the target
+    /// limbs. The target chain only needs to represent the decomposition base,
+    /// not the full source-chain product, which is the boundary used by
+    /// basis-extension-aware key switching.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when either chain is malformed for the parameter
+    /// set, either chain cannot represent the decomposition base, the source
+    /// polynomial shape is invalid, a reconstructed coefficient is not a
+    /// canonical digit, or CRT reconstruction overflows.
+    pub fn basis_extend_key_switch_digit_polynomial(
+        &self,
+        params: &BfvParameters,
+        polynomial: &BfvRnsPolynomial,
+        target_chain: &BfvRnsModulusChain,
+    ) -> Result<BfvRnsPolynomial, BfvError> {
+        self.validate_for_parameters(params)?;
+        target_chain.validate_for_parameters(params)?;
+        validate_rns_polynomial(params, self, polynomial)?;
+        let base = u128::from(params.decomposition_base());
+        let source_product = self.product()?;
+        if source_product < base {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV RNS key-switch digit source product {source_product} does not cover decomposition base {base}"
+            )));
+        }
+        let target_product = target_chain.product()?;
+        if target_product < base {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV RNS key-switch digit target product {target_product} does not cover decomposition base {base}"
+            )));
+        }
+        let coefficients = self.reconstruct_polynomial(params, polynomial)?;
+        for (index, &coefficient) in coefficients.iter().enumerate() {
+            if coefficient >= base {
+                return Err(BfvError::ShapeMismatch(format!(
+                    "RNS key-switch digit coefficient[{index}] {coefficient} exceeds decomposition base {base}"
+                )));
+            }
+        }
+        let residues_by_limb = target_chain
+            .moduli
+            .iter()
+            .map(|&modulus| {
+                coefficients
+                    .iter()
+                    .map(|&coefficient| reduce_u128_to_u64_mod(coefficient, modulus))
+                    .collect::<Result<Vec<_>, BfvError>>()
+            })
+            .collect::<Result<Vec<_>, BfvError>>()?;
+        Ok(BfvRnsPolynomial { residues_by_limb })
     }
 
     /// Add two RNS polynomials coefficient-wise in the chain product ring.
@@ -635,6 +836,77 @@ impl BfvRnsModulusChain {
             })
             .collect();
         Ok(BfvRnsPolynomial { residues_by_limb })
+    }
+
+    /// Multiply an RNS polynomial by a `Z_q` polynomial through an exact RNS corridor.
+    ///
+    /// This is the key-switch digit product primitive: the left operand is
+    /// already represented in this RNS chain, while the right operand is a
+    /// ciphertext-modulus polynomial such as an evaluation-key component. The
+    /// product is reconstructed exactly and reduced back into `Z_q`.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the chain is malformed, too narrow for exact
+    /// `Z_q` negacyclic multiplication, or either operand is malformed.
+    pub fn multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
+        &self,
+        params: &BfvParameters,
+        lhs: &BfvRnsPolynomial,
+        rhs: &[u64],
+    ) -> Result<Vec<u64>, BfvError> {
+        self.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
+        validate_rns_polynomial(params, self, lhs)?;
+        validate_poly(params, rhs, "RNS exact-multiply rhs polynomial")?;
+
+        let chain_product = self.product()?;
+        let centered_abs_bound = exact_ciphertext_modulus_negacyclic_product_abs_bound(params)?;
+        let rhs_rns = self.decompose_polynomial(params, rhs)?;
+        let product_rns = self.multiply_rns_polynomials_negacyclic(params, lhs, &rhs_rns)?;
+        self.reconstruct_polynomial(params, &product_rns)?
+            .into_iter()
+            .map(|coefficient| {
+                reduce_centered_rns_value_to_u64_mod(
+                    coefficient,
+                    chain_product,
+                    centered_abs_bound,
+                    params.ciphertext_modulus,
+                )
+            })
+            .collect()
+    }
+
+    /// Multiply two `Z_q` polynomials and return exact centered raw coefficients.
+    ///
+    /// Unlike [`Self::multiply_ciphertext_modulus_polynomials_negacyclic_exact`],
+    /// this does not reduce the reconstructed negacyclic product back into
+    /// `Z_q`. It returns the signed centered raw product needed by rounded BFV
+    /// multiplication before the deterministic `t/q` scale-and-round step.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the chain is malformed, too narrow for exact
+    /// centered reconstruction, either polynomial is malformed, or the centered
+    /// product does not fit deterministic signed integer bounds.
+    pub fn multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+        &self,
+        params: &BfvParameters,
+        lhs: &[u64],
+        rhs: &[u64],
+    ) -> Result<Vec<i128>, BfvError> {
+        self.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
+        validate_poly(params, lhs, "RNS centered multiply lhs polynomial")?;
+        validate_poly(params, rhs, "RNS centered multiply rhs polynomial")?;
+
+        let chain_product = self.product()?;
+        let centered_abs_bound = exact_ciphertext_modulus_negacyclic_product_abs_bound(params)?;
+        let lhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, lhs)?;
+        let rhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, rhs)?;
+        let product_rns = self.multiply_rns_polynomials_negacyclic(params, &lhs_rns, &rhs_rns)?;
+        self.reconstruct_polynomial(params, &product_rns)?
+            .into_iter()
+            .map(|coefficient| {
+                reduce_centered_rns_value_to_i128(coefficient, chain_product, centered_abs_bound)
+            })
+            .collect()
     }
 
     /// Add two ciphertext-modulus polynomials through an exact RNS corridor.
@@ -859,6 +1131,35 @@ struct BfvRefreshTranscriptDigestMaterial {
     bootstrap_transcript: Option<BfvBootstrapKeyTranscriptDigestMaterial>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BfvRefreshTranscriptMode {
+    Exact,
+    BoundedNoise,
+}
+
+impl BfvRefreshTranscriptMode {
+    fn rotation_seed_label(self) -> &'static str {
+        match self {
+            Self::Exact => "rotation refresh transcript seed",
+            Self::BoundedNoise => "bounded-noise rotation refresh transcript seed",
+        }
+    }
+
+    fn bootstrap_seed_label(self) -> &'static str {
+        match self {
+            Self::Exact => "bootstrap refresh transcript seed",
+            Self::BoundedNoise => "bounded-noise bootstrap refresh transcript seed",
+        }
+    }
+
+    fn digest_domain(self) -> &'static [u8] {
+        match self {
+            Self::Exact => BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+            Self::BoundedNoise => BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+        }
+    }
+}
+
 impl BfvEvaluationKeyBundle {
     /// Validate evaluation-key shapes against BFV parameters.
     ///
@@ -909,6 +1210,54 @@ impl BfvEvaluationKeyBundle {
         rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
         bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
     ) -> Result<(), BfvError> {
+        self.validate_refresh_transcripts_for_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            BfvRefreshTranscriptMode::Exact,
+        )
+    }
+
+    /// Verify public rounded encrypted-zero refresh transcripts for the bundle.
+    ///
+    /// This is the bounded-noise counterpart of
+    /// [`Self::validate_refresh_transcripts`]. It requires one transcript seed
+    /// for every rotation refresh key and matching metadata for the optional
+    /// bootstrap key, then recomputes each rounded encrypted-zero refresh
+    /// ciphertext from `public_key`. Legacy exact-lift refresh transcript
+    /// validation is intentionally separate so admission can bind which BFV
+    /// refresh mode was authorized.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle, public key, transcript inventory,
+    /// bounded-noise capacity, or recomputed refresh material is malformed or
+    /// inconsistent.
+    pub fn validate_bounded_noise_refresh_transcripts(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<(), BfvError> {
+        self.validate_refresh_transcripts_for_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            BfvRefreshTranscriptMode::BoundedNoise,
+        )
+    }
+
+    fn validate_refresh_transcripts_for_mode(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+        mode: BfvRefreshTranscriptMode,
+    ) -> Result<(), BfvError> {
+        validate_refresh_transcript_metadata(rotation_transcripts, bootstrap_transcript, mode)?;
         self.validate(params)?;
         validate_public_key(params, public_key)?;
         if rotation_transcripts.len() != self.rotation_keys.len() {
@@ -947,12 +1296,22 @@ impl BfvEvaluationKeyBundle {
                         rotation_key.rotation_steps
                     ))
                 })?;
-            validate_rotation_key_zero_refresh_transcript(
-                params,
-                public_key,
-                rotation_key,
-                transcript.seed,
-            )?;
+            match mode {
+                BfvRefreshTranscriptMode::Exact => validate_rotation_key_zero_refresh_transcript(
+                    params,
+                    public_key,
+                    rotation_key,
+                    transcript.seed,
+                )?,
+                BfvRefreshTranscriptMode::BoundedNoise => {
+                    validate_rotation_key_bounded_noise_zero_refresh_transcript(
+                        params,
+                        public_key,
+                        rotation_key,
+                        transcript.seed,
+                    )?;
+                }
+            }
         }
 
         match (self.bootstrap_key.as_ref(), bootstrap_transcript) {
@@ -965,12 +1324,24 @@ impl BfvEvaluationKeyBundle {
                             .to_owned(),
                     ));
                 }
-                validate_bootstrap_key_zero_refresh_transcript(
-                    params,
-                    public_key,
-                    bootstrap_key,
-                    transcript.seed,
-                )?;
+                match mode {
+                    BfvRefreshTranscriptMode::Exact => {
+                        validate_bootstrap_key_zero_refresh_transcript(
+                            params,
+                            public_key,
+                            bootstrap_key,
+                            transcript.seed,
+                        )?;
+                    }
+                    BfvRefreshTranscriptMode::BoundedNoise => {
+                        validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+                            params,
+                            public_key,
+                            bootstrap_key,
+                            transcript.seed,
+                        )?;
+                    }
+                }
             }
             (Some(bootstrap_key), None) => {
                 return Err(BfvError::ShapeMismatch(format!(
@@ -1008,11 +1379,56 @@ impl BfvEvaluationKeyBundle {
         rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
         bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
     ) -> Result<Hash, BfvError> {
-        self.validate_refresh_transcripts(
+        self.refresh_transcript_digest_for_mode(
             params,
             public_key,
             rotation_transcripts,
             bootstrap_transcript,
+            BfvRefreshTranscriptMode::Exact,
+        )
+    }
+
+    /// Return a stable digest over rounded public refresh transcripts.
+    ///
+    /// This is the bounded-noise counterpart of
+    /// [`Self::refresh_transcript_digest`]. It validates every public
+    /// rotation/bootstrap refresh mask with the rounded BFV transcript
+    /// generators, then hashes the same public inventory under a separate
+    /// domain so exact-lift and bounded-noise admission digests cannot collide.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when bounded transcript validation fails or
+    /// canonical encoding of the digest material fails.
+    pub fn bounded_noise_refresh_transcript_digest(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<Hash, BfvError> {
+        self.refresh_transcript_digest_for_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            BfvRefreshTranscriptMode::BoundedNoise,
+        )
+    }
+
+    fn refresh_transcript_digest_for_mode(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+        mode: BfvRefreshTranscriptMode,
+    ) -> Result<Hash, BfvError> {
+        self.validate_refresh_transcripts_for_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            mode,
         )?;
         let evaluation_key_digest = self.digest(params)?;
         let rotation_transcripts = self
@@ -1022,13 +1438,18 @@ impl BfvEvaluationKeyBundle {
                 let transcript = rotation_transcripts
                     .iter()
                     .find(|transcript| transcript.rotation_steps == rotation_key.rotation_steps)
-                    .expect("validated rotation transcript exists");
-                BfvRotationKeyTranscriptDigestMaterial {
+                    .ok_or_else(|| {
+                        BfvError::ShapeMismatch(format!(
+                            "missing deterministic transcript seed for rotation key {}",
+                            rotation_key.rotation_steps
+                        ))
+                    })?;
+                Ok(BfvRotationKeyTranscriptDigestMaterial {
                     rotation_steps: rotation_key.rotation_steps,
                     seed: transcript.seed.to_vec(),
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, BfvError>>()?;
         let bootstrap_transcript =
             bootstrap_transcript.map(|transcript| BfvBootstrapKeyTranscriptDigestMaterial {
                 key_id: transcript.key_id.to_owned(),
@@ -1046,7 +1467,7 @@ impl BfvEvaluationKeyBundle {
             BfvError::InvalidParameters(format!("refresh transcript digest encoding failed: {err}"))
         })?;
         Ok(Hash::new_from_chunks(&[
-            BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+            mode.digest_domain(),
             bytes.as_slice(),
         ]))
     }
@@ -1079,6 +1500,33 @@ impl BfvEvaluationKeyBundle {
         }
         if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
             validate_bootstrap_key_zero_refreshes(params, secret_key, bootstrap_key)?;
+        }
+        Ok(())
+    }
+
+    /// Verify that all rounded public refresh ciphertexts decrypt to zero.
+    ///
+    /// This is the bounded-noise counterpart of [`Self::validate_zero_refreshes`]
+    /// for key-owner bundle construction. It checks rounded plaintext zero and
+    /// the fresh bounded-noise budget for every rotation/bootstrap refresh mask.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle is malformed, `secret_key` does not
+    /// match the parameter set, any refresh ciphertext decrypts to non-zero
+    /// plaintext, or any refresh ciphertext exceeds the bounded-noise budget.
+    pub fn validate_bounded_noise_zero_refreshes(
+        &self,
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Result<(), BfvError> {
+        self.validate(params)?;
+        validate_secret_key(params, secret_key)?;
+        validate_bfv_bounded_noise_encryption_capacity(params)?;
+        for rotation_key in &self.rotation_keys {
+            validate_rotation_key_bounded_noise_zero_refresh(params, secret_key, rotation_key)?;
+        }
+        if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
+            validate_bootstrap_key_bounded_noise_zero_refreshes(params, secret_key, bootstrap_key)?;
         }
         Ok(())
     }
@@ -1128,6 +1576,36 @@ impl BfvEvaluationKeyBundle {
         Ok(())
     }
 
+    /// Verify that bounded-noise evaluation keys match a secret key.
+    ///
+    /// This is the rounded BFV counterpart of
+    /// [`Self::validate_secret_key_consistency`]. It checks that relinearization
+    /// entries decrypt to raw `base^i * s^2`, Galois entries decrypt to raw
+    /// `base^i * sigma_k(s)`, and every public rotation/bootstrap refresh
+    /// ciphertext decrypts to zero, all under the bounded centered-noise policy.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the bundle is malformed, `secret_key` does not
+    /// match the parameter set, any bounded key-switch entry has an unexpected
+    /// target residue or oversized noise, or any public refresh ciphertext
+    /// decrypts to non-zero plaintext or exceeds the bounded-noise budget.
+    pub fn validate_bounded_noise_secret_key_consistency(
+        &self,
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Result<(), BfvError> {
+        self.validate_bounded_noise_zero_refreshes(params, secret_key)?;
+        validate_bounded_noise_relinearization_key_secret_consistency(
+            params,
+            secret_key,
+            &self.relinearization_key,
+        )?;
+        for galois_key in &self.galois_keys {
+            validate_bounded_noise_galois_key_secret_consistency(params, secret_key, galois_key)?;
+        }
+        Ok(())
+    }
+
     /// Return a stable digest over the evaluation-key bundle.
     ///
     /// # Errors
@@ -1173,6 +1651,26 @@ pub struct BfvExactResidualProfile {
     pub residual_multiple_headroom: u128,
 }
 
+/// Secret-key diagnostic for rounded BFV plaintext scaling.
+///
+/// Unlike [`BfvExactResidualProfile`], this profile measures centered
+/// ciphertext noise around the nearest `round(q/t) * plaintext` representative.
+/// It is the first bounded-noise BFV diagnostic used by the pending BFV-RNS
+/// replacement path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BfvBoundedNoiseProfile {
+    /// Plaintext coefficients returned by rounded BFV decryption.
+    pub plaintext: Vec<u64>,
+    /// Signed centered noise for each decrypted coefficient.
+    pub noise: Vec<i128>,
+    /// Largest absolute centered noise coefficient.
+    pub max_abs_noise: u128,
+    /// Largest centered noise admitted before rounded plaintext decoding may cross a boundary.
+    pub centered_decoding_capacity: u128,
+    /// Remaining margin to the centered rounded-decoding capacity.
+    pub noise_headroom: u128,
+}
+
 /// Public BFV parameters published to clients for encrypted identifier input.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1212,6 +1710,11 @@ impl BfvIdentifierPublicParameters {
                 "max_input_bytes must fit into one plaintext slot".to_owned(),
             ));
         }
+        if self.max_input_bytes > RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES {
+            return Err(BfvError::InvalidParameters(format!(
+                "max_input_bytes must be at most {RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES} for the registered RAM-LFE BFV identifier profile"
+            )));
+        }
         Ok(())
     }
 }
@@ -1246,6 +1749,7 @@ pub fn validate_registered_bfv_parameters(params: &BfvParameters) -> Result<(), 
             "BFV parameter set is not registered for production FHE evaluation".to_owned(),
         ));
     }
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
     Ok(())
 }
 
@@ -1259,7 +1763,7 @@ pub fn registered_bfv_rns_modulus_chain(
 ) -> Result<BfvRnsModulusChain, BfvError> {
     validate_registered_bfv_parameters(params)?;
     let chain = ram_lfe_bfv_rns_modulus_chain_v1();
-    chain.validate_for_parameters(params)?;
+    validate_rns_exact_evaluator_chain(params, &chain)?;
     Ok(chain)
 }
 
@@ -1376,12 +1880,14 @@ pub enum BfvError {
 /// Deterministic BFV key generation from a seed.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameters are invalid.
+/// Returns [`BfvError`] when parameters are invalid or the deterministic seed
+/// is empty.
 pub fn keygen_from_seed(
     params: &BfvParameters,
     seed: &[u8],
 ) -> Result<(BfvSecretKey, BfvPublicKey, BfvRelinearizationKey), BfvError> {
-    params.validate()?;
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_deterministic_seed("BFV keygen seed", seed)?;
 
     let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
     let secret = sample_small_poly(params, &mut rng);
@@ -1391,7 +1897,7 @@ pub fn keygen_from_seed(
     let b = poly_sub_mod(params, &poly_neg_mod(params, &as_product), &e);
 
     let secret_sq = poly_mul_mod(params, &secret, &secret);
-    let digits = params.decomposition_digits();
+    let digits = params.decomposition_digits()?;
     let base = params.decomposition_base();
     let mut scale = 1_u64;
     let mut relin_entries = Vec::with_capacity(digits);
@@ -1457,6 +1963,123 @@ pub fn validate_public_key_secret_consistency(
     validate_plaintext_multiple_residual_bound(params, &residual, &zero_poly(params), "public key")
 }
 
+/// Deterministic bounded-noise BFV public-key generation from a seed.
+///
+/// This generates the same secret/public key shapes as [`keygen_from_seed`],
+/// but samples public-key error coefficients from a centered small-noise
+/// distribution rather than plaintext-modulus multiples. It is the keygen entry
+/// for the rounded BFV-RNS replacement path; evaluation-key material is still
+/// produced by the exact-lift bridge until the full bounded-noise key-switching
+/// path lands.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, the rounded-decoding
+/// capacity is too narrow for seeded encryption noise, or the deterministic
+/// seed is empty.
+pub fn keygen_bounded_noise_from_seed(
+    params: &BfvParameters,
+    seed: &[u8],
+) -> Result<(BfvSecretKey, BfvPublicKey), BfvError> {
+    let (secret_key, public_key, _) =
+        keygen_bounded_noise_with_relinearization_from_seed(params, seed)?;
+    Ok((secret_key, public_key))
+}
+
+/// Deterministic bounded-noise BFV key generation with relinearization material.
+///
+/// The relinearization entries encrypt raw `base^i * s^2` key-switch material
+/// with small centered error. They are intended for
+/// [`multiply_ciphertexts_bounded_noise`], not the exact-lift evaluator.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, the rounded-decoding
+/// capacity is too narrow for seeded encryption noise, or the deterministic
+/// seed is empty.
+pub fn keygen_bounded_noise_with_relinearization_from_seed(
+    params: &BfvParameters,
+    seed: &[u8],
+) -> Result<(BfvSecretKey, BfvPublicKey, BfvRelinearizationKey), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_deterministic_seed("bounded-noise BFV keygen seed", seed)?;
+
+    let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
+    let secret = sample_small_poly(params, &mut rng);
+    let a = sample_uniform_poly(params, &mut rng);
+    let e = sample_bounded_noise_poly(params, &mut rng);
+    let as_product = poly_mul_mod(params, &a, &secret);
+    let b = poly_sub_mod(params, &poly_neg_mod(params, &as_product), &e);
+
+    let secret_key = BfvSecretKey { s: secret };
+    let public_key = BfvPublicKey { b, a };
+    let secret_sq = poly_mul_mod(params, &secret_key.s, &secret_key.s);
+    let relinearization_key = BfvRelinearizationKey {
+        entries: key_switch_entries_bounded_noise_from_rng(
+            params,
+            &secret_key.s,
+            &secret_sq,
+            &mut rng,
+        )?,
+    };
+    validate_bounded_noise_public_key_secret_consistency(params, &secret_key, &public_key)?;
+    validate_bounded_noise_relinearization_key_secret_consistency(
+        params,
+        &secret_key,
+        &relinearization_key,
+    )?;
+    Ok((secret_key, public_key, relinearization_key))
+}
+
+/// Verify that a rounded BFV public key is consistent with a secret key.
+///
+/// This key-owner diagnostic checks that `b + a*s` is bounded centered noise,
+/// not a plaintext-modulus-multiple residual. It is not a public proof that a
+/// published key was honestly generated.
+///
+/// # Errors
+/// Returns [`BfvError`] when key material is malformed, does not match
+/// `secret_key`, or exceeds the bounded-noise keygen error profile.
+pub fn validate_bounded_noise_public_key_secret_consistency(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    public_key: &BfvPublicKey,
+) -> Result<(), BfvError> {
+    validate_secret_key(params, secret_key)?;
+    validate_public_key(params, public_key)?;
+    let residual = poly_add_mod(
+        params,
+        &public_key.b,
+        &poly_mul_mod(params, &public_key.a, &secret_key.s),
+    );
+    validate_centered_noise_bound(
+        params,
+        &residual,
+        u128::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
+        "bounded-noise public key",
+    )
+}
+
+/// Verify that a bounded-noise relinearization key matches a secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key shape is malformed or any entry fails to
+/// decrypt to raw `base^i * s^2` with the configured small centered error
+/// bound.
+pub fn validate_bounded_noise_relinearization_key_secret_consistency(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    relinearization_key: &BfvRelinearizationKey,
+) -> Result<(), BfvError> {
+    validate_secret_key(params, secret_key)?;
+    let secret_square = poly_mul_mod(params, &secret_key.s, &secret_key.s);
+    validate_bounded_noise_key_switch_entry_residuals(
+        params,
+        &secret_key.s,
+        &secret_square,
+        &relinearization_key.entries,
+        "bounded-noise relinearization key",
+    )
+}
+
 /// Encrypt a plaintext polynomial from a seed.
 ///
 /// The plaintext is encoded coefficient-wise under the plaintext modulus. The
@@ -1464,22 +2087,58 @@ pub fn validate_public_key_secret_consistency(
 /// are treated as zero.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameters, plaintext, or key shapes are invalid.
+/// Returns [`BfvError`] when parameters, plaintext, key shapes, or the
+/// deterministic seed are invalid.
 pub fn encrypt_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
     plaintext: &[u64],
     seed: &[u8],
 ) -> Result<BfvCiphertext, BfvError> {
-    params.validate()?;
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
     validate_public_key(params, public_key)?;
     validate_plaintext(params, plaintext)?;
+    validate_deterministic_seed("BFV encryption seed", seed)?;
 
     let encoded_plaintext = encode_plaintext(params, plaintext);
     let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
     let u = sample_small_poly(params, &mut rng);
     let e1 = sample_error_poly(params, &mut rng);
     let e2 = sample_error_poly(params, &mut rng);
+    let c0 = poly_add_mod(
+        params,
+        &poly_add_mod(params, &poly_mul_mod(params, &public_key.b, &u), &e1),
+        &encoded_plaintext,
+    );
+    let c1 = poly_add_mod(params, &poly_mul_mod(params, &public_key.a, &u), &e2);
+    Ok(BfvCiphertext { c0, c1 })
+}
+
+/// Encrypt a plaintext polynomial with rounded BFV plaintext scaling.
+///
+/// The plaintext is encoded as `(q / t) * m` in `R_q`, and fresh error
+/// coefficients are sampled from a small centered distribution. This is the
+/// encryption entry for the pending bounded-noise BFV-RNS path.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, plaintext, key shapes, rounded-noise
+/// capacity, or deterministic seed material are invalid.
+pub fn encrypt_bounded_noise_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    plaintext: &[u64],
+    seed: &[u8],
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_public_key(params, public_key)?;
+    validate_plaintext(params, plaintext)?;
+    validate_deterministic_seed("bounded-noise BFV encryption seed", seed)?;
+
+    let encoded_plaintext = encode_rounded_plaintext(params, plaintext)?;
+    let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
+    let u = sample_small_poly(params, &mut rng);
+    let e1 = sample_bounded_noise_poly(params, &mut rng);
+    let e2 = sample_bounded_noise_poly(params, &mut rng);
     let c0 = poly_add_mod(
         params,
         &poly_add_mod(params, &poly_mul_mod(params, &public_key.b, &u), &e1),
@@ -1498,7 +2157,7 @@ pub fn encrypt_from_seed(
 ///
 /// # Errors
 /// Returns [`BfvError`] when parameters, secret-key shape, or automorphism
-/// power are invalid.
+/// power are invalid, or when the deterministic seed is empty.
 pub fn galois_key_from_seed(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -1508,19 +2167,87 @@ pub fn galois_key_from_seed(
     params.validate()?;
     validate_secret_key(params, secret_key)?;
     validate_galois_automorphism_power(params, automorphism_power)?;
+    validate_deterministic_seed("BFV Galois key seed", seed)?;
 
     let target_secret = apply_galois_automorphism_poly(params, &secret_key.s, automorphism_power)?;
     let power_bytes = automorphism_power.to_le_bytes();
     let material: [u8; Hash::LENGTH] =
         Hash::new_from_chunks(&[GALOIS_KEYGEN_DOMAIN, power_bytes.as_slice(), seed]).into();
     let mut rng = ChaCha20Rng::from_seed(material);
-    let entries = key_switch_entries_from_rng(params, &secret_key.s, &target_secret, &mut rng);
+    let entries = key_switch_entries_from_rng(params, &secret_key.s, &target_secret, &mut rng)?;
     let key = BfvGaloisKey {
         automorphism_power,
         entries,
     };
     validate_galois_key(params, &key)?;
+    validate_key_switch_entry_residuals(
+        params,
+        &secret_key.s,
+        &target_secret,
+        &key.entries,
+        "generated Galois key",
+    )?;
     Ok(key)
+}
+
+/// Derive deterministic bounded-noise Galois key-switching material.
+///
+/// The key switches ciphertexts encrypted under `sigma_k(s)` back to the
+/// original secret key `s`, with small centered key-switch entry errors for the
+/// rounded BFV-RNS migration path.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, secret-key shape, automorphism power,
+/// or deterministic seed material are invalid.
+pub fn galois_key_bounded_noise_from_seed(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    automorphism_power: u32,
+    seed: &[u8],
+) -> Result<BfvGaloisKey, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_secret_key(params, secret_key)?;
+    validate_galois_automorphism_power(params, automorphism_power)?;
+    validate_deterministic_seed("bounded-noise BFV Galois key seed", seed)?;
+
+    let target_secret = apply_galois_automorphism_poly(params, &secret_key.s, automorphism_power)?;
+    let power_bytes = automorphism_power.to_le_bytes();
+    let material: [u8; Hash::LENGTH] =
+        Hash::new_from_chunks(&[GALOIS_KEYGEN_DOMAIN, power_bytes.as_slice(), seed]).into();
+    let mut rng = ChaCha20Rng::from_seed(material);
+    let entries =
+        key_switch_entries_bounded_noise_from_rng(params, &secret_key.s, &target_secret, &mut rng)?;
+    let key = BfvGaloisKey {
+        automorphism_power,
+        entries,
+    };
+    validate_galois_key(params, &key)?;
+    validate_bounded_noise_galois_key_secret_consistency(params, secret_key, &key)?;
+    Ok(key)
+}
+
+/// Verify that a bounded-noise Galois key matches a secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key shape is malformed, the automorphism power
+/// is invalid, or any entry fails to decrypt to raw `base^i * sigma_k(s)` with
+/// the configured small centered error bound.
+pub fn validate_bounded_noise_galois_key_secret_consistency(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    galois_key: &BfvGaloisKey,
+) -> Result<(), BfvError> {
+    validate_secret_key(params, secret_key)?;
+    validate_galois_key(params, galois_key)?;
+    let target_secret =
+        apply_galois_automorphism_poly(params, &secret_key.s, galois_key.automorphism_power)?;
+    validate_bounded_noise_key_switch_entry_residuals(
+        params,
+        &secret_key.s,
+        &target_secret,
+        &galois_key.entries,
+        "bounded-noise Galois key",
+    )
 }
 
 /// Apply a packed-polynomial BFV Galois automorphism and key switch back to `s`.
@@ -1554,6 +2281,109 @@ pub fn apply_galois_automorphism_ciphertext(
     )
 }
 
+/// Apply a rounded BFV Galois automorphism and bounded-noise key switch back to `s`.
+///
+/// # Errors
+/// Returns [`BfvError`] when the ciphertext or Galois key does not match the
+/// parameter set.
+pub fn apply_galois_automorphism_ciphertext_bounded_noise(
+    params: &BfvParameters,
+    galois_key: &BfvGaloisKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key(params, galois_key)?;
+
+    let automorphed_c0 =
+        apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
+    let automorphed_c1 =
+        apply_galois_automorphism_poly(params, &ciphertext.c1, galois_key.automorphism_power)?;
+    key_switch_from_transformed_secret(
+        params,
+        &galois_key.entries,
+        &automorphed_c0,
+        &automorphed_c1,
+    )
+}
+
+/// Apply a rounded BFV Galois automorphism through an exact RNS key-switch bridge.
+///
+/// The ciphertext components are automorphed in scalar `Z_q` representation,
+/// then the transformed secret component is key-switched back to `s` through
+/// the RNS digit/key-switch path while preserving the bounded-noise key
+/// material semantics.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the ciphertext
+/// or Galois key does not match the parameter set, or the RNS chain is
+/// malformed or too narrow for exact key switching.
+pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    galois_key: &BfvGaloisKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key(params, galois_key)?;
+
+    let automorphed_c0 =
+        apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
+    let automorphed_c1 =
+        apply_galois_automorphism_poly(params, &ciphertext.c1, galois_key.automorphism_power)?;
+    key_switch_from_transformed_secret_rns_exact(
+        params,
+        rns_chain,
+        &galois_key.entries,
+        &automorphed_c0,
+        &automorphed_c1,
+    )
+}
+
+/// Apply a rounded BFV Galois automorphism through an exact basis-extension RNS bridge.
+///
+/// The transformed secret component is decomposed in `decomposition_chain`,
+/// exactly basis-extended into `evaluator_chain`, and then consumed by the RNS
+/// key-switch products. This keeps the final BFV-RNS basis-extension boundary
+/// explicit while preserving deterministic exact reconstruction semantics.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, either RNS
+/// chain is malformed or too narrow, or the ciphertext/Galois key does not
+/// match the parameter set.
+pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    galois_key: &BfvGaloisKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_rns_exact_evaluator_chain(params, evaluator_chain)?;
+    validate_rns_key_switch_decomposition_chain(
+        params,
+        decomposition_chain,
+        "bounded-noise RNS Galois decomposition",
+    )?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key(params, galois_key)?;
+
+    let automorphed_c0 =
+        apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
+    let automorphed_c1 =
+        apply_galois_automorphism_poly(params, &ciphertext.c1, galois_key.automorphism_power)?;
+    key_switch_from_transformed_secret_rns_exact_with_basis_extension(
+        params,
+        decomposition_chain,
+        evaluator_chain,
+        &galois_key.entries,
+        &automorphed_c0,
+        &automorphed_c1,
+    )
+}
+
 /// Apply a packed-polynomial BFV Galois automorphism through an exact RNS corridor.
 ///
 /// The ciphertext components are automorphed in the scalar `Z_q` representation,
@@ -1572,6 +2402,7 @@ pub fn apply_galois_automorphism_ciphertext_rns_exact(
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
     validate_ciphertext(params, ciphertext)?;
     validate_galois_key(params, galois_key)?;
 
@@ -1839,6 +2670,187 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys(
     })
 }
 
+/// Rotate a rounded BFV packed ciphertext left with bounded-noise Galois keys.
+///
+/// This mirrors [`rotate_packed_ciphertext_slots_left_with_galois_keys`] for
+/// the rounded BFV-RNS migration path: each scheduled automorphism uses
+/// bounded-noise key switching, then a public packed plaintext selector masks
+/// the slots contributed by that automorphism before the masked ciphertexts
+/// are accumulated.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the rotation is
+/// invalid, required Galois keys are missing or malformed, or ciphertext/
+/// plaintext-mask arithmetic fails.
+pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set(params, galois_keys, "bounded-noise packed RotateLeft")?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for bounded-noise packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let transformed =
+            apply_galois_automorphism_ciphertext_bounded_noise(params, galois_key, ciphertext)?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked =
+            multiply_plaintext_polynomial_bounded_noise(params, &transformed, &mask_plaintext)?;
+        output = Some(match output {
+            Some(accumulator) => add_ciphertexts(params, &accumulator, &masked)?,
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "bounded-noise packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )
+    })
+}
+
+/// Rotate a rounded BFV packed ciphertext left through exact RNS bridges.
+///
+/// This is the RNS counterpart of
+/// [`rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise`].
+/// Every scheduled bounded-noise Galois switch, public packed-selector product,
+/// and accumulator addition runs through the guarded RNS exact bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the rotation is
+/// invalid, required Galois keys are missing or malformed, the RNS chain is too
+/// narrow, or ciphertext/plaintext-mask arithmetic fails.
+pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set(params, galois_keys, "bounded-noise RNS packed RotateLeft")?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for bounded-noise RNS packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let transformed = apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
+            params, rns_chain, galois_key, ciphertext,
+        )?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked = multiply_plaintext_polynomial_rns_exact(
+            params,
+            rns_chain,
+            &transformed,
+            &mask_plaintext,
+        )?;
+        output = Some(match output {
+            Some(accumulator) => {
+                add_ciphertexts_rns_exact(params, rns_chain, &accumulator, &masked)?
+            }
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "bounded-noise RNS packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )
+    })
+}
+
+/// Rotate a rounded BFV packed ciphertext left through exact basis-extension RNS bridges.
+///
+/// This is the basis-extension counterpart of
+/// [`rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact`].
+/// Each scheduled Galois switch decomposes in `decomposition_chain`,
+/// basis-extends into `evaluator_chain`, then uses the same guarded RNS
+/// plaintext-selector products and accumulator additions as the exact RNS
+/// packed rotation bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the rotation is
+/// invalid, required Galois keys are missing or malformed, either RNS chain is
+/// malformed or too narrow, or ciphertext/plaintext-mask arithmetic fails.
+pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    rotation_steps: u32,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_rns_exact_evaluator_chain(params, evaluator_chain)?;
+    validate_rns_key_switch_decomposition_chain(
+        params,
+        decomposition_chain,
+        "bounded-noise RNS packed RotateLeft decomposition",
+    )?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set(
+        params,
+        galois_keys,
+        "bounded-noise basis-extension RNS packed RotateLeft",
+    )?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for bounded-noise basis-extension RNS packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let transformed =
+            apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
+                params,
+                decomposition_chain,
+                evaluator_chain,
+                galois_key,
+                ciphertext,
+            )?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked = multiply_plaintext_polynomial_rns_exact(
+            params,
+            evaluator_chain,
+            &transformed,
+            &mask_plaintext,
+        )?;
+        output = Some(match output {
+            Some(accumulator) => {
+                add_ciphertexts_rns_exact(params, evaluator_chain, &accumulator, &masked)?
+            }
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "bounded-noise basis-extension RNS packed RotateLeft produced an empty Galois key schedule"
+                .to_owned(),
+        )
+    })
+}
+
 /// Rotate a packed BFV ciphertext left with a public Galois-key schedule
 /// through an exact RNS corridor.
 ///
@@ -1859,6 +2871,7 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
     rotation_steps: u32,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
     validate_ciphertext(params, ciphertext)?;
     validate_galois_key_set(params, galois_keys, "packed RotateLeft")?;
     let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
@@ -1991,7 +3004,8 @@ fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u3
 /// once the RNS modulus-chain engine lands.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameter or public-key validation fails.
+/// Returns [`BfvError`] when parameter, public-key, or public transcript seed
+/// validation fails.
 pub fn bootstrap_key_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -2015,8 +3029,8 @@ pub fn bootstrap_key_from_seed(
 /// `round_refreshes` by index for multi-round refreshes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameter, public-key, key id, or refresh-round
-/// bounds are invalid.
+/// Returns [`BfvError`] when parameter, public-key, key id, refresh-round, or
+/// public transcript seed bounds are invalid.
 pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -2026,6 +3040,7 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
 ) -> Result<BfvBootstrapKey, BfvError> {
     let key_id = key_id.into();
     validate_bootstrap_key_metadata(&key_id, max_refresh_rounds)?;
+    validate_refresh_transcript_seed("bootstrap refresh transcript seed", seed)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
             let round_seed =
@@ -2036,6 +3051,74 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
     let Some(zero_refresh) = round_refreshes.first().cloned() else {
         return Err(BfvError::InvalidParameters(
             "bootstrap refresh rounds must be greater than zero".to_owned(),
+        ));
+    };
+    let bootstrap_key = BfvBootstrapKey {
+        key_id,
+        max_refresh_rounds,
+        zero_refresh,
+        round_refreshes,
+    };
+    validate_bootstrap_key(params, &bootstrap_key)?;
+    Ok(bootstrap_key)
+}
+
+/// Derive a deterministic one-round bounded-noise bootstrap refresh key.
+///
+/// The refresh ciphertext is a rounded BFV encryption of zero generated with
+/// the bounded-noise public-key path. This is still an encrypted-zero refresh,
+/// not full BFV bootstrapping, but it moves bootstrap refresh material onto the
+/// same bounded-noise semantics as the rounded BFV-RNS migration path.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameter, public-key, or public transcript seed
+/// validation fails.
+pub fn bootstrap_key_bounded_noise_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    key_id: impl Into<String>,
+    seed: &[u8],
+) -> Result<BfvBootstrapKey, BfvError> {
+    bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+        params,
+        public_key,
+        key_id,
+        BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS,
+        seed,
+    )
+}
+
+/// Derive a deterministic bounded-noise public bootstrap refresh key.
+///
+/// The returned key contains one domain-separated rounded BFV encrypted-zero
+/// refresh ciphertext per authorized round. Round zero is mirrored in
+/// `zero_refresh` for descriptor compatibility; evaluators should consume
+/// `round_refreshes` by index.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameter, public-key, key id, refresh-round, or
+/// public transcript seed bounds are invalid.
+pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    key_id: impl Into<String>,
+    max_refresh_rounds: u16,
+    seed: &[u8],
+) -> Result<BfvBootstrapKey, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    let key_id = key_id.into();
+    validate_bootstrap_key_metadata(&key_id, max_refresh_rounds)?;
+    validate_refresh_transcript_seed("bounded-noise bootstrap refresh transcript seed", seed)?;
+    let round_refreshes = (0..max_refresh_rounds)
+        .map(|round_index| {
+            let round_seed =
+                bootstrap_refresh_round_seed(&key_id, max_refresh_rounds, seed, round_index);
+            encrypt_bounded_noise_from_seed(params, public_key, &[0], &round_seed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(zero_refresh) = round_refreshes.first().cloned() else {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise bootstrap refresh rounds must be greater than zero".to_owned(),
         ));
     };
     let bootstrap_key = BfvBootstrapKey {
@@ -2075,6 +3158,45 @@ pub fn validate_bootstrap_key_zero_refreshes(
     Ok(())
 }
 
+/// Verify that every bounded-noise bootstrap refresh ciphertext decrypts to zero.
+///
+/// This is the rounded BFV counterpart of
+/// [`validate_bootstrap_key_zero_refreshes`]. It checks that each refresh mask
+/// decrypts to zero under rounded decoding and stays within the fresh
+/// bounded-noise encryption budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is malformed, any refresh ciphertext
+/// decrypts to a non-zero plaintext, or any refresh exceeds the bounded-noise
+/// budget.
+pub fn validate_bootstrap_key_bounded_noise_zero_refreshes(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    bootstrap_key: &BfvBootstrapKey,
+) -> Result<(), BfvError> {
+    validate_bootstrap_key(params, bootstrap_key)?;
+    let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
+    for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
+        let profile = validate_ciphertext_bounded_noise(
+            params,
+            secret_key,
+            refresh,
+            refresh_bound,
+            &format!("bounded-noise bootstrap key round_refreshes[{index}]"),
+        )?;
+        if profile
+            .plaintext
+            .iter()
+            .any(|&coefficient| coefficient != 0)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "bounded-noise bootstrap key round_refreshes[{index}] must decrypt to zero plaintext"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Verify that a bootstrap refresh key matches its public deterministic transcript.
 ///
 /// The current first-release bootstrap material is a bounded set of
@@ -2093,6 +3215,7 @@ pub fn validate_bootstrap_key_zero_refresh_transcript(
     bootstrap_key: &BfvBootstrapKey,
     seed: &[u8],
 ) -> Result<(), BfvError> {
+    validate_refresh_transcript_seed("bootstrap refresh transcript seed", seed)?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let expected = bootstrap_key_with_max_refresh_rounds_from_seed(
         params,
@@ -2116,6 +3239,51 @@ pub fn validate_bootstrap_key_zero_refresh_transcript(
         if expected_refresh != actual_refresh {
             return Err(BfvError::ShapeMismatch(format!(
                 "bootstrap key round_refreshes[{index}] does not match deterministic encrypted-zero transcript"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Verify that a bounded-noise bootstrap refresh key matches its public transcript.
+///
+/// This recomputes every rounded BFV encrypted-zero refresh from the advertised
+/// seed, public key, key id, and round count, rejecting drift without requiring
+/// a BFV secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or public key is malformed, or when any
+/// refresh ciphertext differs from the deterministic bounded-noise transcript.
+pub fn validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    bootstrap_key: &BfvBootstrapKey,
+    seed: &[u8],
+) -> Result<(), BfvError> {
+    validate_refresh_transcript_seed("bounded-noise bootstrap refresh transcript seed", seed)?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    let expected = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+        params,
+        public_key,
+        bootstrap_key.key_id.clone(),
+        bootstrap_key.max_refresh_rounds,
+        seed,
+    )?;
+    if expected.zero_refresh != bootstrap_key.zero_refresh {
+        return Err(BfvError::ShapeMismatch(
+            "bounded-noise bootstrap key zero_refresh does not match deterministic encrypted-zero transcript"
+                .to_owned(),
+        ));
+    }
+    for (index, (expected_refresh, actual_refresh)) in expected
+        .round_refreshes
+        .iter()
+        .zip(&bootstrap_key.round_refreshes)
+        .enumerate()
+    {
+        if expected_refresh != actual_refresh {
+            return Err(BfvError::ShapeMismatch(format!(
+                "bounded-noise bootstrap key round_refreshes[{index}] does not match deterministic encrypted-zero transcript"
             )));
         }
     }
@@ -2147,6 +3315,39 @@ pub fn bootstrap_ciphertext_round(
     round_index: u16,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    add_ciphertexts(
+        params,
+        ciphertext,
+        bootstrap_round_refresh(bootstrap_key, round_index)?,
+    )
+}
+
+/// Refresh a rounded BFV ciphertext with round zero from a bounded-noise bootstrap key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input or refresh key does not match the
+/// parameter set.
+pub fn bootstrap_ciphertext_bounded_noise(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    bootstrap_ciphertext_bounded_noise_round(params, bootstrap_key, ciphertext, 0)
+}
+
+/// Refresh a rounded BFV ciphertext with one indexed bounded-noise bootstrap round.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or round index does not
+/// match the parameter set.
+pub fn bootstrap_ciphertext_bounded_noise_round(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    round_index: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts(
         params,
@@ -2188,6 +3389,51 @@ pub fn bootstrap_ciphertext_rns_exact_round(
     round_index: u16,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    add_ciphertexts_rns_exact(
+        params,
+        rns_chain,
+        ciphertext,
+        bootstrap_round_refresh(bootstrap_key, round_index)?,
+    )
+}
+
+/// Refresh a rounded BFV ciphertext with round zero through an exact RNS corridor.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or RNS chain does not
+/// match the parameter set.
+pub fn bootstrap_ciphertext_bounded_noise_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    bootstrap_ciphertext_bounded_noise_rns_exact_round(
+        params,
+        rns_chain,
+        bootstrap_key,
+        ciphertext,
+        0,
+    )
+}
+
+/// Refresh a rounded BFV ciphertext with one indexed bounded-noise bootstrap
+/// round through an exact RNS corridor.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, round index, or RNS chain
+/// does not match the parameter set.
+pub fn bootstrap_ciphertext_bounded_noise_rns_exact_round(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    round_index: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts_rns_exact(
         params,
@@ -2203,8 +3449,8 @@ pub fn bootstrap_ciphertext_rns_exact_round(
 /// ciphertext moved by an outer envelope slot rotation.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the rotation step, parameter set, or public-key
-/// shape is invalid.
+/// Returns [`BfvError`] when the rotation step, parameter set, public-key
+/// shape, or public transcript seed bounds are invalid.
 pub fn rotation_key_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -2216,7 +3462,39 @@ pub fn rotation_key_from_seed(
             "rotation key steps must be greater than zero".to_owned(),
         ));
     }
+    validate_refresh_transcript_seed("rotation refresh transcript seed", seed)?;
     let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let rotation_key = BfvRotationKey {
+        rotation_steps,
+        zero_refresh,
+    };
+    validate_rotation_key(params, &rotation_key)?;
+    Ok(rotation_key)
+}
+
+/// Derive a deterministic bounded-noise public slot-rotation key.
+///
+/// The resulting key contains a rounded BFV encryption of zero used to refresh
+/// every ciphertext moved by an outer envelope slot rotation. This mirrors
+/// [`rotation_key_from_seed`] for the bounded-noise BFV-RNS migration path.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation step, parameter set, public-key
+/// shape, bounded-noise capacity, or public transcript seed bounds are invalid.
+pub fn rotation_key_bounded_noise_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    rotation_steps: u32,
+    seed: &[u8],
+) -> Result<BfvRotationKey, BfvError> {
+    if rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_refresh_transcript_seed("bounded-noise rotation refresh transcript seed", seed)?;
+    let zero_refresh = encrypt_bounded_noise_from_seed(params, public_key, &[0], seed)?;
     let rotation_key = BfvRotationKey {
         rotation_steps,
         zero_refresh,
@@ -2247,6 +3525,40 @@ pub fn validate_rotation_key_zero_refresh(
     )
 }
 
+/// Verify that a bounded-noise rotation-key refresh ciphertext decrypts to zero.
+///
+/// This checks the rounded BFV plaintext and fresh bounded-noise budget for the
+/// outer-slot rotation refresh mask.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is malformed, its refresh ciphertext
+/// decrypts to non-zero plaintext, or it exceeds the bounded-noise budget.
+pub fn validate_rotation_key_bounded_noise_zero_refresh(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    rotation_key: &BfvRotationKey,
+) -> Result<(), BfvError> {
+    validate_rotation_key(params, rotation_key)?;
+    let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
+    let profile = validate_ciphertext_bounded_noise(
+        params,
+        secret_key,
+        &rotation_key.zero_refresh,
+        refresh_bound,
+        "bounded-noise rotation key zero_refresh",
+    )?;
+    if profile
+        .plaintext
+        .iter()
+        .any(|&coefficient| coefficient != 0)
+    {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise rotation key zero_refresh must decrypt to zero plaintext".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Verify that a rotation refresh key matches its public deterministic transcript.
 ///
 /// This check recomputes the encrypted-zero refresh mask from the advertised
@@ -2264,11 +3576,43 @@ pub fn validate_rotation_key_zero_refresh_transcript(
     rotation_key: &BfvRotationKey,
     seed: &[u8],
 ) -> Result<(), BfvError> {
+    validate_refresh_transcript_seed("rotation refresh transcript seed", seed)?;
     validate_rotation_key(params, rotation_key)?;
     let expected = rotation_key_from_seed(params, public_key, rotation_key.rotation_steps, seed)?;
     if expected.zero_refresh != rotation_key.zero_refresh {
         return Err(BfvError::ShapeMismatch(
             "rotation key zero_refresh does not match deterministic encrypted-zero transcript"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify that a bounded-noise rotation refresh key matches its public transcript.
+///
+/// This recomputes the rounded BFV encrypted-zero refresh mask from the
+/// advertised seed, public key, and rotation step count.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or public key is malformed, or when the
+/// refresh ciphertext differs from the deterministic bounded-noise transcript.
+pub fn validate_rotation_key_bounded_noise_zero_refresh_transcript(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    rotation_key: &BfvRotationKey,
+    seed: &[u8],
+) -> Result<(), BfvError> {
+    validate_refresh_transcript_seed("bounded-noise rotation refresh transcript seed", seed)?;
+    validate_rotation_key(params, rotation_key)?;
+    let expected = rotation_key_bounded_noise_from_seed(
+        params,
+        public_key,
+        rotation_key.rotation_steps,
+        seed,
+    )?;
+    if expected.zero_refresh != rotation_key.zero_refresh {
+        return Err(BfvError::ShapeMismatch(
+            "bounded-noise rotation key zero_refresh does not match deterministic encrypted-zero transcript"
                 .to_owned(),
         ));
     }
@@ -2322,6 +3666,68 @@ pub fn rotate_ciphertext_slots_left_rns_exact(
     slots: &[BfvCiphertext],
 ) -> Result<Vec<BfvCiphertext>, BfvError> {
     params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
+    validate_rotation_key(params, rotation_key)?;
+    for slot in slots {
+        validate_ciphertext(params, slot)?;
+    }
+    let normalized_steps = rotation_steps_mod_slot_count(rotation_key.rotation_steps, slots.len())?;
+
+    let mut rotated = slots.to_vec();
+    rotated.rotate_left(normalized_steps);
+    rotated
+        .iter()
+        .map(|slot| add_ciphertexts_rns_exact(params, rns_chain, slot, &rotation_key.zero_refresh))
+        .collect()
+}
+
+/// Rotate a rounded BFV ciphertext-slot envelope left and refresh each moved slot.
+///
+/// This mirrors [`rotate_ciphertext_slots_left`] for the bounded-noise BFV-RNS
+/// migration path. The refresh mask must be generated with
+/// [`rotation_key_bounded_noise_from_seed`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or any ciphertext slot does not match the
+/// parameter set, bounded-noise capacity is too narrow, or when the normalized
+/// rotation would be empty/full-cycle.
+pub fn rotate_ciphertext_slots_left_bounded_noise(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+    slots: &[BfvCiphertext],
+) -> Result<Vec<BfvCiphertext>, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_rotation_key(params, rotation_key)?;
+    for slot in slots {
+        validate_ciphertext(params, slot)?;
+    }
+    let normalized_steps = rotation_steps_mod_slot_count(rotation_key.rotation_steps, slots.len())?;
+
+    let mut rotated = slots.to_vec();
+    rotated.rotate_left(normalized_steps);
+    rotated
+        .iter()
+        .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
+        .collect()
+}
+
+/// Rotate a rounded BFV ciphertext-slot envelope left through an exact RNS corridor.
+///
+/// This is the RNS counterpart of
+/// [`rotate_ciphertext_slots_left_bounded_noise`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the key, RNS chain, or any ciphertext slot does
+/// not match the parameter set, bounded-noise capacity is too narrow, or when
+/// the normalized rotation would be empty/full-cycle.
+pub fn rotate_ciphertext_slots_left_bounded_noise_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    rotation_key: &BfvRotationKey,
+    slots: &[BfvCiphertext],
+) -> Result<Vec<BfvCiphertext>, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
     validate_rotation_key(params, rotation_key)?;
     for slot in slots {
         validate_ciphertext(params, slot)?;
@@ -2366,6 +3772,1304 @@ pub fn decrypt_with_exact_residual_profile(
 ) -> Result<BfvExactResidualProfile, BfvError> {
     let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
     Ok(exact_residual_profile_from_scaled(params, &scaled))
+}
+
+/// Decrypt a rounded BFV ciphertext back into plaintext coefficients.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, ciphertext, or key shapes are invalid.
+pub fn decrypt_bounded_noise(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<Vec<u64>, BfvError> {
+    let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
+    decode_rounded_plaintext(params, &scaled)
+}
+
+/// Decrypt a rounded BFV ciphertext and return its centered noise profile.
+///
+/// The profile measures each decrypted coefficient against the nearest
+/// `q/t`-scaled plaintext representative and reports remaining rounded-decoding
+/// headroom.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, ciphertext, or key shapes are invalid.
+pub fn decrypt_with_bounded_noise_profile(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvBoundedNoiseProfile, BfvError> {
+    let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
+    bounded_noise_profile_from_scaled(params, &scaled)
+}
+
+/// Validate a rounded BFV ciphertext against a centered noise bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, ciphertext, or key shapes are invalid,
+/// when the requested bound exceeds rounded-decoding capacity, or when the
+/// ciphertext's centered noise exceeds the requested bound.
+pub fn validate_ciphertext_bounded_noise(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    max_abs_noise: u128,
+    label: &str,
+) -> Result<BfvBoundedNoiseProfile, BfvError> {
+    let profile = decrypt_with_bounded_noise_profile(params, secret_key, ciphertext)?;
+    let label = if label.is_empty() {
+        "BFV ciphertext"
+    } else {
+        label
+    };
+    if max_abs_noise > profile.centered_decoding_capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} rounded-noise bound {max_abs_noise} exceeds centered decoding capacity {}",
+            profile.centered_decoding_capacity
+        )));
+    }
+    if profile.max_abs_noise > max_abs_noise {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} rounded noise {} exceeds bound {max_abs_noise}",
+            profile.max_abs_noise
+        )));
+    }
+    Ok(profile)
+}
+
+/// Return the centered noise bound for rounded BFV ciphertext addition.
+///
+/// Addition preserves rounded BFV semantics and adds the centered noise terms
+/// of every input ciphertext. This helper is the bounded-noise counterpart of
+/// [`bfv_add_output_residual_multiple_bound`] for the BFV-RNS migration path.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, fewer than two input
+/// bounds are supplied, a bound exceeds rounded-decoding capacity, or the
+/// summed output bound overflows/exceeds rounded-decoding capacity.
+pub fn bfv_add_bounded_noise_output_bound(
+    params: &BfvParameters,
+    input_noise_bounds: &[u128],
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    if input_noise_bounds.len() < 2 {
+        return Err(BfvError::InvalidParameters(
+            "BFV bounded-noise add output bound requires at least two input bounds".to_owned(),
+        ));
+    }
+    let capacity = rounded_plaintext_decoding_capacity(params)?;
+    let mut output_bound = 0_u128;
+    for (index, &input_bound) in input_noise_bounds.iter().enumerate() {
+        if input_bound > capacity {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV bounded-noise add input[{index}] bound {input_bound} exceeds rounded decoding capacity {capacity}"
+            )));
+        }
+        output_bound = output_bound.checked_add(input_bound).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise add output bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    }
+    if output_bound > capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV bounded-noise add output bound {output_bound} exceeds rounded decoding capacity {capacity}"
+        )));
+    }
+    Ok(output_bound)
+}
+
+/// Return the centered noise bound for rounded BFV ciphertext subtraction.
+///
+/// Subtraction negates the right-hand noise and adds it to the left-hand noise,
+/// so the conservative output bound is the sum of both input bounds.
+///
+/// # Errors
+/// Returns [`BfvError`] when either input bound or the summed output bound
+/// exceeds rounded-decoding capacity.
+pub fn bfv_subtract_bounded_noise_output_bound(
+    params: &BfvParameters,
+    lhs_noise_bound: u128,
+    rhs_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    bfv_add_bounded_noise_output_bound(params, &[lhs_noise_bound, rhs_noise_bound])
+}
+
+/// Return the centered noise bound after adding public rounded plaintext.
+///
+/// Adding rounded plaintext changes only the message term, not the ciphertext
+/// noise.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input bound exceeds rounded-decoding capacity.
+pub fn bfv_add_plain_bounded_noise_output_bound(
+    params: &BfvParameters,
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise add-plain input bound",
+    )?;
+    Ok(input_noise_bound)
+}
+
+/// Return the centered noise bound after rounded BFV plaintext-scalar multiplication.
+///
+/// # Errors
+/// Returns [`BfvError`] when the scalar is not in `Z_t`, the input bound exceeds
+/// rounded-decoding capacity, or the scaled output bound overflows/exceeds
+/// rounded-decoding capacity.
+pub fn bfv_multiply_plain_scalar_bounded_noise_output_bound(
+    params: &BfvParameters,
+    input_noise_bound: u128,
+    scalar: u64,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    if scalar >= params.plaintext_modulus {
+        return Err(BfvError::PlaintextOutOfRange {
+            coefficient: scalar,
+            plaintext_modulus: params.plaintext_modulus,
+        });
+    }
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise multiply-plain-scalar input bound",
+    )?;
+    let output_bound = input_noise_bound
+        .checked_mul(u128::from(scalar))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply-plain-scalar output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV bounded-noise multiply-plain-scalar output bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the centered noise bound after rounded BFV plaintext-polynomial multiplication.
+///
+/// Each output coefficient receives a negacyclic sum of input-noise
+/// coefficients scaled by public plaintext coefficients, so this uses the
+/// plaintext coefficient `L1` sum as a conservative bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when plaintext shape is invalid, the input bound exceeds
+/// rounded-decoding capacity, or the output bound overflows/exceeds
+/// rounded-decoding capacity.
+pub fn bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+    params: &BfvParameters,
+    input_noise_bound: u128,
+    plaintext: &[u64],
+) -> Result<u128, BfvError> {
+    validate_plaintext(params, plaintext)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise multiply-plaintext-polynomial input bound",
+    )?;
+    let coefficient_sum = plaintext
+        .iter()
+        .try_fold(0_u128, |accumulator, &coefficient| {
+            accumulator
+                .checked_add(u128::from(coefficient))
+                .ok_or_else(|| {
+                    BfvError::InvalidParameters(
+                        "BFV bounded-noise multiply-plaintext-polynomial coefficient bound exceeds deterministic limits"
+                            .to_owned(),
+                    )
+                })
+        })?;
+    let output_bound = input_noise_bound
+        .checked_mul(coefficient_sum)
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply-plaintext-polynomial output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV bounded-noise multiply-plaintext-polynomial output bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return a conservative centered noise bound after rounded BFV multiplication.
+///
+/// The bound accounts for plaintext/noise cross terms, the scaled noise product,
+/// deterministic component scale-and-rounding, and the bounded-noise
+/// relinearization key-switch residual. It is a scalar bridge bound for the
+/// pending BFV-RNS multiplication pipeline.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters or key shapes are invalid, input bounds
+/// exceed rounded-decoding capacity, or the output bound overflows/exceeds
+/// rounded-decoding capacity.
+pub fn bfv_multiply_bounded_noise_output_bound(
+    params: &BfvParameters,
+    relinearization_key: &BfvRelinearizationKey,
+    lhs_noise_bound: u128,
+    rhs_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    validate_key_switch_entries(
+        params,
+        &relinearization_key.entries,
+        "bounded-noise relinearization key",
+    )?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        lhs_noise_bound,
+        "BFV bounded-noise multiply lhs bound",
+    )?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        rhs_noise_bound,
+        "BFV bounded-noise multiply rhs bound",
+    )?;
+
+    let degree = u128::from(params.polynomial_degree);
+    let plaintext_bound = u128::from(params.plaintext_modulus.checked_sub(1).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV bounded-noise multiply plaintext modulus is below deterministic bounds".to_owned(),
+        )
+    })?);
+    let cross_bound = lhs_noise_bound
+        .checked_add(rhs_noise_bound)
+        .and_then(|bound| bound.checked_mul(plaintext_bound))
+        .and_then(|bound| bound.checked_mul(degree))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply cross-noise bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    let product_noise = lhs_noise_bound
+        .checked_mul(rhs_noise_bound)
+        .and_then(|bound| bound.checked_mul(degree))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply noise-product bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    let scaled_product_noise = ceil_div_u128(
+        product_noise
+            .checked_mul(u128::from(params.plaintext_modulus))
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "BFV bounded-noise multiply scaled noise-product bound exceeds deterministic limits"
+                        .to_owned(),
+                )
+            })?,
+        u128::from(params.ciphertext_modulus),
+    )?;
+    let rounding_bound = degree
+        .checked_mul(degree)
+        .and_then(|value| value.checked_add(degree))
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply rounding bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    let key_switch_bound = bfv_key_switch_extra_residual_multiple_bound(params)?;
+    let output_bound = cross_bound
+        .checked_add(scaled_product_noise)
+        .and_then(|value| value.checked_add(rounding_bound))
+        .and_then(|value| value.checked_add(key_switch_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise multiply output bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV bounded-noise multiply output bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the centered noise bound after one rounded BFV Galois key switch.
+///
+/// A Galois automorphism preserves the input noise magnitude; bounded-noise
+/// key switching adds the configured key-switch residual contribution.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is invalid, the input bound exceeds
+/// rounded-decoding capacity, or the output bound overflows/exceeds
+/// rounded-decoding capacity.
+pub fn bfv_galois_key_switch_bounded_noise_output_bound(
+    params: &BfvParameters,
+    galois_key: &BfvGaloisKey,
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_galois_key(params, galois_key)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise Galois key-switch input bound",
+    )?;
+    let output_bound = input_noise_bound
+        .checked_add(bfv_key_switch_extra_residual_multiple_bound(params)?)
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise Galois key-switch output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV bounded-noise Galois key-switch output bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the centered noise bound for bounded-noise packed-slot `RotateLeft`.
+///
+/// The helper mirrors
+/// [`rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise`]: each
+/// scheduled Galois key switch receives the same input bound, each switched
+/// ciphertext is multiplied by its public packed plaintext selector, and the
+/// masked contributions are accumulated.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the rotation is
+/// invalid, required Galois keys are missing or malformed, or any intermediate
+/// or output bound exceeds rounded-decoding capacity.
+pub fn bfv_packed_rotate_left_bounded_noise_output_bound(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    input_noise_bound: u128,
+    rotation_steps: u32,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_galois_key_set(params, galois_keys, "bounded-noise packed RotateLeft")?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise packed RotateLeft input bound",
+    )?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut contribution_bounds = Vec::with_capacity(schedule.len());
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for bounded-noise packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let switched_bound = bfv_galois_key_switch_bounded_noise_output_bound(
+            params,
+            galois_key,
+            input_noise_bound,
+        )?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked_bound = bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+            params,
+            switched_bound,
+            &mask_plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "bounded-noise packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_bounded_noise_output_bound(params, bounds),
+    }
+}
+
+/// Validate that an exact residual-multiple bound fits the centered lift capacity.
+///
+/// This is a public metadata/admission preflight for callers that propagate
+/// owner-side exact residual bounds without holding the secret key. It only
+/// proves that the declared bound is representable for the parameter set; it
+/// does not prove that any ciphertext actually satisfies the bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid or the bound exceeds the
+/// centered residual capacity.
+pub fn validate_bfv_exact_residual_multiple_capacity(
+    params: &BfvParameters,
+    bound: u128,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_exact_residual_bound_within_centered_capacity(params, bound, label)
+}
+
+/// Validate that a rounded BFV centered-noise bound fits the decoding capacity.
+///
+/// This is a public metadata/admission preflight for callers that propagate
+/// bounded-noise ciphertext metadata without holding the secret key. It only
+/// proves that the declared bound is representable for the parameter set; it
+/// does not prove that any ciphertext actually satisfies the bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, rounded BFV encryption is
+/// not admissible for the profile, or the bound exceeds rounded decoding
+/// capacity.
+pub fn validate_bfv_bounded_noise_bound(
+    params: &BfvParameters,
+    bound: u128,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bounded_noise_bound_within_decoding_capacity(params, bound, label)
+}
+
+/// Validate a ciphertext against an exact residual-multiple output bound.
+///
+/// This is an owner-side diagnostic for first-release evaluated ciphertext
+/// admission. The secret-key owner supplies the expected plaintext-multiple
+/// residual bound for the operation shape, and the helper rejects outputs whose
+/// exact residual profile exceeds it. It must not be interpreted as a public
+/// proof or as the future bounded-RLWE BFV-RNS noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, ciphertext, or key shapes are invalid,
+/// when the requested bound exceeds the centered residual capacity, or when the
+/// ciphertext residual exceeds the requested bound.
+pub fn validate_ciphertext_exact_residual_multiple_bound(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    max_abs_residual_multiple: u128,
+    label: &str,
+) -> Result<BfvExactResidualProfile, BfvError> {
+    let profile = decrypt_with_exact_residual_profile(params, secret_key, ciphertext)?;
+    let label = if label.is_empty() {
+        "BFV ciphertext"
+    } else {
+        label
+    };
+    if max_abs_residual_multiple > profile.centered_residual_multiple_capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} residual bound {max_abs_residual_multiple} exceeds centered residual capacity {}",
+            profile.centered_residual_multiple_capacity
+        )));
+    }
+    if profile.max_abs_residual_multiple > max_abs_residual_multiple {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} residual {} exceeds exact residual bound {max_abs_residual_multiple}",
+            profile.max_abs_residual_multiple
+        )));
+    }
+    Ok(profile)
+}
+
+/// Return the exact residual-multiple bound for a ciphertext addition output.
+///
+/// The bound is the checked sum of the caller-supplied input bounds. This
+/// covers the current exact plaintext-lift evaluator for additive circuits and
+/// gives owner-side diagnostics a reusable bound to feed into
+/// [`validate_ciphertext_exact_residual_multiple_bound`]. It is not the future
+/// bounded-RLWE BFV-RNS noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, fewer than two input
+/// bounds are supplied, a bound exceeds centered residual capacity, or the
+/// summed output bound overflows/exceeds centered capacity.
+pub fn bfv_add_output_residual_multiple_bound(
+    params: &BfvParameters,
+    input_bounds: &[u128],
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    if input_bounds.len() < 2 {
+        return Err(BfvError::InvalidParameters(
+            "BFV add output residual bound requires at least two input bounds".to_owned(),
+        ));
+    }
+    let mut output_bound = 0_u128;
+    for (index, &input_bound) in input_bounds.iter().enumerate() {
+        validate_exact_residual_bound_within_centered_capacity(
+            params,
+            input_bound,
+            &format!("BFV add input[{index}] residual bound"),
+        )?;
+        output_bound = output_bound.checked_add(input_bound).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV add output residual bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    }
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV add output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the exact residual-multiple bound for a ciphertext subtraction output.
+///
+/// Subtraction negates the right-hand residual and adds it to the left-hand
+/// residual, so the exact diagnostic bound is the sum of the two input bounds.
+/// This is for the current exact plaintext-lift evaluator, not the future
+/// bounded-RLWE BFV-RNS noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, either input bound exceeds
+/// centered residual capacity, or the output bound overflows/exceeds centered
+/// capacity.
+pub fn bfv_subtract_output_residual_multiple_bound(
+    params: &BfvParameters,
+    lhs_bound: u128,
+    rhs_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        lhs_bound,
+        "BFV subtract lhs residual bound",
+    )?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        rhs_bound,
+        "BFV subtract rhs residual bound",
+    )?;
+    let output_bound = lhs_bound.checked_add(rhs_bound).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV subtract output residual bound exceeds deterministic limits".to_owned(),
+        )
+    })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV subtract output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return a conservative exact residual-multiple bound for multiplication.
+///
+/// The current exact plaintext-lift evaluator multiplies decrypted lifts of
+/// the form `m + t*r`. A product coefficient can receive up to `n`
+/// negacyclic terms, so this helper includes conservative terms for
+/// plaintext-product carries, plaintext/residual cross products,
+/// residual/residual products, and the relinearization key-switch residual.
+/// This is an owner/runtime diagnostic bound for the first-release evaluator,
+/// not the future bounded-RLWE BFV-RNS noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters or relinearization key shapes are
+/// invalid, either input bound exceeds centered capacity, or the propagated
+/// output bound overflows/exceeds centered capacity.
+pub fn bfv_multiply_output_residual_multiple_bound(
+    params: &BfvParameters,
+    relinearization_key: &BfvRelinearizationKey,
+    lhs_bound: u128,
+    rhs_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_relinearization_key(params, relinearization_key)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        lhs_bound,
+        "BFV multiply lhs residual bound",
+    )?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        rhs_bound,
+        "BFV multiply rhs residual bound",
+    )?;
+
+    let degree = u128::from(params.polynomial_degree);
+    let plaintext_modulus = u128::from(params.plaintext_modulus);
+    let plaintext_bound = plaintext_modulus.checked_sub(1).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV multiply plaintext modulus is below deterministic carry bounds".to_owned(),
+        )
+    })?;
+    let plaintext_carry_bound = degree
+        .checked_mul(plaintext_bound)
+        .and_then(|value| value.checked_mul(plaintext_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV multiply plaintext carry residual bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    let cross_bound = lhs_bound.checked_add(rhs_bound).and_then(|value| {
+        degree
+            .checked_mul(plaintext_bound)
+            .and_then(|scaled| scaled.checked_mul(value))
+    });
+    let cross_bound = cross_bound.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV multiply plaintext-residual bound exceeds deterministic limits".to_owned(),
+        )
+    })?;
+    let residual_product_bound = degree
+        .checked_mul(plaintext_modulus)
+        .and_then(|value| value.checked_mul(lhs_bound))
+        .and_then(|value| value.checked_mul(rhs_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV multiply residual-product bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    let key_switch_bound = bfv_key_switch_extra_residual_multiple_bound(params)?;
+    let output_bound = plaintext_carry_bound
+        .checked_add(cross_bound)
+        .and_then(|value| value.checked_add(residual_product_bound))
+        .and_then(|value| value.checked_add(key_switch_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV multiply output residual bound exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV multiply output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the exact residual-multiple bound after adding public plaintext.
+///
+/// Adding plaintext changes only the decoded message term, not the residual
+/// multiples, so the output bound equals the input bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid or the input bound exceeds
+/// centered residual capacity.
+pub fn bfv_add_plain_output_residual_multiple_bound(
+    params: &BfvParameters,
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV add-plain input residual bound",
+    )?;
+    Ok(input_bound)
+}
+
+/// Return the exact residual-multiple bound after plaintext-scalar multiplication.
+///
+/// The current exact evaluator multiplies each residual multiple by the public
+/// scalar's canonical `Z_t` representative.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, the scalar is outside the
+/// plaintext field, the input bound exceeds centered capacity, or the output
+/// bound overflows/exceeds centered capacity.
+pub fn bfv_multiply_plain_scalar_output_residual_multiple_bound(
+    params: &BfvParameters,
+    input_bound: u128,
+    scalar: u64,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    if scalar >= params.plaintext_modulus {
+        return Err(BfvError::PlaintextOutOfRange {
+            coefficient: scalar,
+            plaintext_modulus: params.plaintext_modulus,
+        });
+    }
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV multiply-plain-scalar input residual bound",
+    )?;
+    let output_bound = input_bound.checked_mul(u128::from(scalar)).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV multiply-plain-scalar output residual bound exceeds deterministic limits"
+                .to_owned(),
+        )
+    })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV multiply-plain-scalar output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the exact residual-multiple bound after plaintext-polynomial multiplication.
+///
+/// Plaintext polynomials are encoded with canonical non-negative `Z_t`
+/// representatives. Each output coefficient is a negacyclic sum of residual
+/// multiples scaled by those public coefficients, so this diagnostic uses the
+/// coefficient `L1` sum as a conservative exact-lift bound for the current
+/// evaluator.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters or plaintext shape are invalid, the
+/// input bound exceeds centered capacity, or the output bound
+/// overflows/exceeds centered capacity.
+pub fn bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+    params: &BfvParameters,
+    input_bound: u128,
+    plaintext: &[u64],
+) -> Result<u128, BfvError> {
+    validate_plaintext(params, plaintext)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV multiply-plaintext-polynomial input residual bound",
+    )?;
+    let coefficient_sum = plaintext.iter().try_fold(0_u128, |accumulator, &coefficient| {
+        accumulator
+            .checked_add(u128::from(coefficient))
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(
+                    "BFV multiply-plaintext-polynomial coefficient bound exceeds deterministic limits"
+                        .to_owned(),
+                )
+            })
+    })?;
+    let output_bound = input_bound.checked_mul(coefficient_sum).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV multiply-plaintext-polynomial output residual bound exceeds deterministic limits"
+                .to_owned(),
+        )
+    })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV multiply-plaintext-polynomial output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return exact residual-multiple bounds for a public affine circuit.
+///
+/// For the current exact plaintext-lift evaluator, each output row has
+/// residual bound `sum_i input_bound_i * weight_i`; public bias terms do not
+/// change residual multiples. This is reusable owner-side bound propagation for
+/// [`evaluate_affine_circuit`], not a bounded-RLWE BFV-RNS noise model.
+///
+/// # Errors
+/// Returns [`BfvError`] when the affine circuit is invalid for the supplied
+/// input count, an input bound exceeds centered capacity, or any output bound
+/// overflows/exceeds centered capacity.
+pub fn bfv_affine_circuit_output_residual_multiple_bounds(
+    params: &BfvParameters,
+    circuit: &BfvAffineCircuit,
+    input_bounds: &[u128],
+) -> Result<Vec<u128>, BfvError> {
+    circuit.validate(params, input_bounds.len())?;
+    for (index, &input_bound) in input_bounds.iter().enumerate() {
+        validate_exact_residual_bound_within_centered_capacity(
+            params,
+            input_bound,
+            &format!("BFV affine input[{index}] residual bound"),
+        )?;
+    }
+    circuit
+        .weights
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let mut output_bound = 0_u128;
+            for (&input_bound, &weight) in input_bounds.iter().zip(row) {
+                let contribution = input_bound.checked_mul(u128::from(weight)).ok_or_else(|| {
+                    BfvError::InvalidParameters(format!(
+                        "BFV affine output[{row_index}] residual bound exceeds deterministic limits"
+                    ))
+                })?;
+                output_bound = output_bound.checked_add(contribution).ok_or_else(|| {
+                    BfvError::InvalidParameters(format!(
+                        "BFV affine output[{row_index}] residual bound exceeds deterministic limits"
+                    ))
+                })?;
+            }
+            validate_exact_residual_bound_within_centered_capacity(
+                params,
+                output_bound,
+                &format!("BFV affine output[{row_index}] residual bound"),
+            )?;
+            Ok(output_bound)
+        })
+        .collect()
+}
+
+/// Return exact residual-multiple bounds after outer ciphertext-slot rotation.
+///
+/// This mirrors [`rotate_ciphertext_slots_left`]: input bounds are rotated by
+/// the key's normalized step count, then each output slot receives one public
+/// encrypted-zero refresh bound. It is exact-bound propagation for the current
+/// outer-slot refresh path, not full BFV-RNS noise accounting.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation key is invalid, the input-bound list
+/// is empty or represents a full-cycle rotation, any input bound exceeds
+/// centered capacity, or any refreshed output bound overflows/exceeds centered
+/// capacity.
+pub fn bfv_rotate_slots_left_output_residual_multiple_bounds(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+    input_bounds: &[u128],
+) -> Result<Vec<u128>, BfvError> {
+    params.validate()?;
+    validate_rotation_key(params, rotation_key)?;
+    for (index, &input_bound) in input_bounds.iter().enumerate() {
+        validate_exact_residual_bound_within_centered_capacity(
+            params,
+            input_bound,
+            &format!("BFV RotateLeft input[{index}] residual bound"),
+        )?;
+    }
+    let normalized_steps =
+        rotation_steps_mod_slot_count(rotation_key.rotation_steps, input_bounds.len())?;
+    let refresh_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
+    let mut rotated = input_bounds.to_vec();
+    rotated.rotate_left(normalized_steps);
+    rotated
+        .into_iter()
+        .enumerate()
+        .map(|(index, input_bound)| {
+            let output_bound =
+                bfv_add_output_residual_multiple_bound(params, &[input_bound, refresh_bound])?;
+            validate_exact_residual_bound_within_centered_capacity(
+                params,
+                output_bound,
+                &format!("BFV RotateLeft output[{index}] residual bound"),
+            )?;
+            Ok(output_bound)
+        })
+        .collect()
+}
+
+/// Return centered noise bounds after bounded-noise outer ciphertext-slot rotation.
+///
+/// This mirrors [`rotate_ciphertext_slots_left_bounded_noise`]: input bounds
+/// are rotated by the key's normalized step count, then each output slot
+/// receives one rounded BFV encrypted-zero refresh bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation key is invalid, the input-bound list
+/// is empty or represents a full-cycle rotation, any input bound exceeds
+/// rounded-decoding capacity, or any refreshed output bound overflows/exceeds
+/// rounded-decoding capacity.
+pub fn bfv_rotate_slots_left_bounded_noise_output_bounds(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+    input_noise_bounds: &[u128],
+) -> Result<Vec<u128>, BfvError> {
+    validate_rotation_key(params, rotation_key)?;
+    for (index, &input_bound) in input_noise_bounds.iter().enumerate() {
+        validate_bounded_noise_bound_within_decoding_capacity(
+            params,
+            input_bound,
+            &format!("BFV bounded-noise RotateLeft input[{index}] bound"),
+        )?;
+    }
+    let normalized_steps =
+        rotation_steps_mod_slot_count(rotation_key.rotation_steps, input_noise_bounds.len())?;
+    let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
+    let mut rotated = input_noise_bounds.to_vec();
+    rotated.rotate_left(normalized_steps);
+    rotated
+        .into_iter()
+        .enumerate()
+        .map(|(index, input_bound)| {
+            let output_bound =
+                bfv_add_bounded_noise_output_bound(params, &[input_bound, refresh_bound])?;
+            validate_bounded_noise_bound_within_decoding_capacity(
+                params,
+                output_bound,
+                &format!("BFV bounded-noise RotateLeft output[{index}] bound"),
+            )?;
+            Ok(output_bound)
+        })
+        .collect()
+}
+
+/// Return the extra exact residual-multiple bound for one key-switch operation.
+///
+/// Current deterministic key-switch entries carry plaintext-multiple error
+/// coefficients bounded by `BFV_ERROR_MULTIPLE_BOUND`. Each decomposition digit
+/// coefficient is below the decomposition base, so each output coefficient gets
+/// at most `n * (base - 1) * E` residual multiples per digit.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is invalid or the bound exceeds
+/// deterministic integer limits.
+pub fn bfv_key_switch_extra_residual_multiple_bound(
+    params: &BfvParameters,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    let degree = u128::from(params.polynomial_degree);
+    let digits = u128::try_from(params.decomposition_digits()?).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV key-switch decomposition digit count exceeds deterministic limits".to_owned(),
+        )
+    })?;
+    let digit_bound = u128::from(params.decomposition_base().checked_sub(1).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV key-switch decomposition base is below deterministic digit bounds".to_owned(),
+        )
+    })?);
+    degree
+        .checked_mul(digits)
+        .and_then(|value| value.checked_mul(digit_bound))
+        .and_then(|value| value.checked_mul(u128::from(BFV_ERROR_MULTIPLE_BOUND)))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV key-switch residual bound exceeds deterministic limits".to_owned(),
+            )
+        })
+}
+
+/// Return the exact residual-multiple bound after one Galois key switch.
+///
+/// A Galois automorphism preserves the input residual magnitude; switching the
+/// transformed secret component back to `s` adds the current key-switch residual
+/// bound. This is owner-side exact-lift accounting for the deterministic
+/// key-switch bridge, not a public BFV-RNS noise proof.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key is invalid, the input bound exceeds
+/// centered capacity, or the output bound overflows/exceeds centered capacity.
+pub fn bfv_galois_key_switch_output_residual_multiple_bound(
+    params: &BfvParameters,
+    galois_key: &BfvGaloisKey,
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_galois_key(params, galois_key)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV Galois key-switch input residual bound",
+    )?;
+    let output_bound = input_bound
+        .checked_add(bfv_key_switch_extra_residual_multiple_bound(params)?)
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV Galois key-switch output residual bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV Galois key-switch output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the exact residual-multiple bound for packed-slot `RotateLeft`.
+///
+/// The helper mirrors [`rotate_packed_ciphertext_slots_left_with_galois_keys`]:
+/// every scheduled Galois key switch receives the same input bound, each
+/// switched ciphertext is masked by its packed plaintext selector, and the
+/// masked contributions are added. This remains a conservative exact-lift
+/// diagnostic for the current key-switch bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation is invalid, required Galois keys are
+/// missing or malformed, or any intermediate/output bound exceeds centered
+/// residual capacity.
+pub fn bfv_packed_rotate_left_output_residual_multiple_bound(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    input_bound: u128,
+    rotation_steps: u32,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    validate_galois_key_set(params, galois_keys, "packed RotateLeft")?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV packed RotateLeft input residual bound",
+    )?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut contribution_bounds = Vec::with_capacity(schedule.len());
+    for (automorphism_power, mask_slots) in schedule {
+        let galois_key = galois_keys
+            .iter()
+            .find(|key| key.automorphism_power == automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
+                ))
+            })?;
+        let switched_bound =
+            bfv_galois_key_switch_output_residual_multiple_bound(params, galois_key, input_bound)?;
+        let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
+        let masked_bound = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            params,
+            switched_bound,
+            &mask_plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "packed RotateLeft produced an empty Galois key schedule".to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_output_residual_multiple_bound(params, bounds),
+    }
+}
+
+/// Return the exact residual-multiple bound after public bootstrap refreshes.
+///
+/// In the first-release refresh path, each public bootstrap round adds one
+/// encrypted-zero mask to the input ciphertext, so the exact residual bound is
+/// the input bound plus `rounds *` the seeded encrypted-zero refresh bound. It
+/// is a diagnostic for the current refresh format, not the future
+/// proof-carrying full bootstrap noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, zero rounds are requested,
+/// the input bound exceeds centered capacity, or the refreshed output bound
+/// overflows/exceeds centered capacity.
+pub fn bfv_bootstrap_refresh_output_residual_multiple_bound(
+    params: &BfvParameters,
+    input_bound: u128,
+    refresh_rounds: u16,
+) -> Result<u128, BfvError> {
+    if refresh_rounds == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV bootstrap refresh output residual bound requires at least one round".to_owned(),
+        ));
+    }
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV bootstrap input residual bound",
+    )?;
+    let refresh_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
+    let refresh_bound = refresh_bound
+        .checked_mul(u128::from(refresh_rounds))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bootstrap refresh output residual bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    let output_bound = input_bound.checked_add(refresh_bound).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV bootstrap refresh output residual bound exceeds deterministic limits".to_owned(),
+        )
+    })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV bootstrap refresh output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the exact residual-multiple bound after key-authorized bootstrap refreshes.
+///
+/// This variant first validates the supplied bootstrap key and confirms that the
+/// requested round count is within the key's public `max_refresh_rounds`
+/// capacity, so admission checks can use the same key-bound constraint as the
+/// public refresh evaluator.
+///
+/// # Errors
+/// Returns [`BfvError`] when the bootstrap key is malformed, the requested
+/// refresh count exceeds the key capacity, or the residual-bound calculation
+/// fails.
+pub fn bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    input_bound: u128,
+    refresh_rounds: u16,
+) -> Result<u128, BfvError> {
+    validate_bootstrap_key(params, bootstrap_key)?;
+    if refresh_rounds > bootstrap_key.max_refresh_rounds {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV bootstrap refresh rounds {refresh_rounds} exceeds bootstrap key max_refresh_rounds {}",
+            bootstrap_key.max_refresh_rounds
+        )));
+    }
+    bfv_bootstrap_refresh_output_residual_multiple_bound(params, input_bound, refresh_rounds)
+}
+
+/// Return the centered noise bound after bounded-noise bootstrap refreshes.
+///
+/// Each refresh round adds one rounded BFV encrypted-zero mask generated by
+/// [`bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed`], so the
+/// conservative output bound is the input bound plus `refresh_rounds` fresh
+/// bounded-noise encryption bounds. This remains an encrypted-zero refresh
+/// bound, not full bootstrapping noise analysis.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid, zero rounds are requested,
+/// the input bound exceeds rounded-decoding capacity, or the refreshed output
+/// bound overflows/exceeds rounded-decoding capacity.
+pub fn bfv_bootstrap_refresh_bounded_noise_output_bound(
+    params: &BfvParameters,
+    input_noise_bound: u128,
+    refresh_rounds: u16,
+) -> Result<u128, BfvError> {
+    if refresh_rounds == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV bounded-noise bootstrap refresh output bound requires at least one round"
+                .to_owned(),
+        ));
+    }
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV bounded-noise bootstrap input bound",
+    )?;
+    let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?
+        .checked_mul(u128::from(refresh_rounds))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise bootstrap refresh output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    let output_bound = input_noise_bound
+        .checked_add(refresh_bound)
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise bootstrap refresh output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV bounded-noise bootstrap refresh output bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the centered noise bound after key-authorized bounded-noise bootstrap refreshes.
+///
+/// This variant validates the supplied bootstrap key and confirms that the
+/// requested round count is within the key's public `max_refresh_rounds`
+/// capacity before deriving the bounded-noise output bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when the bootstrap key is malformed, the requested
+/// refresh count exceeds the key capacity, or the bounded-noise calculation
+/// fails.
+pub fn bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    input_noise_bound: u128,
+    refresh_rounds: u16,
+) -> Result<u128, BfvError> {
+    validate_bootstrap_key(params, bootstrap_key)?;
+    if refresh_rounds > bootstrap_key.max_refresh_rounds {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV bounded-noise bootstrap refresh rounds {refresh_rounds} exceeds bootstrap key max_refresh_rounds {}",
+            bootstrap_key.max_refresh_rounds
+        )));
+    }
+    bfv_bootstrap_refresh_bounded_noise_output_bound(params, input_noise_bound, refresh_rounds)
+}
+
+/// Return the exact plaintext-multiple residual bound for seeded zero refreshes.
+///
+/// The current first-release refresh masks are BFV encryptions of zero. After
+/// decryption, each coefficient is bounded by the public-key residual times the
+/// small encryption polynomial plus two fresh small error products:
+/// `pk_error * u + e1 + e2 * s`. With ternary `u`/`s` and error multiples
+/// bounded by `BFV_ERROR_MULTIPLE_BOUND`, each negacyclic product contributes
+/// at most `n * E` plaintext-modulus multiples and the direct error contributes
+/// `E`, for `(2n + 1) * E`.
+///
+/// This is an exact diagnostic bound for the deterministic refresh-key format;
+/// it is not the future bounded-RLWE noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is invalid or the bound exceeds
+/// deterministic integer limits.
+pub fn bfv_encrypted_zero_refresh_residual_multiple_bound(
+    params: &BfvParameters,
+) -> Result<u128, BfvError> {
+    params.validate()?;
+    let degree = u128::from(params.polynomial_degree);
+    let error_bound = u128::from(BFV_ERROR_MULTIPLE_BOUND);
+    degree
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .and_then(|value| value.checked_mul(error_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV encrypted-zero refresh residual bound exceeds deterministic limits".to_owned(),
+            )
+        })
+}
+
+/// Validate that seeded BFV encryption has enough centered residual headroom.
+///
+/// The deterministic first-release encryption/refresh format is only admitted
+/// when the parameter set can represent the worst-case encrypted-zero residual
+/// without crossing the centered `q/t` decoding boundary. This is still an
+/// exact-lift diagnostic for the current seeded format, not the final
+/// bounded-RLWE noise budget.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is invalid or its centered
+/// residual capacity is below
+/// [`bfv_encrypted_zero_refresh_residual_multiple_bound`].
+pub fn validate_bfv_seeded_encryption_residual_capacity(
+    params: &BfvParameters,
+) -> Result<(), BfvError> {
+    let residual_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
+    let capacity = centered_residual_multiple_capacity(params);
+    if capacity < residual_bound {
+        return Err(BfvError::InvalidParameters(format!(
+            "ciphertext_modulus/plaintext_modulus centered capacity {capacity} is below seeded BFV encryption residual bound {residual_bound}"
+        )));
+    }
+    Ok(())
+}
+
+/// Return the conservative centered noise bound for fresh rounded BFV encryption.
+///
+/// For public-key residual `e_pk`, ternary encryption mask `u`, fresh error
+/// `e1`, fresh error `e2`, and ternary secret `s`, a coefficient of
+/// `e_pk * u + e1 + e2 * s` is bounded by `(2n + 1)E`.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is invalid or the bound exceeds
+/// deterministic integer limits.
+pub fn bfv_fresh_bounded_noise_ciphertext_bound(params: &BfvParameters) -> Result<u128, BfvError> {
+    params.validate()?;
+    let degree = u128::from(params.polynomial_degree);
+    let error_bound = u128::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND);
+    degree
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .and_then(|value| value.checked_mul(error_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV fresh rounded-noise bound exceeds deterministic limits".to_owned(),
+            )
+        })
+}
+
+/// Validate that rounded BFV encryption has enough decoding headroom.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters are invalid or the rounded plaintext
+/// scale cannot hold the conservative fresh encryption noise bound.
+pub fn validate_bfv_bounded_noise_encryption_capacity(
+    params: &BfvParameters,
+) -> Result<(), BfvError> {
+    let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
+    let capacity = rounded_plaintext_decoding_capacity(params)?;
+    if capacity < noise_bound {
+        return Err(BfvError::InvalidParameters(format!(
+            "rounded BFV decoding capacity {capacity} is below fresh encryption noise bound {noise_bound}"
+        )));
+    }
+    Ok(())
 }
 
 fn decrypt_scaled_coefficients(
@@ -2415,8 +5119,102 @@ fn exact_residual_profile_from_scaled(
     }
 }
 
+fn bounded_noise_profile_from_scaled(
+    params: &BfvParameters,
+    scaled: &[u64],
+) -> Result<BfvBoundedNoiseProfile, BfvError> {
+    let plaintext = decode_rounded_plaintext(params, scaled)?;
+    let encoded_plaintext = encode_rounded_plaintext(params, &plaintext)?;
+    let noise = scaled
+        .iter()
+        .zip(&encoded_plaintext)
+        .map(|(&coefficient, &encoded)| {
+            center_lift(
+                sub_mod_u64(coefficient, encoded, params.ciphertext_modulus),
+                params.ciphertext_modulus,
+            )
+        })
+        .collect::<Vec<_>>();
+    let max_abs_noise = noise
+        .iter()
+        .map(|coefficient| coefficient.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    let centered_decoding_capacity = rounded_plaintext_decoding_capacity(params)?;
+    let noise_headroom = centered_decoding_capacity.saturating_sub(max_abs_noise);
+    Ok(BfvBoundedNoiseProfile {
+        plaintext,
+        noise,
+        max_abs_noise,
+        centered_decoding_capacity,
+        noise_headroom,
+    })
+}
+
 fn centered_residual_multiple_capacity(params: &BfvParameters) -> u128 {
     u128::from(params.ciphertext_modulus / params.plaintext_modulus / 2)
+}
+
+fn rounded_plaintext_scale(params: &BfvParameters) -> Result<u64, BfvError> {
+    params.validate()?;
+    Ok(params.ciphertext_modulus / params.plaintext_modulus)
+}
+
+fn rounded_plaintext_decoding_capacity(params: &BfvParameters) -> Result<u128, BfvError> {
+    let scale = rounded_plaintext_scale(params)?;
+    let capacity = scale.checked_sub(1).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "rounded BFV plaintext scale is below deterministic decoding bounds".to_owned(),
+        )
+    })? / 2;
+    Ok(u128::from(capacity))
+}
+
+fn validate_bounded_noise_bound_within_decoding_capacity(
+    params: &BfvParameters,
+    bound: u128,
+    label: &str,
+) -> Result<(), BfvError> {
+    let capacity = rounded_plaintext_decoding_capacity(params)?;
+    if bound > capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} {bound} exceeds rounded decoding capacity {capacity}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_exact_residual_bound_within_centered_capacity(
+    params: &BfvParameters,
+    bound: u128,
+    label: &str,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    let capacity = centered_residual_multiple_capacity(params);
+    if bound > capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} {bound} exceeds centered residual capacity {capacity}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_centered_noise_bound(
+    params: &BfvParameters,
+    polynomial: &[u64],
+    bound: u128,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_poly(params, polynomial, label)?;
+    for (index, &coefficient) in polynomial.iter().enumerate() {
+        let centered = center_lift(coefficient, params.ciphertext_modulus);
+        if centered.unsigned_abs() > bound {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} centered noise coefficient[{index}] {centered} exceeds bound {bound}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_refresh_ciphertext_decrypts_to_zero(
@@ -2433,6 +5231,13 @@ fn validate_refresh_ciphertext_decrypts_to_zero(
     {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must decrypt to zero plaintext"
+        )));
+    }
+    let residual_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
+    if profile.max_abs_residual_multiple > residual_bound {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} residual {} exceeds BFV encrypted-zero refresh bound {residual_bound}",
+            profile.max_abs_residual_multiple
         )));
     }
     Ok(())
@@ -2461,6 +5266,37 @@ fn validate_key_switch_entry_residuals(
             params,
             &decrypted_entry,
             &expected_target,
+            &format!("{label} entry[{entry_index}]"),
+        )?;
+        scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
+    }
+    Ok(())
+}
+
+fn validate_bounded_noise_key_switch_entry_residuals(
+    params: &BfvParameters,
+    source_secret: &[u64],
+    target_secret: &[u64],
+    entries: &[BfvRelinearizationKeyEntry],
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_poly(params, source_secret, "bounded key-switch source secret")?;
+    validate_poly(params, target_secret, "bounded key-switch target secret")?;
+    validate_key_switch_entries(params, entries, label)?;
+    let base = params.decomposition_base();
+    let mut scale = 1_u64;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        let decrypted_entry = poly_add_mod(
+            params,
+            &entry.b,
+            &poly_mul_mod(params, &entry.a, source_secret),
+        );
+        let expected_target = poly_scalar_mul_mod(params, target_secret, scale);
+        let residual = poly_sub_mod(params, &decrypted_entry, &expected_target);
+        validate_centered_noise_bound(
+            params,
+            &residual,
+            u128::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
             &format!("{label} entry[{entry_index}]"),
         )?;
         scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
@@ -2538,6 +5374,7 @@ pub fn add_ciphertexts_rns_exact(
     rhs: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
     Ok(BfvCiphertext {
@@ -2579,6 +5416,7 @@ pub fn subtract_ciphertexts_rns_exact(
     rhs: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
     let rhs_negated = BfvCiphertext {
@@ -2607,6 +5445,39 @@ pub fn add_plain_scalar(
     }
     let mut encoded = zero_poly(params);
     encoded[0] = scalar % params.plaintext_modulus;
+    Ok(BfvCiphertext {
+        c0: poly_add_mod(params, &ciphertext.c0, &encoded),
+        c1: ciphertext.c1.clone(),
+    })
+}
+
+/// Add a rounded-BFV plaintext scalar to coefficient slot zero.
+///
+/// This is the rounded plaintext-scaling counterpart of [`add_plain_scalar`].
+/// It adds `(q / t) * scalar` to `c0[0]`, preserving the existing ciphertext
+/// noise for the bounded-noise BFV-RNS migration path.
+///
+/// # Errors
+/// Returns [`BfvError`] when the plaintext or ciphertext shape is invalid.
+pub fn add_plain_scalar_bounded_noise(
+    params: &BfvParameters,
+    ciphertext: &BfvCiphertext,
+    scalar: u64,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, ciphertext)?;
+    if scalar >= params.plaintext_modulus {
+        return Err(BfvError::PlaintextOutOfRange {
+            coefficient: scalar,
+            plaintext_modulus: params.plaintext_modulus,
+        });
+    }
+    let mut encoded = zero_poly(params);
+    encoded[0] = mul_mod_u64(
+        scalar,
+        rounded_plaintext_scale(params)?,
+        params.ciphertext_modulus,
+    );
     Ok(BfvCiphertext {
         c0: poly_add_mod(params, &ciphertext.c0, &encoded),
         c1: ciphertext.c1.clone(),
@@ -2660,6 +5531,32 @@ pub fn multiply_plaintext_polynomial(
     })
 }
 
+/// Multiply a rounded BFV ciphertext by a public plaintext polynomial.
+///
+/// The plaintext polynomial is encoded in the plaintext ring, not as another
+/// rounded `(q / t)` message. This preserves the existing rounded ciphertext
+/// scale while multiplying both the message and its centered noise by the
+/// public polynomial. It is the bounded-noise counterpart of
+/// [`multiply_plaintext_polynomial`] for packed rotation masks.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow or when the
+/// plaintext or ciphertext shape is invalid.
+pub fn multiply_plaintext_polynomial_bounded_noise(
+    params: &BfvParameters,
+    ciphertext: &BfvCiphertext,
+    plaintext: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_plaintext(params, plaintext)?;
+    let encoded = encode_plaintext(params, plaintext);
+    Ok(BfvCiphertext {
+        c0: poly_mul_mod(params, &ciphertext.c0, &encoded),
+        c1: poly_mul_mod(params, &ciphertext.c1, &encoded),
+    })
+}
+
 /// Multiply a ciphertext by a plaintext polynomial through an exact RNS corridor.
 ///
 /// This is used by packed-slot public mask schedules so ciphertext-mask
@@ -2676,6 +5573,7 @@ pub fn multiply_plaintext_polynomial_rns_exact(
     plaintext: &[u64],
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
     validate_ciphertext(params, ciphertext)?;
     validate_plaintext(params, plaintext)?;
     let encoded = encode_plaintext(params, plaintext);
@@ -2718,6 +5616,187 @@ pub fn multiply_ciphertexts(
     relinearize(params, relinearization_key, &raw_c0, &raw_c1, &raw_c2)
 }
 
+/// Multiply two rounded BFV ciphertexts and relinearize.
+///
+/// This computes exact centered raw products, applies deterministic
+/// coefficient-wise `t/q` scale-and-rounding, then key-switches the quadratic
+/// component with bounded-noise relinearization material. It is the scalar
+/// semantic bridge for the pending BFV-RNS multiplication pipeline.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, operand shapes, or relinearization-key
+/// shapes are invalid, or when exact product/scaling arithmetic exceeds
+/// deterministic bounds.
+pub fn multiply_ciphertexts_bounded_noise(
+    params: &BfvParameters,
+    relinearization_key: &BfvRelinearizationKey,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_ciphertext(params, lhs)?;
+    validate_ciphertext(params, rhs)?;
+    validate_key_switch_entries(
+        params,
+        &relinearization_key.entries,
+        "bounded-noise relinearization key",
+    )?;
+
+    let raw_c0 = poly_mul_centered_raw(params, &lhs.c0, &rhs.c0, "bounded BFV multiply c0")?;
+    let lhs_c0_rhs_c1 = poly_mul_centered_raw(
+        params,
+        &lhs.c0,
+        &rhs.c1,
+        "bounded BFV multiply lhs.c0*rhs.c1",
+    )?;
+    let lhs_c1_rhs_c0 = poly_mul_centered_raw(
+        params,
+        &lhs.c1,
+        &rhs.c0,
+        "bounded BFV multiply lhs.c1*rhs.c0",
+    )?;
+    let raw_c1 = poly_add_centered_raw(&lhs_c0_rhs_c1, &lhs_c1_rhs_c0, "bounded BFV multiply c1")?;
+    let raw_c2 = poly_mul_centered_raw(params, &lhs.c1, &rhs.c1, "bounded BFV multiply c2")?;
+
+    let scaled_c0 = scale_round_raw_product_polynomial(params, &raw_c0)?;
+    let scaled_c1 = scale_round_raw_product_polynomial(params, &raw_c1)?;
+    let scaled_c2 = scale_round_raw_product_polynomial(params, &raw_c2)?;
+    relinearize(
+        params,
+        relinearization_key,
+        &scaled_c0,
+        &scaled_c1,
+        &scaled_c2,
+    )
+}
+
+/// Multiply two rounded BFV ciphertexts through an exact RNS raw-product bridge.
+///
+/// Raw ciphertext products are evaluated in the supplied RNS chain and
+/// reconstructed as signed centered coefficients before deterministic `t/q`
+/// scale-and-rounding. Relinearization then consumes bounded-noise key-switch
+/// material through the RNS digit/key-switch path. This is still an exact
+/// reconstruction bridge, not the final approximate BFV-RNS basis-extension
+/// pipeline.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, chain coverage, operand shapes, or
+/// relinearization-key shapes are invalid, or when exact product/scaling
+/// arithmetic exceeds deterministic bounds.
+pub fn multiply_ciphertexts_bounded_noise_rns_exact(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    relinearization_key: &BfvRelinearizationKey,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    rns_chain.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
+    validate_ciphertext(params, lhs)?;
+    validate_ciphertext(params, rhs)?;
+    validate_key_switch_entries(
+        params,
+        &relinearization_key.entries,
+        "bounded-noise RNS relinearization key",
+    )?;
+
+    let (scaled_c0, scaled_c1, scaled_c2) =
+        multiply_ciphertexts_bounded_noise_rns_scaled_components(params, rns_chain, lhs, rhs)?;
+    relinearize_rns_exact(
+        params,
+        rns_chain,
+        relinearization_key,
+        &scaled_c0,
+        &scaled_c1,
+        &scaled_c2,
+    )
+}
+
+/// Multiply two rounded BFV ciphertexts through an exact basis-extension RNS bridge.
+///
+/// Raw products are evaluated and scale-rounded through `evaluator_chain`.
+/// The quadratic component is decomposed in `decomposition_chain`, exactly
+/// basis-extended into `evaluator_chain`, and then consumed by bounded-noise
+/// relinearization key material. This is the deterministic bridge shape for
+/// the pending approximate BFV-RNS basis-extension implementation.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, chain coverage, operand shapes, or
+/// relinearization-key shapes are invalid, or when exact product/scaling
+/// arithmetic exceeds deterministic bounds.
+pub fn multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    relinearization_key: &BfvRelinearizationKey,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    evaluator_chain.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
+    validate_rns_key_switch_decomposition_chain(
+        params,
+        decomposition_chain,
+        "bounded-noise RNS relinearization decomposition",
+    )?;
+    validate_ciphertext(params, lhs)?;
+    validate_ciphertext(params, rhs)?;
+    validate_key_switch_entries(
+        params,
+        &relinearization_key.entries,
+        "bounded-noise basis-extension RNS relinearization key",
+    )?;
+
+    let (scaled_c0, scaled_c1, scaled_c2) =
+        multiply_ciphertexts_bounded_noise_rns_scaled_components(
+            params,
+            evaluator_chain,
+            lhs,
+            rhs,
+        )?;
+    relinearize_rns_exact_with_basis_extension(
+        params,
+        decomposition_chain,
+        evaluator_chain,
+        relinearization_key,
+        &scaled_c0,
+        &scaled_c1,
+        &scaled_c2,
+    )
+}
+
+fn multiply_ciphertexts_bounded_noise_rns_scaled_components(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    lhs: &BfvCiphertext,
+    rhs: &BfvCiphertext,
+) -> Result<(Polynomial, Polynomial, Polynomial), BfvError> {
+    let raw_c0 = rns_chain.multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+        params, &lhs.c0, &rhs.c0,
+    )?;
+    let lhs_c0_rhs_c1 = rns_chain
+        .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+            params, &lhs.c0, &rhs.c1,
+        )?;
+    let lhs_c1_rhs_c0 = rns_chain
+        .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+            params, &lhs.c1, &rhs.c0,
+        )?;
+    let raw_c1 = poly_add_centered_raw(
+        &lhs_c0_rhs_c1,
+        &lhs_c1_rhs_c0,
+        "bounded BFV RNS multiply c1",
+    )?;
+    let raw_c2 = rns_chain.multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+        params, &lhs.c1, &rhs.c1,
+    )?;
+
+    let scaled_c0 = scale_round_raw_product_polynomial(params, &raw_c0)?;
+    let scaled_c1 = scale_round_raw_product_polynomial(params, &raw_c1)?;
+    let scaled_c2 = scale_round_raw_product_polynomial(params, &raw_c2)?;
+    Ok((scaled_c0, scaled_c1, scaled_c2))
+}
+
 /// Multiply two ciphertexts through an exact RNS corridor and relinearize.
 ///
 /// Raw ciphertext products and relinearization-key products are evaluated with
@@ -2736,6 +5815,7 @@ pub fn multiply_ciphertexts_rns_exact(
     rhs: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
     validate_relinearization_key(params, relinearization_key)?;
@@ -2799,7 +5879,8 @@ pub fn evaluate_affine_circuit(
 /// metadata, while the secret key remains private to the resolver runtime.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameters or envelope capacity are invalid.
+/// Returns [`BfvError`] when parameters, envelope capacity, or deterministic
+/// seed material is invalid.
 pub fn derive_identifier_key_material_from_seed(
     params: &BfvParameters,
     max_input_bytes: u16,
@@ -2813,6 +5894,7 @@ pub fn derive_identifier_key_material_from_seed(
     ),
     BfvError,
 > {
+    validate_deterministic_seed("BFV identifier key seed", seed)?;
     let derived_seed = Hash::new_from_chunks(&[IDENTIFIER_KEYGEN_DOMAIN, associated_data, seed]);
     let derived_seed: [u8; Hash::LENGTH] = derived_seed.into();
     let (secret_key, public_key, relinearization_key) = keygen_from_seed(params, &derived_seed)?;
@@ -2830,7 +5912,8 @@ pub fn derive_identifier_key_material_from_seed(
 /// The envelope stores the byte length in slot 0 followed by one byte per slot.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the input does not fit the configured envelope.
+/// Returns [`BfvError`] when the input does not fit the configured envelope or
+/// the deterministic encryption seed is invalid.
 pub fn encrypt_identifier_from_seed(
     public_parameters: &BfvIdentifierPublicParameters,
     input: &[u8],
@@ -2838,6 +5921,7 @@ pub fn encrypt_identifier_from_seed(
 ) -> Result<BfvIdentifierCiphertext, BfvError> {
     public_parameters.validate()?;
     let scalars = encode_identifier_slots(public_parameters, input)?;
+    validate_deterministic_seed("BFV identifier encryption seed", seed)?;
     let slots = scalars
         .into_iter()
         .enumerate()
@@ -2977,11 +6061,12 @@ fn validate_key_switch_entries(
     label: &str,
 ) -> Result<(), BfvError> {
     params.validate()?;
-    if entries.len() != params.decomposition_digits() {
+    let expected_entries = params.decomposition_digits()?;
+    if entries.len() != expected_entries {
         return Err(BfvError::ShapeMismatch(format!(
             "{label} expected {} entries, found {}",
-            params.decomposition_digits(),
-            entries.len()
+            expected_entries,
+            entries.len(),
         )));
     }
     for (index, entry) in entries.iter().enumerate() {
@@ -3008,6 +6093,61 @@ fn validate_key_switch_inputs(
         switching_component,
         "key switch switching component",
     )
+}
+
+fn validate_refresh_transcript_metadata(
+    rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+    bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    mode: BfvRefreshTranscriptMode,
+) -> Result<(), BfvError> {
+    if rotation_transcripts.len() > BFV_EVALUATION_KEY_MAX_ROTATION_KEYS {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV refresh transcript supports at most {BFV_EVALUATION_KEY_MAX_ROTATION_KEYS} rotation transcripts"
+        )));
+    }
+    let mut seen_rotations = std::collections::BTreeSet::new();
+    for transcript in rotation_transcripts {
+        if transcript.rotation_steps == 0 {
+            return Err(BfvError::InvalidParameters(
+                "rotation refresh transcript steps must be greater than zero".to_owned(),
+            ));
+        }
+        if !seen_rotations.insert(transcript.rotation_steps) {
+            return Err(BfvError::InvalidParameters(format!(
+                "duplicate rotation refresh transcript for {} steps",
+                transcript.rotation_steps
+            )));
+        }
+        validate_refresh_transcript_seed(mode.rotation_seed_label(), transcript.seed)?;
+    }
+    if let Some(transcript) = bootstrap_transcript {
+        validate_bootstrap_key_metadata(transcript.key_id, transcript.max_refresh_rounds)?;
+        validate_refresh_transcript_seed(mode.bootstrap_seed_label(), transcript.seed)?;
+    }
+    Ok(())
+}
+
+fn validate_refresh_transcript_seed(label: &str, seed: &[u8]) -> Result<(), BfvError> {
+    if seed.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} exceeds the maximum supported length {BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_deterministic_seed(label: &str, seed: &[u8]) -> Result<(), BfvError> {
+    if seed.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_galois_automorphism_power(
@@ -3239,6 +6379,43 @@ fn validate_bfv_rns_modulus_chain(
     Ok(product)
 }
 
+fn validate_rns_exact_evaluator_chain(
+    params: &BfvParameters,
+    chain: &BfvRnsModulusChain,
+) -> Result<(), BfvError> {
+    let product = validate_bfv_rns_modulus_chain(chain, params)?;
+
+    let addition_required = exact_ciphertext_modulus_addition_rns_bound(params)?;
+    if product < addition_required {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus addition bound {addition_required}"
+        )));
+    }
+
+    let product_required = exact_ciphertext_modulus_negacyclic_product_rns_bound(params)?;
+    if product < product_required {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus negacyclic product bound {product_required}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_rns_key_switch_decomposition_chain(
+    params: &BfvParameters,
+    chain: &BfvRnsModulusChain,
+    label: &str,
+) -> Result<(), BfvError> {
+    let product = validate_bfv_rns_modulus_chain(chain, params)?;
+    let decomposition_base = u128::from(params.decomposition_base());
+    if product < decomposition_base {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} RNS chain product {product} does not cover BFV decomposition base {decomposition_base}"
+        )));
+    }
+    Ok(())
+}
+
 fn checked_rns_modulus_product(moduli: &[u64]) -> Result<u128, BfvError> {
     if moduli.is_empty() {
         return Err(BfvError::InvalidParameters(
@@ -3352,6 +6529,34 @@ fn reduce_centered_rns_value_to_u64_mod(
     }
 }
 
+fn reduce_centered_rns_value_to_i128(
+    value: u128,
+    rns_product: u128,
+    centered_abs_bound: u128,
+) -> Result<i128, BfvError> {
+    if value <= centered_abs_bound {
+        return i128::try_from(value).map_err(|_| {
+            BfvError::InvalidParameters("BFV RNS centered reconstruction exceeds i128".to_owned())
+        });
+    }
+    let negative_magnitude = rns_product.checked_sub(value).ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV RNS centered reconstruction exceeds modulus-chain product".to_owned(),
+        )
+    })?;
+    if negative_magnitude > centered_abs_bound {
+        return Err(BfvError::InvalidParameters(
+            "BFV RNS centered reconstruction exceeds exact negacyclic product bound".to_owned(),
+        ));
+    }
+    let magnitude = i128::try_from(negative_magnitude).map_err(|_| {
+        BfvError::InvalidParameters("BFV RNS centered reconstruction exceeds i128".to_owned())
+    })?;
+    magnitude.checked_neg().ok_or_else(|| {
+        BfvError::InvalidParameters("BFV RNS centered reconstruction exceeds i128".to_owned())
+    })
+}
+
 fn validate_rns_polynomial(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -3396,6 +6601,44 @@ fn validate_rns_polynomial_pair(
     chain.validate_for_parameters(params)?;
     validate_rns_polynomial(params, chain, lhs)?;
     validate_rns_polynomial(params, chain, rhs)
+}
+
+fn validate_rns_key_switch_digit_polynomials(
+    params: &BfvParameters,
+    chain: &BfvRnsModulusChain,
+    digit_polynomials: &[BfvRnsPolynomial],
+    label: &str,
+) -> Result<(), BfvError> {
+    chain.validate_for_parameters(params)?;
+    let expected_digits = params.decomposition_digits()?;
+    let base = u128::from(params.decomposition_base());
+    let product = chain.product()?;
+    if product < base {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} RNS chain product {product} does not cover decomposition base {base}"
+        )));
+    }
+    if digit_polynomials.len() != expected_digits {
+        return Err(BfvError::ShapeMismatch(format!(
+            "{label} expected {expected_digits} decomposition digits, found {}",
+            digit_polynomials.len()
+        )));
+    }
+    for (digit_index, digit_polynomial) in digit_polynomials.iter().enumerate() {
+        validate_rns_polynomial(params, chain, digit_polynomial)?;
+        for (coefficient_index, coefficient) in chain
+            .reconstruct_polynomial(params, digit_polynomial)?
+            .into_iter()
+            .enumerate()
+        {
+            if coefficient >= base {
+                return Err(BfvError::ShapeMismatch(format!(
+                    "{label} digit[{digit_index}] coefficient[{coefficient_index}] {coefficient} exceeds decomposition base {base}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn multiply_rns_limb_negacyclic(
@@ -3792,6 +7035,18 @@ fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         .collect()
 }
 
+fn sample_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
+    (0..params.degree())
+        .map(
+            |_| match rng.random_range(0..=(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND * 2)) {
+                0 => 0,
+                1 => u64::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
+                _ => params.ciphertext_modulus - u64::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
+            },
+        )
+        .collect()
+}
+
 fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(|_| rng.random_range(0..params.ciphertext_modulus))
@@ -3806,12 +7061,151 @@ fn encode_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Polynomial {
     encoded
 }
 
+fn encode_rounded_plaintext(
+    params: &BfvParameters,
+    plaintext: &[u64],
+) -> Result<Polynomial, BfvError> {
+    validate_plaintext(params, plaintext)?;
+    let scale = rounded_plaintext_scale(params)?;
+    let mut encoded = zero_poly(params);
+    for (slot, &coefficient) in plaintext.iter().enumerate() {
+        encoded[slot] = mul_mod_u64(coefficient, scale, params.ciphertext_modulus);
+    }
+    Ok(encoded)
+}
+
 fn decode_plaintext(params: &BfvParameters, scaled: &[u64]) -> Vec<u64> {
     scaled
         .iter()
         .map(|&coefficient| {
             let centered = center_lift(coefficient, params.ciphertext_modulus);
             mod_t(centered, params.plaintext_modulus)
+        })
+        .collect()
+}
+
+fn decode_rounded_plaintext(params: &BfvParameters, scaled: &[u64]) -> Result<Vec<u64>, BfvError> {
+    params.validate()?;
+    let scale = i128::from(rounded_plaintext_scale(params)?);
+    scaled
+        .iter()
+        .map(|&coefficient| {
+            let centered = center_lift(coefficient, params.ciphertext_modulus);
+            let rounded = div_round_nearest_i128(centered, scale)?;
+            Ok(mod_t(rounded, params.plaintext_modulus))
+        })
+        .collect()
+}
+
+fn scale_round_raw_product_polynomial(
+    params: &BfvParameters,
+    raw: &[i128],
+) -> Result<Polynomial, BfvError> {
+    validate_raw_polynomial_len(params, raw, "raw BFV product polynomial")?;
+    raw.iter()
+        .map(|&coefficient| scale_round_raw_product_coefficient(params, coefficient))
+        .collect()
+}
+
+fn scale_round_raw_product_coefficient(
+    params: &BfvParameters,
+    coefficient: i128,
+) -> Result<u64, BfvError> {
+    params.validate()?;
+    let numerator = coefficient
+        .unsigned_abs()
+        .checked_mul(u128::from(params.plaintext_modulus))
+        .and_then(|value| value.checked_add(u128::from(params.ciphertext_modulus / 2)))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise product scaling exceeds deterministic limits".to_owned(),
+            )
+        })?;
+    let rounded = numerator / u128::from(params.ciphertext_modulus);
+    let rounded = i128::try_from(rounded).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV bounded-noise scaled product coefficient exceeds i128".to_owned(),
+        )
+    })?;
+    let rounded = if coefficient < 0 { -rounded } else { rounded };
+    Ok(mod_q(rounded, params.ciphertext_modulus))
+}
+
+fn validate_raw_polynomial_len(
+    params: &BfvParameters,
+    raw: &[i128],
+    label: &str,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    let expected = params.degree();
+    if raw.len() != expected {
+        return Err(BfvError::ShapeMismatch(format!(
+            "{label} length {} does not match polynomial_degree {expected}",
+            raw.len()
+        )));
+    }
+    Ok(())
+}
+
+fn poly_mul_centered_raw(
+    params: &BfvParameters,
+    lhs: &[u64],
+    rhs: &[u64],
+    label: &str,
+) -> Result<Vec<i128>, BfvError> {
+    validate_poly(params, lhs, &format!("{label} lhs"))?;
+    validate_poly(params, rhs, &format!("{label} rhs"))?;
+    let degree = params.degree();
+    let mut out = vec![0_i128; degree];
+    for (lhs_index, &lhs_coefficient) in lhs.iter().enumerate() {
+        let lhs_centered = center_lift(lhs_coefficient, params.ciphertext_modulus);
+        for (rhs_index, &rhs_coefficient) in rhs.iter().enumerate() {
+            let rhs_centered = center_lift(rhs_coefficient, params.ciphertext_modulus);
+            let product = lhs_centered.checked_mul(rhs_centered).ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "{label} raw product coefficient exceeds deterministic limits"
+                ))
+            })?;
+            let exponent = lhs_index.checked_add(rhs_index).ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "{label} raw product exponent exceeds deterministic limits"
+                ))
+            })?;
+            if exponent >= degree {
+                let target = exponent - degree;
+                out[target] = out[target].checked_sub(product).ok_or_else(|| {
+                    BfvError::InvalidParameters(format!(
+                        "{label} raw negacyclic subtraction exceeds deterministic limits"
+                    ))
+                })?;
+            } else {
+                out[exponent] = out[exponent].checked_add(product).ok_or_else(|| {
+                    BfvError::InvalidParameters(format!(
+                        "{label} raw negacyclic addition exceeds deterministic limits"
+                    ))
+                })?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn poly_add_centered_raw(lhs: &[i128], rhs: &[i128], label: &str) -> Result<Vec<i128>, BfvError> {
+    if lhs.len() != rhs.len() {
+        return Err(BfvError::ShapeMismatch(format!(
+            "{label} raw polynomial length mismatch: {} != {}",
+            lhs.len(),
+            rhs.len()
+        )));
+    }
+    lhs.iter()
+        .zip(rhs)
+        .map(|(&left, &right)| {
+            left.checked_add(right).ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "{label} raw polynomial addition exceeds deterministic limits"
+                ))
+            })
         })
         .collect()
 }
@@ -3841,7 +7235,7 @@ fn key_switch(
         switching_component,
         "key switch key",
     )?;
-    let digits = decompose_poly(params, switching_component);
+    let digits = decompose_poly(params, switching_component)?;
     let mut out0 = c0.to_vec();
     let mut out1 = c1.to_vec();
     for (digit_poly, entry) in digits.iter().zip(entries) {
@@ -3865,8 +7259,8 @@ fn key_switch_entries_from_rng(
     source_secret: &[u64],
     target_secret: &[u64],
     rng: &mut ChaCha20Rng,
-) -> Vec<BfvRelinearizationKeyEntry> {
-    let digits = params.decomposition_digits();
+) -> Result<Vec<BfvRelinearizationKeyEntry>, BfvError> {
+    let digits = params.decomposition_digits()?;
     let base = params.decomposition_base();
     let mut scale = 1_u64;
     let mut entries = Vec::with_capacity(digits);
@@ -3886,7 +7280,36 @@ fn key_switch_entries_from_rng(
         entries.push(BfvRelinearizationKeyEntry { b: key_b, a: key_a });
         scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
     }
-    entries
+    Ok(entries)
+}
+
+fn key_switch_entries_bounded_noise_from_rng(
+    params: &BfvParameters,
+    source_secret: &[u64],
+    target_secret: &[u64],
+    rng: &mut ChaCha20Rng,
+) -> Result<Vec<BfvRelinearizationKeyEntry>, BfvError> {
+    let digits = params.decomposition_digits()?;
+    let base = params.decomposition_base();
+    let mut scale = 1_u64;
+    let mut entries = Vec::with_capacity(digits);
+    for _ in 0..digits {
+        let key_a = sample_uniform_poly(params, rng);
+        let key_e = sample_bounded_noise_poly(params, rng);
+        let scaled_target = poly_scalar_mul_mod(params, target_secret, scale);
+        let key_b = poly_add_mod(
+            params,
+            &poly_sub_mod(
+                params,
+                &poly_neg_mod(params, &poly_mul_mod(params, &key_a, source_secret)),
+                &key_e,
+            ),
+            &scaled_target,
+        );
+        entries.push(BfvRelinearizationKeyEntry { b: key_b, a: key_a });
+        scale = mul_mod_u64(scale, base, params.ciphertext_modulus);
+    }
+    Ok(entries)
 }
 
 fn relinearize_rns_exact(
@@ -3898,6 +7321,26 @@ fn relinearize_rns_exact(
     c2: &[u64],
 ) -> Result<BfvCiphertext, BfvError> {
     key_switch_rns_exact(params, rns_chain, &relinearization_key.entries, c0, c1, c2)
+}
+
+fn relinearize_rns_exact_with_basis_extension(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    relinearization_key: &BfvRelinearizationKey,
+    c0: &[u64],
+    c1: &[u64],
+    c2: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    key_switch_rns_exact_with_basis_extension(
+        params,
+        decomposition_chain,
+        evaluator_chain,
+        &relinearization_key.entries,
+        c0,
+        c1,
+        c2,
+    )
 }
 
 fn key_switch_from_transformed_secret_rns_exact(
@@ -3917,6 +7360,25 @@ fn key_switch_from_transformed_secret_rns_exact(
     )
 }
 
+fn key_switch_from_transformed_secret_rns_exact_with_basis_extension(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    entries: &[BfvRelinearizationKeyEntry],
+    c0: &[u64],
+    transformed_c1: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    key_switch_rns_exact_with_basis_extension(
+        params,
+        decomposition_chain,
+        evaluator_chain,
+        entries,
+        c0,
+        &zero_poly(params),
+        transformed_c1,
+    )
+}
+
 fn key_switch_rns_exact(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -3925,6 +7387,7 @@ fn key_switch_rns_exact(
     c1: &[u64],
     switching_component: &[u64],
 ) -> Result<BfvCiphertext, BfvError> {
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
     validate_key_switch_inputs(
         params,
         entries,
@@ -3933,12 +7396,85 @@ fn key_switch_rns_exact(
         switching_component,
         "RNS exact key switch key",
     )?;
-    let digits = decompose_poly(params, switching_component);
+    let digits =
+        rns_chain.decompose_key_switch_component_polynomial(params, switching_component)?;
+    key_switch_rns_exact_with_digit_polynomials(params, rns_chain, entries, c0, c1, &digits)
+}
+
+fn key_switch_rns_exact_with_basis_extension(
+    params: &BfvParameters,
+    decomposition_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    entries: &[BfvRelinearizationKeyEntry],
+    c0: &[u64],
+    c1: &[u64],
+    switching_component: &[u64],
+) -> Result<BfvCiphertext, BfvError> {
+    validate_rns_exact_evaluator_chain(params, evaluator_chain)?;
+    validate_rns_key_switch_decomposition_chain(
+        params,
+        decomposition_chain,
+        "RNS basis-extension key switch decomposition",
+    )?;
+    validate_key_switch_inputs(
+        params,
+        entries,
+        c0,
+        c1,
+        switching_component,
+        "RNS basis-extension key switch key",
+    )?;
+    let source_digits = decomposition_chain
+        .decompose_key_switch_component_polynomial(params, switching_component)?;
+    let evaluator_digits = source_digits
+        .iter()
+        .map(|digit| {
+            decomposition_chain.basis_extend_key_switch_digit_polynomial(
+                params,
+                digit,
+                evaluator_chain,
+            )
+        })
+        .collect::<Result<Vec<_>, BfvError>>()?;
+    validate_rns_key_switch_digit_polynomials(
+        params,
+        evaluator_chain,
+        &evaluator_digits,
+        "RNS basis-extended key switch digits",
+    )?;
+    key_switch_rns_exact_with_digit_polynomials(
+        params,
+        evaluator_chain,
+        entries,
+        c0,
+        c1,
+        &evaluator_digits,
+    )
+}
+
+fn key_switch_rns_exact_with_digit_polynomials(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    entries: &[BfvRelinearizationKeyEntry],
+    c0: &[u64],
+    c1: &[u64],
+    digit_polynomials: &[BfvRnsPolynomial],
+) -> Result<BfvCiphertext, BfvError> {
+    validate_rns_exact_evaluator_chain(params, rns_chain)?;
+    validate_poly(params, c0, "RNS exact key switch c0")?;
+    validate_poly(params, c1, "RNS exact key switch c1")?;
+    validate_key_switch_entries(params, entries, "RNS exact key switch key")?;
+    validate_rns_key_switch_digit_polynomials(
+        params,
+        rns_chain,
+        digit_polynomials,
+        "RNS exact key switch digits",
+    )?;
     let mut out0 = c0.to_vec();
     let mut out1 = c1.to_vec();
-    for (digit_poly, entry) in digits.iter().zip(entries) {
+    for (digit_poly, entry) in digit_polynomials.iter().zip(entries) {
         let out0_contribution = rns_chain
-            .multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+            .multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
                 params, digit_poly, &entry.b,
             )?;
         out0 = rns_chain.add_ciphertext_modulus_polynomials_exact(
@@ -3947,7 +7483,7 @@ fn key_switch_rns_exact(
             &out0_contribution,
         )?;
         let out1_contribution = rns_chain
-            .multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+            .multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
                 params, digit_poly, &entry.a,
             )?;
         out1 = rns_chain.add_ciphertext_modulus_polynomials_exact(
@@ -4056,8 +7592,8 @@ fn evaluate_plaintext_polynomial_mod(coefficients: &[u64], point: u64, modulus: 
     })
 }
 
-fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Vec<Polynomial> {
-    let digits = params.decomposition_digits();
+fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Result<Vec<Polynomial>, BfvError> {
+    let digits = params.decomposition_digits()?;
     let base = params.decomposition_base();
     let mut output = vec![zero_poly(params); digits];
     for (coeff_index, &coefficient) in poly.iter().enumerate() {
@@ -4067,7 +7603,7 @@ fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Vec<Polynomial> {
             value /= base;
         }
     }
-    output
+    Ok(output)
 }
 
 fn poly_add_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
@@ -4410,6 +7946,44 @@ fn mod_t(value: i128, modulus: u64) -> u64 {
     mod_q(value, modulus)
 }
 
+fn div_round_nearest_i128(value: i128, divisor: i128) -> Result<i128, BfvError> {
+    if divisor <= 0 {
+        return Err(BfvError::InvalidParameters(
+            "rounded BFV plaintext scale must be positive".to_owned(),
+        ));
+    }
+    let half = divisor / 2;
+    if value >= 0 {
+        value.checked_add(half).map(|value| value / divisor)
+    } else {
+        value
+            .checked_abs()
+            .and_then(|abs| abs.checked_add(half))
+            .map(|rounded_abs| -(rounded_abs / divisor))
+    }
+    .ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "rounded BFV plaintext decoding exceeds deterministic integer limits".to_owned(),
+        )
+    })
+}
+
+fn ceil_div_u128(numerator: u128, denominator: u128) -> Result<u128, BfvError> {
+    if denominator == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV bounded-noise division denominator must be non-zero".to_owned(),
+        ));
+    }
+    numerator
+        .checked_add(denominator - 1)
+        .map(|value| value / denominator)
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV bounded-noise ceiling division exceeds deterministic limits".to_owned(),
+            )
+        })
+}
+
 fn center_lift(coefficient: u64, modulus: u64) -> i128 {
     let coefficient = i128::from(coefficient);
     let modulus = i128::from(modulus);
@@ -4460,10 +8034,34 @@ mod tests {
         }
     }
 
+    fn bounded_noise_multiply_params() -> BfvParameters {
+        BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 4_294_967_296,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        }
+    }
+
+    fn bounded_noise_multiply_rns_chain() -> BfvRnsModulusChain {
+        BfvRnsModulusChain {
+            moduli: vec![4_292_018_177, 4_292_149_249, 4_292_804_609],
+        }
+    }
+
+    fn bounded_noise_packed_params() -> BfvParameters {
+        BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 17_u64 * (1_u64 << 40),
+            plaintext_modulus: 17,
+            decomposition_base_log: 12,
+        }
+    }
+
     fn rns_exact_params() -> BfvParameters {
         BfvParameters {
             polynomial_degree: 2,
-            ciphertext_modulus: 45,
+            ciphertext_modulus: 55,
             plaintext_modulus: 5,
             decomposition_base_log: 4,
         }
@@ -4561,6 +8159,1221 @@ mod tests {
     }
 
     #[test]
+    fn bounded_noise_bfv_roundtrip_reports_centered_noise() {
+        let params = params();
+        validate_bfv_bounded_noise_encryption_capacity(&params)
+            .expect("test params have rounded BFV headroom");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        assert_eq!(fresh_bound, 17);
+        validate_bfv_bounded_noise_bound(&params, fresh_bound, "fresh rounded ciphertext")
+            .expect("fresh rounded bound fits decoding capacity");
+        let err =
+            validate_bfv_bounded_noise_bound(&params, u128::MAX, "oversized rounded ciphertext")
+                .expect_err("oversized public rounded bound must be rejected");
+        assert!(
+            err.to_string().contains("rounded decoding capacity"),
+            "unexpected error: {err}"
+        );
+
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-keygen").expect("keygen");
+        validate_bounded_noise_public_key_secret_consistency(&params, &secret_key, &public_key)
+            .expect("generated rounded public key matches the secret key");
+
+        let public_key_residual = poly_add_mod(
+            &params,
+            &public_key.b,
+            &poly_mul_mod(&params, &public_key.a, &secret_key.s),
+        );
+        assert!(
+            public_key_residual
+                .iter()
+                .map(|&coefficient| center_lift(coefficient, params.ciphertext_modulus))
+                .any(|coefficient| coefficient != 0),
+            "bounded-noise public key should carry actual small noise"
+        );
+
+        let ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[13, 42, 255, 7],
+            b"bfv-rounded-encrypt",
+        )
+        .expect("encrypt");
+        let plaintext = decrypt_bounded_noise(&params, &secret_key, &ciphertext).expect("decrypt");
+        assert_eq!(&plaintext[..4], &[13, 42, 255, 7]);
+
+        let profile = decrypt_with_bounded_noise_profile(&params, &secret_key, &ciphertext)
+            .expect("noise profile");
+        assert_eq!(&profile.plaintext[..4], &[13, 42, 255, 7]);
+        assert!(profile.max_abs_noise > 0);
+        assert!(profile.max_abs_noise <= fresh_bound);
+        assert!(
+            profile
+                .noise
+                .iter()
+                .any(|noise| noise % i128::from(params.plaintext_modulus) != 0),
+            "rounded BFV noise must not be restricted to plaintext-modulus multiples"
+        );
+
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &ciphertext,
+            fresh_bound,
+            "rounded ciphertext",
+        )
+        .expect("fresh ciphertext fits the conservative bound");
+        let err = validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &ciphertext,
+            profile.max_abs_noise - 1,
+            "rounded ciphertext",
+        )
+        .expect_err("too-low rounded-noise bounds must be rejected");
+        assert!(
+            err.to_string().contains("rounded noise"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_rejects_too_narrow_profiles() {
+        let insufficient = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 15,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient
+            .validate()
+            .expect("profile is structurally valid before rounded-noise guard");
+        assert_eq!(
+            bfv_fresh_bounded_noise_ciphertext_bound(&insufficient)
+                .expect("fresh rounded-noise bound"),
+            5
+        );
+
+        let err = validate_bfv_bounded_noise_encryption_capacity(&insufficient)
+            .expect_err("rounded BFV must reject too-narrow decoding capacity");
+        assert!(
+            err.to_string().contains("fresh encryption noise bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = validate_bfv_bounded_noise_bound(&insufficient, 1, "narrow rounded ciphertext")
+            .expect_err("public bounded-noise metadata must reject too-narrow profiles");
+        assert!(
+            err.to_string().contains("fresh encryption noise bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = keygen_bounded_noise_from_seed(&insufficient, b"bfv-rounded-narrow-keygen")
+            .expect_err("rounded BFV keygen must reject too-narrow profiles");
+        assert!(
+            err.to_string().contains("fresh encryption noise bound"),
+            "unexpected error: {err}"
+        );
+
+        let public_key = BfvPublicKey {
+            b: zero_poly(&insufficient),
+            a: zero_poly(&insufficient),
+        };
+        let err = encrypt_bounded_noise_from_seed(
+            &insufficient,
+            &public_key,
+            &[1],
+            b"bfv-rounded-narrow-encrypt",
+        )
+        .expect_err("rounded BFV encryption must reject too-narrow profiles");
+        assert!(
+            err.to_string().contains("fresh encryption noise bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_addition_tracks_noise_bound() {
+        let params = params();
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let add_bound = bfv_add_bounded_noise_output_bound(&params, &[fresh_bound, fresh_bound])
+            .expect("rounded add bound");
+
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-add-keygen").expect("keygen");
+        let lhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[13, 42],
+            b"bfv-rounded-add-lhs",
+        )
+        .expect("encrypt lhs");
+        let rhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[250, 7],
+            b"bfv-rounded-add-rhs",
+        )
+        .expect("encrypt rhs");
+        let sum = add_ciphertexts(&params, &lhs, &rhs).expect("add rounded ciphertexts");
+
+        let plaintext = decrypt_bounded_noise(&params, &secret_key, &sum).expect("decrypt sum");
+        assert_eq!(&plaintext[..2], &[7, 49]);
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &sum,
+            add_bound,
+            "rounded add output",
+        )
+        .expect("rounded addition output fits the propagated noise bound");
+
+        let capacity = rounded_plaintext_decoding_capacity(&params).expect("capacity");
+        let err = bfv_add_bounded_noise_output_bound(&params, &[capacity, 1])
+            .expect_err("rounded add bound must reject capacity overflow");
+        assert!(
+            err.to_string().contains("rounded decoding capacity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_plain_operations_track_noise_bounds() {
+        let params = params();
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-plain-ops-keygen")
+                .expect("keygen");
+        let lhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[13, 42],
+            b"bfv-rounded-plain-ops-lhs",
+        )
+        .expect("encrypt lhs");
+        let rhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[250, 7],
+            b"bfv-rounded-plain-ops-rhs",
+        )
+        .expect("encrypt rhs");
+
+        let difference = subtract_ciphertexts(&params, &lhs, &rhs).expect("subtract ciphertexts");
+        let difference_bound =
+            bfv_subtract_bounded_noise_output_bound(&params, fresh_bound, fresh_bound)
+                .expect("subtract bound");
+        assert_eq!(
+            &decrypt_bounded_noise(&params, &secret_key, &difference).expect("decrypt diff")[..2],
+            &[19, 35]
+        );
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &difference,
+            difference_bound,
+            "rounded subtract output",
+        )
+        .expect("subtract output fits bound");
+
+        let add_plain =
+            add_plain_scalar_bounded_noise(&params, &difference, 5).expect("add rounded plain");
+        let add_plain_bound = bfv_add_plain_bounded_noise_output_bound(&params, difference_bound)
+            .expect("add-plain bound");
+        assert_eq!(
+            &decrypt_bounded_noise(&params, &secret_key, &add_plain).expect("decrypt add-plain")
+                [..2],
+            &[24, 35]
+        );
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &add_plain,
+            add_plain_bound,
+            "rounded add-plain output",
+        )
+        .expect("add-plain output fits bound");
+
+        let scaled = multiply_plain_scalar(&params, &add_plain, 3).expect("multiply plain scalar");
+        let scaled_bound =
+            bfv_multiply_plain_scalar_bounded_noise_output_bound(&params, add_plain_bound, 3)
+                .expect("multiply-plain-scalar bound");
+        assert_eq!(
+            &decrypt_bounded_noise(&params, &secret_key, &scaled).expect("decrypt scaled")[..2],
+            &[72, 105]
+        );
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &scaled,
+            scaled_bound,
+            "rounded multiply-plain-scalar output",
+        )
+        .expect("multiply-plain-scalar output fits bound");
+
+        let mask = [1, 1];
+        let polynomial_product =
+            multiply_plaintext_polynomial(&params, &scaled, &mask).expect("multiply plain poly");
+        let polynomial_bound = bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+            &params,
+            scaled_bound,
+            &mask,
+        )
+        .expect("multiply-plaintext-polynomial bound");
+        assert_eq!(
+            &decrypt_bounded_noise(&params, &secret_key, &polynomial_product)
+                .expect("decrypt polynomial product")[..3],
+            &[72, 177, 105]
+        );
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &polynomial_product,
+            polynomial_bound,
+            "rounded multiply-plaintext-polynomial output",
+        )
+        .expect("multiply-plaintext-polynomial output fits bound");
+
+        let capacity = rounded_plaintext_decoding_capacity(&params).expect("capacity");
+        let err = bfv_multiply_plain_scalar_bounded_noise_output_bound(&params, capacity, 2)
+            .expect_err("plain scalar bound must reject capacity overflow");
+        assert!(
+            err.to_string().contains("rounded decoding capacity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_multiplication_relinearizes_after_scale_rounding() {
+        let params = bounded_noise_multiply_params();
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key, relinearization_key) =
+            keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"bfv-rounded-multiply-keygen",
+            )
+            .expect("keygen");
+        validate_bounded_noise_relinearization_key_secret_consistency(
+            &params,
+            &secret_key,
+            &relinearization_key,
+        )
+        .expect("generated bounded-noise relinearization key matches secret key");
+
+        let lhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[3, 5],
+            b"bfv-rounded-multiply-lhs",
+        )
+        .expect("encrypt lhs");
+        let rhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[7, 11],
+            b"bfv-rounded-multiply-rhs",
+        )
+        .expect("encrypt rhs");
+        let product = multiply_ciphertexts_bounded_noise(&params, &relinearization_key, &lhs, &rhs)
+            .expect("multiply rounded ciphertexts");
+        let product_bound = bfv_multiply_bounded_noise_output_bound(
+            &params,
+            &relinearization_key,
+            fresh_bound,
+            fresh_bound,
+        )
+        .expect("multiply bound");
+
+        let plaintext =
+            decrypt_bounded_noise(&params, &secret_key, &product).expect("decrypt product");
+        assert_eq!(&plaintext[..3], &[21, 68, 55]);
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &product,
+            product_bound,
+            "rounded multiply output",
+        )
+        .expect("multiply output fits propagated bounded-noise budget");
+
+        let capacity = rounded_plaintext_decoding_capacity(&params).expect("capacity");
+        let err = bfv_multiply_bounded_noise_output_bound(
+            &params,
+            &relinearization_key,
+            capacity,
+            fresh_bound,
+        )
+        .expect_err("multiply bound must reject capacity overflow");
+        assert!(
+            err.to_string().contains("rounded decoding capacity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge() {
+        let params = bounded_noise_multiply_params();
+        let rns_chain = bounded_noise_multiply_rns_chain();
+        rns_chain
+            .validate_exact_ciphertext_modulus_negacyclic_product_coverage(&params)
+            .expect("RNS chain covers rounded raw products");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key, relinearization_key) =
+            keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"bfv-rounded-rns-multiply-keygen",
+            )
+            .expect("keygen");
+
+        let lhs_raw = vec![
+            params.ciphertext_modulus - 3,
+            5,
+            0,
+            11,
+            params.ciphertext_modulus - 17,
+            0,
+            19,
+            23,
+        ];
+        let rhs_raw = vec![
+            7,
+            params.ciphertext_modulus - 13,
+            29,
+            0,
+            31,
+            params.ciphertext_modulus - 37,
+            0,
+            41,
+        ];
+        assert_eq!(
+            rns_chain
+                .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+                    &params, &lhs_raw, &rhs_raw
+                )
+                .expect("RNS centered raw product"),
+            poly_mul_centered_raw(&params, &lhs_raw, &rhs_raw, "test centered raw product")
+                .expect("scalar centered raw product")
+        );
+
+        let lhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[3, 5],
+            b"bfv-rounded-rns-multiply-lhs",
+        )
+        .expect("encrypt lhs");
+        let rhs = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[7, 11],
+            b"bfv-rounded-rns-multiply-rhs",
+        )
+        .expect("encrypt rhs");
+        let scalar_product =
+            multiply_ciphertexts_bounded_noise(&params, &relinearization_key, &lhs, &rhs)
+                .expect("scalar rounded multiply");
+        let scaled_c0 = scale_round_raw_product_polynomial(
+            &params,
+            &rns_chain
+                .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+                    &params, &lhs.c0, &rhs.c0,
+                )
+                .expect("RNS raw c0"),
+        )
+        .expect("scale c0");
+        let scaled_c1 = scale_round_raw_product_polynomial(
+            &params,
+            &poly_add_centered_raw(
+                &rns_chain
+                    .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+                        &params, &lhs.c0, &rhs.c1,
+                    )
+                    .expect("RNS raw lhs.c0*rhs.c1"),
+                &rns_chain
+                    .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+                        &params, &lhs.c1, &rhs.c0,
+                    )
+                    .expect("RNS raw lhs.c1*rhs.c0"),
+                "test RNS raw c1",
+            )
+            .expect("add raw c1"),
+        )
+        .expect("scale c1");
+        let scaled_c2 = scale_round_raw_product_polynomial(
+            &params,
+            &rns_chain
+                .multiply_ciphertext_modulus_centered_polynomials_negacyclic_raw_exact(
+                    &params, &lhs.c1, &rhs.c1,
+                )
+                .expect("RNS raw c2"),
+        )
+        .expect("scale c2");
+        assert_eq!(
+            relinearize_rns_exact(
+                &params,
+                &rns_chain,
+                &relinearization_key,
+                &scaled_c0,
+                &scaled_c1,
+                &scaled_c2,
+            )
+            .expect("RNS relinearization over rounded products"),
+            scalar_product
+        );
+        let rns_product = multiply_ciphertexts_bounded_noise_rns_exact(
+            &params,
+            &rns_chain,
+            &relinearization_key,
+            &lhs,
+            &rhs,
+        )
+        .expect("RNS rounded multiply");
+        assert_eq!(rns_product, scalar_product);
+        let decomposition_chain = BfvRnsModulusChain {
+            moduli: rns_chain.moduli[..2].to_vec(),
+        };
+        let basis_extension_product = multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
+            &params,
+            &decomposition_chain,
+            &rns_chain,
+            &relinearization_key,
+            &lhs,
+            &rhs,
+        )
+        .expect("basis-extension RNS rounded multiply");
+        assert_eq!(basis_extension_product, scalar_product);
+
+        let product_bound = bfv_multiply_bounded_noise_output_bound(
+            &params,
+            &relinearization_key,
+            fresh_bound,
+            fresh_bound,
+        )
+        .expect("multiply bound");
+        let plaintext =
+            decrypt_bounded_noise(&params, &secret_key, &rns_product).expect("decrypt product");
+        assert_eq!(&plaintext[..3], &[21, 68, 55]);
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &rns_product,
+            product_bound,
+            "rounded RNS multiply output",
+        )
+        .expect("RNS multiply output fits propagated bounded-noise budget");
+
+        let too_narrow_chain = BfvRnsModulusChain {
+            moduli: vec![4_292_018_177],
+        };
+        let err = multiply_ciphertexts_bounded_noise_rns_exact(
+            &params,
+            &too_narrow_chain,
+            &relinearization_key,
+            &lhs,
+            &rhs,
+        )
+        .expect_err("too-narrow RNS chain must be rejected before rounded multiply");
+        assert!(
+            err.to_string().contains("does not cover"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism() {
+        let params = bounded_noise_multiply_params();
+        let rns_chain = bounded_noise_multiply_rns_chain();
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-galois-keygen").expect("keygen");
+        let plaintext = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &plaintext,
+            b"bfv-rounded-galois-ciphertext",
+        )
+        .expect("encrypt");
+        let galois_key = galois_key_bounded_noise_from_seed(
+            &params,
+            &secret_key,
+            3,
+            b"bfv-rounded-galois-switch-key",
+        )
+        .expect("bounded-noise Galois key");
+        validate_bounded_noise_galois_key_secret_consistency(&params, &secret_key, &galois_key)
+            .expect("generated bounded-noise Galois key matches secret key");
+
+        let transformed =
+            apply_galois_automorphism_ciphertext_bounded_noise(&params, &galois_key, &ciphertext)
+                .expect("apply bounded-noise Galois automorphism");
+        assert_ne!(transformed, ciphertext);
+        let rns_transformed = apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
+            &params,
+            &rns_chain,
+            &galois_key,
+            &ciphertext,
+        )
+        .expect("apply bounded-noise RNS Galois automorphism");
+        assert_eq!(rns_transformed, transformed);
+        let decomposition_chain = BfvRnsModulusChain {
+            moduli: rns_chain.moduli[..2].to_vec(),
+        };
+        let basis_extension_transformed =
+            apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
+                &params,
+                &decomposition_chain,
+                &rns_chain,
+                &galois_key,
+                &ciphertext,
+            )
+            .expect("apply bounded-noise basis-extension RNS Galois automorphism");
+        assert_eq!(basis_extension_transformed, transformed);
+
+        let expected_encoded = apply_galois_automorphism_poly(
+            &params,
+            &encode_rounded_plaintext(&params, &plaintext).expect("encode rounded plaintext"),
+            3,
+        )
+        .expect("automorph rounded plaintext");
+        let expected_plaintext =
+            decode_rounded_plaintext(&params, &expected_encoded).expect("decode expected");
+        let decrypted =
+            decrypt_bounded_noise(&params, &secret_key, &transformed).expect("decrypt transformed");
+        assert_eq!(decrypted, expected_plaintext);
+
+        let output_bound =
+            bfv_galois_key_switch_bounded_noise_output_bound(&params, &galois_key, fresh_bound)
+                .expect("Galois bound");
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &transformed,
+            output_bound,
+            "rounded Galois output",
+        )
+        .expect("bounded-noise Galois output fits propagated bound");
+
+        let mut tampered = galois_key.clone();
+        tampered.entries[0].b[0] =
+            add_mod_u64(tampered.entries[0].b[0], 2, params.ciphertext_modulus);
+        let err =
+            validate_bounded_noise_galois_key_secret_consistency(&params, &secret_key, &tampered)
+                .expect_err("tampered bounded-noise Galois key must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise Galois key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_outer_rotate_left_refreshes_slots_and_tracks_bounds() {
+        let params = bounded_noise_multiply_params();
+        let rns_chain = bounded_noise_multiply_rns_chain();
+        rns_chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&params)
+            .expect("RNS chain covers bounded-noise outer rotation addition");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-outer-rotate-keygen")
+                .expect("bounded-noise keygen");
+        let slots = [10_u64, 20, 30]
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rounded-outer-rotate-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let rotation_key = rotation_key_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            1,
+            b"bfv-rounded-outer-rotate-refresh",
+        )
+        .expect("bounded-noise rotation key");
+        validate_rotation_key_bounded_noise_zero_refresh(&params, &secret_key, &rotation_key)
+            .expect("bounded-noise rotation refresh decrypts to zero");
+        validate_rotation_key_bounded_noise_zero_refresh_transcript(
+            &params,
+            &public_key,
+            &rotation_key,
+            b"bfv-rounded-outer-rotate-refresh",
+        )
+        .expect("bounded-noise rotation refresh transcript matches");
+        let err = validate_rotation_key_bounded_noise_zero_refresh_transcript(
+            &params,
+            &public_key,
+            &rotation_key,
+            b"bfv-rounded-outer-rotate-wrong-refresh",
+        )
+        .expect_err("wrong bounded-noise rotation transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise rotation key"),
+            "unexpected error: {err}"
+        );
+
+        let rotated = rotate_ciphertext_slots_left_bounded_noise(&params, &rotation_key, &slots)
+            .expect("bounded-noise outer rotation");
+        let rns_rotated = rotate_ciphertext_slots_left_bounded_noise_rns_exact(
+            &params,
+            &rns_chain,
+            &rotation_key,
+            &slots,
+        )
+        .expect("bounded-noise RNS outer rotation");
+        assert_eq!(rns_rotated, rotated);
+        assert_ne!(rotated, slots);
+
+        let output_bounds = bfv_rotate_slots_left_bounded_noise_output_bounds(
+            &params,
+            &rotation_key,
+            &[fresh_bound; 3],
+        )
+        .expect("bounded-noise outer rotation bounds");
+        let plaintexts = rotated
+            .iter()
+            .zip(&output_bounds)
+            .map(|(slot, &bound)| {
+                validate_ciphertext_bounded_noise(
+                    &params,
+                    &secret_key,
+                    slot,
+                    bound,
+                    "bounded-noise outer rotation output",
+                )
+                .expect("rotated slot fits bound")
+                .plaintext[0]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(plaintexts, vec![20, 30, 10]);
+
+        let mut nonzero_rotation = rotation_key.clone();
+        nonzero_rotation.zero_refresh =
+            add_plain_scalar_bounded_noise(&params, &nonzero_rotation.zero_refresh, 1)
+                .expect("add rounded plaintext to bounded-noise rotation refresh");
+        let err = validate_rotation_key_bounded_noise_zero_refresh(
+            &params,
+            &secret_key,
+            &nonzero_rotation,
+        )
+        .expect_err("non-zero bounded-noise rotation refresh must be rejected");
+        assert!(
+            err.to_string().contains("zero_refresh"),
+            "unexpected error: {err}"
+        );
+
+        let full_cycle_key = rotation_key_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            3,
+            b"bfv-rounded-outer-rotate-full-cycle",
+        )
+        .expect("full-cycle bounded-noise rotation key");
+        let err = bfv_rotate_slots_left_bounded_noise_output_bounds(
+            &params,
+            &full_cycle_key,
+            &[fresh_bound; 3],
+        )
+        .expect_err("full-cycle bounded-noise outer rotations must be rejected");
+        assert!(
+            err.to_string().contains("full slot cycle"),
+            "unexpected error: {err}"
+        );
+
+        let too_narrow_chain = BfvRnsModulusChain {
+            moduli: vec![4_292_018_177],
+        };
+        let err = rotate_ciphertext_slots_left_bounded_noise_rns_exact(
+            &params,
+            &too_narrow_chain,
+            &rotation_key,
+            &slots,
+        )
+        .expect_err("too-narrow RNS chain must be rejected before bounded-noise outer rotation");
+        assert!(
+            err.to_string().contains("does not cover"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_packed_rotate_left_tracks_galois_schedule() {
+        let params = bounded_noise_packed_params();
+        let rns_chain = bounded_noise_multiply_rns_chain();
+        validate_rns_exact_evaluator_chain(&params, &rns_chain)
+            .expect("RNS chain covers rounded packed rotation");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-packed-keygen").expect("keygen");
+        let slots = (0..params.degree())
+            .map(|index| {
+                u64::try_from(index + 1).expect("slot index fits u64") % params.plaintext_modulus
+            })
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-rounded-packed-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+
+        let identity_mask = encode_packed_plaintext_slots(&params, &vec![1; params.degree()])
+            .expect("encode identity mask");
+        let identity_masked =
+            multiply_plaintext_polynomial_bounded_noise(&params, &ciphertext, &identity_mask)
+                .expect("multiply by public packed identity mask");
+        let identity_bound = bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+            &params,
+            fresh_bound,
+            &identity_mask,
+        )
+        .expect("identity mask bound");
+        let identity_profile = validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &identity_masked,
+            identity_bound,
+            "rounded packed identity-mask output",
+        )
+        .expect("identity-mask output fits propagated bounded-noise budget");
+        assert_eq!(
+            decode_packed_plaintext_slots(&params, &identity_profile.plaintext)
+                .expect("decode identity-mask slots"),
+            slots
+        );
+
+        let powers = packed_left_rotation_galois_automorphism_powers(&params, 1)
+            .expect("one-step packed rotation schedule");
+        assert!(
+            powers.len() > 1,
+            "one-step canonical packed rotation must use a mask schedule"
+        );
+        let galois_keys = powers
+            .iter()
+            .map(|&power| {
+                galois_key_bounded_noise_from_seed(
+                    &params,
+                    &secret_key,
+                    power,
+                    b"bfv-rounded-packed-galois-key",
+                )
+                .expect("bounded-noise Galois key")
+            })
+            .collect::<Vec<_>>();
+
+        let rotated = rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise(
+            &params,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect("rotate rounded packed slots with bounded-noise schedule");
+        let rns_rotated =
+            rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact(
+                &params,
+                &rns_chain,
+                &galois_keys,
+                &ciphertext,
+                1,
+            )
+            .expect("rotate rounded packed slots with bounded-noise RNS schedule");
+        assert_eq!(rns_rotated, rotated);
+        let decomposition_chain = BfvRnsModulusChain {
+            moduli: rns_chain.moduli[..2].to_vec(),
+        };
+        let basis_extension_rotated =
+            rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact(
+                &params,
+                &decomposition_chain,
+                &rns_chain,
+                &galois_keys,
+                &ciphertext,
+                1,
+            )
+            .expect("rotate rounded packed slots with bounded-noise basis-extension RNS schedule");
+        assert_eq!(basis_extension_rotated, rotated);
+        let output_bound = bfv_packed_rotate_left_bounded_noise_output_bound(
+            &params,
+            &galois_keys,
+            fresh_bound,
+            1,
+        )
+        .expect("packed RotateLeft bounded-noise bound");
+        let profile = validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &rotated,
+            output_bound,
+            "rounded packed RotateLeft output",
+        )
+        .expect("packed RotateLeft output fits propagated bounded-noise budget");
+        let rotated_slots =
+            decode_packed_plaintext_slots(&params, &profile.plaintext).expect("decode slots");
+        let mut expected_slots = slots;
+        expected_slots.rotate_left(1);
+        assert_eq!(rotated_slots, expected_slots);
+
+        let missing_power = powers[0];
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise(
+            &params,
+            &galois_keys[1..],
+            &ciphertext,
+            1,
+        )
+        .expect_err("missing rounded packed rotation Galois key must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("automorphism power {missing_power}")),
+            "unexpected error: {err}"
+        );
+        let too_narrow_chain = BfvRnsModulusChain {
+            moduli: vec![4_292_018_177],
+        };
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact(
+            &params,
+            &too_narrow_chain,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect_err("too-narrow RNS chain must be rejected before packed rotation");
+        assert!(
+            err.to_string().contains("does not cover"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_packed_rotate_left_bounded_noise_output_bound(
+            &params,
+            &galois_keys,
+            fresh_bound,
+            u32::from(params.polynomial_degree),
+        )
+        .expect_err("full packed-slot rotations must be rejected");
+        assert!(
+            err.to_string().contains("full slot cycle"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds() {
+        let params = bounded_noise_multiply_params();
+        let rns_chain = bounded_noise_multiply_rns_chain();
+        rns_chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&params)
+            .expect("RNS chain covers bounded-noise bootstrap addition");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-rounded-bootstrap-keygen")
+                .expect("bounded-noise keygen");
+        let ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[77, 19],
+            b"bfv-rounded-bootstrap-input",
+        )
+        .expect("encrypt bounded-noise input");
+        validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &ciphertext,
+            fresh_bound,
+            "bounded-noise bootstrap input",
+        )
+        .expect("input fits fresh bounded-noise budget");
+
+        let bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bounded-bootstrap-refresh-key",
+            2,
+            b"bfv-rounded-bootstrap-refresh",
+        )
+        .expect("bounded-noise bootstrap key");
+        validate_bootstrap_key_bounded_noise_zero_refreshes(&params, &secret_key, &bootstrap_key)
+            .expect("bounded-noise bootstrap refreshes decrypt to zero");
+        validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+            &params,
+            &public_key,
+            &bootstrap_key,
+            b"bfv-rounded-bootstrap-refresh",
+        )
+        .expect("bounded-noise bootstrap transcript matches");
+        let err = validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+            &params,
+            &public_key,
+            &bootstrap_key,
+            b"bfv-rounded-bootstrap-wrong-refresh",
+        )
+        .expect_err("wrong bounded-noise bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise bootstrap key"),
+            "unexpected error: {err}"
+        );
+
+        let first =
+            bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &ciphertext, 0)
+                .expect("first bounded-noise bootstrap refresh");
+        let second = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &first, 1)
+            .expect("second bounded-noise bootstrap refresh");
+        let rns_second = bootstrap_ciphertext_bounded_noise_rns_exact_round(
+            &params,
+            &rns_chain,
+            &bootstrap_key,
+            &first,
+            1,
+        )
+        .expect("RNS bounded-noise bootstrap refresh");
+        assert_eq!(rns_second, second);
+        assert_ne!(second, ciphertext);
+
+        let output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+            &params,
+            &bootstrap_key,
+            fresh_bound,
+            2,
+        )
+        .expect("bounded-noise bootstrap output bound");
+        let profile = validate_ciphertext_bounded_noise(
+            &params,
+            &secret_key,
+            &second,
+            output_bound,
+            "bounded-noise bootstrap output",
+        )
+        .expect("bounded-noise bootstrap output fits propagated bound");
+        assert_eq!(&profile.plaintext[..2], &[77, 19]);
+
+        let err = bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+            &params,
+            &bootstrap_key,
+            fresh_bound,
+            3,
+        )
+        .expect_err("over-key-capacity bounded-noise bootstrap rounds must be rejected");
+        assert!(
+            err.to_string().contains("max_refresh_rounds"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_bootstrap_refresh_bounded_noise_output_bound(&params, fresh_bound, 0)
+            .expect_err("zero-round bounded-noise bootstrap bound must be rejected");
+        assert!(
+            err.to_string().contains("at least one round"),
+            "unexpected error: {err}"
+        );
+
+        let mut nonzero_bootstrap = bootstrap_key.clone();
+        nonzero_bootstrap.round_refreshes[1] =
+            add_plain_scalar_bounded_noise(&params, &nonzero_bootstrap.round_refreshes[1], 1)
+                .expect("add rounded plaintext to bounded-noise bootstrap refresh");
+        let err = validate_bootstrap_key_bounded_noise_zero_refreshes(
+            &params,
+            &secret_key,
+            &nonzero_bootstrap,
+        )
+        .expect_err("non-zero bounded-noise bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+
+        let too_narrow_chain = BfvRnsModulusChain {
+            moduli: vec![4_292_018_177],
+        };
+        let err = bootstrap_ciphertext_bounded_noise_rns_exact_round(
+            &params,
+            &too_narrow_chain,
+            &bootstrap_key,
+            &ciphertext,
+            0,
+        )
+        .expect_err("too-narrow RNS chain must be rejected before bounded-noise bootstrap refresh");
+        assert!(
+            err.to_string().contains("does not cover"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn seeded_encryption_rejects_insufficient_residual_capacity() {
+        let insufficient = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient
+            .validate()
+            .expect("profile is structurally valid before seeded-encryption guard");
+        assert_eq!(
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&insufficient)
+                .expect("residual bound"),
+            5
+        );
+
+        let err = validate_bfv_seeded_encryption_residual_capacity(&insufficient)
+            .expect_err("seeded encryption must require residual headroom");
+        assert!(
+            err.to_string()
+                .contains("seeded BFV encryption residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = keygen_from_seed(&insufficient, b"bfv-insufficient-capacity-keygen")
+            .expect_err("keygen must reject params without seeded-encryption headroom");
+        assert!(
+            err.to_string()
+                .contains("seeded BFV encryption residual bound"),
+            "unexpected error: {err}"
+        );
+        let public_key = BfvPublicKey {
+            b: zero_poly(&insufficient),
+            a: zero_poly(&insufficient),
+        };
+        let err = encrypt_from_seed(
+            &insufficient,
+            &public_key,
+            &[0],
+            b"bfv-insufficient-capacity-encrypt",
+        )
+        .expect_err("seeded encryption must reject params without residual headroom");
+        assert!(
+            err.to_string()
+                .contains("seeded BFV encryption residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn deterministic_bfv_seeded_helpers_reject_empty_seeds() {
+        let params = params();
+        let err = keygen_from_seed(&params, b"")
+            .expect_err("empty BFV keygen seeds must not derive key material");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-empty-seed-keygen").expect("keygen");
+        let err = encrypt_from_seed(&params, &public_key, &[1], b"")
+            .expect_err("empty BFV encryption seeds must not derive ciphertexts");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let err = galois_key_from_seed(&params, &secret_key, 3, b"")
+            .expect_err("empty BFV Galois key seeds must not derive key material");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let identifier_params = ram_lfe_bfv_parameters_v1();
+        let err = derive_identifier_key_material_from_seed(
+            &identifier_params,
+            8,
+            b"",
+            b"test-associated",
+        )
+        .expect_err("empty BFV identifier key seeds must not derive key material");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+            &identifier_params,
+            8,
+            b"bfv-empty-identifier-key-seed",
+            b"test-associated",
+        )
+        .expect("identifier key material");
+        let err = encrypt_identifier_from_seed(&public_parameters, b"id", b"")
+            .expect_err("empty BFV identifier encryption seeds must not derive ciphertexts");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bfv_decomposition_digits_are_checked() {
+        let params = params();
+        assert_eq!(
+            params
+                .decomposition_digits()
+                .expect("valid params have a deterministic digit count"),
+            2
+        );
+        assert_eq!(
+            bfv_key_switch_extra_residual_multiple_bound(&params)
+                .expect("valid params have a deterministic key-switch residual bound"),
+            65_520
+        );
+
+        let invalid = BfvParameters {
+            decomposition_base_log: 0,
+            ..params
+        };
+        let err = invalid
+            .decomposition_digits()
+            .expect_err("invalid decomposition base must fail before digit coverage");
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+
+        let err = bfv_key_switch_extra_residual_multiple_bound(&invalid)
+            .expect_err("key-switch residual bound must reject invalid digit parameters");
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+
+        let err = validate_key_switch_entries(&invalid, &[], "test key")
+            .expect_err("key-switch entry validation must reject invalid digit parameters");
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+
+        let mut rng = derive_rng(b"bfv-decomposition-digits-test", b"invalid-base");
+        let zero_secret = vec![0; params.degree()];
+        let err = key_switch_entries_from_rng(&invalid, &zero_secret, &zero_secret, &mut rng)
+            .expect_err("key-switch generation must reject invalid digit parameters");
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+
+        let err = decompose_poly(&invalid, &zero_secret)
+            .expect_err("polynomial decomposition must reject invalid digit parameters");
+        assert!(
+            err.to_string().contains("decomposition_base_log"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn public_key_secret_consistency_rejects_tampered_key_material() {
         let params = params();
         let (secret_key, public_key, _) =
@@ -4628,6 +9441,31 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let err = validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &material.rotation_key,
+            b"",
+        )
+        .expect_err("empty rotation transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_rotation_seed = vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
+        let err = validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &material.rotation_key,
+            &oversized_rotation_seed,
+        )
+        .expect_err("oversized rotation transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+
         let mut tampered_rotation = material.rotation_key.clone();
         tampered_rotation.zero_refresh.c0[0] = add_mod_u64(
             tampered_rotation.zero_refresh.c0[0],
@@ -4677,6 +9515,31 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+            b"",
+        )
+        .expect_err("empty bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_bootstrap_seed = vec![0x5A; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+            &oversized_bootstrap_seed,
+        )
+        .expect_err("oversized bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+
         let mut tampered_bootstrap_round = bootstrap_key.clone();
         tampered_bootstrap_round.round_refreshes[1].c1[0] = add_mod_u64(
             tampered_bootstrap_round.round_refreshes[1].c1[0],
@@ -4706,6 +9569,57 @@ mod tests {
         .expect_err("bootstrap key-id drift must change the transcript");
         assert!(
             err.to_string().contains("zero_refresh"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn refresh_key_generators_reject_malformed_public_transcript_seeds() {
+        let material = evaluation_key_adversarial_material();
+
+        let err = rotation_key_from_seed(&material.params, &material.public_key, 1, b"")
+            .expect_err("empty rotation transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_rotation_seed = vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
+        let err = rotation_key_from_seed(
+            &material.params,
+            &material.public_key,
+            1,
+            &oversized_rotation_seed,
+        )
+        .expect_err("oversized rotation transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+
+        let err = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            2,
+            b"",
+        )
+        .expect_err("empty bootstrap transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_bootstrap_seed = vec![0x5A; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
+        let err = bootstrap_key_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            &oversized_bootstrap_seed,
+        )
+        .expect_err("oversized bootstrap transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("maximum supported length"),
             "unexpected error: {err}"
         );
     }
@@ -4793,6 +9707,18 @@ mod tests {
             err.to_string().contains("expected 1 rotation"),
             "unexpected error: {err}"
         );
+        let err = bundle
+            .refresh_transcript_digest(
+                &material.params,
+                &material.public_key,
+                &[],
+                bootstrap_transcript,
+            )
+            .expect_err("digest must reject missing rotation transcript seeds");
+        assert!(
+            err.to_string().contains("expected 1 rotation"),
+            "unexpected error: {err}"
+        );
 
         let wrong_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
             rotation_steps: material.rotation_key.rotation_steps + 1,
@@ -4806,6 +9732,18 @@ mod tests {
                 bootstrap_transcript,
             )
             .expect_err("bundle transcript validation must reject unmatched rotation seeds");
+        assert!(
+            err.to_string().contains("missing rotation key"),
+            "unexpected error: {err}"
+        );
+        let err = bundle
+            .refresh_transcript_digest(
+                &material.params,
+                &material.public_key,
+                &wrong_rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("digest must reject unmatched rotation transcript seeds");
         assert!(
             err.to_string().contains("missing rotation key"),
             "unexpected error: {err}"
@@ -4880,6 +9818,404 @@ mod tests {
     }
 
     #[test]
+    fn evaluation_key_bundle_refresh_transcripts_reject_malformed_public_metadata() {
+        let material = evaluation_key_adversarial_material();
+        let bootstrap_seed = b"bfv-bundle-refresh-transcript-bootstrap";
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let valid_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let valid_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+
+        let empty_rotation_seed = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: b"",
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &empty_rotation_seed,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("empty rotation transcript seeds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_rotation_seed = vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
+        let oversized_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: &oversized_rotation_seed,
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &oversized_rotation_transcripts,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("oversized rotation transcript seeds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+
+        let zero_rotation_steps = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: 0,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &zero_rotation_steps,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("zero rotation transcript steps must fail metadata preflight");
+        assert!(
+            err.to_string().contains("greater than zero"),
+            "unexpected error: {err}"
+        );
+
+        let duplicate_rotation_steps = [
+            BfvRotationKeyTranscriptSeed {
+                rotation_steps: material.rotation_key.rotation_steps,
+                seed: b"bfv-eval-key-rotation",
+            },
+            BfvRotationKeyTranscriptSeed {
+                rotation_steps: material.rotation_key.rotation_steps,
+                seed: b"bfv-eval-key-rotation-duplicate",
+            },
+        ];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &duplicate_rotation_steps,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("duplicate rotation transcript steps must fail metadata preflight");
+        assert!(
+            err.to_string()
+                .contains("duplicate rotation refresh transcript"),
+            "unexpected error: {err}"
+        );
+
+        let too_many_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: b"bfv-eval-key-rotation",
+        }; BFV_EVALUATION_KEY_MAX_ROTATION_KEYS + 1];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &too_many_rotation_transcripts,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("oversized rotation transcript inventories must fail metadata preflight");
+        assert!(
+            err.to_string().contains("at most"),
+            "unexpected error: {err}"
+        );
+
+        let empty_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: b"",
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                empty_bootstrap_seed,
+            )
+            .expect_err("empty bootstrap transcript seeds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_bootstrap_key_id = "k".repeat(BFV_BOOTSTRAP_KEY_ID_MAX_BYTES + 1);
+        let malformed_bootstrap_metadata = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: &oversized_bootstrap_key_id,
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                malformed_bootstrap_metadata,
+            )
+            .expect_err("oversized bootstrap transcript key ids must fail metadata preflight");
+        assert!(
+            err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+
+        let zero_bootstrap_rounds = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 0,
+            seed: bootstrap_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                zero_bootstrap_rounds,
+            )
+            .expect_err("zero bootstrap transcript rounds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("greater than zero"),
+            "unexpected error: {err}"
+        );
+
+        let oversized_bootstrap_rounds = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS + 1,
+            seed: bootstrap_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                oversized_bootstrap_rounds,
+            )
+            .expect_err("oversized bootstrap transcript rounds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("supported limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated() {
+        let params = bounded_noise_multiply_params();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"bfv-bounded-bundle-keygen",
+            )
+            .expect("bounded-noise keygen");
+        let rotation_seed = b"bfv-bounded-bundle-rotation";
+        let rotation_key =
+            rotation_key_bounded_noise_from_seed(&params, &public_key, 1, rotation_seed)
+                .expect("bounded-noise rotation key");
+        let galois_key = galois_key_bounded_noise_from_seed(
+            &params,
+            &secret_key,
+            3,
+            b"bfv-bounded-bundle-galois",
+        )
+        .expect("bounded-noise Galois key");
+        let bootstrap_seed = b"bfv-bounded-bundle-bootstrap";
+        let bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bounded-bootstrap-refresh-key",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bounded-noise bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![rotation_key],
+            galois_keys: vec![galois_key],
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: 1,
+            seed: rotation_seed,
+        }];
+        let bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bounded-bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+
+        bundle
+            .validate_bounded_noise_refresh_transcripts(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("bounded-noise bundle refresh transcripts match generated masks");
+        bundle
+            .validate_bounded_noise_zero_refreshes(&params, &secret_key)
+            .expect("bounded-noise bundle refresh masks decrypt to zero");
+        bundle
+            .validate_bounded_noise_secret_key_consistency(&params, &secret_key)
+            .expect("bounded-noise bundle key material matches secret key");
+
+        let bounded_digest = bundle
+            .bounded_noise_refresh_transcript_digest(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("bounded-noise bundle transcript digest");
+        let transcript_material = BfvRefreshTranscriptDigestMaterial {
+            params,
+            public_key: public_key.clone(),
+            evaluation_key_digest: bundle.digest(&params).expect("evaluation-key digest"),
+            rotation_transcripts: vec![BfvRotationKeyTranscriptDigestMaterial {
+                rotation_steps: 1,
+                seed: rotation_seed.to_vec(),
+            }],
+            bootstrap_transcript: Some(BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: "bounded-bootstrap-refresh-key".to_owned(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            }),
+        };
+        let transcript_material_bytes =
+            norito::to_bytes(&transcript_material).expect("encode transcript digest material");
+        let expected_bounded_digest = Hash::new(
+            [
+                BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+                transcript_material_bytes.as_slice(),
+            ]
+            .concat(),
+        );
+        let exact_domain_digest = Hash::new(
+            [
+                BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+                transcript_material_bytes.as_slice(),
+            ]
+            .concat(),
+        );
+        assert_eq!(bounded_digest, expected_bounded_digest);
+        assert_ne!(bounded_digest, exact_domain_digest);
+
+        let err = bundle
+            .validate_refresh_transcripts(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("exact transcript validation must reject bounded-noise masks");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+        let err = bundle
+            .refresh_transcript_digest(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("exact transcript digest must reject bounded-noise masks");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let wrong_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: 1,
+            seed: b"bfv-bounded-bundle-wrong-rotation",
+        }];
+        let err = bundle
+            .validate_bounded_noise_refresh_transcripts(
+                &params,
+                &public_key,
+                &wrong_rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("wrong bounded-noise rotation seed must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise rotation key"),
+            "unexpected error: {err}"
+        );
+
+        let err = bundle
+            .validate_bounded_noise_refresh_transcripts(
+                &params,
+                &public_key,
+                &[],
+                bootstrap_transcript,
+            )
+            .expect_err("missing bounded-noise rotation seed must be rejected");
+        assert!(
+            err.to_string().contains("expected 1 rotation"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_refresh_bundle = bundle.clone();
+        tampered_refresh_bundle.rotation_keys[0].zero_refresh = add_plain_scalar_bounded_noise(
+            &params,
+            &tampered_refresh_bundle.rotation_keys[0].zero_refresh,
+            1,
+        )
+        .expect("tamper rounded rotation refresh");
+        let err = tampered_refresh_bundle
+            .validate_bounded_noise_zero_refreshes(&params, &secret_key)
+            .expect_err("non-zero bounded-noise bundle refresh mask must be rejected");
+        assert!(
+            err.to_string().contains("zero_refresh"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_relinearization_bundle = bundle.clone();
+        tampered_relinearization_bundle.relinearization_key.entries[0].b[0] = add_mod_u64(
+            tampered_relinearization_bundle.relinearization_key.entries[0].b[0],
+            3,
+            params.ciphertext_modulus,
+        );
+        let err = tampered_relinearization_bundle
+            .validate_bounded_noise_secret_key_consistency(&params, &secret_key)
+            .expect_err("tampered bounded-noise relinearization key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("bounded-noise relinearization key"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered_galois_bundle = bundle.clone();
+        tampered_galois_bundle.galois_keys[0].entries[0].b[0] = add_mod_u64(
+            tampered_galois_bundle.galois_keys[0].entries[0].b[0],
+            3,
+            params.ciphertext_modulus,
+        );
+        let err = tampered_galois_bundle
+            .validate_bounded_noise_secret_key_consistency(&params, &secret_key)
+            .expect_err("tampered bounded-noise Galois key must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise Galois key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn exact_residual_profile_reports_centered_plaintext_multiple_decomposition() {
         let params = params();
         let (secret_key, _, _) =
@@ -4922,6 +10258,485 @@ mod tests {
                     + i128::from(params.plaintext_modulus) * profile.residual_multiples[index]
             );
         }
+    }
+
+    #[test]
+    fn evaluated_ciphertext_residual_bound_rejects_oversized_residual() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-evaluated-bound-keygen").expect("keygen");
+        let lhs = encrypt_from_seed(&params, &public_key, &[17], b"bfv-evaluated-bound-lhs")
+            .expect("encrypt lhs");
+        let rhs = encrypt_from_seed(&params, &public_key, &[25], b"bfv-evaluated-bound-rhs")
+            .expect("encrypt rhs");
+        let sum = add_ciphertexts(&params, &lhs, &rhs).expect("add ciphertexts");
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let addition_bound =
+            bfv_add_output_residual_multiple_bound(&params, &[input_bound, input_bound])
+                .expect("addition residual bound");
+
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &sum,
+            addition_bound,
+            "add output",
+        )
+        .expect("fresh homomorphic add output fits declared residual bound");
+        assert_eq!(profile.plaintext[0], 42);
+        assert!(profile.max_abs_residual_multiple <= addition_bound);
+
+        let err = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &sum,
+            profile.centered_residual_multiple_capacity + 1,
+            "add output",
+        )
+        .expect_err("caller-supplied bounds beyond centered capacity must be rejected");
+        assert!(
+            err.to_string()
+                .contains("exceeds centered residual capacity"),
+            "unexpected error: {err}"
+        );
+
+        let mut tampered = sum;
+        let injected_multiple = addition_bound
+            .checked_add(profile.residual_multiples[0].unsigned_abs())
+            .and_then(|value| value.checked_add(1))
+            .expect("residual injection fits u128");
+        let injected_residual = u64::try_from(
+            u128::from(params.plaintext_modulus)
+                .checked_mul(injected_multiple)
+                .expect("residual injection fits u128"),
+        )
+        .expect("residual injection fits u64 for test profile");
+        tampered.c0[0] = add_mod_u64(tampered.c0[0], injected_residual, params.ciphertext_modulus);
+
+        let tampered_profile = decrypt_with_exact_residual_profile(&params, &secret_key, &tampered)
+            .expect("tampered profile");
+        assert_eq!(tampered_profile.plaintext[0], profile.plaintext[0]);
+        assert!(tampered_profile.max_abs_residual_multiple > addition_bound);
+        let err = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &tampered,
+            addition_bound,
+            "tampered add output",
+        )
+        .expect_err("plaintext-preserving oversized residual must be rejected");
+        assert!(
+            err.to_string().contains("exceeds exact residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn exact_residual_bound_helpers_track_add_and_bootstrap_capacity() {
+        let params = params();
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let add_bound = bfv_add_output_residual_multiple_bound(
+            &params,
+            &[input_bound, input_bound, input_bound],
+        )
+        .expect("three-input add bound");
+        assert_eq!(add_bound, input_bound * 3);
+
+        let err = bfv_add_output_residual_multiple_bound(&params, &[input_bound])
+            .expect_err("single-input add output bounds must be rejected");
+        assert!(
+            err.to_string().contains("at least two input bounds"),
+            "unexpected error: {err}"
+        );
+
+        let capacity = centered_residual_multiple_capacity(&params);
+        let err = bfv_add_output_residual_multiple_bound(&params, &[capacity, 1])
+            .expect_err("add output bounds above capacity must be rejected");
+        assert!(
+            err.to_string()
+                .contains("exceeds centered residual capacity"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_add_output_residual_multiple_bound(&params, &[capacity + 1, 0])
+            .expect_err("individual input bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("input[0]"),
+            "unexpected error: {err}"
+        );
+
+        let refreshed_bound =
+            bfv_bootstrap_refresh_output_residual_multiple_bound(&params, add_bound, 2)
+                .expect("two-round bootstrap refresh bound");
+        assert_eq!(refreshed_bound, add_bound + input_bound * 2);
+
+        let (_secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-bound-keygen").expect("keygen");
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "residual-bound-bootstrap-key",
+            1,
+            b"bfv-bootstrap-bound-key",
+        )
+        .expect("bootstrap key");
+        let keyed_refreshed_bound = bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+            &params,
+            &bootstrap_key,
+            add_bound,
+            1,
+        )
+        .expect("key-authorized bootstrap refresh bound");
+        assert_eq!(keyed_refreshed_bound, add_bound + input_bound);
+
+        let err = bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+            &params,
+            &bootstrap_key,
+            add_bound,
+            2,
+        )
+        .expect_err("bootstrap output bounds above key capacity must be rejected");
+        assert!(
+            err.to_string().contains("max_refresh_rounds"),
+            "unexpected error: {err}"
+        );
+
+        let mut malformed_bootstrap_key = bootstrap_key.clone();
+        malformed_bootstrap_key.round_refreshes.clear();
+        let err = bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+            &params,
+            &malformed_bootstrap_key,
+            add_bound,
+            1,
+        )
+        .expect_err("malformed bootstrap keys must be rejected before bound admission");
+        assert!(
+            err.to_string().contains("round refresh ciphertexts"),
+            "unexpected error: {err}"
+        );
+
+        let err = bfv_bootstrap_refresh_output_residual_multiple_bound(&params, add_bound, 0)
+            .expect_err("zero-round bootstrap output bounds must be rejected");
+        assert!(
+            err.to_string().contains("at least one round"),
+            "unexpected error: {err}"
+        );
+
+        let err = bfv_bootstrap_refresh_output_residual_multiple_bound(&params, capacity + 1, 1)
+            .expect_err("bootstrap input bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("bootstrap input residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_bootstrap_refresh_output_residual_multiple_bound(&params, capacity, 1)
+            .expect_err("bootstrap output bounds above capacity must be rejected");
+        assert!(
+            err.to_string()
+                .contains("bootstrap refresh output residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn exact_residual_bound_helpers_track_subtract_and_plaintext_operations() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-sub-plain-bound-keygen").expect("keygen");
+        let lhs = encrypt_from_seed(&params, &public_key, &[89], b"bfv-sub-plain-bound-lhs")
+            .expect("encrypt lhs");
+        let rhs = encrypt_from_seed(&params, &public_key, &[34], b"bfv-sub-plain-bound-rhs")
+            .expect("encrypt rhs");
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+
+        let difference = subtract_ciphertexts(&params, &lhs, &rhs).expect("subtract");
+        let subtract_bound =
+            bfv_subtract_output_residual_multiple_bound(&params, input_bound, input_bound)
+                .expect("subtract residual bound");
+        assert_eq!(subtract_bound, input_bound * 2);
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &difference,
+            subtract_bound,
+            "subtract output",
+        )
+        .expect("subtraction output fits residual bound");
+        assert_eq!(profile.plaintext[0], 55);
+
+        let plus_plain = add_plain_scalar(&params, &difference, 7).expect("add plaintext");
+        let add_plain_bound = bfv_add_plain_output_residual_multiple_bound(&params, subtract_bound)
+            .expect("add-plain residual bound");
+        assert_eq!(add_plain_bound, subtract_bound);
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &plus_plain,
+            add_plain_bound,
+            "add-plain output",
+        )
+        .expect("add-plain output fits residual bound");
+        assert_eq!(profile.plaintext[0], 62);
+
+        let scaled = multiply_plain_scalar(&params, &difference, 9).expect("multiply scalar");
+        let scalar_bound =
+            bfv_multiply_plain_scalar_output_residual_multiple_bound(&params, subtract_bound, 9)
+                .expect("multiply-plain-scalar residual bound");
+        assert_eq!(scalar_bound, subtract_bound * 9);
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &scaled,
+            scalar_bound,
+            "multiply-plain-scalar output",
+        )
+        .expect("multiply-plain-scalar output fits residual bound");
+        assert_eq!(profile.plaintext[0], (55 * 9) % params.plaintext_modulus);
+        assert_eq!(
+            bfv_multiply_plain_scalar_output_residual_multiple_bound(&params, input_bound, 0)
+                .expect("zero scalar residual bound"),
+            0
+        );
+
+        let plaintext_mask = [1, 2, 0, 3];
+        let masked = multiply_plaintext_polynomial(&params, &lhs, &plaintext_mask)
+            .expect("multiply plaintext polynomial");
+        let polynomial_bound = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            &params,
+            input_bound,
+            &plaintext_mask,
+        )
+        .expect("multiply-plaintext-polynomial residual bound");
+        assert_eq!(polynomial_bound, input_bound * 6);
+        validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &masked,
+            polynomial_bound,
+            "multiply-plaintext-polynomial output",
+        )
+        .expect("multiply-plaintext-polynomial output fits residual bound");
+        assert_eq!(
+            bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+                &params,
+                input_bound,
+                &[0, 0, 0],
+            )
+            .expect("zero plaintext polynomial residual bound"),
+            0
+        );
+
+        let capacity = centered_residual_multiple_capacity(&params);
+        let err = bfv_subtract_output_residual_multiple_bound(&params, capacity, 1)
+            .expect_err("subtract output bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("subtract output residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_add_plain_output_residual_multiple_bound(&params, capacity + 1)
+            .expect_err("add-plain input bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("add-plain input residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_multiply_plain_scalar_output_residual_multiple_bound(&params, capacity, 2)
+            .expect_err("plain scalar output bounds above capacity must be rejected");
+        assert!(
+            err.to_string()
+                .contains("multiply-plain-scalar output residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_multiply_plain_scalar_output_residual_multiple_bound(
+            &params,
+            input_bound,
+            params.plaintext_modulus,
+        )
+        .expect_err("plain scalar outside plaintext modulus must be rejected");
+        assert!(
+            err.to_string().contains("exceeds plaintext modulus"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            &params,
+            capacity,
+            &[1, 1],
+        )
+        .expect_err("plaintext-polynomial output bounds above capacity must be rejected");
+        assert!(
+            err.to_string()
+                .contains("multiply-plaintext-polynomial output residual bound"),
+            "unexpected error: {err}"
+        );
+        let err = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            &params,
+            input_bound,
+            &[params.plaintext_modulus],
+        )
+        .expect_err("plaintext-polynomial coefficients outside plaintext modulus must be rejected");
+        assert!(
+            err.to_string().contains("exceeds plaintext modulus"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn multiply_residual_bound_tracks_relinearized_output() {
+        let registered_params = ram_lfe_bfv_parameters_v1();
+        let rns_chain =
+            registered_bfv_rns_modulus_chain(&registered_params).expect("registered RNS chain");
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&registered_params, b"bfv-multiply-bound-keygen").expect("keygen");
+        let lhs = encrypt_from_seed(
+            &registered_params,
+            &public_key,
+            &[registered_params.plaintext_modulus - 1, 17, 29, 41],
+            b"bfv-multiply-bound-lhs",
+        )
+        .expect("encrypt lhs");
+        let rhs = encrypt_from_seed(
+            &registered_params,
+            &public_key,
+            &[3, registered_params.plaintext_modulus - 1, 31, 43],
+            b"bfv-multiply-bound-rhs",
+        )
+        .expect("encrypt rhs");
+        let input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&registered_params)
+            .expect("input bound");
+        let multiply_bound = bfv_multiply_output_residual_multiple_bound(
+            &registered_params,
+            &relinearization_key,
+            input_bound,
+            input_bound,
+        )
+        .expect("multiply residual bound");
+
+        let product = multiply_ciphertexts_rns_exact(
+            &registered_params,
+            &rns_chain,
+            &relinearization_key,
+            &lhs,
+            &rhs,
+        )
+        .expect("RNS multiply");
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &registered_params,
+            &secret_key,
+            &product,
+            multiply_bound,
+            "multiply output",
+        )
+        .expect("relinearized multiply output fits propagated bound");
+        assert!(
+            profile.max_abs_residual_multiple <= multiply_bound,
+            "multiply residual {} must fit bound {multiply_bound}",
+            profile.max_abs_residual_multiple
+        );
+
+        let small_params = params();
+        let (_, _, small_relinearization_key) =
+            keygen_from_seed(&small_params, b"bfv-small-multiply-bound-keygen").expect("keygen");
+        let small_input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&small_params)
+            .expect("small input bound");
+        let err = bfv_multiply_output_residual_multiple_bound(
+            &small_params,
+            &small_relinearization_key,
+            small_input_bound,
+            small_input_bound,
+        )
+        .expect_err("too-narrow profiles must reject multiply residual bounds");
+        assert!(
+            err.to_string().contains("multiply output residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn affine_circuit_residual_bounds_track_weighted_public_rows() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-affine-bound-keygen").expect("keygen");
+        let inputs = vec![
+            encrypt_from_seed(&params, &public_key, &[5], b"bfv-affine-bound-input-a")
+                .expect("encrypt input a"),
+            encrypt_from_seed(&params, &public_key, &[11], b"bfv-affine-bound-input-b")
+                .expect("encrypt input b"),
+        ];
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let circuit = BfvAffineCircuit {
+            weights: vec![vec![3, 4], vec![7, 2], vec![0, 0]],
+            bias: vec![9, 1, 123],
+        };
+        let bounds = bfv_affine_circuit_output_residual_multiple_bounds(
+            &params,
+            &circuit,
+            &[input_bound, input_bound],
+        )
+        .expect("affine residual bounds");
+        assert_eq!(bounds, vec![input_bound * 7, input_bound * 9, 0]);
+
+        let outputs = evaluate_affine_circuit(&params, &circuit, &inputs).expect("evaluate");
+        assert_eq!(outputs.len(), bounds.len());
+        let expected_plaintexts = [68, 58, 123];
+        for (index, (output, &bound)) in outputs.iter().zip(&bounds).enumerate() {
+            let profile = validate_ciphertext_exact_residual_multiple_bound(
+                &params,
+                &secret_key,
+                output,
+                bound,
+                &format!("affine output[{index}]"),
+            )
+            .expect("affine output fits propagated residual bound");
+            assert_eq!(profile.plaintext[0], expected_plaintexts[index]);
+        }
+
+        let err =
+            bfv_affine_circuit_output_residual_multiple_bounds(&params, &circuit, &[input_bound])
+                .expect_err("affine bound input shape must match circuit weights");
+        assert!(
+            err.to_string().contains("expected 1 inputs"),
+            "unexpected error: {err}"
+        );
+
+        let capacity = centered_residual_multiple_capacity(&params);
+        let over_capacity_input = bfv_affine_circuit_output_residual_multiple_bounds(
+            &params,
+            &circuit,
+            &[capacity + 1, input_bound],
+        )
+        .expect_err("input bounds above capacity must be rejected");
+        assert!(
+            over_capacity_input.to_string().contains("affine input[0]"),
+            "unexpected error: {over_capacity_input}"
+        );
+
+        let over_capacity_circuit = BfvAffineCircuit {
+            weights: vec![vec![2, 1]],
+            bias: vec![0],
+        };
+        let err = bfv_affine_circuit_output_residual_multiple_bounds(
+            &params,
+            &over_capacity_circuit,
+            &[capacity, 0],
+        )
+        .expect_err("affine output bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("affine output[0]"),
+            "unexpected error: {err}"
+        );
+
+        let invalid_weight = BfvAffineCircuit {
+            weights: vec![vec![params.plaintext_modulus]],
+            bias: vec![0],
+        };
+        let err =
+            bfv_affine_circuit_output_residual_multiple_bounds(&params, &invalid_weight, &[0])
+                .expect_err("invalid affine weights must be rejected");
+        assert!(
+            err.to_string().contains("exceeds plaintext modulus"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -5072,6 +10887,92 @@ mod tests {
             .expect_err("non-zero bootstrap refresh must be rejected");
         assert!(
             err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn refresh_key_zero_plaintext_validators_reject_oversized_zero_residuals() {
+        let params = params();
+        let residual_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&params)
+            .expect("encrypted-zero refresh residual bound");
+        let oversized_multiple = residual_bound
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(1))
+            .expect("oversized residual multiple fits");
+        let oversized_delta = u64::try_from(
+            oversized_multiple
+                .checked_mul(u128::from(params.plaintext_modulus))
+                .expect("oversized residual delta fits u128"),
+        )
+        .expect("oversized residual delta fits u64");
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-refresh-zero-residual-keygen").expect("keygen");
+        let rotation_key = rotation_key_from_seed(
+            &params,
+            &public_key,
+            1,
+            b"bfv-refresh-zero-residual-rotation",
+        )
+        .expect("rotation key");
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            2,
+            b"bfv-refresh-zero-residual-bootstrap",
+        )
+        .expect("bootstrap key");
+
+        let rotation_profile =
+            decrypt_with_exact_residual_profile(&params, &secret_key, &rotation_key.zero_refresh)
+                .expect("rotation refresh residual profile");
+        assert!(
+            rotation_profile.max_abs_residual_multiple <= residual_bound,
+            "generated rotation refresh residual {} must fit bound {residual_bound}",
+            rotation_profile.max_abs_residual_multiple
+        );
+        let bootstrap_profile = decrypt_with_exact_residual_profile(
+            &params,
+            &secret_key,
+            &bootstrap_key.round_refreshes[1],
+        )
+        .expect("bootstrap refresh residual profile");
+        assert!(
+            bootstrap_profile.max_abs_residual_multiple <= residual_bound,
+            "generated bootstrap refresh residual {} must fit bound {residual_bound}",
+            bootstrap_profile.max_abs_residual_multiple
+        );
+
+        let mut oversized_rotation = rotation_key;
+        oversized_rotation.zero_refresh.c0[0] = add_mod_u64(
+            oversized_rotation.zero_refresh.c0[0],
+            oversized_delta,
+            params.ciphertext_modulus,
+        );
+        let err = validate_rotation_key_zero_refresh(&params, &secret_key, &oversized_rotation)
+            .expect_err("zero-plaintext rotation refresh with oversized residual must be rejected");
+        assert!(
+            err.to_string().contains("encrypted-zero refresh bound"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_bootstrap = bootstrap_key;
+        oversized_bootstrap.round_refreshes[1].c0[0] = add_mod_u64(
+            oversized_bootstrap.round_refreshes[1].c0[0],
+            oversized_delta,
+            params.ciphertext_modulus,
+        );
+        let err = validate_bootstrap_key_zero_refreshes(&params, &secret_key, &oversized_bootstrap)
+            .expect_err(
+                "zero-plaintext bootstrap refresh with oversized residual must be rejected",
+            );
+        assert!(
+            err.to_string().contains("round_refreshes[1]"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.to_string().contains("encrypted-zero refresh bound"),
             "unexpected error: {err}"
         );
     }
@@ -5256,6 +11157,102 @@ mod tests {
             .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
             .collect::<Vec<_>>();
         assert_eq!(plaintexts, vec![20, 30, 10]);
+    }
+
+    #[test]
+    fn rotation_slot_residual_bounds_track_public_refresh() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-bound-keygen").expect("keygen");
+        let slots = [10_u64, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rotation-bound-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-rotation-bound-refresh")
+                .expect("rotation key");
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let bounds = bfv_rotate_slots_left_output_residual_multiple_bounds(
+            &params,
+            &rotation_key,
+            &[input_bound, input_bound * 2, input_bound * 3],
+        )
+        .expect("rotation output residual bounds");
+        assert_eq!(
+            bounds,
+            vec![input_bound * 3, input_bound * 4, input_bound * 2]
+        );
+
+        let rotated =
+            rotate_ciphertext_slots_left(&params, &rotation_key, &slots).expect("rotate slots");
+        let expected_plaintexts = [20, 30, 10];
+        for (index, (slot, &bound)) in rotated.iter().zip(&bounds).enumerate() {
+            let profile = validate_ciphertext_exact_residual_multiple_bound(
+                &params,
+                &secret_key,
+                slot,
+                bound,
+                &format!("rotation output[{index}]"),
+            )
+            .expect("rotation output fits propagated residual bound");
+            assert_eq!(profile.plaintext[0], expected_plaintexts[index]);
+        }
+
+        let capacity = centered_residual_multiple_capacity(&params);
+        let err = bfv_rotate_slots_left_output_residual_multiple_bounds(
+            &params,
+            &rotation_key,
+            &[capacity + 1, input_bound, input_bound],
+        )
+        .expect_err("input bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("RotateLeft input[0]"),
+            "unexpected error: {err}"
+        );
+
+        let err = bfv_rotate_slots_left_output_residual_multiple_bounds(
+            &params,
+            &rotation_key,
+            &[0, 0, capacity],
+        )
+        .expect_err("output bounds above capacity must be rejected");
+        assert!(
+            err.to_string().contains("add output residual bound")
+                || err.to_string().contains("RotateLeft output"),
+            "unexpected error: {err}"
+        );
+
+        let err =
+            bfv_rotate_slots_left_output_residual_multiple_bounds(&params, &rotation_key, &[])
+                .expect_err("empty rotation bound inputs must be rejected");
+        assert!(
+            err.to_string().contains("at least one ciphertext slot"),
+            "unexpected error: {err}"
+        );
+
+        let full_cycle_key =
+            rotation_key_from_seed(&params, &public_key, 3, b"bfv-rotation-bound-full-cycle")
+                .expect("full-cycle key is valid until slot count is known");
+        let err = bfv_rotate_slots_left_output_residual_multiple_bounds(
+            &params,
+            &full_cycle_key,
+            &[input_bound; 3],
+        )
+        .expect_err("full-cycle rotations must be rejected");
+        assert!(
+            err.to_string().contains("full slot cycle"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -5621,6 +11618,153 @@ mod tests {
     }
 
     #[test]
+    fn packed_rotate_left_residual_bound_tracks_galois_schedule() {
+        let registered_params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&registered_params, b"bfv-packed-bound-keygen").expect("keygen");
+        let slots = (0..registered_params.degree())
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&registered_params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &registered_params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-packed-bound-ciphertext",
+        )
+        .expect("encrypt packed plaintext");
+        let input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&registered_params)
+            .expect("input bound");
+
+        let powers = packed_left_rotation_galois_automorphism_powers(&registered_params, 1)
+            .expect("one-step packed rotation schedule");
+        let galois_keys = powers
+            .iter()
+            .map(|&power| {
+                galois_key_from_seed(
+                    &registered_params,
+                    &secret_key,
+                    power,
+                    b"bfv-packed-bound-galois-key",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let bound = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &registered_params,
+            &galois_keys,
+            input_bound,
+            1,
+        )
+        .expect("packed RotateLeft residual bound");
+        let rotated = rotate_packed_ciphertext_slots_left_with_galois_keys(
+            &registered_params,
+            &galois_keys,
+            &ciphertext,
+            1,
+        )
+        .expect("packed RotateLeft");
+        let profile = validate_ciphertext_exact_residual_multiple_bound(
+            &registered_params,
+            &secret_key,
+            &rotated,
+            bound,
+            "packed RotateLeft output",
+        )
+        .expect("packed RotateLeft output fits propagated residual bound");
+        let rotated_slots = decode_packed_plaintext_slots(&registered_params, &profile.plaintext)
+            .expect("decode slots");
+        let mut expected_slots = slots.clone();
+        expected_slots.rotate_left(1);
+        assert_eq!(rotated_slots, expected_slots);
+
+        let half_rotation = u32::from(registered_params.polynomial_degree) / 2;
+        let half_power =
+            packed_left_rotation_galois_automorphism_power(&registered_params, half_rotation)
+                .expect("half rotation power");
+        let half_key = galois_key_from_seed(
+            &registered_params,
+            &secret_key,
+            half_power,
+            b"bfv-packed-bound-half-key",
+        )
+        .expect("half-rotation Galois key");
+        let half_bound = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &registered_params,
+            core::slice::from_ref(&half_key),
+            input_bound,
+            half_rotation,
+        )
+        .expect("single-key packed RotateLeft residual bound");
+        let half_rotated = rotate_packed_ciphertext_slots_left(
+            &registered_params,
+            &half_key,
+            &ciphertext,
+            half_rotation,
+        )
+        .expect("single-key packed RotateLeft");
+        validate_ciphertext_exact_residual_multiple_bound(
+            &registered_params,
+            &secret_key,
+            &half_rotated,
+            half_bound,
+            "single-key packed RotateLeft output",
+        )
+        .expect("single-key packed RotateLeft output fits propagated residual bound");
+
+        let missing_power = powers[0];
+        let err = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &registered_params,
+            &galois_keys[1..],
+            input_bound,
+            1,
+        )
+        .expect_err("missing packed rotation Galois key must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("automorphism power {missing_power}")),
+            "unexpected error: {err}"
+        );
+
+        let err = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &registered_params,
+            &galois_keys,
+            input_bound,
+            u32::from(registered_params.polynomial_degree),
+        )
+        .expect_err("full packed-slot rotations must be rejected");
+        assert!(
+            err.to_string().contains("full slot cycle"),
+            "unexpected error: {err}"
+        );
+
+        let small_params = params();
+        let (small_secret_key, _, _) =
+            keygen_from_seed(&small_params, b"bfv-small-packed-bound-keygen").expect("keygen");
+        let small_galois_key = galois_key_from_seed(
+            &small_params,
+            &small_secret_key,
+            3,
+            b"bfv-small-packed-bound-key",
+        )
+        .expect("Galois key");
+        let small_input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&small_params)
+            .expect("small input bound");
+        let err = bfv_galois_key_switch_output_residual_multiple_bound(
+            &small_params,
+            &small_galois_key,
+            small_input_bound,
+        )
+        .expect_err("too-narrow profiles must reject key-switch residual bounds");
+        assert!(
+            err.to_string()
+                .contains("Galois key-switch output residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn packed_rotate_left_with_galois_schedule_rejects_missing_key() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, _) =
@@ -5803,6 +11947,43 @@ mod tests {
     }
 
     #[test]
+    fn galois_key_generation_self_checks_key_switch_residuals() {
+        let params = params();
+        let (secret_key, _, _) =
+            keygen_from_seed(&params, b"bfv-galois-self-check-keygen").expect("keygen");
+        let galois_key =
+            galois_key_from_seed(&params, &secret_key, 3, b"bfv-galois-self-check-key")
+                .expect("generated Galois key self-checks before returning");
+        let target_secret =
+            apply_galois_automorphism_poly(&params, &secret_key.s, galois_key.automorphism_power)
+                .expect("target secret");
+        validate_key_switch_entry_residuals(
+            &params,
+            &secret_key.s,
+            &target_secret,
+            &galois_key.entries,
+            "standalone generated Galois key",
+        )
+        .expect("generated Galois key residuals match automorphed secret");
+
+        let mut tampered = galois_key;
+        tampered.entries[0].b[0] =
+            add_mod_u64(tampered.entries[0].b[0], 1, params.ciphertext_modulus);
+        let err = validate_key_switch_entry_residuals(
+            &params,
+            &secret_key.s,
+            &target_secret,
+            &tampered.entries,
+            "standalone generated Galois key",
+        )
+        .expect_err("tampered generated Galois entries must fail residual validation");
+        assert!(
+            err.to_string().contains("non-plaintext-multiple"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn key_switch_primitives_reject_truncated_entries_before_digit_zip() {
         let params = params();
         let (_, _, relinearization_key) =
@@ -5841,6 +12022,164 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("RNS exact key switch key expected"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rns_key_switch_rejects_too_narrow_chain_before_key_material() {
+        let rns_params = rns_exact_params();
+        let (_, _, rns_relinearization_key) =
+            keygen_from_seed(&rns_params, b"bfv-rns-key-switch-chain-preflight-keygen")
+                .expect("RNS keygen");
+        let mut truncated_entries = rns_relinearization_key.entries.clone();
+        truncated_entries.pop().expect("sample RNS key has entries");
+        let rns_zero = zero_poly(&rns_params);
+        let addition_only_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89],
+        };
+        addition_only_chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&rns_params)
+            .expect("chain covers exact addition");
+        addition_only_chain
+            .validate_exact_ciphertext_modulus_negacyclic_product_coverage(&rns_params)
+            .expect_err("chain remains too narrow for exact multiplication");
+
+        let err = key_switch_rns_exact(
+            &rns_params,
+            &addition_only_chain,
+            &truncated_entries,
+            &rns_zero,
+            &rns_zero,
+            &rns_zero,
+        )
+        .expect_err("RNS key switching must preflight exact chain coverage");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rns_exact_public_entrypoints_preflight_chain_before_late_operation_errors() {
+        let rns_params = rns_exact_params();
+        let addition_too_narrow_chain = BfvRnsModulusChain { moduli: vec![73] };
+        addition_too_narrow_chain
+            .validate_for_parameters(&rns_params)
+            .expect("single-limb chain is structurally valid for the small profile");
+        addition_too_narrow_chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&rns_params)
+            .expect_err("single-limb chain is too narrow for exact addition");
+
+        let product_too_narrow_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89],
+        };
+        product_too_narrow_chain
+            .validate_exact_ciphertext_modulus_addition_coverage(&rns_params)
+            .expect("two-limb chain covers exact addition");
+        product_too_narrow_chain
+            .validate_exact_ciphertext_modulus_negacyclic_product_coverage(&rns_params)
+            .expect_err("two-limb chain is too narrow for exact multiplication");
+
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&rns_params, b"bfv-rns-public-preflight-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &rns_params,
+            &public_key,
+            &[1, 2],
+            b"bfv-rns-public-preflight-ciphertext",
+        )
+        .expect("encrypt");
+        let rhs = encrypt_from_seed(
+            &rns_params,
+            &public_key,
+            &[3, 4],
+            b"bfv-rns-public-preflight-rhs",
+        )
+        .expect("encrypt rhs");
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &rns_params,
+            &public_key,
+            "rns-public-preflight",
+            1,
+            b"bfv-rns-public-preflight-bootstrap",
+        )
+        .expect("bootstrap key");
+        let full_cycle_rotation_key = rotation_key_from_seed(
+            &rns_params,
+            &public_key,
+            2,
+            b"bfv-rns-public-preflight-rotation",
+        )
+        .expect("rotation key");
+        let galois_key = galois_key_from_seed(
+            &rns_params,
+            &secret_key,
+            3,
+            b"bfv-rns-public-preflight-galois",
+        )
+        .expect("Galois key");
+
+        let err = bootstrap_ciphertext_rns_exact_round(
+            &rns_params,
+            &addition_too_narrow_chain,
+            &bootstrap_key,
+            &ciphertext,
+            99,
+        )
+        .expect_err("bootstrap refresh must preflight the RNS addition chain");
+        assert!(
+            err.to_string().contains("addition bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = rotate_ciphertext_slots_left_rns_exact(
+            &rns_params,
+            &addition_too_narrow_chain,
+            &full_cycle_rotation_key,
+            &[ciphertext.clone(), rhs.clone()],
+        )
+        .expect_err("outer-slot rotation must preflight the RNS addition chain");
+        assert!(
+            err.to_string().contains("addition bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = multiply_ciphertexts_rns_exact(
+            &rns_params,
+            &product_too_narrow_chain,
+            &relinearization_key,
+            &ciphertext,
+            &rhs,
+        )
+        .expect_err("ciphertext multiplication must preflight the full exact RNS chain");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = apply_galois_automorphism_ciphertext_rns_exact(
+            &rns_params,
+            &product_too_narrow_chain,
+            &galois_key,
+            &ciphertext,
+        )
+        .expect_err("Galois key switching must preflight the full exact RNS chain");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
+            "unexpected error: {err}"
+        );
+
+        let err = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
+            &rns_params,
+            &product_too_narrow_chain,
+            &[],
+            &ciphertext,
+            0,
+        )
+        .expect_err("packed rotation must preflight the full exact RNS chain");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
             "unexpected error: {err}"
         );
     }
@@ -6381,6 +12720,38 @@ mod tests {
     }
 
     #[test]
+    fn identifier_public_parameters_reject_overwide_envelope_capacity() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-overwide-identifier-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES + 1,
+        };
+
+        let err = public_parameters
+            .validate()
+            .expect_err("identifier public parameters must reject overwide envelopes");
+        assert!(
+            err.to_string().contains("registered RAM-LFE"),
+            "unexpected error: {err}"
+        );
+
+        let err = derive_identifier_key_material_from_seed(
+            &params,
+            RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES + 1,
+            b"bfv-overwide-identifier-seed",
+            b"phone#retail",
+        )
+        .expect_err("identifier key derivation must reject overwide envelopes");
+        assert!(
+            err.to_string().contains("registered RAM-LFE"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn identifier_envelope_decryption_rejects_adversarial_plaintext_metadata() {
         let params = ram_lfe_bfv_parameters_v1();
         let (public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
@@ -6649,6 +13020,40 @@ mod tests {
             polynomial_degree: 32_768,
             ciphertext_modulus: 1_u64 << 63,
             plaintext_modulus: 256,
+            decomposition_base_log: 8,
+        };
+        assert_eq!(
+            params.validate(),
+            Err(BfvError::InvalidParameters(
+                "parameter set exceeds the deterministic BFV exact-arithmetic raw coefficient bounds"
+                    .to_owned(),
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_parameter_sets_that_overflow_scaled_scalar_accumulators() {
+        let params = BfvParameters {
+            polynomial_degree: 32_768,
+            ciphertext_modulus: 1_u64 << 56,
+            plaintext_modulus: 4,
+            decomposition_base_log: 8,
+        };
+        assert_eq!(
+            params.validate(),
+            Err(BfvError::InvalidParameters(
+                "parameter set exceeds the deterministic BFV exact-arithmetic scaled coefficient bounds"
+                    .to_owned(),
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_parameter_sets_above_i128_exact_arithmetic_ceiling() {
+        let params = BfvParameters {
+            polynomial_degree: 32_768,
+            ciphertext_modulus: 1_u64 << 55,
+            plaintext_modulus: 4,
             decomposition_base_log: 8,
         };
         assert_eq!(
@@ -7258,6 +13663,270 @@ mod tests {
     }
 
     #[test]
+    fn rns_basis_extension_preserves_source_product_coefficients() {
+        let params = rns_exact_params();
+        let source_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89],
+        };
+        let target_chain = rns_exact_chain();
+        let source_product = source_chain.product().expect("source product");
+        let source_coefficients = vec![
+            u128::from(params.ciphertext_modulus) + 7,
+            source_product - 1,
+        ];
+        assert!(
+            source_coefficients
+                .iter()
+                .any(|&coefficient| coefficient >= u128::from(params.ciphertext_modulus)),
+            "basis-extension regression must cover values outside the ciphertext modulus"
+        );
+        let source_rns = BfvRnsPolynomial {
+            residues_by_limb: source_chain
+                .moduli
+                .iter()
+                .map(|&modulus| {
+                    source_coefficients
+                        .iter()
+                        .map(|&coefficient| {
+                            u64::try_from(coefficient % u128::from(modulus))
+                                .expect("residue fits u64")
+                        })
+                        .collect()
+                })
+                .collect(),
+        };
+
+        let extended = source_chain
+            .basis_extend_polynomial(&params, &source_rns, &target_chain)
+            .expect("basis-extend source polynomial");
+        assert_eq!(extended.residues_by_limb.len(), target_chain.moduli.len());
+        let reconstructed = target_chain
+            .reconstruct_polynomial(&params, &extended)
+            .expect("reconstruct extended polynomial");
+        assert_eq!(reconstructed, source_coefficients);
+
+        let err = target_chain
+            .basis_extend_polynomial(&params, &extended, &source_chain)
+            .expect_err("narrow target basis-extension must reject aliasing");
+        assert!(
+            err.to_string().contains("target product"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rns_key_switch_digit_polynomials_survive_basis_extension() {
+        let params = rns_exact_params();
+        let source_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89],
+        };
+        let target_chain = rns_exact_chain();
+        let switching_component = vec![54, 37];
+        let source_digits = source_chain
+            .decompose_key_switch_component_polynomial(&params, &switching_component)
+            .expect("decompose key-switch component into RNS digits");
+        let expected_digits: [Vec<u64>; 2] = [vec![6, 5], vec![3, 2]];
+        assert_eq!(source_digits.len(), expected_digits.len());
+        for (digit, expected) in source_digits.iter().zip(&expected_digits) {
+            assert_eq!(
+                source_chain
+                    .reconstruct_polynomial(&params, digit)
+                    .expect("reconstruct source digit"),
+                expected
+                    .iter()
+                    .map(|&coefficient| u128::from(coefficient))
+                    .collect::<Vec<_>>()
+            );
+        }
+        let target_digits = source_digits
+            .iter()
+            .map(|digit| {
+                source_chain.basis_extend_key_switch_digit_polynomial(&params, digit, &target_chain)
+            })
+            .collect::<Result<Vec<_>, BfvError>>()
+            .expect("basis-extend key-switch digits");
+        validate_rns_key_switch_digit_polynomials(
+            &params,
+            &target_chain,
+            &target_digits,
+            "basis-extended key-switch digits",
+        )
+        .expect("basis-extended digits remain canonical");
+
+        let (_, _, relinearization_key) =
+            keygen_from_seed(&params, b"bfv-rns-basis-key-switch-keygen").expect("keygen");
+        let c0 = vec![13, 21];
+        let c1 = vec![8, 34];
+        let scalar = key_switch(
+            &params,
+            &relinearization_key.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )
+        .expect("scalar key switch");
+        let rns_from_component = key_switch_rns_exact(
+            &params,
+            &target_chain,
+            &relinearization_key.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )
+        .expect("RNS key switch from scalar component");
+        let rns_from_digits = key_switch_rns_exact_with_digit_polynomials(
+            &params,
+            &target_chain,
+            &relinearization_key.entries,
+            &c0,
+            &c1,
+            &target_digits,
+        )
+        .expect("RNS key switch from basis-extended digits");
+        let rns_from_basis_extension = key_switch_rns_exact_with_basis_extension(
+            &params,
+            &source_chain,
+            &target_chain,
+            &relinearization_key.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )
+        .expect("RNS key switch with explicit basis extension");
+        assert_eq!(rns_from_component, scalar);
+        assert_eq!(rns_from_digits, scalar);
+        assert_eq!(rns_from_basis_extension, scalar);
+
+        let wide_source_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89, 97, 113],
+        };
+        assert!(
+            wide_source_chain.product().expect("wide source product")
+                > target_chain.product().expect("target product"),
+            "wide source regression must exceed the evaluator target product"
+        );
+        let wide_source_digits = wide_source_chain
+            .decompose_key_switch_component_polynomial(&params, &switching_component)
+            .expect("decompose key-switch component in wider source chain");
+        let err = wide_source_chain
+            .basis_extend_polynomial(&params, &wide_source_digits[0], &target_chain)
+            .expect_err("general polynomial basis extension must reject narrower targets");
+        assert!(
+            err.to_string().contains("target product"),
+            "unexpected error: {err}"
+        );
+        let target_digits_from_wide = wide_source_digits
+            .iter()
+            .map(|digit| {
+                wide_source_chain.basis_extend_key_switch_digit_polynomial(
+                    &params,
+                    digit,
+                    &target_chain,
+                )
+            })
+            .collect::<Result<Vec<_>, BfvError>>()
+            .expect("digit basis extension accepts a narrower target product");
+        assert_eq!(target_digits_from_wide, target_digits);
+        let rns_from_wide_basis_extension = key_switch_rns_exact_with_basis_extension(
+            &params,
+            &wide_source_chain,
+            &target_chain,
+            &relinearization_key.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )
+        .expect("RNS key switch with wide-source digit basis extension");
+        assert_eq!(rns_from_wide_basis_extension, scalar);
+
+        let digit_product = target_chain
+            .multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
+                &params,
+                &target_digits[0],
+                &relinearization_key.entries[0].b,
+            )
+            .expect("multiply RNS digit by evaluation-key component");
+        let scalar_digit_product = target_chain
+            .multiply_ciphertext_modulus_polynomials_negacyclic_exact(
+                &params,
+                &expected_digits[0],
+                &relinearization_key.entries[0].b,
+            )
+            .expect("multiply scalar digit by evaluation-key component");
+        assert_eq!(digit_product, scalar_digit_product);
+
+        let mut noncanonical_digit = target_digits.clone();
+        let base = params.decomposition_base();
+        for (limb, &modulus) in noncanonical_digit[0]
+            .residues_by_limb
+            .iter_mut()
+            .zip(&target_chain.moduli)
+        {
+            limb[0] = base % modulus;
+        }
+        let err = validate_rns_key_switch_digit_polynomials(
+            &params,
+            &target_chain,
+            &noncanonical_digit,
+            "basis-extended key-switch digits",
+        )
+        .expect_err("noncanonical key-switch digits must be rejected");
+        assert!(
+            err.to_string().contains("exceeds decomposition base"),
+            "unexpected error: {err}"
+        );
+
+        let mut noncanonical_source_digit = wide_source_digits[0].clone();
+        for (limb, &modulus) in noncanonical_source_digit
+            .residues_by_limb
+            .iter_mut()
+            .zip(&wide_source_chain.moduli)
+        {
+            limb[0] = base % modulus;
+        }
+        let err = wide_source_chain
+            .basis_extend_key_switch_digit_polynomial(
+                &params,
+                &noncanonical_source_digit,
+                &target_chain,
+            )
+            .expect_err("noncanonical source digits must not basis-extend");
+        assert!(
+            err.to_string().contains("exceeds decomposition base"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rns_key_switch_basis_extension_rejects_digit_aliasing_source_chain() {
+        let params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 60,
+            plaintext_modulus: 5,
+            decomposition_base_log: 8,
+        };
+        params.validate().expect("toy params are valid");
+        let source_chain = BfvRnsModulusChain { moduli: vec![61] };
+        let target_chain = rns_exact_chain();
+        let zero = vec![0, 0];
+        let switching_component = vec![59, 17];
+        let err = key_switch_rns_exact_with_basis_extension(
+            &params,
+            &source_chain,
+            &target_chain,
+            &[],
+            &zero,
+            &zero,
+            &switching_component,
+        )
+        .expect_err("source chains that alias decomposition digits must be rejected");
+        assert!(
+            err.to_string().contains("decomposition base"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn rns_polynomial_ring_operations_match_scalar_mod_chain_product() {
         let params = ram_lfe_bfv_parameters_v1();
         let chain = registered_bfv_rns_modulus_chain(&params).expect("registered chain");
@@ -7372,6 +14041,12 @@ mod tests {
 
     #[test]
     fn registered_bfv_parameters_reject_structural_but_unregistered_sets() {
+        let registered = ram_lfe_bfv_parameters_v1();
+        validate_bfv_seeded_encryption_residual_capacity(&registered)
+            .expect("registered profile has seeded-encryption residual capacity");
+        validate_registered_bfv_parameters(&registered)
+            .expect("registered profile is admitted for production FHE evaluation");
+
         let mut params = ram_lfe_bfv_parameters_v1();
         params.decomposition_base_log = params.decomposition_base_log.saturating_add(1);
         params

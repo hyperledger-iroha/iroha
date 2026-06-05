@@ -73,6 +73,7 @@ const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const NORITO_COMPACT_LEN_FLAG = 0x02;
 const BFV_IDENTIFIER_SEED_BYTES = 32;
+const BFV_IDENTIFIER_MAX_INPUT_BYTES = 63;
 const BFV_RUST_ENCRYPT_DOMAIN = Buffer.from(
   "iroha.crypto.fhe.bfv.encrypt.v1",
   "utf8",
@@ -21827,6 +21828,13 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context}.max_input_bytes must fit into one plaintext slot`,
+      `${context}.max_input_bytes`,
+    );
+  }
+  if (maxInputBytes > BFV_IDENTIFIER_MAX_INPUT_BYTES) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.max_input_bytes must be at most ${BFV_IDENTIFIER_MAX_INPUT_BYTES} for the registered RAM-LFE BFV identifier profile`,
       `${context}.max_input_bytes`,
     );
   }

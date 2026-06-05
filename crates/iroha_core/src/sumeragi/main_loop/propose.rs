@@ -1711,11 +1711,12 @@ impl Actor {
                 && !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
-        let local_commit_vote_blocks_yield = local_vote.as_ref().is_some_and(|vote| {
+        let local_commit_vote_present = local_vote.as_ref().is_some_and(|vote| {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
         });
+        let local_commit_vote_blocks_yield = local_commit_vote_present && recovery_exhausted;
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
             .as_ref()
@@ -1760,6 +1761,7 @@ impl Actor {
                     frontier_commit_qc_observed,
                     frontier_commit_qc_blocks_yield,
                     local_vote_consensus_locked,
+                    local_commit_vote_present,
                     local_commit_vote_blocks_yield,
                     local_vote_blocks,
                     competing_quorum_locked,

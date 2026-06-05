@@ -1,6 +1,6 @@
 //! Minimal Nexus App Facade transfer recipe with fake wallet/Torii dependencies.
 
-use std::{num::NonZeroU32, time::Duration};
+use std::{error::Error, num::NonZeroU32, time::Duration};
 
 use iroha::{
     crypto::{Algorithm, KeyPair, Signature},
@@ -101,8 +101,12 @@ fn transfer_input(authority: AccountId) -> NexusTransferInput {
     }
 }
 
-fn main() -> Result<(), NexusAppError> {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+fn demo_wallet_key_pair() -> Result<KeyPair, iroha::crypto::Error> {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let key_pair = demo_wallet_key_pair()?;
     let account_id = AccountId::new(key_pair.public_key().clone());
     let client = NexusAppClient::new(
         NexusAppConfig {
@@ -130,4 +134,22 @@ fn main() -> Result<(), NexusAppError> {
         receipt.signed_transaction_hash_hex
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demo_wallet_key_pair_uses_checked_ed25519_generation() {
+        let key_pair = demo_wallet_key_pair().expect("checked demo wallet key generation");
+
+        assert_eq!(
+            key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("generated public key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }
