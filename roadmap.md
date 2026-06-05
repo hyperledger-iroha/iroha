@@ -728,9 +728,9 @@ and completed history lives in [`status.md`](./status.md).
   aggregate ISO production-readiness rollup now requires explicit expected
   provider/environment context, non-empty strict XSD proof, operator evidence
   summaries, and digest-bound direct receipt-archive verification with
-  unique per-receipt paths and digests into one release gate; remaining
-  readiness work is making that gate pass without diagnostic overrides and with
-  real provider evidence.
+  unique canonical per-receipt `*.receipt.json` paths and digests into one
+  release gate; remaining readiness work is making that gate pass without
+  diagnostic overrides and with real provider evidence.
   Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the
@@ -751,30 +751,45 @@ and completed history lives in [`status.md`](./status.md).
   evidence gate now requires explicit expected provider/environment context,
   records that context in its digest-bound policy, recomputes
   canary/trust/receipt summary digests, rejects repeated or copied
-  canary/trust summaries, rejects duplicate receipt paths or receipt digests,
-  rejects duplicate archived trust profile IDs, and rejects
-  plan-only, dry-run, insecure-HTTP, default-profile, secret-leaking,
-  smuggled-URL, synthetic-trust, record-only, or receipt-verifier-output-free
-  evidence before archival, and requires trust-summary and receipt-summary
+  canary/trust summaries, rejects non-canonical or duplicate receipt paths or
+  receipt digests, rejects duplicate archived trust profile IDs, and rejects
+  plan-only, dry-run, control-bearing child-command entries,
+  non-canonical or command-mismatched rail/notary receipt directories,
+  verify commands that omit generated rail/notary receipt directories,
+  insecure-HTTP, default-profile, secret-leaking,
+  smuggled-URL, non-canonical canary runbook config paths, unknown upstream
+  summary fields, synthetic-trust, record-only, or receipt-verifier-output-free
+  evidence before archival, and requires
+  trust-summary and receipt-summary
   policy booleans plus trust revocation booleans/counts and plan-only status
   booleans to be present explicitly so omissions cannot become production
   defaults. Canary summaries must also prove the runner used
   `--require-explicit-policy`. The evidence gate requires explicit freshness
   budgets for canary, trust-summary, and trust-source evidence before archival,
+  preserves compact trust source URL/retrieval provenance for release review,
   and the aggregate readiness gate rechecks that proof plus the evidence policy
   context, requires explicit freshness budgets for
   XSD/evidence/canary/trust/trust-source timestamps, blocks stale digest-correct
   summaries and archive freshness policies weaker than the final release
-  budgets, and rechecks compact CRL/OCSP revocation posture and trust
+  budgets, rejects stale or smuggled compact trust source provenance, and
+  rechecks compact CRL/OCSP revocation posture and trust
   profile-count binding, while rejecting repeated or copied
   XSD/evidence and compact canary/trust summaries, requiring compact
-  canary/trust source paths and summary digests, rejecting duplicate receipt
-  paths or receipt digests, rejecting duplicate compact trust profile IDs,
+  canary/trust source paths to be control-free and traversal-free, requiring
+  compact canary runbook config paths to remain traversal-free JSON pointers,
+  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
+  rejecting non-canonical compact receipt paths, rejecting duplicate compact
+  trust profile IDs, rejecting control-bearing compact identity strings,
+  rejecting unknown compact evidence fields,
   rechecking XSD schema/fixture summary arrays for count, digest, and
-  schema-reference consistency, requiring XML schema-validation proof for every
-  schema-backed fixture, requiring profile-catalog source and embedded JSON
+  schema-path/message-id, fixture-path, and schema-reference consistency,
+  requiring XML schema-validation proof for every
+  schema-backed fixture, rejecting unknown XSD summary fields, recomputing
+  schema-only flags/reasons and reviewed gap lists from the schema/fixture
+  relationship, requiring profile-catalog source and embedded JSON
   digest provenance plus duplicate-free profile/message/direction/version shape
-  and schema-backed proof for advertised concrete message versions, and
+  and schema-backed proof for advertised concrete message versions, recomputing
+  profile-catalog missing-version lists, and
   requiring timezone-aware non-future XSD/evidence/trust verification
   timestamps and ordered canary and non-overlapping per-stage start/finish
   windows for final evidence traceability. Compact stage-window names must

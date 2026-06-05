@@ -24,9 +24,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -42,8 +44,10 @@ SOURCE_REPOSITORY_RE = re.compile(
 REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 REQUIRE_VERIFIED = "require-verified"
+RECEIPT_PATH_SUFFIX = ".receipt.json"
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
+TRUST_SOURCE_KEYS = {"url", "retrieved_at"}
 PRODUCTION_FALSE_POLICY_FLAGS = {
     "allow_plan_only",
     "allow_dry_run",
@@ -61,6 +65,156 @@ EVIDENCE_FRESHNESS_POLICY_FIELDS = {
     "max_canary_age_days",
     "max_trust_age_days",
     "max_trust_source_age_days",
+}
+EVIDENCE_SUMMARY_KEYS = {
+    "version",
+    "verified_at",
+    "ok",
+    "canary_summaries",
+    "trust_summaries",
+    "receipt_verification",
+    "policy",
+    SUMMARY_DIGEST_FIELD,
+}
+EVIDENCE_POLICY_KEYS = {
+    "provider",
+    "environment",
+    *PRODUCTION_FALSE_POLICY_FLAGS,
+    *EVIDENCE_FRESHNESS_POLICY_FIELDS,
+}
+COMPACT_CANARY_KEYS = {
+    "path",
+    "config_path",
+    "provider",
+    "environment",
+    "started_at",
+    "finished_at",
+    "plan_only",
+    "require_explicit_policy",
+    "stage_names",
+    "stage_windows",
+    "receipt_summary",
+    SUMMARY_DIGEST_FIELD,
+}
+COMPACT_STAGE_WINDOW_KEYS = {"name", "started_at", "finished_at"}
+RECEIPT_SUMMARY_KEYS = {
+    "verified_receipts",
+    "receipt_kind",
+    "allow_failed",
+    "allow_insecure_http",
+    "allow_legacy_colr007",
+    "require_source_files",
+    "receipts",
+    SUMMARY_DIGEST_FIELD,
+}
+RECEIPT_ENTRY_KEYS = {
+    "path",
+    "receipt_kind",
+    "receipt_sha256",
+    "ok",
+    "status_code",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+    "message_type",
+    "payload_sha256",
+    "profile",
+}
+TRUST_SUMMARY_KEYS = {
+    "path",
+    "verified_at",
+    "verified_bundles",
+    "profiles",
+    SUMMARY_DIGEST_FIELD,
+}
+TRUST_PROFILE_KEYS = {
+    "profile_id",
+    "rail",
+    "environment",
+    "source",
+    "embedded_signature_policy",
+    "signature_public_key_pin_count",
+    "x509_trust_anchor_pin_count",
+    "x509_require_crl_revocation_check",
+    "x509_crl_count",
+    "x509_require_ocsp_revocation_check",
+    "x509_ocsp_response_count",
+}
+XSD_SUMMARY_KEYS = {
+    "verified_at",
+    "manifest",
+    "manifest_sha256",
+    "verified_schemas",
+    "verified_fixtures",
+    "schema_backed_fixtures",
+    "schema_validated_fixtures",
+    "profile_checked_versions",
+    "profile_schema_backed_versions",
+    "missing_schema_fixtures",
+    "schema_only_entries",
+    "missing_profile_schema_versions",
+    "schemas",
+    "fixtures",
+    "profile_catalog",
+    "strict",
+    SUMMARY_DIGEST_FIELD,
+}
+XSD_SCHEMA_KEYS = {
+    "path",
+    "message_def_id",
+    "target_namespace",
+    "payload_root",
+    "sha256",
+    "schema_only",
+    "schema_only_reason",
+    "source",
+}
+XSD_FIXTURE_KEYS = {
+    "path",
+    "message_def_id",
+    "payload_root",
+    "sha256",
+    "schema",
+    "schema_backed",
+    "schema_validated",
+    "missing_schema_reason",
+}
+XSD_GAP_ENTRY_KEYS = {"path", "message_def_id", "reason"}
+XSD_STRICT_KEYS = {
+    "require_schema_backed_fixtures",
+    "require_fixture_for_schema",
+    "require_profile_schema_backed_versions",
+    "validate_xml_schema",
+}
+XSD_PROFILE_CATALOG_KEYS = {
+    "path",
+    "sha256",
+    "catalog_json_sha256",
+    "profiles",
+    "checked_versions",
+    "schema_backed_versions",
+    "missing_schema_versions",
+    "skipped_family_versions",
+    "versions",
+}
+XSD_PROFILE_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "message_def_id",
+    "schema_backed",
+}
+XSD_PROFILE_MISSING_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "message_def_id",
+}
+XSD_PROFILE_SKIPPED_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "version",
 }
 
 
@@ -126,6 +280,8 @@ def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise ReadinessError(f"{label}.{key} must be a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label}.{key} must not contain control characters")
     return raw.strip()
 
 
@@ -214,6 +370,37 @@ def _require_sha256(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _validate_receipt_path(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    if not raw.endswith(RECEIPT_PATH_SUFFIX):
+        raise ReadinessError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
+    return raw
+
+
+def _validate_compact_summary_path(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    return raw
+
+
+def _validate_config_path(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
 def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     if MESSAGE_DEF_ID_RE.fullmatch(raw) is None:
@@ -233,6 +420,18 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must point to an .xsd file")
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ReadinessError(f"{label} must not contain empty, dot, or parent segments")
+    return raw
+
+
+def _validate_fixture_summary_path(raw: str, label: str) -> str:
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if Path(raw).is_absolute():
+        raise ReadinessError(f"{label} must be relative, got {raw}")
+    if not raw.endswith(".xml"):
+        raise ReadinessError(f"{label} must point to an .xml file")
     return raw
 
 
@@ -315,6 +514,34 @@ def _require_timestamp(value: dict[str, Any], key: str, label: str) -> tuple[str
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label}.{key} must not contain control characters")
     return raw, _parse_timestamp(raw, f"{label}.{key}")
+
+
+def _validate_https_source_url(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise ReadinessError(f"{label} is not a valid URL: {error}") from error
+    if parsed.scheme != "https":
+        raise ReadinessError(f"{label} must use HTTPS URL")
+    if not parsed.netloc or hostname is None or not hostname.strip():
+        raise ReadinessError(f"{label} must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ReadinessError(f"{label} must not contain credentials")
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ReadinessError(f"{label} must not contain params, query, or fragment")
+    hostname = hostname.strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        raise ReadinessError(f"{label} must not use localhost")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return raw
+    if not address.is_global:
+        raise ReadinessError(f"{label} must not use local, private, or reserved IP addresses")
+    return raw
 
 
 def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
@@ -406,6 +633,8 @@ def _verify_xsd_summary_entries(
         )
 
     schema_paths: list[str] = []
+    declared_schema_only_paths: list[str] = []
+    declared_schema_only_entries: list[tuple[str, str, str]] = []
     schema_ids: list[str] = []
     schema_digests: list[str] = []
     schema_source_refs: list[str] = []
@@ -413,13 +642,47 @@ def _verify_xsd_summary_entries(
     for offset, schema_raw in enumerate(schemas_raw):
         label = f"{path}.schemas[{offset}]"
         schema = _require_object(schema_raw, label)
-        schema_paths.append(_require_string(schema, "path", label))
+        _reject_unknown_keys(schema, XSD_SCHEMA_KEYS, label)
         message_def_id = _require_message_def_id(schema, "message_def_id", label)
+        schema_path = _validate_schema_source_path(
+            _require_string(schema, "path", label),
+            f"{label}.path",
+        )
+        schema_paths.append(schema_path)
+        if Path(schema_path).name != f"{message_def_id}.xsd":
+            _blocker(
+                blockers,
+                "xsd.schema_path_mismatch",
+                f"{label}.path filename does not match message_def_id",
+                path,
+            )
         schema_ids.append(message_def_id)
         _require_string(schema, "payload_root", label)
         _require_string(schema, "target_namespace", label)
         schema_sha256 = _require_sha256(schema, "sha256", label)
         schema_digests.append(schema_sha256)
+        schema_only = _require_bool(schema, "schema_only", label)
+        schema_only_reason = schema.get("schema_only_reason")
+        if schema_only:
+            declared_schema_only_paths.append(schema_path)
+            if not isinstance(schema_only_reason, str) or not schema_only_reason.strip():
+                _blocker(
+                    blockers,
+                    "xsd.schema_only_reason_absent",
+                    f"{label} is marked schema-only without a reviewed reason",
+                    path,
+                )
+            else:
+                declared_schema_only_entries.append(
+                    (schema_path, message_def_id, schema_only_reason.strip())
+                )
+        elif schema_only_reason is not None:
+            _blocker(
+                blockers,
+                "xsd.schema_only_reason_mismatch",
+                f"{label} is not schema-only but still records a schema-only reason",
+                path,
+            )
         source = _verify_schema_source_summary(
             schema.get("source"),
             f"{label}.source",
@@ -468,6 +731,7 @@ def _verify_xsd_summary_entries(
     fixture_paths: list[str] = []
     fixture_digests: list[str] = []
     backed_schema_paths: set[str] = set()
+    computed_missing_schema_entries: list[tuple[str, str, str]] = []
     computed_schema_backed = 0
     computed_schema_validated = 0
     computed_missing_schema = 0
@@ -475,8 +739,13 @@ def _verify_xsd_summary_entries(
     for offset, fixture_raw in enumerate(fixtures_raw):
         label = f"{path}.fixtures[{offset}]"
         fixture = _require_object(fixture_raw, label)
-        fixture_paths.append(_require_string(fixture, "path", label))
-        _require_message_def_id(fixture, "message_def_id", label)
+        _reject_unknown_keys(fixture, XSD_FIXTURE_KEYS, label)
+        fixture_path = _validate_fixture_summary_path(
+            _require_string(fixture, "path", label),
+            f"{label}.path",
+        )
+        fixture_paths.append(fixture_path)
+        fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
         _require_string(fixture, "payload_root", label)
         fixture_digests.append(_require_sha256(fixture, "sha256", label))
         schema_backed = _require_bool(fixture, "schema_backed", label)
@@ -526,6 +795,10 @@ def _verify_xsd_summary_entries(
                     f"{label} is not schema-backed but has no reviewed missing-schema reason",
                     path,
                 )
+            else:
+                computed_missing_schema_entries.append(
+                    (fixture_path, fixture_message_def_id, missing_reason.strip())
+                )
     _block_duplicate_strings(
         fixture_paths,
         label=f"{path}.fixtures.path",
@@ -570,7 +843,28 @@ def _verify_xsd_summary_entries(
             "XSD summary missing_schema_fixtures does not match fixtures[]",
             path,
         )
-    computed_schema_only = len(schema_path_set - backed_schema_paths)
+    actual_missing_schema_entries: list[tuple[str, str, str]] = []
+    for offset, raw_missing in enumerate(missing_schema_fixtures):
+        label = f"{path}.missing_schema_fixtures[{offset}]"
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_GAP_ENTRY_KEYS, label)
+        actual_missing_schema_entries.append(_xsd_gap_entry_key(missing, label))
+    if sorted(actual_missing_schema_entries) != sorted(computed_missing_schema_entries):
+        _blocker(
+            blockers,
+            "xsd.missing_schema_fixture_entries_mismatch",
+            "XSD summary missing_schema_fixtures does not match fixtures[] entries",
+            path,
+        )
+    computed_schema_only_paths = schema_path_set - backed_schema_paths
+    if set(declared_schema_only_paths) != computed_schema_only_paths:
+        _blocker(
+            blockers,
+            "xsd.schema_only_flag_mismatch",
+            "XSD summary schemas[].schema_only does not match schemas[]/fixtures[]",
+            path,
+        )
+    computed_schema_only = len(computed_schema_only_paths)
     if computed_schema_only != len(schema_only_entries):
         _blocker(
             blockers,
@@ -578,7 +872,28 @@ def _verify_xsd_summary_entries(
             "XSD summary schema_only_entries does not match schemas[]/fixtures[]",
             path,
         )
+    actual_schema_only_entries: list[tuple[str, str, str]] = []
+    for offset, raw_schema_only in enumerate(schema_only_entries):
+        label = f"{path}.schema_only_entries[{offset}]"
+        schema_only = _require_object(raw_schema_only, label)
+        _reject_unknown_keys(schema_only, XSD_GAP_ENTRY_KEYS, label)
+        actual_schema_only_entries.append(_xsd_gap_entry_key(schema_only, label))
+    if sorted(actual_schema_only_entries) != sorted(declared_schema_only_entries):
+        _blocker(
+            blockers,
+            "xsd.schema_only_entries_mismatch",
+            "XSD summary schema_only_entries does not match schemas[] entries",
+            path,
+        )
     summary["_validated_schema_sources"] = schema_sources
+
+
+def _xsd_gap_entry_key(entry: dict[str, Any], label: str) -> tuple[str, str, str]:
+    return (
+        _require_string(entry, "path", label),
+        _require_message_def_id(entry, "message_def_id", label),
+        _require_string(entry, "reason", label),
+    )
 
 
 def _profile_version_key(entry: dict[str, Any], label: str) -> tuple[str, str, str, str]:
@@ -614,6 +929,7 @@ def _verify_xsd_profile_catalog_entries(
         return None
 
     profile_catalog = _require_object(profile_catalog_raw, f"{path}.profile_catalog")
+    _reject_unknown_keys(profile_catalog, XSD_PROFILE_CATALOG_KEYS, f"{path}.profile_catalog")
     profile_catalog_path = _require_string(
         profile_catalog,
         "path",
@@ -666,6 +982,7 @@ def _verify_xsd_profile_catalog_entries(
     for offset, raw_skipped in enumerate(skipped_raw):
         label = f"{path}.profile_catalog.skipped_family_versions[{offset}]"
         skipped = _require_object(raw_skipped, label)
+        _reject_unknown_keys(skipped, XSD_PROFILE_SKIPPED_VERSION_KEYS, label)
         key = (
             _require_string(skipped, "profile_id", label),
             _require_string(skipped, "message_type", label),
@@ -708,6 +1025,7 @@ def _verify_xsd_profile_catalog_entries(
     for offset, raw_version in enumerate(versions_raw):
         label = f"{path}.profile_catalog.versions[{offset}]"
         version = _require_object(raw_version, label)
+        _reject_unknown_keys(version, XSD_PROFILE_VERSION_KEYS, label)
         key = _profile_version_key(version, label)
         if key in seen_versions:
             _blocker(
@@ -734,10 +1052,30 @@ def _verify_xsd_profile_catalog_entries(
             path,
         )
 
+    catalog_missing: list[tuple[str, str, str, str]] = []
+    catalog_missing_raw = _require_list(
+        profile_catalog.get("missing_schema_versions"),
+        f"{path}.profile_catalog.missing_schema_versions",
+    )
+    for offset, raw_missing in enumerate(catalog_missing_raw):
+        label = f"{path}.profile_catalog.missing_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_PROFILE_MISSING_VERSION_KEYS, label)
+        catalog_missing.append(_profile_version_key(missing, label))
+    if sorted(catalog_missing) != sorted(computed_missing):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_missing_schema_versions_mismatch",
+            "XSD summary profile_catalog.missing_schema_versions does not match profile catalog",
+            path,
+        )
+
     actual_missing: list[tuple[str, str, str, str]] = []
     for offset, raw_missing in enumerate(missing_profile_schema_versions):
         label = f"{path}.missing_profile_schema_versions[{offset}]"
-        actual_missing.append(_profile_version_key(_require_object(raw_missing, label), label))
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_PROFILE_MISSING_VERSION_KEYS, label)
+        actual_missing.append(_profile_version_key(missing, label))
     if sorted(actual_missing) != sorted(computed_missing):
         _blocker(
             blockers,
@@ -771,6 +1109,7 @@ def _verify_receipt_summary(
     kind_entry_mismatch_code: str,
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
+    _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
     verified_receipts = _require_positive_int(
         receipt_obj,
         "verified_receipts",
@@ -847,7 +1186,11 @@ def _verify_receipt_summary(
     for offset, receipt_raw in enumerate(receipts_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt = _require_object(receipt_raw, entry_label)
-        receipt_path = _require_string(receipt, "path", entry_label)
+        _reject_unknown_keys(receipt, RECEIPT_ENTRY_KEYS, entry_label)
+        receipt_path = _validate_receipt_path(
+            _require_string(receipt, "path", entry_label),
+            f"{entry_label}.path",
+        )
         if receipt_path in seen_receipt_paths:
             _blocker(
                 blockers,
@@ -915,6 +1258,7 @@ def verify_xsd_summary(
 
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
+    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, str(path))
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -966,6 +1310,7 @@ def verify_xsd_summary(
         f"{path}.missing_profile_schema_versions",
     )
     strict = _require_object(summary.get("strict"), f"{path}.strict")
+    _reject_unknown_keys(strict, XSD_STRICT_KEYS, f"{path}.strict")
     require_schema_backed = _require_bool(
         strict,
         "require_schema_backed_fixtures",
@@ -1127,6 +1472,7 @@ def _verify_policy(
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     policy = _require_object(summary.get("policy"), f"{path}.policy")
+    _reject_unknown_keys(policy, EVIDENCE_POLICY_KEYS, f"{path}.policy")
     provider = _require_string(policy, "provider", f"{path}.policy")
     environment = _require_string(policy, "environment", f"{path}.policy")
     if provider != args.provider:
@@ -1175,7 +1521,15 @@ def _verify_canary(
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    canary_path = _require_string(canary, "path", label)
+    _reject_unknown_keys(canary, COMPACT_CANARY_KEYS, label)
+    canary_path = _validate_compact_summary_path(
+        _require_string(canary, "path", label),
+        f"{label}.path",
+    )
+    config_path = _validate_config_path(
+        _require_string(canary, "config_path", label),
+        f"{label}.config_path",
+    )
     summary_sha256 = _require_sha256(canary, SUMMARY_DIGEST_FIELD, label)
     started_at_raw, started_at = _require_timestamp(canary, "started_at", label)
     finished_at_raw, finished_at = _require_timestamp(canary, "finished_at", label)
@@ -1217,8 +1571,16 @@ def _verify_canary(
             path,
         )
     stage_names_raw = _require_list(canary.get("stage_names"), f"{label}.stage_names")
-    if not all(isinstance(item, str) for item in stage_names_raw):
-        raise ReadinessError(f"{label}.stage_names must contain strings")
+    stage_names_clean: list[str] = []
+    for offset, item in enumerate(stage_names_raw):
+        if not isinstance(item, str) or not item.strip():
+            raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
+            raise ReadinessError(
+                f"{label}.stage_names[{offset}] must not contain control characters"
+            )
+        stage_names_clean.append(item.strip())
+    stage_names_raw = stage_names_clean
     stage_names = set(stage_names_raw)
     if len(stage_names_raw) != len(stage_names):
         raise ReadinessError(f"{label}.stage_names must not contain duplicates")
@@ -1235,6 +1597,7 @@ def _verify_canary(
     for offset, raw_window in enumerate(stage_windows_raw):
         window_label = f"{label}.stage_windows[{offset}]"
         window = _require_object(raw_window, window_label)
+        _reject_unknown_keys(window, COMPACT_STAGE_WINDOW_KEYS, window_label)
         stage_name = _require_string(window, "name", window_label)
         window_started_raw, window_started = _require_timestamp(
             window,
@@ -1294,6 +1657,7 @@ def _verify_canary(
     )
     return {
         "path": canary_path,
+        "config_path": config_path,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
         "provider": provider,
@@ -1316,6 +1680,7 @@ def _verify_trust_profile(
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
     profile_id = _require_string(profile, "profile_id", label)
     rail = _require_string(profile, "rail", label)
     environment = _require_string(profile, "environment", label)
@@ -1337,6 +1702,25 @@ def _verify_trust_profile(
         profile,
         "x509_ocsp_response_count",
         label,
+    )
+    source = _require_object(profile.get("source"), f"{label}.source")
+    _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
+    source_url = _validate_https_source_url(
+        _require_string(source, "url", f"{label}.source"),
+        f"{label}.source.url",
+    )
+    source_retrieved_at_raw, source_retrieved_at = _require_timestamp(
+        source,
+        "retrieved_at",
+        f"{label}.source",
+    )
+    _block_if_stale(
+        source_retrieved_at,
+        max_age_days=args.max_trust_source_age_days,
+        code="trust.source_stale",
+        label="trust source retrieved_at",
+        path=path,
+        blockers=blockers,
     )
     if signature_pin_count + x509_pin_count <= 0:
         _blocker(
@@ -1391,6 +1775,10 @@ def _verify_trust_profile(
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
+        "source": {
+            "url": source_url,
+            "retrieved_at": source_retrieved_at_raw,
+        },
         "embedded_signature_policy": policy,
         "signature_public_key_pin_count": signature_pin_count,
         "x509_trust_anchor_pin_count": x509_pin_count,
@@ -1447,6 +1835,7 @@ def verify_evidence_summary(
 
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
+    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, str(path))
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -1485,7 +1874,11 @@ def verify_evidence_summary(
     for offset, trust in enumerate(trust_summaries):
         label = f"{path}.trust_summaries[{offset}]"
         trust_obj = _require_object(trust, label)
-        trust_path = _require_string(trust_obj, "path", label)
+        _reject_unknown_keys(trust_obj, TRUST_SUMMARY_KEYS, label)
+        trust_path = _validate_compact_summary_path(
+            _require_string(trust_obj, "path", label),
+            f"{label}.path",
+        )
         verified_at_raw, verified_at_dt = _require_timestamp(trust_obj, "verified_at", label)
         _block_if_stale(
             verified_at_dt,

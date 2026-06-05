@@ -1151,7 +1151,7 @@ def _is_safe_source_reference_label(value: str) -> bool:
         bool(value)
         and value == value.strip()
         and len(value) <= _SOURCE_REFERENCE_LABEL_MAX_LENGTH
-        and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in value)
+        and all(0x20 <= ord(char) <= 0x7E for char in value)
     )
 
 
@@ -1375,7 +1375,7 @@ def _is_private_or_local_source_reference_url(value: str) -> bool:
 
 def _is_clean_catalog_string(value: str) -> bool:
     return value == value.strip() and all(
-        ord(char) >= 0x20 and ord(char) != 0x7F
+        not unicodedata.category(char).startswith("C")
         for char in value
     )
 

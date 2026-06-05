@@ -385,6 +385,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(summary["policy"]["max_canary_age_days"], 36500)
             self.assertEqual(summary["policy"]["max_trust_age_days"], 36500)
             self.assertEqual(summary["policy"]["max_trust_source_age_days"], 36500)
+            self.assertEqual(summary["canary_summaries"][0]["config_path"], "/ops/iso/canary.json")
             self.assertEqual(summary["canary_summaries"][0]["started_at"], "2026-06-04T00:00:00+00:00")
             self.assertEqual(summary["canary_summaries"][0]["finished_at"], "2026-06-04T00:00:01+00:00")
             self.assertEqual(summary["canary_summaries"][0]["stage_names"], ["rail", "notary", "verify"])
@@ -410,6 +411,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             self.assertEqual(summary["trust_summaries"][0]["verified_bundles"], 1)
             trust_profile = summary["trust_summaries"][0]["profiles"][0]
+            self.assertEqual(
+                trust_profile["source"],
+                {
+                    "url": "https://pki.example.invalid/swift-cbpr-plus",
+                    "retrieved_at": "2026-06-04T00:00:00Z",
+                },
+            )
             self.assertTrue(trust_profile["x509_require_crl_revocation_check"])
             self.assertEqual(trust_profile["x509_crl_count"], 1)
             self.assertTrue(trust_profile["x509_require_ocsp_revocation_check"])
@@ -418,6 +426,32 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, EVIDENCE.sha256_hex(EVIDENCE._canonical_json_bytes(body)))
+
+    def test_canary_config_path_is_canonical(self):
+        cases = (
+            ("/ops/iso/canary\n.json", "config_path must not contain control characters"),
+            ("/ops/iso/../canary.json", "config_path must not contain dot or parent segments"),
+            (r"..\canary.json", "config_path must not contain dot or parent segments"),
+            ("/ops/iso/canary.txt", "config_path must point to a .json file"),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            for offset, (config_path, message) in enumerate(cases):
+                with self.subTest(config_path=config_path):
+                    body = valid_canary_summary()
+                    body["config_path"] = config_path
+                    canary_path = write_json(
+                        root / f"bad-config-{offset}.summary.json",
+                        digest_summary(body),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_canary_and_trust_summaries_are_required(self):
         rc, _stdout, stderr = run_evidence([])
@@ -1063,6 +1097,188 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_canary_child_commands_reject_control_characters(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            executed = valid_canary_summary()
+            executed["stages"][0]["command"][3] = "/ops/iso/inbox\nextra"
+            executed.pop("summary_sha256")
+            planned = plan_only_canary_summary()
+            planned["planned_stages"][0]["command"][3] = "/ops/iso/inbox\nextra"
+            planned.pop("summary_sha256")
+            cases = (
+                (
+                    digest_summary(executed),
+                    [],
+                    "stages[0].command[3] must not contain control characters",
+                ),
+                (
+                    digest_summary(planned),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].command[3] must not contain control characters",
+                ),
+            )
+            for body, extra_args, message in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_canary_receipt_dirs_reject_control_and_traversal_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            executed_control = valid_canary_summary()
+            executed_control["stages"][0]["receipt_dir"] = "/ops/iso/rail\nreceipts"
+            executed_control.pop("summary_sha256")
+            executed_parent = valid_canary_summary()
+            executed_parent["stages"][1]["receipt_dir"] = "/ops/iso/../notary-receipts"
+            executed_parent.pop("summary_sha256")
+            planned_control = plan_only_canary_summary()
+            planned_control["planned_stages"][0]["receipt_dir"] = "/ops/iso/rail\nreceipts"
+            planned_control.pop("summary_sha256")
+            planned_parent = plan_only_canary_summary()
+            planned_parent["planned_stages"][1]["receipt_dir"] = r"..\notary-receipts"
+            planned_parent.pop("summary_sha256")
+            cases = (
+                (
+                    digest_summary(executed_control),
+                    [],
+                    "stages[0].receipt_dir must not contain control characters",
+                ),
+                (
+                    digest_summary(executed_parent),
+                    [],
+                    "stages[1].receipt_dir must not contain dot or parent segments",
+                ),
+                (
+                    digest_summary(planned_control),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].receipt_dir must not contain control characters",
+                ),
+                (
+                    digest_summary(planned_parent),
+                    ["--allow-plan-only"],
+                    "planned_stages[1].receipt_dir must not contain dot or parent segments",
+                ),
+            )
+            for body, extra_args, message in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_canary_receipt_dirs_must_match_child_command_arguments(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            executed_mismatch = valid_canary_summary()
+            executed_mismatch["stages"][0]["receipt_dir"] = "/ops/iso/other-receipts"
+            executed_mismatch.pop("summary_sha256")
+            executed_missing = valid_canary_summary()
+            del executed_missing["stages"][0]["command"][6:8]
+            executed_missing.pop("summary_sha256")
+            executed_command_parent = valid_canary_summary()
+            executed_command_parent["stages"][0]["command"][7] = "/ops/iso/../rail-receipts"
+            executed_command_parent.pop("summary_sha256")
+            planned_mismatch = plan_only_canary_summary()
+            planned_mismatch["planned_stages"][1]["receipt_dir"] = "/ops/iso/other-receipts"
+            planned_mismatch.pop("summary_sha256")
+            planned_equals_mismatch = plan_only_canary_summary()
+            command = planned_equals_mismatch["planned_stages"][0]["command"]
+            del command[6:8]
+            command.insert(6, "--receipt-dir=/ops/iso/other-receipts")
+            planned_equals_mismatch.pop("summary_sha256")
+            cases = (
+                (
+                    digest_summary(executed_mismatch),
+                    [],
+                    "stages[0].receipt_dir does not match command --receipt-dir",
+                ),
+                (
+                    digest_summary(executed_missing),
+                    [],
+                    "stages[0].command must contain exactly one --receipt-dir",
+                ),
+                (
+                    digest_summary(executed_command_parent),
+                    [],
+                    "stages[0].command[7] must not contain dot or parent segments",
+                ),
+                (
+                    digest_summary(planned_mismatch),
+                    ["--allow-plan-only"],
+                    "planned_stages[1].receipt_dir does not match command --receipt-dir",
+                ),
+                (
+                    digest_summary(planned_equals_mismatch),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].receipt_dir does not match command --receipt-dir",
+                ),
+            )
+            for body, extra_args, message in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_verify_stage_command_must_include_stage_receipt_dirs(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            missing_rail = valid_canary_summary()
+            del missing_rail["stages"][2]["command"][2:4]
+            missing_rail.pop("summary_sha256")
+            missing_notary = valid_canary_summary()
+            del missing_notary["stages"][2]["command"][4:6]
+            missing_notary.pop("summary_sha256")
+            traversal = valid_canary_summary()
+            traversal["stages"][2]["command"][3] = "/ops/iso/../rail-receipts"
+            traversal.pop("summary_sha256")
+            cases = (
+                (
+                    digest_summary(missing_rail),
+                    "verify command does not include rail receipt_dir",
+                ),
+                (
+                    digest_summary(missing_notary),
+                    "verify command does not include notary receipt_dir",
+                ),
+                (
+                    digest_summary(traversal),
+                    "stages[2].command[3] must not contain dot or parent segments",
+                ),
+            )
+            for body, message in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_plan_only_stage_dry_run_flag_is_required(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1210,6 +1426,154 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_canary_and_trust_identity_strings_reject_control_characters(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            canary_cases = (
+                (
+                    lambda body: body.__setitem__("provider", "local\nbank"),
+                    "provider must not contain control characters",
+                ),
+                (
+                    lambda body: body["stages"][0].__setitem__("name", "rail\nx"),
+                    "name must not contain control characters",
+                ),
+            )
+            for offset, (mutate, message) in enumerate(canary_cases):
+                with self.subTest(kind="canary", offset=offset):
+                    body = valid_canary_summary()
+                    mutate(body)
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+            canary_path = write_canary(root, valid_canary_summary())
+            trust_cases = (
+                (
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "profile_id",
+                        "swift\ncbpr",
+                    ),
+                    "profile_id must not contain control characters",
+                ),
+                (
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "embedded_signature_policy",
+                        "require-verified\n",
+                    ),
+                    "embedded_signature_policy must not contain control characters",
+                ),
+            )
+            for offset, (mutate, message) in enumerate(trust_cases):
+                with self.subTest(kind="trust", offset=offset):
+                    mutated_trust_path = write_trust_summary(root / f"trust-{offset}")
+                    rewrite_trust_summary(mutated_trust_path, mutate)
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(mutated_trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_unknown_canary_trust_and_receipt_summary_keys_are_rejected(self):
+        def get_nested(value, parts):
+            target = value
+            for part in parts:
+                target = target[part]
+            return target
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            canary_cases = (
+                ("summary", ()),
+                ("policy", ("policy",)),
+                ("stage", ("stages", 0)),
+            )
+            for name, target_path in canary_cases:
+                with self.subTest(kind="canary", name=name):
+                    body = valid_canary_summary()
+                    get_nested(body, target_path)["unexpected"] = "value"
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("contains unknown keys", stderr)
+
+            receipt_cases = (
+                ("summary", ()),
+                ("entry", ("receipts", 0)),
+            )
+            for name, target_path in receipt_cases:
+                with self.subTest(kind="receipt", name=name):
+                    receipt_summary = json.loads(receipt_stdout())
+                    get_nested(receipt_summary, target_path)["unexpected"] = "value"
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("contains unknown keys", stderr)
+
+            canary_path = write_canary(root, valid_canary_summary())
+            trust_cases = (
+                ("summary", ()),
+                ("bundle", ("bundles", 0)),
+                ("source", ("bundles", 0, "source")),
+                ("material", ("bundles", 0, "material")),
+                ("profile-overrides", ("bundles", 0, "profile_overrides")),
+            )
+            for name, target_path in trust_cases:
+                with self.subTest(kind="trust", name=name):
+                    mutated_trust_path = write_trust_summary(root / f"unknown-{name}")
+                    rewrite_trust_summary(
+                        mutated_trust_path,
+                        lambda summary, parts=target_path: get_nested(
+                            summary,
+                            parts,
+                        ).__setitem__("unexpected", "value"),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(mutated_trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("contains unknown keys", stderr)
 
     def test_canary_stage_timestamps_are_required_valid_and_inside_canary_window(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1371,6 +1735,50 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             for receipt_summary, message in cases:
                 with self.subTest(message=message):
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_receipt_verifier_stdout_receipt_paths_are_canonical(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = (
+                (
+                    "/ops/iso/receipts/rail\n0.receipt.json",
+                    "must not contain control characters",
+                ),
+                (
+                    "/ops/iso/receipts/../rail.receipt.json",
+                    "must not contain dot or parent segments",
+                ),
+                (
+                    r"..\rail.receipt.json",
+                    "must not contain dot or parent segments",
+                ),
+                (
+                    "/ops/iso/receipts/rail.json",
+                    "must point to a .receipt.json file",
+                ),
+            )
+            for receipt_path, message in cases:
+                with self.subTest(receipt_path=receipt_path):
+                    receipt_summary = json.loads(receipt_stdout())
+                    receipt_summary["receipts"][0]["path"] = receipt_path
                     body = valid_canary_summary()
                     body["stages"][2]["stdout_preview"] = (
                         json.dumps(

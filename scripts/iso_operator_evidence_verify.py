@@ -38,6 +38,7 @@ EVIDENCE_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
 REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
+RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -82,6 +83,108 @@ EXPECTED_STAGE_FLAGS = {
     },
 }
 COMMAND_URL_FLAGS = {"--endpoint", "--torii-base-url"}
+CANARY_SUMMARY_KEYS = {
+    "provider",
+    "environment",
+    "config_path",
+    "started_at",
+    "finished_at",
+    "ok",
+    "plan_only",
+    "policy",
+    "planned_stages",
+    "stages",
+    SUMMARY_DIGEST_FIELD,
+}
+CANARY_POLICY_KEYS = {"require_explicit_policy"}
+CANARY_STAGE_KEYS = {
+    "name",
+    "started_at",
+    "finished_at",
+    "returncode",
+    "command",
+    "stdout_preview",
+    "stderr_preview",
+    "stdout_truncated",
+    "stderr_truncated",
+    "receipt_dir",
+    "skipped",
+    "reason",
+}
+CANARY_PLANNED_STAGE_KEYS = {"name", "command", "receipt_dir", "dry_run"}
+RECEIPT_SUMMARY_KEYS = {
+    "verified_receipts",
+    "receipt_kind",
+    "allow_failed",
+    "allow_insecure_http",
+    "allow_legacy_colr007",
+    "require_source_files",
+    "receipts",
+    SUMMARY_DIGEST_FIELD,
+}
+RECEIPT_ENTRY_KEYS = {
+    "path",
+    "receipt_kind",
+    "receipt_sha256",
+    "ok",
+    "status_code",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+    "message_type",
+    "payload_sha256",
+    "profile",
+}
+TRUST_SUMMARY_KEYS = {
+    "verified_at",
+    "verified_bundles",
+    "allow_record_only",
+    "allow_insecure_source_url",
+    "allow_synthetic_der",
+    "profile_json_emitted",
+    "profile_json_emittable",
+    "bundles",
+    SUMMARY_DIGEST_FIELD,
+}
+TRUST_BUNDLE_KEYS = {
+    "path",
+    "profile_id",
+    "rail",
+    "environment",
+    "source",
+    "embedded_signature_policy",
+    "material",
+    "x509_trust_anchors",
+    "revoked_certificates",
+    "x509_crls",
+    "x509_ocsp_responses",
+    "profile_overrides",
+    "bundle_sha256",
+}
+TRUST_SOURCE_KEYS = {"authority", "version", "url", "retrieved_at"}
+TRUST_MATERIAL_KEYS = {
+    "signature_public_key_pin_count",
+    "x509_trust_anchor_pin_count",
+    "revoked_certificate_pin_count",
+    "x509_crl_count",
+    "x509_ocsp_response_count",
+    "x509_required_certificate_policy_oid_count",
+}
+TRUST_PROFILE_OVERRIDE_KEYS = {
+    "id",
+    "rail",
+    "embedded_signature_policy",
+    "signature_public_key_sha256_pins",
+    "trusted_public_key_sha256",
+    "x509_trust_anchor_sha256_pins",
+    "trusted_certificate_sha256",
+    "revoked_certificate_sha256",
+    "x509_required_certificate_policy_oids",
+    "x509_require_crl_revocation_check",
+    "x509_crl_der_base64",
+    "x509_require_ocsp_revocation_check",
+    "x509_ocsp_response_der_base64",
+}
 
 SECRET_KEY_FRAGMENTS = (
     "authorization",
@@ -148,6 +251,12 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise EvidenceError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise EvidenceError(f"{label} must be a JSON array")
@@ -158,6 +267,8 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise EvidenceError(f"{label}.{key} must be a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label}.{key} must not contain control characters")
     return raw.strip()
 
 
@@ -238,6 +349,39 @@ def _is_lower_sha256(value: Any) -> bool:
     )
 
 
+def _validate_receipt_path(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise EvidenceError(f"{label} must not contain dot or parent segments")
+    if not raw.endswith(RECEIPT_PATH_SUFFIX):
+        raise EvidenceError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
+    return raw
+
+
+def _validate_config_path(raw: str, label: str) -> str:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise EvidenceError(f"{label} must not contain dot or parent segments")
+    if not raw.endswith(".json"):
+        raise EvidenceError(f"{label} must point to a .json file")
+    return raw
+
+
+def _validate_artifact_path(raw: str, label: str) -> str:
+    if not raw.strip():
+        raise EvidenceError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label} must not contain control characters")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise EvidenceError(f"{label} must not contain dot or parent segments")
+    return raw.strip()
+
+
 def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
     expected = summary.get(SUMMARY_DIGEST_FIELD)
     if not _is_lower_sha256(expected):
@@ -258,6 +402,7 @@ def _verify_receipt_verifier_summary(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
+    _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
     _check_no_secret_material(receipt_obj, label)
     verified_receipts = receipt_obj.get("verified_receipts")
     if (
@@ -308,7 +453,11 @@ def _verify_receipt_verifier_summary(
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt_entry = _require_object(receipt_entry_raw, entry_label)
-        receipt_path = _required_string(receipt_entry, "path", entry_label)
+        _reject_unknown_keys(receipt_entry, RECEIPT_ENTRY_KEYS, entry_label)
+        receipt_path = _validate_receipt_path(
+            _required_string(receipt_entry, "path", entry_label),
+            f"{entry_label}.path",
+        )
         if receipt_path in seen_receipt_paths:
             raise EvidenceError(
                 f"{entry_label}.path duplicates "
@@ -373,6 +522,23 @@ def _command_has_script(command: list[str], script_name: str) -> bool:
 
 def _command_has_flag(command: list[str], flag: str) -> bool:
     return any(item == flag or item.startswith(flag + "=") for item in command)
+
+
+def _command_flag_values(
+    command: list[str],
+    flag: str,
+    label: str,
+) -> list[tuple[int, str]]:
+    values: list[tuple[int, str]] = []
+    prefix = flag + "="
+    for offset, item in enumerate(command):
+        if item == flag:
+            if offset + 1 >= len(command):
+                raise EvidenceError(f"{label}.command has {flag} without a value")
+            values.append((offset + 1, command[offset + 1]))
+        elif item.startswith(prefix):
+            values.append((offset, item[len(prefix):]))
+    return values
 
 
 def _command_has_http_url(command: list[str]) -> bool:
@@ -440,6 +606,11 @@ def _check_command_policy(
         raise EvidenceError(f"{label}.command must not be empty")
     if not all(isinstance(item, str) and item for item in command):
         raise EvidenceError(f"{label}.command must contain non-empty strings")
+    for offset, item in enumerate(command):
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
+            raise EvidenceError(
+                f"{label}.command[{offset}] must not contain control characters"
+            )
     _check_redacted_bearer_files(command, label)
     if _command_has_flag(command, "--dry-run") and not allow_dry_run:
         raise EvidenceError(f"{label} used --dry-run")
@@ -476,6 +647,20 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
             raise EvidenceError(f"{label}.command[{offset}] uses unsupported flag {flag!r}")
 
 
+def _check_receipt_dir_binding(command: list[str], receipt_dir: str, label: str) -> None:
+    recorded = _validate_artifact_path(receipt_dir, f"{label}.receipt_dir")
+    values = _command_flag_values(command, "--receipt-dir", label)
+    if len(values) != 1:
+        raise EvidenceError(f"{label}.command must contain exactly one --receipt-dir")
+    value_offset, command_value = values[0]
+    command_receipt_dir = _validate_artifact_path(
+        command_value,
+        f"{label}.command[{value_offset}]",
+    )
+    if command_receipt_dir != recorded:
+        raise EvidenceError(f"{label}.receipt_dir does not match command --receipt-dir")
+
+
 def _verify_receipt_stdout(
     stage: dict[str, Any],
     label: str,
@@ -505,6 +690,7 @@ def _stage_summary(
     canary_started_at: dt.datetime,
     canary_finished_at: dt.datetime,
 ) -> dict[str, Any]:
+    _reject_unknown_keys(stage, CANARY_STAGE_KEYS, label)
     name = _required_string(stage, "name", label)
     started_at_raw, started_at = _required_timestamp(stage, "started_at", label)
     finished_at_raw, finished_at = _required_timestamp(stage, "finished_at", label)
@@ -538,11 +724,17 @@ def _stage_summary(
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
+        _check_receipt_dir_binding(command, receipt_dir, label)
     if name == "verify":
+        receipt_dirs = [
+            _validate_artifact_path(value, f"{label}.command[{offset}]")
+            for offset, value in _command_flag_values(command, "--receipt-dir", label)
+        ]
         result = {
             "name": name,
             "_started_at": started_at,
             "_finished_at": finished_at,
+            "_receipt_dirs": receipt_dirs,
             "started_at": started_at_raw,
             "finished_at": finished_at_raw,
         }
@@ -557,8 +749,12 @@ def _stage_summary(
         "name": name,
         "_started_at": started_at,
         "_finished_at": finished_at,
+        "_dry_run": _command_has_flag(command, "--dry-run"),
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
+        "receipt_dir": _validate_artifact_path(receipt_dir, f"{label}.receipt_dir")
+        if name in {"rail", "notary"}
+        else None,
     }
 
 
@@ -567,6 +763,7 @@ def _planned_stage_summary(
     label: str,
     args: argparse.Namespace,
 ) -> str:
+    _reject_unknown_keys(stage, CANARY_PLANNED_STAGE_KEYS, label)
     name = _required_string(stage, "name", label)
     dry_run = _required_bool(stage, "dry_run", label)
     if dry_run and not args.allow_dry_run:
@@ -585,6 +782,11 @@ def _planned_stage_summary(
     )
     _check_stage_script(name, command, label)
     _check_stage_command_flags(name, command, label)
+    if name in {"rail", "notary"}:
+        receipt_dir = stage.get("receipt_dir")
+        if not isinstance(receipt_dir, str) or not receipt_dir.strip():
+            raise EvidenceError(f"{label}.receipt_dir must be recorded")
+        _check_receipt_dir_binding(command, receipt_dir, label)
     return name
 
 
@@ -593,10 +795,15 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
+    _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, str(path))
     _check_no_secret_material(summary)
 
     provider = _required_string(summary, "provider", str(path))
     environment = _required_string(summary, "environment", str(path))
+    config_path = _validate_config_path(
+        _required_string(summary, "config_path", str(path)),
+        f"{path}.config_path",
+    )
     started_at_raw, started_at = _required_timestamp(summary, "started_at", str(path))
     finished_at_raw, finished_at = _required_timestamp(summary, "finished_at", str(path))
     if finished_at < started_at:
@@ -620,6 +827,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
     if plan_only and not args.allow_plan_only:
         raise EvidenceError(f"{path} is plan-only evidence")
     policy = _require_object(summary.get("policy"), f"{path}.policy")
+    _reject_unknown_keys(policy, CANARY_POLICY_KEYS, f"{path}.policy")
     require_explicit_policy = _required_bool(
         policy,
         "require_explicit_policy",
@@ -674,6 +882,22 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             raise EvidenceError(
                 f"{path} is missing required canary stages: {', '.join(missing)}"
             )
+    verify_receipt_dirs = next(
+        (
+            stage.get("_receipt_dirs", [])
+            for stage in stage_results
+            if stage["name"] == "verify"
+        ),
+        [],
+    )
+    for stage in stage_results:
+        if stage["name"] not in {"rail", "notary"} or stage.get("_dry_run"):
+            continue
+        receipt_dir = stage.get("receipt_dir")
+        if receipt_dir is not None and receipt_dir not in verify_receipt_dirs:
+            raise EvidenceError(
+                f"{path}.stages verify command does not include {stage['name']} receipt_dir"
+            )
     receipt_summary = next(
         (
             stage["receipt_summary"]
@@ -685,6 +909,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     return {
         "path": str(path),
+        "config_path": config_path,
         "provider": provider,
         "environment": environment,
         "started_at": started_at_raw,
@@ -787,6 +1012,7 @@ def _check_trust_bundle(
     label: str,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    _reject_unknown_keys(bundle, TRUST_BUNDLE_KEYS, label)
     profile_id = _required_string(bundle, "profile_id", label)
     rail = _required_string(bundle, "rail", label)
     environment = _required_string(bundle, "environment", label)
@@ -798,30 +1024,39 @@ def _check_trust_bundle(
     if policy != REQUIRE_VERIFIED and not args.allow_record_only_trust:
         raise EvidenceError(f"{label}.embedded_signature_policy is {policy!r}")
 
+    source_summary: dict[str, str] | None = None
     source = bundle.get("source")
     if source is None:
         if not args.allow_missing_trust_source:
             raise EvidenceError(f"{label}.source is required for production evidence")
     else:
         source_obj = _require_object(source, f"{label}.source")
+        _reject_unknown_keys(source_obj, TRUST_SOURCE_KEYS, f"{label}.source")
         url = source_obj.get("url")
         if not isinstance(url, str) or not url.strip():
             raise EvidenceError(f"{label}.source.url must be recorded")
+        url = url.strip()
         _check_https_url(
-            url.strip(),
+            url,
             f"{label}.source.url",
             allow_insecure_http=args.allow_insecure_http,
         )
         retrieved_at = source_obj.get("retrieved_at")
         if not isinstance(retrieved_at, str):
             raise EvidenceError(f"{label}.source.retrieved_at must be recorded")
+        retrieved_at = retrieved_at.strip()
         _check_retrieved_at(
             retrieved_at,
             f"{label}.source.retrieved_at",
             args,
         )
+        source_summary = {
+            "url": url,
+            "retrieved_at": retrieved_at,
+        }
 
     material = _require_object(bundle.get("material"), f"{label}.material")
+    _reject_unknown_keys(material, TRUST_MATERIAL_KEYS, f"{label}.material")
     signature_pin_count = _required_nonnegative_int(
         material,
         "signature_public_key_pin_count",
@@ -837,6 +1072,11 @@ def _check_trust_bundle(
 
     profile_overrides = _require_object(
         bundle.get("profile_overrides"),
+        f"{label}.profile_overrides",
+    )
+    _reject_unknown_keys(
+        profile_overrides,
+        TRUST_PROFILE_OVERRIDE_KEYS,
         f"{label}.profile_overrides",
     )
     crl_required = _required_bool(
@@ -868,6 +1108,7 @@ def _check_trust_bundle(
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
+        "source": source_summary,
         "embedded_signature_policy": policy,
         "signature_public_key_pin_count": signature_pin_count,
         "x509_trust_anchor_pin_count": x509_anchor_pin_count,
@@ -883,6 +1124,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
 
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
+    _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, str(path))
     _check_no_secret_material(summary)
     verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", str(path))
     _reject_stale_timestamp(

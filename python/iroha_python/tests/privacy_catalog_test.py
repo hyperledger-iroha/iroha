@@ -674,6 +674,16 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         ),
         (
             "sourceReferences",
+            [{"label": "paper\u200b", "url": "https://zips.z.cash/zip-0224"}],
+            "clean bounded label",
+        ),
+        (
+            "sourceReferences",
+            [{"label": "paper\u007f", "url": "https://zips.z.cash/zip-0224"}],
+            "clean bounded label",
+        ),
+        (
+            "sourceReferences",
             [{"label": "External audit signoff", "url": "https://zips.z.cash/zip-0224"}],
             "label must describe protocol source material, not audit/signoff evidence",
         ),
@@ -685,7 +695,7 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         (
             "sourceReferences",
             [{"label": "Protocol security rev\u0456ew", "url": "https://zips.z.cash/zip-0224"}],
-            "label must describe protocol source material, not audit/signoff evidence",
+            "clean bounded label",
         ),
         (
             "sourceReferences",
@@ -695,7 +705,7 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         (
             "sourceReferences",
             [{"label": "\u0391ssurance.report", "url": "https://zips.z.cash/zip-0224"}],
-            "label must describe protocol source material, not audit/signoff evidence",
+            "clean bounded label",
         ),
         (
             "sourceReferences",
@@ -861,6 +871,11 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         ),
         (
             "securityNotes",
+            ["line\u200bbreak"],
+            "must be clean and already trimmed",
+        ),
+        (
+            "securityNotes",
             ["External audit completed and production sign-off received."],
             (
                 "describe missing audit/review gates, not completed audit "
@@ -949,6 +964,11 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         (
             "chainRequirements",
             ["registry\x7f"],
+            "must be clean and already trimmed",
+        ),
+        (
+            "chainRequirements",
+            ["registry\u200b"],
             "must be clean and already trimmed",
         ),
         (
@@ -1125,6 +1145,10 @@ def test_privacy_catalog_loader_rejects_unportable_backend_families(
         ),
         (
             [{"label": "paper", "url": "https://zips.z.cash:443/zip-0224"}],
+            "url must be canonical",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash:8443/zip-0224"}],
             "url must be canonical",
         ),
         (
@@ -3390,6 +3414,11 @@ def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
         (
             "summary",
             "Descriptor\x7fsummary",
+            "field 'summary' must be clean and already trimmed",
+        ),
+        (
+            "summary",
+            "Descriptor\u200bsummary",
             "field 'summary' must be clean and already trimmed",
         ),
         ("category", None, "field 'category' must be a non-empty string"),

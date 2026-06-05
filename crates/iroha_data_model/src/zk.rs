@@ -26,6 +26,9 @@ pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
 /// Default maximum proof payload size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
 
+/// Default maximum circuit identifier size accepted by generic `OpenVerify` admission.
+pub const OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES: usize = 256;
+
 /// Default maximum public-input metadata size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES: usize = 1024 * 1024;
 
@@ -251,6 +254,8 @@ impl norito::json::JsonDeserialize for BackendTag {
 /// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenVerifyEnvelopeBounds {
+    /// Maximum circuit identifier bytes.
+    pub max_circuit_id_bytes: usize,
     /// Maximum public-input metadata bytes.
     pub max_public_input_bytes: usize,
     /// Maximum backend proof bytes.
@@ -269,6 +274,7 @@ pub struct OpenVerifyEnvelopeBounds {
 impl Default for OpenVerifyEnvelopeBounds {
     fn default() -> Self {
         Self {
+            max_circuit_id_bytes: OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES,
             max_public_input_bytes: OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES,
             max_proof_bytes: OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES,
             max_aux_bytes: OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES,
@@ -292,6 +298,15 @@ pub enum OpenVerifyEnvelopeValidationError {
     },
     /// The circuit identifier is empty or whitespace-only.
     EmptyCircuitId,
+    /// The circuit identifier contains unsupported characters or delimiters.
+    InvalidCircuitId,
+    /// The circuit identifier exceeds configured bounds.
+    CircuitIdTooLarge {
+        /// Observed circuit identifier byte length.
+        len: usize,
+        /// Configured maximum circuit identifier byte length.
+        max: usize,
+    },
     /// The verifier-key hash is all zeros.
     ZeroVerifierKeyHash,
     /// The public-input metadata is empty.
@@ -333,6 +348,14 @@ impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
                 backend.canonical_label()
             ),
             Self::EmptyCircuitId => write!(f, "OpenVerifyEnvelope circuit id is empty"),
+            Self::InvalidCircuitId => write!(
+                f,
+                "OpenVerifyEnvelope circuit id must be a portable canonical identifier"
+            ),
+            Self::CircuitIdTooLarge { len, max } => write!(
+                f,
+                "OpenVerifyEnvelope circuit id length {len} exceeds maximum {max}"
+            ),
             Self::ZeroVerifierKeyHash => {
                 write!(f, "OpenVerifyEnvelope verifier-key hash is zero")
             }
@@ -455,6 +478,15 @@ impl OpenVerifyEnvelope {
         if self.circuit_id.trim().is_empty() {
             return Err(OpenVerifyEnvelopeValidationError::EmptyCircuitId);
         }
+        if self.circuit_id.len() > bounds.max_circuit_id_bytes {
+            return Err(OpenVerifyEnvelopeValidationError::CircuitIdTooLarge {
+                len: self.circuit_id.len(),
+                max: bounds.max_circuit_id_bytes,
+            });
+        }
+        if !open_verify_circuit_id_is_portable(&self.circuit_id) {
+            return Err(OpenVerifyEnvelopeValidationError::InvalidCircuitId);
+        }
         if bounds.require_nonzero_vk_hash && self.vk_hash.iter().all(|byte| *byte == 0) {
             return Err(OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash);
         }
@@ -487,6 +519,34 @@ impl OpenVerifyEnvelope {
         }
         Ok(())
     }
+}
+
+/// Returns `true` when a circuit identifier uses the portable `OpenVerify` grammar.
+#[must_use]
+pub fn open_verify_circuit_id_is_portable(circuit_id: &str) -> bool {
+    let bytes = circuit_id.as_bytes();
+    let Some(first) = bytes.first() else {
+        return false;
+    };
+    let Some(last) = bytes.last() else {
+        return false;
+    };
+    if !(first.is_ascii_lowercase() || first.is_ascii_digit())
+        || !(last.is_ascii_lowercase() || last.is_ascii_digit())
+    {
+        return false;
+    }
+    if ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
+        .iter()
+        .any(|separator| circuit_id.contains(separator))
+    {
+        return false;
+    }
+    bytes.iter().all(|byte| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || matches!(*byte, b'-' | b'_' | b'/' | b':' | b'.')
+    })
 }
 
 // Note: Norito serialization is derived via `Encode`/`Decode` (packed structs compatible)
@@ -987,6 +1047,75 @@ mod tests {
         valid_open_verify_admission_envelope()
             .validate_for_admission()
             .expect("valid envelope");
+    }
+
+    #[test]
+    fn open_verify_envelope_admission_validation_accepts_portable_circuit_ids() {
+        for circuit_id in [
+            "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            "halo2/ipa::transfer_v1",
+            "halo2/pasta/ivm-execution-v1",
+            "stark/fri/sha256_goldilocks.v1",
+        ] {
+            let mut envelope = valid_open_verify_admission_envelope();
+            envelope.circuit_id = circuit_id.to_owned();
+
+            envelope
+                .validate_for_admission()
+                .unwrap_or_else(|err| panic!("{circuit_id} should be accepted: {err}"));
+        }
+    }
+
+    #[test]
+    fn open_verify_envelope_admission_validation_rejects_malformed_circuit_ids() {
+        use OpenVerifyEnvelopeValidationError::{CircuitIdTooLarge, InvalidCircuitId};
+
+        for (name, circuit_id) in [
+            ("uppercase", "Stark/fri/sha256-goldilocks"),
+            ("control", "stark/fri/sha256-goldilocks\nforged"),
+            ("zero-width", "stark/fri/sha256-goldilocks\u{200B}"),
+            ("path-traversal", "stark/fri/../zk_ace_pq_authorization_v0"),
+            ("leading-delimiter", "/stark/fri/sha256-goldilocks"),
+            ("trailing-delimiter", "stark/fri/sha256-goldilocks/"),
+            ("repeated-slash", "stark//fri/sha256-goldilocks"),
+            ("dot-segment", "stark/fri/./zk_ace_pq_authorization_v0"),
+            ("hidden-segment", "stark/fri/.zk_ace_pq_authorization_v0"),
+            (
+                "slash-colon-adjacent",
+                "stark/fri/sha256-goldilocks/:zk_ace",
+            ),
+            (
+                "colon-slash-adjacent",
+                "stark/fri/sha256-goldilocks:/zk_ace",
+            ),
+            ("dot-colon-adjacent", "stark/fri/sha256-goldilocks.:zk_ace"),
+            ("colon-dot-adjacent", "stark/fri/sha256-goldilocks:.zk_ace"),
+            ("triple-colon", "halo2/ipa:::transfer_v1"),
+            ("percent-escape", "stark/fri/%2e%2e/zk_ace"),
+            ("backslash", "stark\\fri\\zk_ace"),
+        ] {
+            let mut envelope = valid_open_verify_admission_envelope();
+            envelope.circuit_id = circuit_id.to_owned();
+
+            assert_eq!(
+                envelope.validate_for_admission().unwrap_err(),
+                InvalidCircuitId,
+                "{name}",
+            );
+        }
+
+        let mut oversized = valid_open_verify_admission_envelope();
+        oversized.circuit_id = "stark".to_owned();
+        assert_eq!(
+            oversized
+                .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                    max_circuit_id_bytes: 4,
+                    ..OpenVerifyEnvelopeBounds::default()
+                })
+                .unwrap_err(),
+            CircuitIdTooLarge { len: 5, max: 4 },
+            "oversized circuit id",
+        );
     }
 
     #[test]

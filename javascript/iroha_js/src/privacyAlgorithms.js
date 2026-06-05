@@ -496,7 +496,7 @@ function assertCleanNonEmptyString(value, context) {
 }
 
 function isCleanCatalogString(value) {
-  return value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+  return value === value.trim() && !/\p{C}/u.test(value);
 }
 
 function isCleanStringListItem(value) {
@@ -648,7 +648,7 @@ function sourceReferenceHostnameUsesIdna(hostname) {
 
 function isCanonicalSourceReferenceUrl(value) {
   const parsed = new URL(value);
-  return parsed.href === value && !parsed.hostname.endsWith(".");
+  return parsed.href === value && parsed.port === "" && !parsed.hostname.endsWith(".");
 }
 
 function sourceReferenceUrlAuthority(value) {
@@ -662,7 +662,7 @@ function isSafeSourceReferenceLabel(value) {
     value !== "" &&
     value === value.trim() &&
     value.length <= SOURCE_REFERENCE_LABEL_MAX_LENGTH &&
-    !/[\u0000-\u001f\u007f]/.test(value)
+    !/[^\u0020-\u007e]/.test(value)
   );
 }
 

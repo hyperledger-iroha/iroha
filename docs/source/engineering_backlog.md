@@ -1364,12 +1364,13 @@ track detailed unfinished engineering work.
   offline production evidence gate for ISO operator archives. The verifier
   recomputes canary and trust summary digests, requires successful
   rail/notary/verify canary stages plus digest-bound receipt-verifier JSON with
-  positive rail/notary receipt evidence, unique receipt paths, and unique
-  per-receipt digests by default,
+  positive rail/notary receipt evidence, unique canonical `*.receipt.json`
+  receipt paths, and unique per-receipt digests by default,
   requires explicit expected `--provider` and `--environment` CLI context and
   records that context in the digest-bound evidence policy for readiness
   rechecking, requires explicit freshness budgets for canary, trust-summary,
   and trust-source evidence while recording them in the evidence policy,
+  preserves compact trust source URL/retrieval provenance for the final rollup,
   rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
@@ -1384,8 +1385,14 @@ track detailed unfinished engineering work.
   missing/malformed/future trust-summary `verified_at` timestamps, smuggled
   child command endpoint URLs, local-only child command flags in either
   `--flag` or `--flag=value` form, unsupported child command flags outside the
-  expected rail/notary/receipt-verifier CLI surfaces, synthetic trust DER, and
-  record-only trust policy before an archive is accepted as production
+  expected rail/notary/receipt-verifier CLI surfaces, control-bearing child
+  command entries, non-canonical canary rail/notary `receipt_dir` values,
+  rail/notary `receipt_dir` values that do not match the child command's single
+  `--receipt-dir`, verify-stage commands that omit generated rail/notary
+  receipt directories, control-bearing provider/stage/receipt-kind/trust-profile
+  identity strings, non-canonical canary runbook `config_path` values, unknown upstream
+  canary/receipt/trust summary fields, synthetic trust DER, and record-only
+  trust policy before an archive is accepted as production
   evidence. Canary command redaction also handles
   `--bearer-token-file=<path>` in addition to the separated argument form.
 - Completed 2026-06-04: added `fixtures/iso20022/xsd/fixture_manifest.json`
@@ -1412,7 +1419,10 @@ track detailed unfinished engineering work.
   verification, legacy `colr.007` local overrides, omitted XSD strict flags,
   XSD summaries produced without XML schema validation,
   inconsistent digest-bound XSD schema/fixture arrays, duplicate XSD schema or
-  fixture evidence digests, schema-reference drift,
+  fixture evidence digests, non-canonical or message-id-mismatched schema
+  paths, non-XML or absolute fixture paths, schema-reference drift, unknown XSD
+  summary fields, forged missing-schema/schema-only reviewed gap lists, forged schema-only
+  flags/reasons, forged profile-catalog missing-version lists,
   omitted evidence or nested receipt-summary policy flags, archived trust
   summaries with omitted policy/profile revocation flags, omitted planned-stage
   `dry_run` flags, omitted evidence status booleans, omitted whole XSD or
@@ -1420,15 +1430,20 @@ track detailed unfinished engineering work.
   `--environment` context, omitted explicit freshness budgets, stale
   digest-correct XSD/evidence/canary/trust summaries, omitted or drifted
   evidence policy context, omitted or weaker evidence freshness policy fields,
-  omitted canary explicit-policy proof, repeated or copied XSD/evidence summaries,
+  omitted or malformed compact trust source provenance, stale compact trust
+  source retrieval timestamps, omitted canary explicit-policy proof, repeated or
+  copied XSD/evidence summaries, missing or non-canonical compact canary
+  runbook `config_path` values, unknown compact evidence fields,
   repeated or copied compact canary/trust summaries, nested receipt-summary
-  tampering, duplicate receipt paths or receipt digests, weak trust profiles,
-  duplicate compact trust profile IDs, record-only trust policy,
+  tampering, non-canonical compact receipt paths, duplicate receipt paths or
+  receipt digests, weak trust profiles, duplicate compact trust profile IDs,
+  record-only trust policy,
   disabled CRL/OCSP revocation checks, and missing required revocation
   material, mismatched trust `verified_bundles`/profile counts, missing compact
-  canary/trust source paths, non-canonical compact canary/trust summary
-  digests, and missing, timezone-less, or future XSD/evidence/trust
-  `verified_at` timestamps, malformed or reversed canary
+  canary/trust source paths, malformed compact canary/trust source paths,
+  non-canonical compact canary/trust summary digests, and missing,
+  control-bearing compact identity strings, timezone-less, or future
+  XSD/evidence/trust `verified_at` timestamps, malformed or reversed canary
   `started_at`/`finished_at` windows,
   missing or out-of-window compact `stage_windows`, overlapping stage
   timelines, name-mismatched or reordered compact stage windows, and emits a

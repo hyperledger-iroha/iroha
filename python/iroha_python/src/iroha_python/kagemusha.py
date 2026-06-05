@@ -317,12 +317,23 @@ def can_redeem_kagemusha_recursive_spend_witnessless(
 ) -> bool:
     """Return whether a recursive spend can attempt witnessless online redeem."""
 
-    return (
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        and is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)
-        and isinstance(hop_count, int)
+    hop_count_supported = (
+        isinstance(hop_count, int)
         and not isinstance(hop_count, bool)
         and 1 <= hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+    )
+    return (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
+        and hop_count_supported
+        and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    ) or (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
+        and hop_count_supported
+        and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    ) or (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
+        and hop_count_supported
+        and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
 
 

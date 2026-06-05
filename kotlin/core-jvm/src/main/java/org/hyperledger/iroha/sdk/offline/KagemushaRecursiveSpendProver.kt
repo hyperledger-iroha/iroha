@@ -52,11 +52,19 @@ class KagemushaRecursiveSpendProver private constructor() {
             if (recursiveSpendAvailable) Mode.RECURSIVE_SPEND_V1 else Mode.CHECKED_PREFOLD_V1
 
         @JvmStatic
-        fun canRedeemWitnessless(circuitId: String?, hopCount: Int): Boolean =
-            RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
-                isLineageProofCircuitId(circuitId) &&
+        fun canRedeemWitnessless(circuitId: String?, hopCount: Int): Boolean {
+            val hopCountSupported =
                 hopCount >= 1 &&
-                hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+                    hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+            val canonicalLineage =
+                circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 && hopCountSupported
+            val oneHopLineage =
+                circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 && hopCountSupported
+            val appendLineage =
+                circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 && hopCountSupported
+            return RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+                (canonicalLineage || oneHopLineage || appendLineage)
+        }
 
         @JvmStatic
         fun isLineageProofCircuitId(circuitId: String?): Boolean =

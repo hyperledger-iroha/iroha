@@ -50,6 +50,7 @@ struct InstructionRow {
     json: String,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
     let block_store_path = resolve_block_store_dir(&args.storage)?;
@@ -118,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         kind: "ContractCall".to_string(),
                         json: format!(
                             "{{\"ContractCall\":{{\"address\":{},\"entrypoint\":{},\"payload\":{}}}}}",
-                            json_string(&call.contract_address.to_string()),
+                            json_string(call.contract_address.as_ref()),
                             json_string(&call.entrypoint),
                             json_string(&format!("{:?}", call.payload))
                         ),
@@ -155,10 +156,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let tx_time_ms = u64::try_from(tx.creation_time().as_millis())?;
             let result_ok = block.error(tx_index).is_none();
-            let rejection = block
-                .error(tx_index)
-                .map(|err| json_string(&format!("{err:?}")))
-                .unwrap_or_else(|| "null".to_string());
+            let rejection = block.error(tx_index).map_or_else(
+                || "null".to_string(),
+                |err| json_string(&format!("{err:?}")),
+            );
             let metadata_json = to_json_value(tx.metadata());
             let executable_json = to_json_value(tx.instructions());
 
@@ -346,16 +347,20 @@ fn route_context_is_public(context: Option<&ExternalExecutionContext>) -> bool {
 }
 
 fn route_fields(context: Option<&ExternalExecutionContext>) -> (u64, u64) {
-    match context {
-        Some(context) => (
-            u64::from(context.lane_id.as_u32()),
-            context.dataspace_id.as_u64(),
-        ),
-        None => (
-            u64::from(LaneId::SINGLE.as_u32()),
-            DataSpaceId::UNIVERSAL.as_u64(),
-        ),
-    }
+    context.map_or_else(
+        || {
+            (
+                u64::from(LaneId::SINGLE.as_u32()),
+                DataSpaceId::UNIVERSAL.as_u64(),
+            )
+        },
+        |context| {
+            (
+                u64::from(context.lane_id.as_u32()),
+                context.dataspace_id.as_u64(),
+            )
+        },
+    )
 }
 
 fn resolve_block_store_dir(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -396,7 +401,9 @@ fn summarize_instruction(instruction: &InstructionBox, summary: &mut TxSummary) 
             summary.from.get_or_insert(from);
             summary.to.get_or_insert(to);
             summary.asset_id.get_or_insert(asset_id);
-            summary.amount.get_or_insert(asset.object.to_string());
+            summary
+                .amount
+                .get_or_insert_with(|| asset.object.to_string());
         }
         return;
     }
@@ -409,7 +416,9 @@ fn summarize_instruction(instruction: &InstructionBox, summary: &mut TxSummary) 
             summary.asset_ids.insert(asset_id.clone());
             summary.to.get_or_insert(to);
             summary.asset_id.get_or_insert(asset_id);
-            summary.amount.get_or_insert(asset.object.to_string());
+            summary
+                .amount
+                .get_or_insert_with(|| asset.object.to_string());
         }
         return;
     }
@@ -422,7 +431,9 @@ fn summarize_instruction(instruction: &InstructionBox, summary: &mut TxSummary) 
             summary.asset_ids.insert(asset_id.clone());
             summary.from.get_or_insert(from);
             summary.asset_id.get_or_insert(asset_id);
-            summary.amount.get_or_insert(asset.object.to_string());
+            summary
+                .amount
+                .get_or_insert_with(|| asset.object.to_string());
         }
         return;
     }
@@ -434,10 +445,10 @@ fn summarize_instruction(instruction: &InstructionBox, summary: &mut TxSummary) 
         return;
     }
 
-    if let Some(unregister) = instruction.as_any().downcast_ref::<UnregisterBox>() {
-        if let UnregisterBox::Account(account) = unregister {
-            summary.accounts.insert(account.object.to_string());
-        }
+    if let Some(UnregisterBox::Account(account)) =
+        instruction.as_any().downcast_ref::<UnregisterBox>()
+    {
+        summary.accounts.insert(account.object.to_string());
     }
 }
 

@@ -2,6 +2,106 @@
 
 Last updated: 2026-06-04
 
+## 2026-06-04 Privacy OpenVerify circuit-id admission gate
+
+- Hardened `OpenVerifyEnvelope` admission with a bounded portable
+  `circuit_id` grammar: lowercase ASCII alphanumeric endpoints, lowercase
+  ASCII alphanumeric plus `-`, `_`, `/`, `:`, and `.` internally, and explicit
+  rejection for traversal, repeated slash, triple-colon, control/format,
+  non-ASCII, percent, backslash, leading/trailing delimiter, and oversized
+  identifiers.
+- Added circuit-id length bounds to `OpenVerifyEnvelopeBounds`, distinct
+  `InvalidCircuitId` and `CircuitIdTooLarge` admission errors, and IVM host
+  error-code mapping for malformed versus oversized circuit identifiers.
+- Added adversarial data-model coverage for malformed circuit IDs and host
+  syscall coverage for malformed and oversized circuit IDs.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model open_verify_envelope --lib -- --test-threads=1`
+    (`6` passed; waited for pre-existing Cargo lock)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core enforce_zk_envelope_rejects_shared_open_verify_shape_failures --lib -- --test-threads=1`
+    (`1` passed; waited for pre-existing Cargo lock)
+
+## 2026-06-04 Privacy catalog zero-width clean-string gate
+
+- Hardened JS and Python privacy catalog clean-string predicates so descriptor
+  strings and string-list items reject Unicode control/format characters such
+  as zero-width spaces, not just ASCII control bytes. Visible non-ASCII letters
+  remain available to the existing homoglyph production-claim tests.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  clean-string predicate.
+- Added zero-width adversarial coverage for scalar descriptor text, security
+  notes, and operational chain requirements.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "invalid_descriptor_fields"`
+    (`58` passed, `405` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`463` passed)
+
+## 2026-06-04 Privacy source-reference label ASCII provenance gate
+
+- Hardened JS and Python public privacy catalog source-reference label
+  validators so labels must be printable ASCII, already trimmed, non-empty, and
+  within the existing length bound. Non-ASCII homoglyph and zero-width labels
+  now fail before they can be treated as protocol provenance.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  source-reference label validator.
+- Added adversarial label coverage for zero-width labels and non-ASCII
+  homoglyph labels, while retaining ASCII audit/signoff label rejection and URL
+  audit/readiness folding coverage.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "invalid_descriptor_fields or source_reference"`
+    (`175` passed, `285` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`460` passed)
+
+## 2026-06-04 Privacy public JS algorithm ID canonicality gate
+
+- Hardened the JS public privacy catalog descriptor `id` validator so algorithm
+  IDs must start and end with lowercase ASCII alphanumeric characters, with
+  only lowercase alphanumeric characters, hyphens, and underscores inside. This
+  aligns the JS public catalog boundary with the existing Python/native
+  trailing-separator rejection.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  descriptor ID grammar.
+- Added JS adversarial descriptor coverage for uppercase, dotted/path-like,
+  leading-separator, and trailing-separator IDs: `Shield`, `shield.v1`,
+  `shield/../../admin`, `_shield`, `-shield`, `shield_`, and `shield-`.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "unsafe_ids"`
+    (`16` passed, `442` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`458` passed)
+
 ## 2026-06-04 Privacy public input schema token canonicality gate
 
 - Hardened JS and Python public privacy catalog public-input schema token
@@ -333,9 +433,35 @@ Last updated: 2026-06-04
   It also rejects compact trust summaries whose `verified_bundles` count does
   not match the number of compact profiles.
 - The final readiness rollup now requires compact canary and trust summary
-  entries to retain non-empty source paths and canonical lowercase
-  `summary_sha256` pointers, and preserves those pointers in the release
-  summary for audit traceability.
+  entries to retain control-free, traversal-free source paths and canonical
+  lowercase `summary_sha256` pointers, and preserves those pointers in the
+  release summary for audit traceability.
+- The operator evidence gate now validates each canary summary's runbook
+  `config_path`, preserves it in compact evidence, and the final readiness
+  gate rechecks it as a control-free, traversal-free `.json` pointer.
+- Canary child command arrays now reject control characters before archival,
+  covering both executed stage commands and plan-only stage commands.
+- Canary rail/notary `receipt_dir` values now reject control characters and
+  dot/parent traversal segments before the evidence archive accepts either
+  executed or plan-only stage records.
+- The evidence gate now also requires each rail/notary stage to carry exactly
+  one child-command `--receipt-dir` argument and verifies that it matches the
+  recorded `receipt_dir`, including `--receipt-dir=value` forms.
+- Executed verify stages now must include the rail/notary receipt directories
+  generated by non-dry-run stages, and those verify-stage `--receipt-dir`
+  values are path-hardened before archive acceptance.
+- Evidence and readiness required-string fields now reject ASCII control
+  characters before trimming, covering compact provider/environment, stage names
+  and windows, receipt kinds, trust profile identifiers, rails, and policy
+  labels.
+- The final readiness rollup now rejects unknown fields in digest-bound compact
+  operator evidence objects, including the evidence policy, compact canary and
+  stage-window records, nested receipt summaries and receipt entries, compact
+  trust summaries, and compact trust profiles.
+- The operator evidence gate now also rejects unknown fields before archival in
+  raw canary summaries, canary policy/stage records, embedded receipt-verifier
+  summaries and receipt entries, trust-bundle summaries, trust bundle records,
+  trust source provenance, material summaries, and profile override objects.
 - The evidence and readiness gates now have direct negative coverage proving
   they reject omitted whole canary/trust and XSD/evidence input summaries,
   preventing empty archive or empty release reports from claiming readiness.
@@ -393,13 +519,30 @@ Last updated: 2026-06-04
   profile-version entries, and forged missing-version lists. Production
   summaries that do not prove `--require-profile-schema-backed-versions` are
   blocked.
+- The final readiness gate now treats XSD summary objects as closed schemas:
+  unknown fields are malformed at top level, in strict flags, schema and
+  fixture entries, source provenance, gap lists, profile catalog metadata,
+  profile-version entries, skipped-family entries, and missing-version entries.
+  It also recomputes `profile_catalog.missing_schema_versions` and schema-only
+  flags/reasons from digest-bound schema and fixture arrays, and compares
+  `missing_schema_fixtures` and `schema_only_entries` by exact path,
+  `message_def_id`, and reviewed reason so forged XSD gap metadata cannot
+  satisfy readiness.
+- Digest-bound XSD `schemas[].path` values are now rechecked as canonical
+  relative forward-slash `.xsd` paths with no dot or parent segments, and the
+  filename must match the schema `message_def_id`.
+- Digest-bound XSD `fixtures[].path` values now reject backslashes, absolute
+  paths, and non-`.xml` leaves while preserving the current parent-relative
+  checked-in fixture layout.
 - The IVM pacs.002 field aliases now accept the standard
   `TxInfAndSts/StsRsnInf/AddtlInf[*]` path as `AddtlInf[*]`, preserving the
   status free-text field after making the fixture XSD-valid.
 - `scripts/iso_operator_receipt_verify.py` now rejects repeated receipt input
   paths and copied receipt files with duplicate `receipt_sha256` values. The
   evidence and readiness gates also reject or block duplicate per-receipt paths
-  and receipt digests in canary-stage and direct archive receipt summaries.
+  and receipt digests in canary-stage and direct archive receipt summaries, and
+  compact receipt paths must be control-free, traversal-free `*.receipt.json`
+  paths before either gate accepts the summary.
 - Archived trust summaries now reject duplicate compact `profile_id` entries at
   the evidence gate, and readiness reports duplicated compact trust-profile IDs
   as production blockers rather than allowing copied profile entries to inflate
@@ -430,6 +573,12 @@ Last updated: 2026-06-04
   digest-correct archive inputs, records those budgets in the evidence policy,
   and `scripts/iso_production_readiness.py` blocks evidence archives produced
   with weaker freshness budgets than the final release gate.
+- Compact trust profiles now preserve trust-source URL and `retrieved_at`
+  provenance in the evidence summary. `scripts/iso_production_readiness.py`
+  revalidates those compact source fields, rejects missing, unknown,
+  credentialed, query-bearing, localhost/private-address, malformed, future, or
+  control-character source provenance as malformed release input, and blocks
+  stale digest-correct compact trust source timestamps.
 - `scripts/iso_operator_canary.py` now records per-stage `started_at` and
   `finished_at` timestamps. The evidence gate compacts those as
   `stage_windows`, and readiness rechecks the compact stage windows against the
@@ -447,17 +596,17 @@ Last updated: 2026-06-04
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
     (passed)
   - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
-    (`77` passed)
+    (`99` passed)
   - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test`
-    (`49` passed)
+    (`60` passed)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
-    (`93` passed)
+    (`119` passed)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
     (`16` passed)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
-    (`54` passed)
+    (`69` passed)
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
-    (`156` passed)
+    (`178` passed)
   - `for f in fixtures/iso20022/operator_canary/*.json; do python3 scripts/iso_operator_canary.py --config "$f" --plan-only --require-explicit-policy --summary-out "/tmp/iroha-iso-canary-$(basename "$f").summary.json" >/tmp/iroha-iso-canary-template.stdout || exit $?; done`
     (passed)
   - `for f in fixtures/iso20022/trust_bundles/*.json; do python3 scripts/iso_trust_bundle_verify.py --bundle "$f" --allow-synthetic-der --summary-out "/tmp/iroha-iso-trust-$(basename "$f").summary.json" >/tmp/iroha-iso-trust-template.stdout || exit $?; done`
@@ -495,6 +644,12 @@ Last updated: 2026-06-04
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p ivm camt056_001_09_fixture_parses_cancellation_fields --lib -- --nocapture`
     (`1` passed)
+  - `git diff --check -- scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/finance/tradfi_interop_audit.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no conflict markers)
+  - `git diff --exit-code -- Cargo.lock`
+    (passed)
   - `cargo fmt --all -- --check`
     (passed)
 

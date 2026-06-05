@@ -1766,6 +1766,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [{ shortName: " Shape" }, /shortName must be clean and already trimmed/],
     [{ summary: "   " }, /summary must be a non-empty string/],
     [{ summary: "Descriptor\u007fsummary" }, /summary must be clean and already trimmed/],
+    [{ summary: "Descriptor\u200bsummary" }, /summary must be clean and already trimmed/],
     [
       { summary: "Mainnet-ready audited production proof." },
       /summary must not claim production\/mainnet\/audit readiness before production gates pass/,
@@ -2004,6 +2005,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /securityNotes\[0\] must be clean and already trimmed/,
     ],
     [
+      { securityNotes: ["line\u200bbreak"] },
+      /securityNotes\[0\] must be clean and already trimmed/,
+    ],
+    [
       { securityNotes: ["External audit completed and production sign-off received."] },
       /securityNotes\[0\] must describe missing audit\/review gates, not completed audit or signoff claims/,
     ],
@@ -2040,6 +2045,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /chainRequirements\[0\] must be clean and already trimmed/,
     ],
     [
+      { chainRequirements: ["registry\u200b"] },
+      /chainRequirements\[0\] must be clean and already trimmed/,
+    ],
+    [
       { sourceReferences: [{ label: " paper", url: "https://example.invalid" }] },
       /sourceReferences\[0\]\.label must be clean and bounded/,
     ],
@@ -2049,6 +2058,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { sourceReferences: [{ label: "paper\u007f", url: "https://example.invalid" }] },
+      /sourceReferences\[0\]\.label must be clean and bounded/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper\u200b", url: "https://example.invalid" }] },
       /sourceReferences\[0\]\.label must be clean and bounded/,
     ],
     [
@@ -2065,7 +2078,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { sourceReferences: [{ label: "Protocol security rev\u0456ew", url: "https://zips.z.cash/zip-0224" }] },
-      /sourceReferences\[0\]\.label must describe protocol source material, not audit\/signoff evidence/,
+      /sourceReferences\[0\]\.label must be clean and bounded/,
     ],
     [
       { sourceReferences: [{ label: "External.review report", url: "https://zips.z.cash/zip-0224" }] },
@@ -2073,7 +2086,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { sourceReferences: [{ label: "\u0391ssurance.report", url: "https://zips.z.cash/zip-0224" }] },
-      /sourceReferences\[0\]\.label must describe protocol source material, not audit\/signoff evidence/,
+      /sourceReferences\[0\]\.label must be clean and bounded/,
     ],
     [
       { sourceReferences: [{ label: "Production-ready protocol source", url: "https://zips.z.cash/zip-0224" }] },
@@ -2121,6 +2134,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { sourceReferences: [{ label: "paper", url: "https://zips.z.cash:443/zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash:8443/zip-0224" }] },
       /sourceReferences\[0\]\.url must be canonical/,
     ],
     [

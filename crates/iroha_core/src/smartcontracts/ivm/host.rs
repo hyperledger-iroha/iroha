@@ -2441,6 +2441,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if rec.backend.is_pending_production_backend() {
                 return Err(ivm::VMError::NoritoInvalid);
             }
+            if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+                || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
+            {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             let backend_label = Self::backend_label_for_record(id, rec);
             if !Self::production_backend_label_matches_record(&backend_label, rec.backend) {
                 return Err(ivm::VMError::NoritoInvalid);
@@ -2626,8 +2631,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 ivm::host::ERR_PROOF_LEN
             }
             OpenVerifyEnvelopeValidationError::PublicInputsTooLarge { .. }
+            | OpenVerifyEnvelopeValidationError::CircuitIdTooLarge { .. }
             | OpenVerifyEnvelopeValidationError::AuxTooLarge { .. } => ivm::host::ERR_ENVELOPE_SIZE,
             OpenVerifyEnvelopeValidationError::EmptyCircuitId
+            | OpenVerifyEnvelopeValidationError::InvalidCircuitId
             | OpenVerifyEnvelopeValidationError::EmptyPublicInputs
             | OpenVerifyEnvelopeValidationError::EmptyProofBytes => ivm::host::ERR_DECODE,
         }
@@ -17271,6 +17278,61 @@ seiyaku Vault {
     }
 
     #[test]
+    fn set_verifying_keys_rejects_malformed_circuit_ids() {
+        crate::test_alias::ensure();
+        let invalid_circuit_ids = [
+            ("empty", " "),
+            ("uppercase", "halo2/ipa:Transfer"),
+            ("control", "halo2/ipa:transfer\nforged"),
+            ("zero-width", "halo2/ipa:transfer\u{200B}"),
+            ("path-traversal", "halo2/ipa/../transfer"),
+            ("dot-segment", "halo2/ipa/./transfer"),
+            ("hidden-segment", "halo2/ipa/.transfer"),
+            ("slash-colon-adjacent", "halo2/ipa/:transfer"),
+            ("colon-slash-adjacent", "halo2/ipa:/transfer"),
+            ("dot-colon-adjacent", "halo2/ipa.:transfer"),
+            ("colon-dot-adjacent", "halo2/ipa:.transfer"),
+            ("backslash", "halo2\\ipa\\transfer"),
+        ];
+        for (label, circuit_id) in invalid_circuit_ids {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment, [0x42; 32], backend, circuit_id, "core", vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject malformed circuit id `{circuit_id}`"
+            );
+        }
+
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![1, 2, 3, 4];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let oversized_circuit_id =
+            "a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+        let rec = active_vk_record(
+            commitment,
+            [0x42; 32],
+            backend,
+            &oversized_circuit_id,
+            "core",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        assert!(
+            host.set_verifying_keys(map).is_err(),
+            "oversized circuit id must be rejected"
+        );
+    }
+
+    #[test]
     fn set_verifying_keys_rejects_trusted_setup_backend_labels() {
         crate::test_alias::ensure();
         for backend in [
@@ -18820,11 +18882,24 @@ seiyaku Vault {
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 6] = [
+        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 8] = [
             (
                 "empty circuit id",
                 |env| env.circuit_id.clear(),
                 ivm::host::ERR_DECODE,
+            ),
+            (
+                "malformed circuit id",
+                |env| env.circuit_id = "halo2/ipa:transfer-check\nforged".to_owned(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "oversized circuit id",
+                |env| {
+                    env.circuit_id = "a"
+                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                },
+                ivm::host::ERR_ENVELOPE_SIZE,
             ),
             (
                 "zero verifier-key hash",

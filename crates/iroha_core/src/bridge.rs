@@ -1129,8 +1129,7 @@ mod tests {
         let chain_id: ChainId = "bridge-sccp-persisted-qc".parse().expect("chain id");
         let block = Arc::new(signed_block_with_transactions(Vec::new(), height));
         let block_hash = block.hash();
-        let validator_keypair =
-            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let validator_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let validator_public_key = validator_keypair.public_key().clone();
         let validator_set = vec![PeerId::new(validator_public_key.clone())];
         let commit_qc = Qc {

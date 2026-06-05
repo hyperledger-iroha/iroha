@@ -177,13 +177,20 @@ pub const fn preferred_kagemusha_offline_spend_mode(
 ///
 /// Only Reserved-lineage proofs inside the configured hop cap redeem witnesslessly.
 #[must_use]
+#[allow(clippy::manual_range_contains)]
 pub fn can_redeem_kagemusha_recursive_spend_witnessless(
     proof_circuit_id: &str,
     hop_count: u32,
 ) -> bool {
+    let is_reserved_lineage_circuit = proof_circuit_id
+        == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
         && is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)
-        && (1..=KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1).contains(&hop_count)
+        && is_reserved_lineage_circuit
+        && hop_count >= 1
+        && hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
 }
 
 /// Return `true` when a circuit id is any Reserved-lineage recursive spend profile.
@@ -222,10 +229,11 @@ pub fn requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
 ///
 /// Reserved-lineage append output is available for previous hops below the cap.
 #[must_use]
+#[allow(clippy::manual_range_contains)]
 pub fn can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count: u32) -> bool {
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        && (1..KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1)
-            .contains(&previous_hop_count)
+        && previous_hop_count >= 1
+        && previous_hop_count < KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
 }
 
 /// Return `true` when append proving must carry previous recursive proof openings.
@@ -12743,25 +12751,45 @@ mod offline_note_tests {
                 .is_empty()
         );
 
-        let mut stale_init_bundle = bundle0.clone();
-        stale_init_bundle.recursive_proof.public_inputs.hop_count = 2;
-        stale_init_bundle
+        let mut stale_init_verifier_count = bundle0.clone();
+        stale_init_verifier_count
             .recursive_proof
             .public_inputs
             .verifier_witness_count = 2;
-        stale_init_bundle.recursive_proof.public_inputs_hash = stale_init_bundle
+        stale_init_verifier_count.recursive_proof.public_inputs_hash = stale_init_verifier_count
             .recursive_proof
             .public_inputs
             .public_inputs_hash()
-            .expect("stale init bundle public-input hash");
+            .expect("stale init verifier-count public-input hash");
         assert!(matches!(
             kagemusha_recursive_spend_lineage_witness_from_init_result(
                 &init_request,
-                &stale_init_bundle
+                &stale_init_verifier_count
             ),
-            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
-                field: "verifier_witness_count"
-            })
+            Err(
+                KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                    expected: 1,
+                    actual: 2,
+                }
+            )
+        ));
+        let mut stale_init_hop_count = bundle0.clone();
+        stale_init_hop_count.recursive_proof.public_inputs.hop_count = 2;
+        stale_init_hop_count
+            .recursive_proof
+            .public_inputs
+            .verifier_witness_count = 2;
+        stale_init_hop_count.recursive_proof.public_inputs_hash = stale_init_hop_count
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("stale init hop-count public-input hash");
+        assert!(matches!(
+            kagemusha_recursive_spend_lineage_witness_from_init_result(
+                &init_request,
+                &stale_init_hop_count
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field: "hop_count" })
         ));
 
         let mut step1 = kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-lineage-hop-1");
@@ -13196,7 +13224,7 @@ mod offline_note_tests {
             .expect("reserved previous builder accepts structurally valid reserved output");
         assert_eq!(
             reserved_output_append_from_builder.output_proof_circuit_id(),
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
         );
         let reserved_append_from_builder =
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness(

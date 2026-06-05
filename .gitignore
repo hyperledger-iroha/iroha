@@ -209,6 +209,7 @@ _apalache-out*
 /test
 /test_set_var
 /foo_test
+/borrow_test
 /sm2_pub.pem
 /fastpq_row_usage_summary.json
 /sora-single/

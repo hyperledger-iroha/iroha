@@ -4040,6 +4040,7 @@ fn full_config_parses_fine() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
