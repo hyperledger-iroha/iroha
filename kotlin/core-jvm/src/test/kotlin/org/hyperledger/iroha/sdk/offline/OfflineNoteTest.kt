@@ -330,6 +330,14 @@ class OfflineNoteTest {
         }
         assertTrue(empty.message!!.contains("returned empty output"))
 
+        val oversized = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
+                "native test",
+            )
+        }
+        assertTrue(oversized.message!!.contains("returned oversized output"))
+
         assertContentEquals(
             byteArrayOf(0x01, 0x02),
             KagemushaCompactPaymentTokenProver.requireNativeOutput(

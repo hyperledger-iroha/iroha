@@ -779,7 +779,7 @@ mod tests {
 
     fn fixture_account(key: &str) -> AccountId {
         AccountId::parse_encoded(&fixture_string(key))
-            .map(|parsed| parsed.into_account_id())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("fixture account")
     }
 
@@ -805,7 +805,10 @@ mod tests {
             metadata,
             creation_time_ms: Some(fixture_u64("creation_time_ms")),
             ttl: Some(Duration::from_millis(fixture_u64("ttl_ms"))),
-            nonce: Some(NonZeroU32::new(fixture_u64("nonce") as u32).expect("nonce")),
+            nonce: Some(
+                NonZeroU32::new(u32::try_from(fixture_u64("nonce")).expect("nonce fits u32"))
+                    .expect("nonce"),
+            ),
         }
     }
 

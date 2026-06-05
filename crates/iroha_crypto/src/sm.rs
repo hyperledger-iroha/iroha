@@ -478,6 +478,17 @@ impl Sm2PrivateKey {
         ))
     }
 
+    /// Generate a random SM2 private key using checked operating-system entropy.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid,
+    /// the OS RNG fails, or the RNG cannot produce valid scalar material within
+    /// the retry budget.
+    pub fn try_random_from_os(distid: impl Into<String>) -> Result<Self, ParseError> {
+        let mut rng = rand::rngs::OsRng;
+        Self::try_random(distid, &mut rng)
+    }
+
     /// Generate a random SM2 private key using an infallible compatibility RNG.
     ///
     /// # Errors
@@ -3382,6 +3393,18 @@ mod tests {
             }
             Ok(_) => panic!("RNG failure must be reported"),
         }
+    }
+
+    #[test]
+    fn sm2_try_random_from_os_roundtrip() {
+        let private =
+            Sm2PrivateKey::try_random_from_os(Sm2PublicKey::DEFAULT_DISTID).expect("OS SM2 key");
+        let message = b"checked OS random sm2";
+        let signature = private.sign(message);
+        let public = private.public_key();
+        public
+            .verify(message, &signature)
+            .expect("signature verifies");
     }
 
     #[test]

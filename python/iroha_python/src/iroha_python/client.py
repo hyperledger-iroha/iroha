@@ -26,6 +26,7 @@ from typing import (
     Iterator,
     List,
     Mapping,
+    MutableMapping,
     Optional,
     Sequence,
     Tuple,
@@ -72,9 +73,10 @@ from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
 
-from .address import AccountAddress, AccountAddressError
+from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
+from ._privacy_backends import _require_production_verify_backend_label
 from .privacy_catalog import (
     get_privacy_algorithm_descriptors,
     privacy_capabilities as _privacy_capabilities,
@@ -181,6 +183,244 @@ def _require_non_empty_string(value: Any, context: str) -> str:
     if not trimmed:
         raise ValueError(f"{context} must be a non-empty string")
     return trimmed
+
+
+def _normalize_zk_verifying_key_registration_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise TypeError("ZK verifying-key registration payload must be a mapping")
+    body = dict(_json_safe_value(dict(payload)))
+    _normalize_zk_verifying_key_submission_payload(
+        body,
+        "register_zk_verifying_key",
+        require_gas_schedule=True,
+    )
+    return body
+
+
+def _normalize_zk_verifying_key_update_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise TypeError("ZK verifying-key update payload must be a mapping")
+    body = dict(_json_safe_value(dict(payload)))
+    _normalize_zk_verifying_key_submission_payload(
+        body,
+        "update_zk_verifying_key",
+        require_gas_schedule=False,
+    )
+    return body
+
+
+def _normalize_zk_verifying_key_submission_payload(
+    body: MutableMapping[str, Any],
+    context: str,
+    *,
+    require_gas_schedule: bool,
+) -> None:
+    body["backend"] = _require_production_verify_backend_label(
+        body.get("backend"),
+        f"{context}.backend",
+    )
+    body["name"] = _require_non_empty_string(body.get("name"), f"{context}.name")
+    if ":" in body["name"]:
+        raise ValueError(f"{context}.name must not contain ':'")
+    body["authority"] = _require_non_empty_string(
+        body.get("authority"),
+        f"{context}.authority",
+    )
+    body["private_key"] = _require_non_empty_string(
+        body.get("private_key"),
+        f"{context}.private_key",
+    )
+    version = _coerce_int(body.get("version"), f"{context}.version")
+    if version is None:
+        raise ValueError(f"{context}.version must be provided")
+    if version > 0xFFFF_FFFF:
+        raise ValueError(f"{context}.version must fit in a u32")
+    body["version"] = version
+    body["circuit_id"] = _require_non_empty_string(body.get("circuit_id"), f"{context}.circuit_id")
+    body["public_inputs_schema_hash_hex"] = _normalize_32_byte_hex(
+        body.get("public_inputs_schema_hash_hex"),
+        f"{context}.public_inputs_schema_hash_hex",
+    )
+    if require_gas_schedule:
+        body["gas_schedule_id"] = _require_non_empty_string(
+            body.get("gas_schedule_id"),
+            f"{context}.gas_schedule_id",
+        )
+    elif "gas_schedule_id" in body:
+        gas_schedule_id = _normalize_optional_string(
+            body.get("gas_schedule_id"),
+            f"{context}.gas_schedule_id",
+        )
+        if gas_schedule_id is None:
+            body.pop("gas_schedule_id", None)
+        else:
+            body["gas_schedule_id"] = gas_schedule_id
+
+    for field in ("curve", "metadata_uri_cid", "vk_bytes_cid"):
+        if field in body:
+            normalized = _normalize_optional_string(body.get(field), f"{context}.{field}")
+            if normalized is None:
+                body.pop(field, None)
+            else:
+                body[field] = normalized
+
+    if "max_proof_bytes" in body:
+        max_proof_bytes = _normalize_optional_u32_field(
+            body.get("max_proof_bytes"),
+            f"{context}.max_proof_bytes",
+            allow_zero=True,
+        )
+        if max_proof_bytes is None:
+            body.pop("max_proof_bytes", None)
+        else:
+            body["max_proof_bytes"] = max_proof_bytes
+    if "status" in body:
+        status = _normalize_optional_zk_verifying_key_status(body.get("status"), f"{context}.status")
+        if status is None:
+            body.pop("status", None)
+        else:
+            body["status"] = status
+    _validate_zk_verifying_key_height_range(body, context)
+    _validate_zk_verifying_key_material_and_commitment(body, context)
+
+
+def _validate_zk_verifying_key_height_range(
+    body: MutableMapping[str, Any],
+    context: str,
+) -> None:
+    activation_height = None
+    withdraw_height = None
+    if "activation_height" in body:
+        activation_height = _normalize_optional_int_field(
+            body.get("activation_height"),
+            f"{context}.activation_height",
+        )
+        body["activation_height"] = activation_height
+    if "withdraw_height" in body:
+        withdraw_height = _normalize_optional_int_field(
+            body.get("withdraw_height"),
+            f"{context}.withdraw_height",
+        )
+        body["withdraw_height"] = withdraw_height
+    if (
+        activation_height is not None
+        and withdraw_height is not None
+        and withdraw_height < activation_height
+    ):
+        raise ValueError(
+            f"{context}.withdraw_height must be greater than or equal to activation_height"
+        )
+
+
+def _validate_zk_verifying_key_material_and_commitment(
+    body: MutableMapping[str, Any],
+    context: str,
+) -> None:
+    commitment_hex: Optional[str] = None
+    if "commitment_hex" in body:
+        commitment_value = body.get("commitment_hex")
+        if commitment_value is not None:
+            commitment_hex = _normalize_32_byte_hex(
+                commitment_value,
+                f"{context}.commitment_hex",
+            )
+            body["commitment_hex"] = commitment_hex
+        else:
+            body.pop("commitment_hex", None)
+
+    vk_len: Optional[int] = None
+    if "vk_len" in body:
+        vk_len = _normalize_optional_u32_field(
+            body.get("vk_len"),
+            f"{context}.vk_len",
+            allow_zero=False,
+        )
+        if vk_len is None:
+            body.pop("vk_len", None)
+        else:
+            body["vk_len"] = vk_len
+
+    vk_bytes_value = body.get("vk_bytes")
+    vk_bytes: Optional[bytes] = None
+    if vk_bytes_value is None:
+        body.pop("vk_bytes", None)
+    else:
+        if not isinstance(vk_bytes_value, str):
+            raise TypeError(f"{context}.vk_bytes must be a base64 string")
+        try:
+            vk_bytes = base64.b64decode(vk_bytes_value, validate=True)
+        except binascii.Error as exc:
+            raise ValueError(f"{context}.vk_bytes must be valid base64") from exc
+        if not vk_bytes:
+            raise ValueError(f"{context}.vk_bytes must be non-empty")
+        if len(vk_bytes) > 0xFFFF_FFFF:
+            raise ValueError(f"{context}.vk_bytes length must fit in a u32")
+        body["vk_bytes"] = base64.b64encode(vk_bytes).decode("ascii")
+        if vk_len is not None and vk_len != len(vk_bytes):
+            raise ValueError(f"{context}.vk_len must match vk_bytes length")
+        body["vk_len"] = len(vk_bytes)
+
+    if vk_bytes is None:
+        if commitment_hex is None:
+            raise ValueError(f"{context}.commitment_hex is required when vk_bytes is omitted")
+        if vk_len is None:
+            raise ValueError(f"{context}.vk_len is required when vk_bytes is omitted")
+
+    if vk_bytes is not None and commitment_hex is not None:
+        expected = _zk_verifying_key_commitment_hex(body["backend"], vk_bytes)
+        if commitment_hex != expected:
+            raise ValueError(
+                f"{context}.commitment_hex must match domain-separated SHA-256 of backend and vk_bytes"
+            )
+
+
+def _zk_verifying_key_commitment_hex(backend: str, vk_bytes: bytes) -> str:
+    backend_bytes = backend.encode("utf-8")
+    preimage = (
+        b"iroha:zk:v1:vk"
+        + len(backend_bytes).to_bytes(8, "big")
+        + backend_bytes
+        + len(vk_bytes).to_bytes(8, "big")
+        + vk_bytes
+    )
+    return hashlib.sha256(preimage).hexdigest()
+
+
+def _normalize_optional_zk_verifying_key_status(value: Any, context: str) -> Optional[str]:
+    normalized = _normalize_optional_string(value, context)
+    if normalized is None:
+        return None
+    lowered = normalized.lower()
+    if lowered == "proposed":
+        return "Proposed"
+    if lowered == "active":
+        return "Active"
+    if lowered == "withdrawn":
+        return "Withdrawn"
+    raise ValueError(f"{context} must be Proposed, Active, or Withdrawn")
+
+
+def _normalize_optional_u32_field(
+    value: Any,
+    context: str,
+    *,
+    allow_zero: bool,
+) -> Optional[int]:
+    parsed = _coerce_int(value, context, allow_zero=allow_zero)
+    if parsed is None:
+        return None
+    if parsed > 0xFFFF_FFFF:
+        raise ValueError(f"{context} must fit in a u32")
+    return parsed
+
+
+def _normalize_32_byte_hex(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a 32-byte hex string")
+    trimmed = value.strip().lower()
+    if trimmed.startswith("0x"):
+        trimmed = trimmed[2:].strip()
+    return _normalize_hex_string(trimmed, context, expected_length=64)
 
 
 def _normalize_optional_int_field(value: Any, context: str) -> Optional[int]:
@@ -331,7 +571,12 @@ def _leading_zero_bits(payload: bytes) -> int:
     return count
 
 
-def _normalize_canonical_account_id(value: Any, context: str) -> str:
+def _normalize_canonical_account_id(
+    value: Any,
+    context: str,
+    *,
+    expected_discriminant: int = DEFAULT_I105_DISCRIMINANT,
+) -> str:
     literal = _require_non_empty_string(value, context)
     if any(ch.isspace() for ch in literal):
         raise ValueError(
@@ -353,13 +598,13 @@ def _normalize_canonical_account_id(value: Any, context: str) -> str:
         return literal
     try:
         address = AccountAddress.parse_encoded(
-            literal, expected_discriminant=DEFAULT_I105_DISCRIMINANT
+            literal, expected_discriminant=expected_discriminant
         )
     except AccountAddressError as exc:
         raise ValueError(
             f"{context} must be a canonical I105 account id or on-chain account alias"
         ) from exc
-    canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
+    canonical = address.to_i105(expected_discriminant)
     if canonical != literal:
         raise ValueError(
             f"{context} must use canonical I105 account id form when not using an alias"
@@ -845,6 +1090,319 @@ def _normalize_base64_payload(
     raise TypeError(f"{context} must be bytes or a base64 string")
 
 
+_MISSING = object()
+
+
+def _first_present(source: Mapping[str, Any], *keys: str) -> Any:
+    present = [key for key in keys if key in source and source[key] is not None]
+    if len(present) > 1:
+        raise TypeError(f"ambiguous aliases: {', '.join(present)}")
+    if not present:
+        return _MISSING
+    return source[present[0]]
+
+
+def _normalize_sorafs_digest_hex(value: Any, context: str) -> str:
+    if isinstance(value, (bytes, bytearray, memoryview, list, tuple)):
+        literal = _bytes_like_to_hex(value, context)
+    elif isinstance(value, str):
+        literal = value.strip()
+        if literal.startswith(("0x", "0X")):
+            literal = literal[2:].strip()
+    else:
+        raise TypeError(f"{context} must be a 32-byte hex string")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", literal):
+        raise ValueError(f"{context} must be a 32-byte hex string")
+    return literal.lower()
+
+
+def _normalize_sorafs_unsigned_integer(
+    value: Any,
+    context: str,
+    *,
+    allow_zero: bool,
+) -> int:
+    if value is None or value == "":
+        raise TypeError(f"{context} is required")
+    if isinstance(value, bool):
+        raise TypeError(f"{context} must be an integer")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        literal = value.strip()
+        if not re.fullmatch(r"[+-]?\d+", literal):
+            raise TypeError(f"{context} must be an integer")
+        number = int(literal)
+    else:
+        raise TypeError(f"{context} must be an integer")
+    if number < 0 or (number == 0 and not allow_zero):
+        raise ValueError(f"{context} must be {'non-negative' if allow_zero else 'positive'}")
+    return number
+
+
+def _normalize_required_base64_payload(value: Any, context: str) -> str:
+    normalized = _normalize_base64_payload(None, value, context)
+    decoded = base64.b64decode(normalized, validate=True)
+    if not decoded:
+        raise ValueError(f"{context} must be a non-empty base64 string")
+    return base64.b64encode(decoded).decode("ascii")
+
+
+def _normalize_sorafs_storage_class(value: Any, context: str) -> str:
+    source = value
+    if isinstance(source, Mapping):
+        source = _first_present(source, "type", "name", "label")
+        if source is _MISSING:
+            raise TypeError(f"{context}.type is required")
+    label = _require_non_empty_string(source, context).lower()
+    if label == "hot":
+        return "Hot"
+    if label == "warm":
+        return "Warm"
+    if label == "cold":
+        return "Cold"
+    raise ValueError(f"{context} must be Hot, Warm, or Cold")
+
+
+def _normalize_sorafs_pin_policy_request(value: Any, context: str) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} must be an object")
+    min_replicas_value = _first_present(value, "min_replicas", "minReplicas")
+    storage_class_value = _first_present(value, "storage_class", "storageClass")
+    retention_epoch_value = _first_present(value, "retention_epoch", "retentionEpoch")
+    if min_replicas_value is _MISSING:
+        raise TypeError(f"{context}.min_replicas is required")
+    if storage_class_value is _MISSING:
+        raise TypeError(f"{context}.storage_class is required")
+    return {
+        "min_replicas": _normalize_sorafs_unsigned_integer(
+            min_replicas_value,
+            f"{context}.min_replicas",
+            allow_zero=False,
+        ),
+        "storage_class": {
+            "type": _normalize_sorafs_storage_class(
+                storage_class_value,
+                f"{context}.storage_class",
+            )
+        },
+        "retention_epoch": _normalize_sorafs_unsigned_integer(
+            0 if retention_epoch_value is _MISSING else retention_epoch_value,
+            f"{context}.retention_epoch",
+            allow_zero=True,
+        ),
+    }
+
+
+def _normalize_sorafs_pin_alias_request(value: Any, context: str) -> Dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} must be an object")
+    namespace_value = _first_present(value, "namespace")
+    name_value = _first_present(value, "name")
+    proof_value = _first_present(
+        value,
+        "proof",
+        "proof_b64",
+        "proofB64",
+        "proof_base64",
+        "proofBase64",
+    )
+    if namespace_value is _MISSING:
+        raise TypeError(f"{context}.namespace is required")
+    if name_value is _MISSING:
+        raise TypeError(f"{context}.name is required")
+    if proof_value is _MISSING:
+        raise TypeError(f"{context}.proof is required")
+    return {
+        "namespace": _require_non_empty_string(namespace_value, f"{context}.namespace"),
+        "name": _require_non_empty_string(name_value, f"{context}.name"),
+        "proof_base64": _normalize_required_base64_payload(
+            proof_value,
+            f"{context}.proof",
+        ),
+    }
+
+
+def _normalize_sorafs_credentials_aliases(
+    request: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    normalized = dict(request)
+    aliases = {
+        "privateKey": "private_key",
+        "privateKeyMultihash": "private_key_multihash",
+        "privateKeyHex": "private_key_hex",
+        "privateKeyBytes": "private_key_bytes",
+        "privateKeySeed": "private_key_seed",
+        "privateKeyAlgorithm": "private_key_algorithm",
+    }
+    for alias_key, canonical_key in aliases.items():
+        if alias_key not in normalized:
+            continue
+        alias_value = normalized.pop(alias_key)
+        canonical_value = normalized.get(canonical_key)
+        if canonical_value is not None and alias_value is not None:
+            raise TypeError(
+                f"{context} accepts only one of {canonical_key} or {alias_key}"
+            )
+        if alias_value is not None:
+            normalized[canonical_key] = alias_value
+    return normalized
+
+
+def _normalize_sorafs_pin_register_request(
+    request: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    if not isinstance(request, Mapping):
+        raise TypeError(f"{context} must be an object")
+    credentials = _normalize_authority_credentials(
+        _normalize_sorafs_credentials_aliases(request, context=context),
+        context=context,
+    )
+
+    chunker_value = _first_present(request, "chunker")
+    if chunker_value is _MISSING or not isinstance(chunker_value, Mapping):
+        raise TypeError(f"{context}.chunker is required")
+    profile_id_value = _first_present(chunker_value, "profile_id", "profileId")
+    namespace_value = _first_present(
+        chunker_value,
+        "namespace",
+        "ns",
+        "profile_namespace",
+        "profileNamespace",
+    )
+    name_value = _first_present(chunker_value, "name", "handle", "profile", "id")
+    semver_value = _first_present(chunker_value, "semver", "version", "rev")
+    multihash_code_value = _first_present(
+        chunker_value,
+        "multihash_code",
+        "multihashCode",
+        "multihash",
+    )
+    if profile_id_value is _MISSING:
+        raise TypeError(f"{context}.chunker.profile_id is required")
+    if namespace_value is _MISSING:
+        raise TypeError(f"{context}.chunker.namespace is required")
+    if name_value is _MISSING:
+        raise TypeError(f"{context}.chunker.name is required")
+    if semver_value is _MISSING:
+        raise TypeError(f"{context}.chunker.semver is required")
+
+    pin_policy_value = _first_present(request, "pin_policy", "pinPolicy")
+    if pin_policy_value is _MISSING:
+        raise TypeError(f"{context}.pin_policy is required")
+    manifest_digest_value = _first_present(
+        request,
+        "manifest_digest_hex",
+        "manifestDigestHex",
+    )
+    chunk_digest_value = _first_present(
+        request,
+        "chunk_digest_sha3_256_hex",
+        "chunkDigestSha3_256Hex",
+        "chunk_digest",
+        "chunkDigest",
+    )
+    content_length_value = _first_present(request, "content_length", "contentLength")
+    submitted_epoch_value = _first_present(request, "submitted_epoch", "submittedEpoch")
+    if manifest_digest_value is _MISSING:
+        raise TypeError(f"{context}.manifest_digest_hex is required")
+    if chunk_digest_value is _MISSING:
+        raise TypeError(f"{context}.chunk_digest_sha3_256_hex is required")
+    if content_length_value is _MISSING:
+        raise TypeError(f"{context}.content_length is required")
+    if submitted_epoch_value is _MISSING:
+        raise TypeError(f"{context}.submitted_epoch is required")
+
+    payload: Dict[str, Any] = {
+        **credentials,
+        "chunker_profile_id": _normalize_sorafs_unsigned_integer(
+            profile_id_value,
+            f"{context}.chunker.profile_id",
+            allow_zero=False,
+        ),
+        "chunker_namespace": _require_non_empty_string(
+            namespace_value,
+            f"{context}.chunker.namespace",
+        ),
+        "chunker_name": _require_non_empty_string(name_value, f"{context}.chunker.name"),
+        "chunker_semver": _require_non_empty_string(
+            semver_value,
+            f"{context}.chunker.semver",
+        ),
+        "chunker_multihash_code": _normalize_sorafs_unsigned_integer(
+            0 if multihash_code_value is _MISSING else multihash_code_value,
+            f"{context}.chunker.multihash_code",
+            allow_zero=True,
+        ),
+        "pin_policy": _normalize_sorafs_pin_policy_request(
+            pin_policy_value,
+            f"{context}.pin_policy",
+        ),
+        "manifest_digest_hex": _normalize_sorafs_digest_hex(
+            manifest_digest_value,
+            f"{context}.manifest_digest_hex",
+        ),
+        "chunk_digest_sha3_256_hex": _normalize_sorafs_digest_hex(
+            chunk_digest_value,
+            f"{context}.chunk_digest_sha3_256_hex",
+        ),
+        "content_length": _normalize_sorafs_unsigned_integer(
+            content_length_value,
+            f"{context}.content_length",
+            allow_zero=True,
+        ),
+        "submitted_epoch": _normalize_sorafs_unsigned_integer(
+            submitted_epoch_value,
+            f"{context}.submitted_epoch",
+            allow_zero=True,
+        ),
+    }
+
+    alias_value = _first_present(request, "alias")
+    alias_namespace = _first_present(request, "alias_namespace", "aliasNamespace")
+    alias_name = _first_present(request, "alias_name", "aliasName")
+    alias_proof = _first_present(
+        request,
+        "alias_proof",
+        "aliasProof",
+        "alias_proof_b64",
+        "aliasProofB64",
+        "alias_proof_base64",
+        "aliasProofBase64",
+    )
+    has_flat_alias = (
+        alias_namespace is not _MISSING
+        or alias_name is not _MISSING
+        or alias_proof is not _MISSING
+    )
+    if alias_value is not _MISSING and has_flat_alias:
+        raise TypeError(f"{context}.alias must not be combined with flat alias fields")
+    if alias_value is _MISSING and has_flat_alias:
+        alias_value = {
+            "namespace": None if alias_namespace is _MISSING else alias_namespace,
+            "name": None if alias_name is _MISSING else alias_name,
+            "proof": None if alias_proof is _MISSING else alias_proof,
+        }
+    if alias_value is not _MISSING:
+        payload["alias"] = _normalize_sorafs_pin_alias_request(
+            alias_value,
+            f"{context}.alias",
+        )
+
+    successor_value = _first_present(request, "successor_of_hex", "successorOfHex")
+    if successor_value is not _MISSING:
+        payload["successor_of_hex"] = _normalize_sorafs_digest_hex(
+            successor_value,
+            f"{context}.successor_of_hex",
+        )
+
+    return payload
+
+
 def _reject_governance_public_input_key(
     record: Dict[str, Any],
     key: str,
@@ -1261,6 +1819,123 @@ class SorafsPorVerdictResponse:
     def from_payload(cls, payload: Mapping[str, Any], context: str) -> "SorafsPorVerdictResponse":
         base = SorafsPorSubmissionResponse.from_payload(payload, context)
         return cls(status=base.status)
+
+
+@dataclass(frozen=True)
+class SorafsPinAlias:
+    """Alias proof metadata attached to a SoraFS pin registration."""
+
+    namespace: str
+    name: str
+    proof_base64: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any], context: str) -> "SorafsPinAlias":
+        alias = _normalize_sorafs_pin_alias_request(payload, context)
+        return cls(
+            namespace=alias["namespace"],
+            name=alias["name"],
+            proof_base64=alias["proof_base64"],
+        )
+
+
+@dataclass(frozen=True)
+class SorafsPinRegisterResponse:
+    """Typed response returned by `/v1/sorafs/pin/register`."""
+
+    manifest_digest_hex: str
+    chunker_handle: str
+    submitted_epoch: int
+    content_length: int
+    pin_fee_nano: int
+    pin_fee_asset_id: str
+    pin_fee_treasury_account_id: str
+    alias: Optional[SorafsPinAlias] = None
+    successor_of_hex: Optional[str] = None
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        context: str,
+    ) -> "SorafsPinRegisterResponse":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be a JSON object")
+        manifest_digest_value = _first_present(
+            payload,
+            "manifest_digest_hex",
+            "manifestDigestHex",
+        )
+        chunker_handle_value = _first_present(payload, "chunker_handle", "chunkerHandle")
+        submitted_epoch_value = _first_present(payload, "submitted_epoch", "submittedEpoch")
+        content_length_value = _first_present(payload, "content_length", "contentLength")
+        pin_fee_nano_value = _first_present(payload, "pin_fee_nano", "pinFeeNano")
+        pin_fee_asset_value = _first_present(payload, "pin_fee_asset_id", "pinFeeAssetId")
+        treasury_value = _first_present(
+            payload,
+            "pin_fee_treasury_account_id",
+            "pinFeeTreasuryAccountId",
+        )
+        required = {
+            "manifest_digest_hex": manifest_digest_value,
+            "chunker_handle": chunker_handle_value,
+            "submitted_epoch": submitted_epoch_value,
+            "content_length": content_length_value,
+            "pin_fee_nano": pin_fee_nano_value,
+            "pin_fee_asset_id": pin_fee_asset_value,
+            "pin_fee_treasury_account_id": treasury_value,
+        }
+        missing = [key for key, value in required.items() if value is _MISSING]
+        if missing:
+            raise TypeError(f"{context} missing required field `{missing[0]}`")
+
+        alias_value = _first_present(payload, "alias")
+        alias = (
+            None
+            if alias_value is _MISSING
+            else SorafsPinAlias.from_payload(alias_value, f"{context}.alias")
+        )
+        successor_value = _first_present(payload, "successor_of_hex", "successorOfHex")
+        successor = (
+            None
+            if successor_value is _MISSING
+            else _normalize_sorafs_digest_hex(successor_value, f"{context}.successor_of_hex")
+        )
+        return cls(
+            manifest_digest_hex=_normalize_sorafs_digest_hex(
+                manifest_digest_value,
+                f"{context}.manifest_digest_hex",
+            ),
+            chunker_handle=_require_non_empty_string(
+                chunker_handle_value,
+                f"{context}.chunker_handle",
+            ),
+            submitted_epoch=_normalize_sorafs_unsigned_integer(
+                submitted_epoch_value,
+                f"{context}.submitted_epoch",
+                allow_zero=True,
+            ),
+            content_length=_normalize_sorafs_unsigned_integer(
+                content_length_value,
+                f"{context}.content_length",
+                allow_zero=True,
+            ),
+            pin_fee_nano=_normalize_sorafs_unsigned_integer(
+                pin_fee_nano_value,
+                f"{context}.pin_fee_nano",
+                allow_zero=True,
+            ),
+            pin_fee_asset_id=_require_non_empty_string(
+                pin_fee_asset_value,
+                f"{context}.pin_fee_asset_id",
+            ),
+            pin_fee_treasury_account_id=_require_non_empty_string(
+                treasury_value,
+                f"{context}.pin_fee_treasury_account_id",
+            ),
+            alias=alias,
+            successor_of_hex=successor,
+        )
 
 
 @dataclass(frozen=True)
@@ -7213,6 +7888,8 @@ __all__ = [
     "SorafsPorSubmissionResponse",
     "SorafsPorObservationResponse",
     "SorafsPorVerdictResponse",
+    "SorafsPinAlias",
+    "SorafsPinRegisterResponse",
     "SorafsPorIngestionProviderStatus",
     "SorafsPorIngestionStatus",
     "ExplorerMetricsSnapshot",
@@ -7369,11 +8046,18 @@ class ToriiClient(_BaseToriiClient):
         backoff_multiplier: Optional[float] = None,
         retry_on_status: Optional[Sequence[int]] = None,
         retry_on_methods: Optional[Sequence[str]] = None,
+        chain_discriminant: Optional[int] = None,
         sorafs_alias_policy: Optional[Union[SorafsAliasPolicy, Mapping[str, Any]]] = None,
         sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
         sorafs_alias_logger: Optional[logging.Logger] = None,
     ) -> None:
         super().__init__(base_url, session=session)
+        self._chain_discriminant = normalize_i105_discriminant(
+            DEFAULT_I105_DISCRIMINANT
+            if chain_discriminant is None
+            else chain_discriminant,
+            "chain_discriminant",
+        )
         self._timeout = timeout
         self._max_retries = max(0, int(max_retries))
         self._retry_statuses = (
@@ -7416,6 +8100,44 @@ class ToriiClient(_BaseToriiClient):
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    def _normalize_canonical_account_id(self, value: Any, context: str) -> str:
+        return _normalize_canonical_account_id(
+            value,
+            context,
+            expected_discriminant=self._chain_discriminant,
+        )
+
+    def _native_transaction_account_id(self, value: Any, context: str) -> str:
+        literal = _require_non_empty_string(value, context)
+        if "@" in literal:
+            return literal
+        candidate_discriminants = [self._chain_discriminant]
+        if self._chain_discriminant != DEFAULT_I105_DISCRIMINANT:
+            candidate_discriminants.append(DEFAULT_I105_DISCRIMINANT)
+        for discriminant in candidate_discriminants:
+            try:
+                address = AccountAddress.parse_encoded(
+                    literal,
+                    expected_discriminant=discriminant,
+                )
+            except AccountAddressError:
+                continue
+            return address.to_i105(DEFAULT_I105_DISCRIMINANT)
+        return literal
+
+    def _native_transaction_asset_id(self, value: Any, context: str) -> str:
+        literal = _require_non_empty_string(value, context)
+        prefix, separator, account_id = literal.rpartition("#")
+        if not separator or not prefix or not account_id:
+            return literal
+        native_account_id = self._native_transaction_account_id(
+            account_id,
+            f"{context}.account_id",
+        )
+        if native_account_id == account_id:
+            return literal
+        return f"{prefix}#{native_account_id}"
 
     def privacy_capabilities(self) -> Dict[str, Any]:
         """Return SDK privacy catalog and implementation capability metadata."""
@@ -7857,7 +8579,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         payload = self.request_json(
@@ -8228,6 +8950,47 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, (200,))
         return type(self)._maybe_json(response)
 
+    def register_sorafs_pin_manifest(
+        self,
+        request: Mapping[str, Any],
+        *,
+        timeout: Optional[float] = None,
+    ) -> Mapping[str, Any]:
+        """Register a SoraFS pin manifest (`POST /v1/sorafs/pin/register`)."""
+
+        payload = _normalize_sorafs_pin_register_request(
+            request,
+            context="register_sorafs_pin_manifest",
+        )
+        response = self._request(
+            "POST",
+            "/v1/sorafs/pin/register",
+            json_body=payload,
+            headers={"Accept": "application/json"},
+            timeout=timeout,
+        )
+        self._expect_status(response, (200,))
+        body = type(self)._maybe_json(response)
+        if body is None:
+            raise RuntimeError("sorafs pin register endpoint returned no payload")
+        if not isinstance(body, Mapping):
+            raise RuntimeError("sorafs pin register endpoint returned malformed payload")
+        return body
+
+    def register_sorafs_pin_manifest_typed(
+        self,
+        request: Mapping[str, Any],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SorafsPinRegisterResponse:
+        """Register a SoraFS pin manifest and return a typed response."""
+
+        payload = self.register_sorafs_pin_manifest(request, timeout=timeout)
+        return SorafsPinRegisterResponse.from_payload(
+            payload,
+            "sorafs_pin_register",
+        )
+
     # -------------------------
     # SoraFS Proof-of-Retrievability APIs
     # -------------------------
@@ -8491,7 +9254,12 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self._status_mapping(self.get_status() if status is None else status)
         indexed: Dict[Tuple[Optional[str], Optional[int]], Dict[str, Any]] = {}
-        for key in ("dataspace_catalog", "dataspaces", "teu_dataspace_backlog"):
+        for key in (
+            "teu_dataspace_backlog",
+            "dataspaces",
+            "dataspace_catalog",
+            "teu_lane_commit",
+        ):
             entries = payload.get(key)
             if not isinstance(entries, list):
                 continue
@@ -8505,7 +9273,9 @@ class ToriiClient(_BaseToriiClient):
                     normalized_id: Optional[int] = int(dataspace_id) if dataspace_id is not None else None
                 except (TypeError, ValueError):
                     normalized_id = None
-                indexed[(alias or None, normalized_id)] = entry
+                key = (alias or None, normalized_id)
+                existing = indexed.get(key, {})
+                indexed[key] = {**existing, **entry}
 
         lane_entries = payload.get("lane_governance")
         if isinstance(lane_entries, list):
@@ -9063,7 +9833,7 @@ class ToriiClient(_BaseToriiClient):
     def get_kaigi_relay(self, relay_id: str) -> Optional[Any]:
         """Fetch metadata for a specific Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`)."""
 
-        relay_literal = _normalize_canonical_account_id(relay_id, "relay_id")
+        relay_literal = self._normalize_canonical_account_id(relay_id, "relay_id")
         response = self._request(
             "GET",
             f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
@@ -9331,7 +10101,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         params = self._pagination_params(limit=limit, offset=offset)
@@ -9382,7 +10152,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         params = self._pagination_params(limit=limit, offset=offset)
@@ -9436,7 +10206,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/assets/query` with a Norito-style envelope."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         if envelope is not None:
@@ -9516,7 +10286,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/transactions/query` with a Norito-style envelope."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         if envelope is not None:
@@ -10039,8 +10809,8 @@ class ToriiClient(_BaseToriiClient):
             f"got {type(hash_field)!r}"
         )
 
-    @staticmethod
     def _transaction_draft(
+        self,
         *,
         chain_id: str,
         authority: str,
@@ -10051,7 +10821,10 @@ class ToriiClient(_BaseToriiClient):
         from .tx import TransactionConfig, TransactionDraft
 
         effective_chain_id = _require_non_empty_string(chain_id, "chain_id")
-        effective_authority = _require_non_empty_string(authority, "authority")
+        effective_authority = self._native_transaction_account_id(
+            authority,
+            "authority",
+        )
         return TransactionDraft(
             TransactionConfig(
                 chain_id=effective_chain_id,
@@ -10227,9 +11000,16 @@ class ToriiClient(_BaseToriiClient):
         metadata_by_account = dict(account_metadata or {})
         registered = 0
         for account_id in accounts:
-            draft.register_account(
+            native_account_id = self._native_transaction_account_id(
                 account_id,
-                metadata=metadata_by_account.get(account_id),
+                f"accounts[{registered}]",
+            )
+            draft.register_account(
+                native_account_id,
+                metadata=(
+                    metadata_by_account.get(account_id)
+                    or metadata_by_account.get(native_account_id)
+                ),
             )
             registered += 1
         if registered == 0:
@@ -10266,7 +11046,7 @@ class ToriiClient(_BaseToriiClient):
             metadata=transaction_metadata,
         )
         draft.grant_account_permission(
-            account_id,
+            self._native_transaction_account_id(account_id, "account_id"),
             permission_name,
             payload=permission_payload,
         )
@@ -10302,7 +11082,7 @@ class ToriiClient(_BaseToriiClient):
             metadata=transaction_metadata,
         )
         draft.revoke_account_permission(
-            account_id,
+            self._native_transaction_account_id(account_id, "account_id"),
             permission_name,
             payload=permission_payload,
         )
@@ -10346,7 +11126,7 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.register_asset_definition_numeric(
             definition_id,
-            owner,
+            self._native_transaction_account_id(owner, "owner"),
             name=name,
             description=description,
             alias=alias,
@@ -10394,7 +11174,10 @@ class ToriiClient(_BaseToriiClient):
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.mint_asset_numeric(asset_id, quantity)
+        draft.mint_asset_numeric(
+            self._native_transaction_asset_id(asset_id, "asset_id"),
+            quantity,
+        )
         return self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
@@ -10439,7 +11222,13 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"mints[{index}].quantity is required")
-            draft.mint_asset_numeric(asset_id, record["quantity"])
+            draft.mint_asset_numeric(
+                self._native_transaction_asset_id(
+                    asset_id,
+                    f"mints[{index}].asset_id",
+                ),
+                record["quantity"],
+            )
             count += 1
         if count == 0:
             raise ValueError("mints must contain at least one mint record")
@@ -10478,7 +11267,10 @@ class ToriiClient(_BaseToriiClient):
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.burn_asset_numeric(asset_id, quantity)
+        draft.burn_asset_numeric(
+            self._native_transaction_asset_id(asset_id, "asset_id"),
+            quantity,
+        )
         return self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
@@ -10515,7 +11307,11 @@ class ToriiClient(_BaseToriiClient):
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.transfer_asset_numeric(asset_id, quantity, destination)
+        draft.transfer_asset_numeric(
+            self._native_transaction_asset_id(asset_id, "asset_id"),
+            quantity,
+            self._native_transaction_account_id(destination, "destination"),
+        )
         return self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
@@ -10564,7 +11360,17 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"transfers[{index}].quantity is required")
-            draft.transfer_asset_numeric(asset_id, record["quantity"], destination)
+            draft.transfer_asset_numeric(
+                self._native_transaction_asset_id(
+                    asset_id,
+                    f"transfers[{index}].asset_id",
+                ),
+                record["quantity"],
+                self._native_transaction_account_id(
+                    destination,
+                    f"transfers[{index}].destination",
+                ),
+            )
             count += 1
         if count == 0:
             raise ValueError("transfers must contain at least one transfer record")
@@ -10656,7 +11462,13 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             identity_commitment=identity_commitment,
             policy_hash=policy_hash,
-            allowed_accounts=allowed_accounts,
+            allowed_accounts=[
+                self._native_transaction_account_id(
+                    account_id,
+                    f"allowed_accounts[{index}]",
+                )
+                for index, account_id in enumerate(allowed_accounts)
+            ],
             verifier_key=verifier_key,
             action_class=action_class,
             domain_tag=domain_tag,
@@ -10702,7 +11514,13 @@ class ToriiClient(_BaseToriiClient):
             old_identity_commitment=old_identity_commitment,
             new_identity_commitment=new_identity_commitment,
             policy_hash=policy_hash,
-            allowed_accounts=allowed_accounts,
+            allowed_accounts=[
+                self._native_transaction_account_id(
+                    account_id,
+                    f"allowed_accounts[{index}]",
+                )
+                for index, account_id in enumerate(allowed_accounts)
+            ],
             verifier_key=verifier_key,
             action_class=action_class,
             domain_tag=domain_tag,
@@ -10781,7 +11599,7 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.shield_asset(
             asset_definition_id,
-            from_account_id,
+            self._native_transaction_account_id(from_account_id, "from_account_id"),
             amount,
             note_commitment=note_commitment,
             ephemeral_public_key=ephemeral_public_key,
@@ -10866,7 +11684,7 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.unshield_prepared(
             asset_definition_id,
-            to_account_id,
+            self._native_transaction_account_id(to_account_id, "to_account_id"),
             public_amount,
             inputs=inputs,
             proof=proof,
@@ -10913,8 +11731,14 @@ class ToriiClient(_BaseToriiClient):
             metadata=transaction_metadata,
         )
         draft.zk_ace_authorized_transfer(
-            from_account_id=from_account_id,
-            to_account_id=to_account_id,
+            from_account_id=self._native_transaction_account_id(
+                from_account_id,
+                "from_account_id",
+            ),
+            to_account_id=self._native_transaction_account_id(
+                to_account_id,
+                "to_account_id",
+            ),
             asset_definition_id=asset_definition_id,
             amount=amount,
             identity_commitment=identity_commitment,
@@ -11437,7 +12261,7 @@ class ToriiClient(_BaseToriiClient):
         return self._request(
             "GET",
             "/v1/zk/vk/"
-            f"{quote(_require_non_empty_string(backend, 'backend'), safe='')}/"
+            f"{quote(_require_production_verify_backend_label(backend, 'backend'), safe='')}/"
             f"{quote(_require_non_empty_string(name, 'name'), safe='')}",
         )
 
@@ -11471,7 +12295,7 @@ class ToriiClient(_BaseToriiClient):
         return self._request(
             "POST",
             "/v1/zk/vk/register",
-            json_body=dict(_json_safe_value(dict(payload))),
+            json_body=_normalize_zk_verifying_key_registration_payload(payload),
             timeout=60.0,
         )
 
@@ -11479,6 +12303,26 @@ class ToriiClient(_BaseToriiClient):
         """Submit a ZK verifying-key registration request and decode the response."""
 
         response = self.submit_zk_verifying_key_registration(payload)
+        self._expect_status(response, {200, 201, 202, 409})
+        return self._maybe_json(response)
+
+    def submit_zk_verifying_key_update(
+        self,
+        payload: Mapping[str, Any],
+    ) -> requests.Response:
+        """Submit a ZK verifying-key update request and return the raw response."""
+
+        return self._request(
+            "POST",
+            "/v1/zk/vk/update",
+            json_body=_normalize_zk_verifying_key_update_payload(payload),
+            timeout=60.0,
+        )
+
+    def update_zk_verifying_key(self, payload: Mapping[str, Any]) -> Optional[Any]:
+        """Submit a ZK verifying-key update request and decode the response."""
+
+        response = self.submit_zk_verifying_key_update(payload)
         self._expect_status(response, {200, 201, 202, 409})
         return self._maybe_json(response)
 
@@ -12086,7 +12930,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account permissions via `GET /v1/accounts/{account_id}/permissions`."""
 
-        canonical_account_id = _normalize_canonical_account_id(
+        canonical_account_id = self._normalize_canonical_account_id(
             account_id, "account_id"
         )
         params = self._pagination_params(limit=limit, offset=offset)

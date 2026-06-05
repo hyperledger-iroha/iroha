@@ -1,13 +1,13 @@
 import Foundation
 
 public enum OfflineNoteV2Constants {
-    public static let keyCertificatePayloadDomain = "iroha:offline-note-v2:key-certificate-payload:v1"
-    public static let issuedClaimDomain = "iroha:offline-note-v2:issued-claim:v1"
-    public static let redeemPublicInputsDomain = "iroha:offline-note-v2:redeem-public-inputs:v1"
-    public static let auditPublicInputsDomain = "iroha:offline-note-v2:audit-public-inputs:v1"
+    public static let keyCertificatePayloadDomain = "iroha:offline-note:key-certificate-payload"
+    public static let issuedClaimDomain = "iroha:offline-note:issued-claim"
+    public static let redeemPublicInputsDomain = "iroha:offline-note:redeem-public-inputs"
+    public static let auditPublicInputsDomain = "iroha:offline-note:audit-public-inputs"
     public static let recursiveBackend = "halo2/ipa"
     public static let recursiveVerifierName = "offline-note-v2-recursive-v1"
-    public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_v2_recursive_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
+    public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
 
     public static var recursivePublicInputsSchemaHash: Data {
         IrohaHash.hash(Data(recursivePublicInputsSchemaV1.utf8))
@@ -703,16 +703,16 @@ public struct AuditOfflineNoteV2Request: Sendable {
 }
 
 enum OfflineNoteV2TypeNames {
-    static let keyCertificate = "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2"
-    static let keyCertificatePayload = "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayloadV2"
-    static let recursiveProof = "iroha_data_model::offline::model::OfflineNoteRecursiveProofV2"
-    static let issue = "iroha_data_model::offline::model::OfflineNoteIssueV2"
-    static let issuedClaim = "iroha_data_model::offline::model::OfflineNoteIssuedClaimV2"
-    static let auditOutputClaim = "iroha_data_model::offline::model::OfflineNoteAuditOutputClaimV2"
-    static let redeem = "iroha_data_model::offline::model::OfflineNoteRedeemV2"
-    static let redeemPublicInputs = "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputsV2"
-    static let audit = "iroha_data_model::offline::model::OfflineNoteAuditBundleV2"
-    static let auditPublicInputs = "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2"
+    static let keyCertificate = "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
+    static let keyCertificatePayload = "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload"
+    static let recursiveProof = "iroha_data_model::offline::model::OfflineNoteRecursiveProof"
+    static let issue = "iroha_data_model::offline::model::OfflineNoteIssue"
+    static let issuedClaim = "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
+    static let auditOutputClaim = "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim"
+    static let redeem = "iroha_data_model::offline::model::OfflineNoteRedeem"
+    static let redeemPublicInputs = "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
+    static let audit = "iroha_data_model::offline::model::OfflineNoteAuditBundle"
+    static let auditPublicInputs = "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs"
     static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
     static let redeemInstruction = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
     static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNoteV2"

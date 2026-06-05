@@ -1146,7 +1146,14 @@ class EvmSccpProverTest {
         }.also { error ->
             assertTrue(error.message?.contains("destinationBindingHash") == true)
         }
-        val submission = EthereumMainnetSccp().buildEthereumCalldata(EvmSccpSubmissionInput(result))
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().buildEthereumCalldata(EvmSccpSubmissionInput(result))
+        }.also { error ->
+            assertTrue(error.message?.contains("verified native EVM prover artifacts") == true)
+        }
+        val submission = EthereumMainnetSccp(
+            nativeProverArtifacts = verifiedArtifacts,
+        ).buildEthereumCalldata(EvmSccpSubmissionInput(artifactBoundResult))
         assertEquals(SccpEvm.DOMAIN_ETH, submission.targetDomain)
         assertContentEquals(proofBytes, submission.proofBytes)
         val submitted = EthereumMainnetSccp(
@@ -1155,7 +1162,8 @@ class EvmSccpProverTest {
                 assertContentEquals(proofBytes, outboundSubmission.proofBytes)
                 "eth-submitted"
             },
-        ).submitOutboundToEthereum(EvmSccpSubmissionInput(result))
+            nativeProverArtifacts = verifiedArtifacts,
+        ).submitOutboundToEthereum(EvmSccpSubmissionInput(artifactBoundResult))
         assertEquals("eth-submitted", submitted)
         var guardedSubmitterCalled = false
         val guarded = EthereumMainnetSccp(
@@ -1167,15 +1175,17 @@ class EvmSccpProverTest {
                 guardedSubmitterCalled = true
                 "wrong-chain"
             },
+            nativeProverArtifacts = verifiedArtifacts,
         )
         assertFailsWith<IllegalArgumentException> {
-            guarded.submitOutboundToEthereum(EvmSccpSubmissionInput(result))
+            guarded.submitOutboundToEthereum(EvmSccpSubmissionInput(artifactBoundResult))
         }.also { error ->
             assertTrue(error.message!!.contains("eth_chainId == 1"))
         }
         assertFalse(guardedSubmitterCalled)
         assertFailsWith<IllegalStateException> {
-            EthereumMainnetSccp().submitOutboundToEthereum(EvmSccpSubmissionInput(result))
+            EthereumMainnetSccp(nativeProverArtifacts = verifiedArtifacts)
+                .submitOutboundToEthereum(EvmSccpSubmissionInput(artifactBoundResult))
         }
         assertFailsWith<IllegalArgumentException> {
             EthereumMainnetSccp().buildEthereumCalldata(
@@ -1349,7 +1359,7 @@ class EvmSccpProverTest {
                         beaconHeaderJson(slot = "64").toByteArray(Charsets.UTF_8),
                     )
                 "https://beacon.example/eth/v1/beacon/blocks/64/root" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("dd").toByteArray(Charsets.UTF_8))
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson().toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v2/beacon/blocks/64" ->
                     EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "64").toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" ->
@@ -1371,7 +1381,10 @@ class EvmSccpProverTest {
         assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
         assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
         assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
-        assertEquals("0x" + "dd".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
+        assertEquals(
+            "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+            evidence.beaconFinality?.get("finalizedHeaderRoot"),
+        )
         assertEquals("0x" + "ee".repeat(32), evidence.beaconFinality?.get("syncCommitteeRoot"))
         assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
         assertEquals(ethereumFinalityBranch, evidence.beaconFinality?.get("finalityBranch"))
@@ -1438,7 +1451,7 @@ class EvmSccpProverTest {
                         beaconHeaderJson(slot = "64").toByteArray(Charsets.UTF_8),
                     )
                 "https://beacon.example/eth/v1/beacon/blocks/64/root" ->
-                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson("dd").toByteArray(Charsets.UTF_8))
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson().toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v2/beacon/blocks/64" ->
                     EthereumMainnetBeaconRestResponse(200, beaconBlockJson(slot = "64").toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" ->
@@ -1463,7 +1476,10 @@ class EvmSccpProverTest {
                 ),
             )
 
-        assertEquals("0x" + "dd".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
+        assertEquals(
+            "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+            evidence.beaconFinality?.get("finalizedHeaderRoot"),
+        )
         assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
         assertEquals(
             listOf(
@@ -4034,15 +4050,16 @@ class EvmSccpProverTest {
     private fun beaconHeaderJson(
         executionOptimistic: Boolean = false,
         finalized: Boolean = true,
-        rootByte: String = "dd",
+        rootByte: String? = null,
         slot: String = "64",
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
     ): String =
         """
         {
           "execution_optimistic": $executionOptimistic,
           "finalized": $finalized,
           "data": {
-            "root": "0x${rootByte.repeat(32)}",
+            "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}",
             "canonical": true,
             "header": {
               "message": {
@@ -4058,27 +4075,33 @@ class EvmSccpProverTest {
         }
         """.trimIndent()
 
-    private fun beaconCheckpointJson(rootByte: String = "dd"): String =
+    private fun beaconCheckpointJson(
+        rootByte: String? = null,
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+    ): String =
         """
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
             "finalized": {
-              "root": "0x${rootByte.repeat(32)}",
+              "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}",
               "epoch": "2"
             }
           }
         }
         """.trimIndent()
 
-    private fun beaconBlockRootJson(rootByte: String = "dd"): String =
+    private fun beaconBlockRootJson(
+        rootByte: String? = null,
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+    ): String =
         """
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
-            "root": "0x${rootByte.repeat(32)}"
+            "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}"
           }
         }
         """.trimIndent()

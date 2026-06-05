@@ -1092,9 +1092,16 @@ fn verify_soracloud_fhe_input_admission_proof(
             })?;
         }
         BfvCiphertextBoundModeV1::BoundedNoise => {
-            return Err(invalid_parameter(
-                "bounded-noise FHE input admission proofs are not yet supported by the runtime verifier",
-            ));
+            validate_bfv_bounded_noise_bound(
+                &params,
+                proof.residual_multiple_bound,
+                "Soracloud FHE input admission bounded-noise bound",
+            )
+            .map_err(|err| {
+                invalid_parameter(format!(
+                    "FHE input admission bounded-noise metadata exceeds BFV capacity: {err}"
+                ))
+            })?;
         }
     }
     validate_soracloud_fhe_input_envelope_shape(&params, value_payload)?;
@@ -12502,6 +12509,26 @@ mod tests {
         governance_tx_hash: Hash,
         residual_multiple_bound: u128,
     ) -> SoracloudFheInputAdmissionProofV1 {
+        sample_fhe_input_admission_proof_with_bound_mode(
+            service_name,
+            binding_name,
+            state_key,
+            payload,
+            governance_tx_hash,
+            residual_multiple_bound,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        )
+    }
+
+    fn sample_fhe_input_admission_proof_with_bound_mode(
+        service_name: &Name,
+        binding_name: &Name,
+        state_key: &str,
+        payload: &[u8],
+        governance_tx_hash: Hash,
+        residual_multiple_bound: u128,
+        bound_mode: BfvCiphertextBoundModeV1,
+    ) -> SoracloudFheInputAdmissionProofV1 {
         let statement_hash = expected_fhe_input_admission_statement_hash(
             service_name,
             binding_name,
@@ -12512,7 +12539,7 @@ mod tests {
             SoraStateEncryptionV1::FheCiphertext,
             governance_tx_hash,
             residual_multiple_bound,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            bound_mode,
         )
         .expect("statement hash");
         let open = StarkFriOpenProofV1 {
@@ -12535,7 +12562,7 @@ mod tests {
             schema_version:
                 iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
             residual_multiple_bound,
-            bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            bound_mode,
             statement_hash,
             proof: iroha_data_model::proof::ProofAttachment::new_ref(
                 FHE_INPUT_ADMISSION_BACKEND.into(),
@@ -12583,6 +12610,29 @@ mod tests {
         residual_multiple_bound: u128,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) -> SoracloudFheInputAdmissionProofV1 {
+        sample_verified_fhe_input_admission_proof_with_bound_mode(
+            service_name,
+            binding_name,
+            state_key,
+            payload,
+            governance_tx_hash,
+            residual_multiple_bound,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            vk_box,
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_verified_fhe_input_admission_proof_with_bound_mode(
+        service_name: &Name,
+        binding_name: &Name,
+        state_key: &str,
+        payload: &[u8],
+        governance_tx_hash: Hash,
+        residual_multiple_bound: u128,
+        bound_mode: BfvCiphertextBoundModeV1,
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> SoracloudFheInputAdmissionProofV1 {
         let statement_hash = expected_fhe_input_admission_statement_hash(
             service_name,
             binding_name,
@@ -12593,7 +12643,7 @@ mod tests {
             SoraStateEncryptionV1::FheCiphertext,
             governance_tx_hash,
             residual_multiple_bound,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            bound_mode,
         )
         .expect("statement hash");
         let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
@@ -12608,7 +12658,7 @@ mod tests {
             schema_version:
                 iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
             residual_multiple_bound,
-            bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            bound_mode,
             statement_hash,
             proof: iroha_data_model::proof::ProofAttachment::new_ref(
                 FHE_INPUT_ADMISSION_BACKEND.into(),
@@ -19967,7 +20017,7 @@ mod tests {
     }
 
     #[test]
-    fn mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof()
+    fn mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
@@ -19980,20 +20030,22 @@ mod tests {
         let service_name: Name = "portal".parse().expect("valid");
         let binding_name: Name = "vault".parse().expect("valid");
         let state_key = "/state/private/input-bounded-proof";
-        let payload = sample_fhe_payload(b"alice", b"seed-proof-bounded-noise");
+        let (_secret_key, public_key, _evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let payload =
+            sample_bounded_noise_fhe_payload(&public_key, &[21, 34], "seed-proof-bounded-noise");
         let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-bounded-noise");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let mut admission_proof = sample_fhe_input_admission_proof(
+        let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
+            .expect("fresh input noise bound");
+        let admission_proof = sample_fhe_input_admission_proof_with_bound_mode(
             &service_name,
             &binding_name,
             state_key,
             &payload,
             governance_tx_hash,
-            residual_bound,
+            noise_bound,
+            BfvCiphertextBoundModeV1::BoundedNoise,
         );
-        admission_proof.bound_mode = BfvCiphertextBoundModeV1::BoundedNoise;
 
         let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
             service_name: service_name.clone(),
@@ -20018,9 +20070,9 @@ mod tests {
             ),
         })
         .execute(&ALICE_ID, &mut stx)
-        .expect_err("bounded-noise FHE input admission must fail closed");
+        .expect_err("unregistered bounded-noise proof verifier must reject FHE input admission");
 
-        assert_invalid_parameter_contains(err, "bounded-noise FHE input admission proofs");
+        assert_invariant_contains(err, "FHE input admission verifying key not found");
         assert!(
             stx.world
                 .soracloud_service_state_entries
@@ -20317,6 +20369,132 @@ mod tests {
             entry.fhe_bound_mode,
             Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
             "verified FHE input admission must persist exact bound semantics"
+        );
+        assert_eq!(
+            world
+                .verifying_keys()
+                .get(&vk_id)
+                .expect("registered input-admission verifier")
+                .namespace,
+            "soracloud"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let bundle = sample_bundle_with_state_binding(
+            "portal",
+            "1.0.0",
+            0,
+            "vault",
+            "/state/private",
+            SoraStateEncryptionV1::FheCiphertext,
+            SoraStateMutabilityV1::ReadWrite,
+            131_072,
+            262_144,
+        );
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        stx.zk.stark.enabled = true;
+
+        let vk_box = sample_fhe_input_admission_vk_box();
+        let vk_id = register_fhe_input_admission_verifier(&mut stx, vk_box.clone())?;
+        assert_eq!(
+            vk_id,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                FHE_INPUT_ADMISSION_CIRCUIT_ID,
+            )
+        );
+
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let state_key = "/state/private/input-verified-bounded";
+        let (_secret_key, public_key, _evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let payload = sample_bounded_noise_fhe_payload(
+            &public_key,
+            &[21, 34],
+            "seed-proof-registered-bounded-vk",
+        );
+        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-registered-bounded");
+        let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
+            .expect("fresh input noise bound");
+        let admission_proof = sample_verified_fhe_input_admission_proof_with_bound_mode(
+            &service_name,
+            &binding_name,
+            state_key,
+            &payload,
+            governance_tx_hash,
+            noise_bound,
+            BfvCiphertextBoundModeV1::BoundedNoise,
+            &vk_box,
+        );
+
+        iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            state_key: state_key.to_string(),
+            operation: SoraStateMutationOperationV1::Upsert,
+            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
+            value_payload: Some(payload.clone()),
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            fhe_input_admission_proof: Some(admission_proof.clone()),
+            provenance: state_mutation_provenance(
+                &service_name,
+                &binding_name,
+                state_key,
+                SoraStateMutationOperationV1::Upsert,
+                Some(u64::try_from(payload.len()).expect("payload len")),
+                Some(Hash::new(&payload)),
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+                Some(admission_proof),
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)?;
+
+        stx.apply();
+        state_block.commit()?;
+
+        let view = state.view();
+        let world = view.world();
+        let entry = world
+            .soracloud_service_state_entries()
+            .get(&(
+                service_name.as_ref().to_owned(),
+                binding_name.as_ref().to_owned(),
+                state_key.to_string(),
+            ))
+            .expect("admitted bounded FHE state entry");
+        assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
+        assert_eq!(entry.payload_commitment, Hash::new(&payload));
+        assert_eq!(
+            entry.fhe_residual_multiple_bound,
+            Some(noise_bound),
+            "verified bounded FHE input admission must persist the proven noise bound"
+        );
+        assert_eq!(
+            entry.fhe_bound_mode,
+            Some(BfvCiphertextBoundModeV1::BoundedNoise),
+            "verified bounded FHE input admission must persist bounded-noise semantics"
         );
         assert_eq!(
             world

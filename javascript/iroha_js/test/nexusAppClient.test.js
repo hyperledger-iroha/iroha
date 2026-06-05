@@ -229,6 +229,32 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
       },
     },
   });
+  for (const algorithm of [
+    "secp256k1",
+    "ed\t25519",
+    "ed\u200B25519",
+    "\u0435d25519",
+    "ed\uFF0D25519",
+    " ED25519 ",
+  ]) {
+    await assert.rejects(
+      () =>
+        client.finalizeAndSubmit(
+          {
+            payloadBytes: Buffer.from("payload"),
+            payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
+            authority: "account-i105",
+            signingPublicKey: Buffer.alloc(32, 1),
+            signatureAlgorithm: "ed25519",
+          },
+          { algorithm, signature: Buffer.alloc(64) },
+          { wait: false },
+        ),
+      (error) =>
+        error instanceof NexusAppError &&
+        error.code === fixture.error_cases[0].expected_code,
+    );
+  }
   await assert.rejects(
     () =>
       client.finalizeAndSubmit(
@@ -237,9 +263,9 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
           payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
           authority: "account-i105",
           signingPublicKey: Buffer.alloc(32, 1),
-          signatureAlgorithm: "ed25519",
+          signatureAlgorithm: "ed\u200B25519",
         },
-        { algorithm: "secp256k1", signature: Buffer.alloc(64) },
+        { algorithm: "ed25519", signature: Buffer.alloc(64) },
         { wait: false },
       ),
     (error) =>

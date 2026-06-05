@@ -409,6 +409,7 @@ fn verify_with_config(
 
     validate_privacy_proof_envelope_metadata(
         &envelope,
+        backend_tag.as_str(),
         record_backend,
         &record_circuit_id,
         record_commitment,
@@ -452,10 +453,19 @@ fn verify_with_config(
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn validate_privacy_proof_envelope_metadata(
     envelope: &OpenVerifyEnvelope,
+    configured_backend: &str,
     record_backend: BackendTag,
     record_circuit_id: &str,
     record_commitment: [u8; Hash::LENGTH],
 ) -> Result<(), Error> {
+    let Some(expected_backend) = zk::production_verify_backend_tag(configured_backend) else {
+        return Err(privacy_error(
+            "privacy proof verifier backend is not admitted by the production verifier registry",
+        ));
+    };
+    if expected_backend != record_backend {
+        return Err(privacy_error("privacy verifier backend tag mismatch"));
+    }
     if record_backend != envelope.backend {
         return Err(privacy_error("privacy proof backend mismatch"));
     }
@@ -557,6 +567,7 @@ mod tests {
         assert!(
             validate_privacy_proof_envelope_metadata(
                 &envelope,
+                "halo2/pasta/kaigi-roster-v1",
                 BackendTag::Halo2IpaPasta,
                 "kaigi/roster",
                 commitment,
@@ -564,9 +575,48 @@ mod tests {
             .is_ok()
         );
 
+        let err = validate_privacy_proof_envelope_metadata(
+            &envelope,
+            "halo2/ipa:production-ready",
+            BackendTag::Halo2IpaPasta,
+            "kaigi/roster",
+            commitment,
+        )
+        .expect_err("production-claim verifier backend must reject");
+        let Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+        ) = err
+        else {
+            panic!("unexpected production-claim backend rejection: {err:?}");
+        };
+        assert!(
+            message.contains("production verifier registry"),
+            "unexpected error: {message}"
+        );
+
+        let err = validate_privacy_proof_envelope_metadata(
+            &envelope,
+            "stark/fri/sha256-goldilocks",
+            BackendTag::Halo2IpaPasta,
+            "kaigi/roster",
+            commitment,
+        )
+        .expect_err("configured backend tag drift must reject");
+        let Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+        ) = err
+        else {
+            panic!("unexpected backend tag mismatch rejection: {err:?}");
+        };
+        assert!(
+            message.contains("backend tag mismatch"),
+            "unexpected error: {message}"
+        );
+
         envelope.vk_hash = [0u8; Hash::LENGTH];
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
+            "halo2/pasta/kaigi-roster-v1",
             BackendTag::Halo2IpaPasta,
             "kaigi/roster",
             commitment,

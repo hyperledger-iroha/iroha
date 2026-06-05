@@ -6873,6 +6873,72 @@ const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
   return artifacts;
 };
 
+const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
+  artifacts,
+  proofResult,
+) => {
+  if (artifacts == null) {
+    const error = new Error(
+      "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts",
+    );
+    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    throw error;
+  }
+  const proofArtifactHash = strictOptionalResultField(
+    proofResult,
+    "proofResult.proofArtifactHash",
+    "proofArtifactHash",
+    "proof_artifact_hash",
+  );
+  const provingKeyHash = strictOptionalResultField(
+    proofResult,
+    "proofResult.provingKeyHash",
+    "provingKeyHash",
+    "proving_key_hash",
+  );
+  if (
+    proofArtifactHash !== artifacts.proofArtifactHash ||
+    provingKeyHash !== artifacts.provingKeyHash
+  ) {
+    throw new TypeError("nativeProverArtifacts artifact hashes must match proofResult");
+  }
+  const destinationBindingHash = normalizeCanonicalNativeEvmProverBundleHex32(
+    strictResultField(
+      proofResult,
+      "proofResult.destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "proofResult.destinationBindingHash",
+  );
+  if (artifacts.nativeProverBundle.destinationBindingHash !== destinationBindingHash) {
+    throw new TypeError("nativeProverArtifacts destinationBindingHash must match proofResult");
+  }
+  if (artifacts.verifierKeyHash !== artifacts.nativeProverBundle.verifierKeyHash) {
+    throw new TypeError("nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+  }
+  if (
+    typeof artifacts.sdk !== "string" ||
+    artifacts.sdk.length === 0 ||
+    typeof artifacts.implementation !== "string" ||
+    artifacts.implementation.length === 0 ||
+    typeof artifacts.implementationHash !== "string"
+  ) {
+    throw new TypeError("nativeProverArtifacts must bind sdk implementation and implementationHash");
+  }
+  const artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.find((row) => row.sdk === artifacts.sdk);
+  if (artifact === undefined) {
+    throw new TypeError(`nativeProverBundle has no artifact row for sdk: ${artifacts.sdk}`);
+  }
+  if (
+    artifacts.implementation !== artifact.implementation ||
+    artifacts.implementationHash !== artifact.implementationHash
+  ) {
+    throw new TypeError("nativeProverArtifacts implementation binding must match nativeProverBundle");
+  }
+  return artifacts;
+};
+
 const prepareEthereumMainnetNativeEvmProverBundleInput = (
   input,
   defaultNativeProverBundle,
@@ -9573,7 +9639,7 @@ const normalizeEthereumMainnetFinalityBranch = (value, label) => {
 
 const ethereumMainnetBeaconRestFinalityUpdateSummary = (
   payload,
-  { expectedFinalizedSlot, expectedSignatureSlot } = {},
+  { expectedFinalizedSlot, expectedFinalizedRoot, expectedSignatureSlot } = {},
 ) => {
   rejectEthereumMainnetBeaconRestUnfinalized(
     payload,
@@ -9614,6 +9680,12 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
   if (expectedFinalizedSlot !== undefined && finalizedSlot !== expectedFinalizedSlot) {
     throw new TypeError(
       "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot",
+    );
+  }
+  const finalizedHeaderRoot = ethBeaconBlockHeaderRoot(finalizedBeacon);
+  if (expectedFinalizedRoot !== undefined && finalizedHeaderRoot !== expectedFinalizedRoot) {
+    throw new TypeError(
+      "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root",
     );
   }
   const signatureSlot = ethereumMainnetBeaconRestNormalizeBeaconSlot(
@@ -9664,6 +9736,8 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
   );
   return {
     finalityBranch,
+    finalizedHeaderRoot,
+    beaconSlot: finalizedSlot.toString(),
     syncCommitteeBits,
     syncCommitteeSignature,
     syncCommitteeParticipation: ethereumMainnetBeaconRestPopcount(
@@ -9943,6 +10017,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       finalityUpdateResponse,
       {
         expectedFinalizedSlot: finalizedHeader.slot,
+        expectedFinalizedRoot: finalizedHeader.root,
         expectedSignatureSlot: finalizedHeader.slot,
       },
     );
@@ -9951,9 +10026,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
         executionBlockNumber,
         executionBlockHash: blockHash,
         executionReceiptsRoot,
-        finalizedHeaderRoot: finalizedHeader.root,
         syncCommitteeRoot: ethereumMainnetBeaconRestSyncCommitteeRoot(this, options),
-        beaconSlot: finalizedHeader.slot.toString(),
         ...finalityUpdate,
       },
       {
@@ -11205,7 +11278,13 @@ export class EthereumMainnetSccp {
   }
 
   buildEthereumCalldata(input) {
-    return requireEthereumMainnetSubmission(buildEvmSccpSubmission(input), input);
+    const submission = requireEthereumMainnetSubmission(buildEvmSccpSubmission(input), input);
+    const proofResult = strictResultField(input, "proofResult", "proofResult", "proof_result");
+    requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult(
+      this.nativeProverArtifacts,
+      proofResult,
+    );
+    return submission;
   }
 
   async submitOutboundToEthereum(input, options = {}) {
@@ -27802,9 +27881,11 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   if (publicInputs.messageId !== expectedMessageId) {
     throw new TypeError("publicInputs.messageId must match canonicalPayloadBytes");
   }
-  const expectedPayloadHash = sccpPayloadHash(canonicalPayloadBytes);
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: parsedPayload }),
+  );
   if (publicInputs.payloadHash !== expectedPayloadHash) {
-    throw new TypeError("publicInputs.payloadHash must match canonicalPayloadBytes");
+    throw new TypeError("publicInputs.payloadHash must match canonical SCCP payload envelope");
   }
   const proofBytesTail = abiDynamicBytes(proofBytes, "proofBytes");
   const canonicalPayloadTail = abiDynamicBytes(canonicalPayloadBytes, "canonicalPayloadBytes");
@@ -27934,12 +28015,39 @@ const readTairaXorTronEventResult = (event) => {
     : requirePlainObject(result, "event.result");
 };
 
+const equalTairaXorTronEventAliasValue = (a, b) => {
+  if (a === b) return true;
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const aHex = a.replace(/^0x/iu, "").toLowerCase();
+  const bHex = b.replace(/^0x/iu, "").toLowerCase();
+  return /^[0-9a-f]+$/u.test(aHex) && aHex === bHex;
+};
+
+const readOptionalTairaXorTronEventAliasField = (value, label, ...names) => {
+  let selected = SCCP_OPTIONAL_FIELD_MISSING;
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(value, name)) {
+      const next = value[name];
+      if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
+        selected = next;
+      } else if (!equalTairaXorTronEventAliasValue(selected, next)) {
+        throw new TypeError(`${label} must not conflict between aliases`);
+      }
+    }
+  }
+  return selected;
+};
+
 const readTairaXorTronEventField = (event, label, ...names) => {
   const result = readTairaXorTronEventResult(event);
   const resultValue = result
-    ? strictOptionalResultField(result, label, ...names)
+    ? readOptionalTairaXorTronEventAliasField(result, label, ...names)
     : SCCP_OPTIONAL_FIELD_MISSING;
-  const eventValue = strictOptionalResultField(event, label, ...names);
+  const eventValue = readOptionalTairaXorTronEventAliasField(
+    event,
+    label,
+    ...names,
+  );
   if (
     resultValue !== SCCP_OPTIONAL_FIELD_MISSING &&
     eventValue !== SCCP_OPTIONAL_FIELD_MISSING &&
@@ -27989,14 +28097,21 @@ const normalizeTairaXorTronEventUint = (value, label, max, typeLabel) => {
 };
 
 const decodeTairaXorEventRecipientText = (value, label) => {
-  if (typeof value === "string" && value.startsWith("0x")) {
+  if (typeof value === "string") {
+    const hexText = value.startsWith("0x") ? value.slice(2) : value;
+    if (value.startsWith("0x") || /^[0-9a-fA-F]+$/u.test(hexText)) {
+      if (hexText.length % 2 !== 0) {
+        throw new TypeError(`${label} must be hex-encoded bytes`);
+      }
+      return normalizeCanonicalTairaAccountId(
+        textDecoder.decode(toBytes(`0x${hexText}`, label)),
+        label,
+      );
+    }
     return normalizeCanonicalTairaAccountId(
-      textDecoder.decode(toBytes(value, label)),
+      value,
       label,
     );
-  }
-  if (typeof value === "string") {
-    return normalizeCanonicalTairaAccountId(value, label);
   }
   return normalizeCanonicalTairaAccountId(
     textDecoder.decode(toBytes(value, label)),
@@ -28520,7 +28635,9 @@ export function bindTairaXorTronToTairaSourceProofPackage(input) {
     amount,
     nonce: transferNonce,
   });
-  const expectedPayloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(expectedPayload));
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: expectedPayload }),
+  );
   if (commitmentPayloadHash !== expectedPayloadHash) {
     throw new TypeError("messageBundle commitment payload hash must match the TAIRA XOR payload");
   }

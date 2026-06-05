@@ -784,6 +784,19 @@ GstElapsedStepOnlySetsGst ==
     /\ digestValid' = digestValid
     /\ committed' = committed
 
+GstMonotonicStep ==
+  gst => gst'
+
+ViewMonotonicStep ==
+  view' >= view
+
+CommitViewMonotonicStep ==
+  commitView' >= commitView
+
+CommitEvidenceMonotonicStep ==
+  /\ commitEvidenceVotes' >= commitEvidenceVotes
+  /\ commitEvidenceStake' >= commitEvidenceStake
+
 ViewEvidenceMatchesActiveView ==
   /\ (view = 0 => viewEvidenceVotes = 0)
   /\ (phase = "NewView" => viewEvidenceVotes = 0)
@@ -1740,6 +1753,18 @@ GstElapsedGateNeverBypassesPreGst ==
 
 GstElapsedStepAlwaysOnlySetsGst ==
   [] [GstElapsedStepOnlySetsGst]_vars
+
+GstNeverRegresses ==
+  [] [GstMonotonicStep]_vars
+
+ViewNeverRegresses ==
+  [] [ViewMonotonicStep]_vars
+
+CommitViewNeverRegresses ==
+  [] [CommitViewMonotonicStep]_vars
+
+CommitEvidenceNeverRegresses ==
+  [] [CommitEvidenceMonotonicStep]_vars
 
 TimeoutTickGateNeverBypassesStalledProgress ==
   [] TimeoutTickGateMatchesStalledProgress

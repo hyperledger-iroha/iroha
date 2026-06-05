@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "schemas": [
+    {
+      "path": "iso/pacs.008.001.08.xsd",
+      "message_def_id": "pacs.008.001.08",
+      "payload_root": "FIToFICstmrCdtTrf",
+      "source": {
+        "repository": "https://github.com/moov-io/fedwire20022",
+        "commit": "55062cced20cca64efde7de6116d82fa0427eef7",
+        "path": "xsd/iso/pacs.008.001.08.xsd",
+        "license": "Apache-2.0",
+        "sha256": "cf048155f70cacd03f1f1dfadf66cba8752be93c249c267351782fd6adb023f7"
+      }
+    },
+    {
+      "path": "iso/pacs.009.001.08.xsd",
+      "message_def_id": "pacs.009.001.08",
+      "payload_root": "FICdtTrf",
+      "source": {
+        "repository": "https://github.com/moov-io/fedwire20022",
+        "commit": "55062cced20cca64efde7de6116d82fa0427eef7",
+        "path": "xsd/iso/pacs.009.001.08.xsd",
+        "license": "Apache-2.0",
+        "sha256": "2f695939eb9be156bf2f14a26fbeb0f3bead73037fb03fd219ad14ceb19905ec"
+      }
+    },
+    {
+      "path": "iso/pacs.002.001.10.xsd",
+      "message_def_id": "pacs.002.001.10",
+      "payload_root": "FIToFIPmtStsRpt",
+      "source": {
+        "repository": "https://github.com/moov-io/fedwire20022",
+        "commit": "55062cced20cca64efde7de6116d82fa0427eef7",
+        "path": "xsd/iso/pacs.002.001.10.xsd",
+        "license": "Apache-2.0",
+        "sha256": "d14da6304db5178b1afc7d8ed6cc6073e6e1a143fc79d9ba66d3246d4a654e90"
+      }
+    },
+    {
+      "path": "iso/pacs.004.001.10.xsd",
+      "message_def_id": "pacs.004.001.10",
+      "payload_root": "PmtRtr",
+      "source": {
+        "repository": "https://github.com/moov-io/fedwire20022",
+        "commit": "55062cced20cca64efde7de6116d82fa0427eef7",
+        "path": "xsd/iso/pacs.004.001.10.xsd",
+        "license": "Apache-2.0",
+        "sha256": "69c4870348b66605b40a66e9fb50788162e7319f571dd1442eb684d900beb6d9"
+      }
+    },
+    {
+      "path": "iso/camt.056.001.08.xsd",
+      "message_def_id": "camt.056.001.08",
+      "payload_root": "FIToFIPmtCxlReq",
+      "source": {
+        "repository": "https://github.com/moov-io/fedwire20022",
+        "commit": "55062cced20cca64efde7de6116d82fa0427eef7",
+        "path": "xsd/iso/camt.056.001.08.xsd",
+        "license": "Apache-2.0",
+        "sha256": "16691301a355a7b2429d3da1217f2ae646e4ed207618d00832d170b1e2b39e6d"
+      }
+    },
+    {
+      "path": "iso/camt.056.001.09.xsd",
+      "message_def_id": "camt.056.001.09",
+      "payload_root": "FIToFIPmtCxlReq",
+      "source": {
+        "repository": "https://github.com/moov-io/iso20022",
+        "commit": "05aa282eb151466fd6b80c431e1cf9b2fada9cdd",
+        "path": "docs/specifications/exceptions__investigations_10/camt.056.001.09.xsd",
+        "license": "Apache-2.0",
+        "sha256": "517177ee4ce62649b189719a22afc4b67aa484cd9a520fe0776c50cba722c2c8"
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "../pacs008_fixture.xml",
+      "message_def_id": "pacs.008.001.08",
+      "payload_root": "FIToFICstmrCdtTrf",
+      "schema": "iso/pacs.008.001.08.xsd"
+    },
+    {
+      "path": "../pacs009_fixture.xml",
+      "message_def_id": "pacs.009.001.08",
+      "payload_root": "FICdtTrf",
+      "schema": "iso/pacs.009.001.08.xsd"
+    },
+    {
+      "path": "../pacs002_fixture.xml",
+      "message_def_id": "pacs.002.001.10",
+      "payload_root": "FIToFIPmtStsRpt",
+      "schema": "iso/pacs.002.001.10.xsd"
+    },
+    {
+      "path": "../pacs004_001_10_fixture.xml",
+      "message_def_id": "pacs.004.001.10",
+      "payload_root": "PmtRtr",
+      "schema": "iso/pacs.004.001.10.xsd"
+    },
+    {
+      "path": "../pacs004_fixture.xml",
+      "message_def_id": "pacs.004.001.09",
+      "payload_root": "PmtRtr",
+      "missing_schema_reason": "Legacy payment-return fixture used by runtime profile tests; the corresponding pacs.004.001.09 Standards Editor XSD is not checked in yet."
+    },
+    {
+      "path": "../camt056_fixture.xml",
+      "message_def_id": "camt.056.001.08",
+      "payload_root": "FIToFIPmtCxlReq",
+      "schema": "iso/camt.056.001.08.xsd"
+    },
+    {
+      "path": "../camt056_001_09_fixture.xml",
+      "message_def_id": "camt.056.001.09",
+      "payload_root": "FIToFIPmtCxlReq",
+      "schema": "iso/camt.056.001.09.xsd"
+    },
+    {
+      "path": "../sese023_fixture.xml",
+      "message_def_id": "sese.023.001.11",
+      "payload_root": "SctiesSttlmTxInstr",
+      "missing_schema_reason": "Securities settlement instruction runtime fixture; official sese.023.001.11 XSD package is still pending."
+    },
+    {
+      "path": "../sese024_fixture.xml",
+      "message_def_id": "sese.024.001.10",
+      "payload_root": "SctiesSttlmTxStsAdvc",
+      "missing_schema_reason": "Securities settlement status runtime fixture; official sese.024.001.10 XSD package is still pending."
+    },
+    {
+      "path": "../sese025_fixture.xml",
+      "message_def_id": "sese.025.001.11",
+      "payload_root": "SctiesSttlmTxConf",
+      "missing_schema_reason": "Securities settlement confirmation runtime fixture; official sese.025.001.11 XSD package is still pending."
+    },
+    {
+      "path": "../colr012_fixture.xml",
+      "message_def_id": "colr.012.001.05",
+      "payload_root": "CollSbstitnConf",
+      "missing_schema_reason": "Collateral substitution confirmation runtime fixture; official colr.012.001.05 XSD package is still pending."
+    }
+  ]
+}

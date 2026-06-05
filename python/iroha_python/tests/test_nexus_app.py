@@ -211,7 +211,18 @@ def test_nexus_app_runs_wallet_transfer_flow():
     assert torii.waited == [hash_hex]
 
 
-def test_nexus_app_rejects_unsupported_signature_algorithm():
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        "secp256k1",
+        "ed\t25519",
+        "ed\u200b25519",
+        "\u0435d25519",
+        "ed\uff0d25519",
+        " ED25519 ",
+    ],
+)
+def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
     client = NexusAppClient(
         NexusAppConfig(
             chain_id="test-chain",
@@ -233,7 +244,7 @@ def test_nexus_app_rejects_unsupported_signature_algorithm():
     with pytest.raises(NexusAppError) as excinfo:
         client.finalize_and_submit(
             draft.signable,
-            {"algorithm": "secp256k1", "signature": bytes([0]) * 64},
+            {"algorithm": algorithm, "signature": bytes([0]) * 64},
             wait=False,
         )
 

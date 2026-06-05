@@ -1,0 +1,28 @@
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
+  <pacs:FICdtTrf>
+    <pacs:GrpHdr>
+      <pacs:MsgId>SECURITIES-MDR-XSD-1-grp</pacs:MsgId>
+      <pacs:CreDtTm>2025-01-01T12:00:00Z</pacs:CreDtTm>
+      <pacs:NbOfTxs>1</pacs:NbOfTxs>
+      <pacs:SttlmInf><pacs:SttlmMtd>CLRG</pacs:SttlmMtd></pacs:SttlmInf>
+      <pacs:InstgAgt><pacs:FinInstnId><pacs:BICFI>DEUTDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstgAgt>
+      <pacs:InstdAgt><pacs:FinInstnId><pacs:BICFI>MARKDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstdAgt>
+    </pacs:GrpHdr>
+    <pacs:CdtTrfTxInf>
+      <pacs:PmtId>
+        <pacs:InstrId>SECURITIES-MDR-XSD-1-instr</pacs:InstrId>
+        <pacs:EndToEndId>SECURITIES-MDR-XSD-1-e2e</pacs:EndToEndId>
+        <pacs:TxId>SECURITIES-MDR-XSD-1-tx</pacs:TxId>
+      </pacs:PmtId>
+      <pacs:IntrBkSttlmAmt Ccy="USD">2500.00</pacs:IntrBkSttlmAmt>
+      <pacs:IntrBkSttlmDt>2024-01-03</pacs:IntrBkSttlmDt>
+      <pacs:InstgAgt><pacs:FinInstnId><pacs:BICFI>DEUTDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstgAgt>
+      <pacs:InstdAgt><pacs:FinInstnId><pacs:BICFI>MARKDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstdAgt>
+      <pacs:Dbtr><pacs:FinInstnId><pacs:BICFI>DEUTDEFF</pacs:BICFI></pacs:FinInstnId></pacs:Dbtr>
+      <pacs:DbtrAcct><pacs:Id><pacs:IBAN>GB82WEST12345698765432</pacs:IBAN></pacs:Id></pacs:DbtrAcct>
+      <pacs:Cdtr><pacs:FinInstnId><pacs:BICFI>MARKDEFF</pacs:BICFI></pacs:FinInstnId></pacs:Cdtr>
+      <pacs:CdtrAcct><pacs:Id><pacs:IBAN>GB33BUKB20201555555555</pacs:IBAN></pacs:Id></pacs:CdtrAcct>
+      <pacs:Purp><pacs:Cd>SECU</pacs:Cd></pacs:Purp>
+    </pacs:CdtTrfTxInf>
+  </pacs:FICdtTrf>
+</pacs:Document>

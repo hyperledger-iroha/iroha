@@ -129,7 +129,8 @@ public sealed class AccountAddress
 
     public static AccountAddress FromPublicKey(ReadOnlySpan<byte> publicKey, string algorithm = "ed25519")
     {
-        if (!CurveAliases.TryGetValue(algorithm.Trim(), out var curveId))
+        var normalizedAlgorithm = algorithm.Trim();
+        if (!IsPrintableAscii(normalizedAlgorithm) || !CurveAliases.TryGetValue(normalizedAlgorithm, out var curveId))
         {
             throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, $"unsupported signing algorithm: {algorithm}");
         }
@@ -158,6 +159,19 @@ public sealed class AccountAddress
             curveId,
             CurveIdToAlgorithm(curveId),
             publicKey.ToArray());
+    }
+
+    private static bool IsPrintableAscii(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (ch < 0x20 || ch > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public static AccountAddress Parse(string encoded, ushort? expectedDiscriminant = null)

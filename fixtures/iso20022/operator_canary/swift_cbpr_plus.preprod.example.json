@@ -1,0 +1,35 @@
+{
+  "provider": "swift-cbpr-plus-operator",
+  "environment": "preprod",
+  "rail": {
+    "inbox_dir": "swift-cbpr-plus/inbox",
+    "torii_base_url": "https://torii.swift-cbpr-plus.example.invalid",
+    "receipt_dir": "swift-cbpr-plus/receipts/rail",
+    "dry_run": false,
+    "allow_default_profile": false,
+    "allow_insecure_http": false,
+    "bearer_token_file": "swift-cbpr-plus/secrets/torii.bearer",
+    "max_payload_bytes": 4194304,
+    "timeout_secs": 10
+  },
+  "notary": {
+    "export_dir": "swift-cbpr-plus/audit-export",
+    "endpoints": [
+      "https://notary.swift-cbpr-plus.example.invalid/iso-anchor"
+    ],
+    "receipt_dir": "swift-cbpr-plus/receipts/notary",
+    "all": false,
+    "dry_run": false,
+    "allow_insecure_http": false,
+    "bearer_token_file": "swift-cbpr-plus/secrets/notary.bearer",
+    "timeout_secs": 10
+  },
+  "verify": {
+    "enabled": true,
+    "include_stage_receipts": true,
+    "skip_on_stage_failure": true,
+    "allow_failed": false,
+    "allow_insecure_http": false,
+    "require_source_files": true
+  }
+}

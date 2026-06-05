@@ -98,6 +98,68 @@ public sealed class SccpBscMainnetTests
         }
     }
 
+    private sealed class MutatingConsensusProviderStub(
+        IReadOnlyDictionary<string, object?> expectedReceipt,
+        IReadOnlyDictionary<string, object?> expectedBlock,
+        IReadOnlyDictionary<string, object?> finality) : IBscMainnetConsensusProvider
+    {
+        public ValueTask<IReadOnlyDictionary<string, object?>> CollectFinalityEvidenceAsync(
+            IReadOnlyDictionary<string, object?>? receipt,
+            IReadOnlyDictionary<string, object?>? block,
+            string? transactionHash,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.NotSame(expectedReceipt, receipt);
+            Assert.NotSame(expectedBlock, block);
+            Assert.Equal(expectedReceipt["transactionHash"], receipt?["transactionHash"]);
+            Assert.Equal(expectedBlock["hash"], block?["hash"]);
+            Assert.True(receipt is IDictionary<string, object?>);
+            Assert.True(block is IDictionary<string, object?>);
+            ((IDictionary<string, object?>)receipt!)["status"] = "0x0";
+            MutateNestedReceiptSnapshot(receipt);
+            ((IDictionary<string, object?>)block!)["receiptsRoot"] = "0x" + new string('e', 64);
+            return ValueTask.FromResult(finality);
+        }
+    }
+
+    private sealed class MutatingInboundProverStub(
+        IReadOnlyDictionary<string, object?> originalReceipt,
+        IReadOnlyDictionary<string, object?> originalBlock,
+        IReadOnlyDictionary<string, object?> originalFinality,
+        string expectedTransactionHash) : IBscMainnetInboundProver
+    {
+        public ValueTask<byte[]> ProveAsync(
+            BscMainnetInboundEvidence evidence,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.NotSame(originalReceipt, evidence.Receipt);
+            Assert.NotSame(originalBlock, evidence.Block);
+            Assert.NotSame(originalFinality, evidence.ParliaFinality);
+            Assert.Equal(expectedTransactionHash, evidence.TransactionHash);
+            Assert.True(evidence.Receipt is IDictionary<string, object?>);
+            Assert.True(evidence.Block is IDictionary<string, object?>);
+            Assert.True(evidence.ParliaFinality is IDictionary<string, object?>);
+            ((IDictionary<string, object?>)evidence.Receipt!)["status"] = "0x0";
+            MutateNestedReceiptSnapshot(evidence.Receipt);
+            ((IDictionary<string, object?>)evidence.Block!)["receiptsRoot"] =
+                "0x" + new string('e', 64);
+            ((IDictionary<string, object?>)evidence.ParliaFinality!)["executionBlockHash"] =
+                "0x" + new string('e', 64);
+            return ValueTask.FromResult(new byte[] { 1, 2, 3 });
+        }
+    }
+
+    private static void MutateNestedReceiptSnapshot(
+        IReadOnlyDictionary<string, object?>? receipt)
+    {
+        var logs = Assert.IsType<object?[]>(receipt?["logs"]);
+        var metadata = Assert.IsAssignableFrom<IDictionary<string, object?>>(logs[0]);
+        var topics = Assert.IsType<object?[]>(logs[1]);
+
+        metadata["address"] = "0x" + new string('e', 40);
+        topics[0] = "0x" + new string('e', 64);
+    }
+
     private sealed class InboundSubmitterStub : IBscMainnetInboundSubmitter
     {
         public ValueTask<object?> SubmitAsync(
@@ -135,6 +197,27 @@ public sealed class SccpBscMainnetTests
             Assert.Equal(BscMainnetSccp.DomainBsc, request.PublicInputs.TargetDomain);
             Assert.Equal(request.DestinationBinding.BindingHash, request.DestinationBindingHash);
             Assert.Equal(9, request.PublicSignalWords.Length);
+            return ValueTask.FromResult(proofBytes);
+        }
+    }
+
+    private sealed class MutatingOutboundProverStub(byte[] proofBytes) : IBscMainnetOutboundProver
+    {
+        public BscMainnetOutboundProofRequest? Request { get; private set; }
+
+        public ValueTask<byte[]> ProveAsync(
+            BscMainnetOutboundProofRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            request.BundleBytes[0] = (byte)(request.BundleBytes[0] ^ 0xff);
+            request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            request.PublicInputsBytes[0] = (byte)(request.PublicInputsBytes[0] ^ 0xff);
+            if (request.PublicSignalWords is string[] publicSignalWords)
+            {
+                publicSignalWords[0] = "0x" + new string('9', 64);
+            }
+
             return ValueTask.FromResult(proofBytes);
         }
     }
@@ -932,6 +1015,63 @@ public sealed class SccpBscMainnetTests
     }
 
     [Fact]
+    public async Task InboundCallbacksReceiveSnapshotEvidence()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var receiptsRoot = "0x" + new string('c', 64);
+        var logAddress = "0x" + new string('f', 40);
+        var logTopic = "0x" + new string('1', 64);
+        var logMetadata = new Dictionary<string, string> { ["address"] = logAddress };
+        var logTopics = new System.Collections.ArrayList { logTopic };
+        var receipt = new Dictionary<string, object?>
+        {
+            ["status"] = "0x1",
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["logs"] = new object?[] { logMetadata, logTopics },
+        };
+        var block = new Dictionary<string, object?>
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = receiptsRoot,
+        };
+        var parliaFinality = new BscMainnetParliaFinalityEvidence(
+            "0x1234",
+            blockHash,
+            receiptsRoot).ToDictionary(
+                [new KeyValuePair<string, object?>("validatorSetHash", "0x" + new string('d', 64))]);
+
+        var collected = await BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new BscMainnetInboundEvidence { TransactionHash = txHash },
+            new ExecutionProviderStub("0x38", receipt, block),
+            new MutatingConsensusProviderStub(receipt, block, parliaFinality));
+        Assert.Equal("0x1", collected.Receipt?["status"]);
+        Assert.Equal(receiptsRoot, collected.Block?["receiptsRoot"]);
+        Assert.Equal("0x1", receipt["status"]);
+        Assert.Equal(receiptsRoot, block["receiptsRoot"]);
+        Assert.Equal(logAddress, logMetadata["address"]);
+        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+
+        var proofBytes = await BscMainnetSccp.ProveInboundToSoraAsync(
+            new BscMainnetInboundEvidence
+            {
+                Receipt = receipt,
+                Block = block,
+                ParliaFinality = parliaFinality,
+            },
+            new MutatingInboundProverStub(receipt, block, parliaFinality, txHash));
+        Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
+        Assert.Equal("0x1", receipt["status"]);
+        Assert.Equal(receiptsRoot, block["receiptsRoot"]);
+        Assert.Equal(logAddress, logMetadata["address"]);
+        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+        Assert.Equal(blockHash, parliaFinality["executionBlockHash"]);
+    }
+
+    [Fact]
     public async Task OutboundProofRequestCalldataAndSubmitUseBscMainnetBinding()
     {
         var binding = SampleDestinationBinding();
@@ -985,6 +1125,57 @@ public sealed class SccpBscMainnetTests
                 submitter));
         Assert.NotNull(submitter.Submission);
         Assert.Equal(submission.CallDataHex, submitter.Submission.CallDataHex);
+    }
+
+    [Fact]
+    public async Task OutboundCallbackAndSubmissionSnapshotsRejectMutation()
+    {
+        var input = SampleOutboundInput();
+        var expectedRequest = BscMainnetSccp.BuildOutboundProofRequest(input);
+        var prover = new MutatingOutboundProverStub(Groth16ProofBytes());
+
+        var proofResult = await BscMainnetSccp.ProveOutboundToBscAsync(input, prover);
+
+        Assert.NotNull(prover.Request);
+        Assert.Equal(expectedRequest.RequestHash, proofResult.RequestHash);
+        Assert.Equal(expectedRequest.BundleBytes, proofResult.Request.BundleBytes);
+        Assert.Equal(expectedRequest.SourceProofBytes, proofResult.Request.SourceProofBytes);
+        Assert.Equal(expectedRequest.PublicInputsBytes, proofResult.Request.PublicInputsBytes);
+        Assert.Equal(expectedRequest.PublicSignalWords, proofResult.Request.PublicSignalWords);
+
+        var submission = BscMainnetSccp.BuildBscCalldata(
+            new BscMainnetSccpSubmissionInput(proofResult));
+        Assert.StartsWith(BscMainnetSccp.SubmitMessageProofSelector, submission.CallDataHex, StringComparison.Ordinal);
+
+        var mutatedProofBytes = proofResult.ProofBytes.ToArray();
+        mutatedProofBytes[31] = 9;
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildBscCalldata(
+                new BscMainnetSccpSubmissionInput(
+                    proofResult with { ProofBytes = mutatedProofBytes })));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildBscCalldata(
+                new BscMainnetSccpSubmissionInput(
+                    proofResult with
+                    {
+                        ProofBase64 = Convert.ToBase64String(mutatedProofBytes),
+                    })));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildBscCalldata(
+                new BscMainnetSccpSubmissionInput(
+                    proofResult with
+                    {
+                        Request = proofResult.Request with
+                        {
+                            BundleBytes = "swapped-bsc-bundle"u8.ToArray(),
+                        },
+                    })));
+        var mutatedSignals = proofResult.PublicSignalWords.ToArray();
+        mutatedSignals[0] = "0x" + new string('9', 64);
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildBscCalldata(
+                new BscMainnetSccpSubmissionInput(
+                    proofResult with { PublicSignalWords = mutatedSignals })));
     }
 
     [Fact]

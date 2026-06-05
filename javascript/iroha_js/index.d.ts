@@ -31,9 +31,17 @@ export type PrivacyCriterionKey =
   | "post_quantum";
 
 export interface PrivacyPqLayers {
-  proof: boolean;
-  authorization: boolean;
-  noteEncryption: boolean;
+  readonly proof: boolean;
+  readonly authorization: boolean;
+  readonly noteEncryption: boolean;
+}
+
+export interface PrivacyProductionGate {
+  readonly version: string;
+  readonly ready: boolean;
+  readonly gates: Readonly<Record<string, boolean>>;
+  readonly missing: readonly string[];
+  readonly auditReferences: readonly Readonly<{ label: string; url: string }>[];
 }
 
 export type PrivacyAlgorithmCategory =
@@ -52,35 +60,50 @@ export type PrivacyAlgorithmMaturity =
   | "specification";
 
 export interface PrivacyAlgorithmDescriptor {
-  id: string;
-  name: string;
-  shortName: string;
-  summary: string;
-  category: PrivacyAlgorithmCategory;
-  maturity: PrivacyAlgorithmMaturity;
-  coveredCriteria: PrivacyCriterionKey[];
-  proofFamily: string;
-  publicInputsSchema: string | null;
-  verifierKeyId: string | null;
-  pqLayers: PrivacyPqLayers;
-  implementationStage?: string | null;
-  recommendedFor?: string[];
-  sourceReferences?: Array<{ label: string; url: string }>;
-  securityNotes?: string[];
-  requiredState?: string[];
-  failureModes?: string[];
-  setupSteps?: string[];
-  executionSteps?: string[];
-  sdkEntrypoints: string[];
-  plannedSdkEntrypoints?: string[];
-  chainRequirements: string[];
+  readonly id: string;
+  readonly name: string;
+  readonly shortName: string;
+  readonly summary: string;
+  readonly category: PrivacyAlgorithmCategory;
+  readonly maturity: PrivacyAlgorithmMaturity;
+  readonly coveredCriteria: readonly PrivacyCriterionKey[];
+  readonly proofFamily: string;
+  readonly publicInputsSchema: string | null;
+  readonly verifierKeyId: string | null;
+  readonly backendFamily: string;
+  readonly pqLayers: PrivacyPqLayers;
+  readonly implementationStage?: string | null;
+  readonly recommendedFor?: readonly string[];
+  readonly sourceReferences?: readonly Readonly<{ label: string; url: string }>[];
+  readonly securityNotes?: readonly string[];
+  readonly requiredState?: readonly string[];
+  readonly failureModes?: readonly string[];
+  readonly setupSteps?: readonly string[];
+  readonly executionSteps?: readonly string[];
+  readonly sdkEntrypoints: readonly string[];
+  readonly plannedSdkEntrypoints?: readonly string[];
+  readonly chainRequirements: readonly string[];
+  readonly productionReady: boolean;
+  readonly productionGate: PrivacyProductionGate;
 }
 
-export function getPrivacyCriteria(): PrivacyCriterionKey[];
-export function getPrivacyAlgorithmDescriptors(): PrivacyAlgorithmDescriptor[];
+export interface PrivacyCapabilities {
+  readonly javascriptSdkAvailable: boolean;
+  readonly bridgeAvailable: boolean;
+  readonly privacyAlgorithms: readonly PrivacyAlgorithmDescriptor[];
+  readonly privacyCriteria: readonly PrivacyCriterionKey[];
+}
+
+export function getPrivacyCriteria(): readonly PrivacyCriterionKey[];
+export function getPrivacyAlgorithmDescriptors(): readonly PrivacyAlgorithmDescriptor[];
 export function getPrivacyAlgorithmDescriptor(
   id: string,
 ): PrivacyAlgorithmDescriptor | null;
+export function getPrivacyCapabilities(): PrivacyCapabilities;
+export function validatePrivacyAlgorithmDescriptor(
+  descriptor: unknown,
+  index?: number,
+): PrivacyAlgorithmDescriptor;
 
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
@@ -104,6 +127,14 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
+export const PRIVACY_FFI_VERSION_V1: 1;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 6;
+export const PRIVACY_FFI_STATUS_ERROR: 1;
+export const PRIVACY_FFI_ERROR_NULL_POINTER: 1;
+export const PRIVACY_FFI_ERROR_MALFORMED_NORITO: 2;
+export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: 3;
+export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: 4;
+export const PRIVACY_FFI_ERROR_INVALID_REQUEST: 5;
 
 export interface SignedTransactionResult {
   signedTransaction: Buffer;
@@ -6168,6 +6199,8 @@ export type BinaryLike =
   | ReadonlyArray<number>
   | string;
 
+export type PrivacyNativeArchiveLike = Buffer | ArrayBuffer | ArrayBufferView;
+
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
 export type PrivacyBackendTag =
@@ -6176,6 +6209,21 @@ export type PrivacyBackendTag =
   | "Groth16"
   | "Stark"
   | "Unsupported"
+  | "Halo2IpaOrchard"
+  | "Groth16Bls12377"
+  | "FcmpPlusPlusCurveTree"
+  | "LatticePcsSis"
+  | "MidenStark"
+  | "AztecPlonkishPrivateKernel"
+  | "PqMaspStarkFri"
+  | "AnonymousPgc"
+  | "VeRange"
+  | "ZkAt"
+  | "RecursiveAnonymousAdmission"
+  | "VegaExistingCredentialZk"
+  | "SilentThresholdAnoncred"
+  | "ZkX509"
+  | "SisWithHints"
   | "halo2-ipa-pasta"
   | "halo2/ipa"
   | "halo2/pasta/ipa"
@@ -6185,6 +6233,21 @@ export type PrivacyBackendTag =
   | "stark/fri"
   | "stark/fri/sha256-goldilocks"
   | "unsupported"
+  | "halo2-ipa-orchard"
+  | "groth16-bls12-377"
+  | "fcmp-plus-plus-curve-tree"
+  | "lattice-pcs-sis"
+  | "miden-stark"
+  | "aztec-plonkish-private-kernel"
+  | "pq-masp-stark-fri"
+  | "anonymous-pgc"
+  | "verange"
+  | "zkat"
+  | "recursive-anonymous-admission"
+  | "vega-existing-credential-zk"
+  | "silent-threshold-anoncred"
+  | "zk-x509"
+  | "sis-with-hints"
   | string;
 
 export interface ConfidentialEncryptedPayloadInput {
@@ -8152,7 +8215,11 @@ export interface ToriiVerifyingKeyRegisterPayload {
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hash_hex: string;
+  public_inputs_schema_hex?: string;
+  public_inputs_schema_hash_hex?: string;
+  public_inputs_schema_hash?: string;
+  publicInputsSchemaHashHex?: string;
+  publicInputsSchemaHash?: string;
   gas_schedule_id: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -8173,7 +8240,11 @@ export interface ToriiVerifyingKeyUpdatePayload {
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hash_hex: string;
+  public_inputs_schema_hex?: string;
+  public_inputs_schema_hash_hex?: string;
+  public_inputs_schema_hash?: string;
+  publicInputsSchemaHashHex?: string;
+  publicInputsSchemaHash?: string;
   gas_schedule_id?: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -10745,6 +10816,7 @@ export interface ToriiSccpProofManifestSet {
   localChain: string;
   proofFamily: string;
   manifests: ReadonlyArray<ToriiSccpProofManifest>;
+  routes: ReadonlyArray<Record<string, unknown>>;
 }
 
 export type ToriiSccpHubMessageKind =
@@ -12489,6 +12561,11 @@ export interface ZkAceAuthorizationProofV1Input {
   envelopeHash?: BinaryLike | null;
 }
 
+export interface ZkAceAuthorizationProofV1 {
+  public_inputs: object;
+  proof: ProofAttachmentInput;
+}
+
 export interface ZkAceWitnessV1Input {
   identityRoot: BinaryLike;
   identityBlinding: BinaryLike;
@@ -13278,16 +13355,30 @@ export interface SorafsPinListOptions {
 }
 
 export interface SorafsPinRegisterPinPolicyInput {
-  minReplicas: NumericLike;
-  storageClass:
+  minReplicas?: NumericLike;
+  min_replicas?: NumericLike;
+  storageClass?:
     | "Hot"
     | "Warm"
     | "Cold"
     | string
     | {
-        type: string;
+        type?: string;
+        name?: string;
+        label?: string;
+      };
+  storage_class?:
+    | "Hot"
+    | "Warm"
+    | "Cold"
+    | string
+    | {
+        type?: string;
+        name?: string;
+        label?: string;
       };
   retentionEpoch?: NumericLike;
+  retention_epoch?: NumericLike;
 }
 
 export interface SorafsPinRegisterChunkerInput {
@@ -13302,14 +13393,18 @@ export interface SorafsPinRegisterAliasInput {
   namespace: string;
   name: string;
   proof?: BinaryLike | string;
+  proof_b64?: BinaryLike | string;
   proofB64?: BinaryLike | string;
+  proof_base64?: BinaryLike | string;
+  proofBase64?: BinaryLike | string;
 }
 
 export interface SorafsPinRegisterRequest {
   authority: string;
   privateKey: string;
   chunker: SorafsPinRegisterChunkerInput;
-  pinPolicy: SorafsPinRegisterPinPolicyInput;
+  pinPolicy?: SorafsPinRegisterPinPolicyInput;
+  pin_policy?: SorafsPinRegisterPinPolicyInput;
   manifestDigestHex?: string;
   manifest_digest_hex?: string;
   chunkDigestSha3_256Hex?: string;
@@ -13322,9 +13417,15 @@ export interface SorafsPinRegisterRequest {
   submitted_epoch?: NumericLike;
   alias?: SorafsPinRegisterAliasInput | null;
   aliasNamespace?: string;
+  alias_namespace?: string;
   aliasName?: string;
+  alias_name?: string;
   aliasProof?: BinaryLike | string;
+  alias_proof?: BinaryLike | string;
   aliasProofB64?: BinaryLike | string;
+  alias_proof_b64?: BinaryLike | string;
+  aliasProofBase64?: BinaryLike | string;
+  alias_proof_base64?: BinaryLike | string;
   successorOfHex?: string | null;
   successor_of_hex?: string | null;
   signal?: AbortSignal;
@@ -15376,15 +15477,102 @@ export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
   "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-spend-lineage-append-v1";
+export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
+export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
+export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN:
+  "iroha:kagemusha:v1:recursive-spend-transition-profile";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN:
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN:
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1:
+  "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1:
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1:
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1:
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 export type KagemushaOfflineSpendMode =
   | "recursive_spend_v1"
   | "checked_prefold_v1";
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable?: boolean,
 ): KagemushaOfflineSpendMode;
+export function canRedeemKagemushaRecursiveSpendWitnessless(
+  proofCircuitId: string,
+  hopCount: number,
+): boolean;
+export function isKagemushaRecursiveSpendLineageProofCircuitId(
+  proofCircuitId?: string | null,
+): boolean;
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+  outputProofCircuitId?: string | null,
+): boolean;
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+  outputProofCircuitId?: string | null,
+): boolean;
+export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+  proofCircuitId: string,
+  hopCount: number,
+): boolean;
+export function canAppendKagemushaRecursiveSpendWitnesslessLineage(
+  previousHopCount: number,
+): boolean;
+export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  outputProofCircuitId?: string | null,
+): string;
+export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  outputProofCircuitId?: string | null,
+): boolean;
+export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+  previousProofCircuitId?: string | null,
+): boolean;
+export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+  previousProofCircuitId?: string | null,
+): boolean;
+export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
+  previousProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string | null | undefined,
+): boolean;
+export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  previousHopCount: number,
+): string;
+export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  outputProofCircuitId: string | null | undefined,
+  previousHopCount: number,
+): boolean;
+export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  previousProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string | null | undefined,
+  previousHopCount: number,
+): boolean;
+export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+  outputProofCircuitId: string | null | undefined,
+  previousHopCount: number,
+): boolean;
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendTransitionProfileInit(
+  requestArchive: BinaryLike,
+): Buffer;
+export function kagemushaRecursiveSpendTransitionProfileAppend(
+  requestArchive: BinaryLike,
+): Buffer;
+export function kagemushaRecursiveSpendLineageAppendBoundary(
+  profileArchive: BinaryLike,
+): Buffer;
 export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
   requestArchive: BinaryLike,
   bundleArchive: BinaryLike,
@@ -15396,6 +15584,11 @@ export function kagemushaRecursiveSpendLineageWitnessAppendResult(
 ): Buffer;
 export function kagemushaRecursiveSpendVerify(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendRedeem(requestArchive: BinaryLike): Buffer;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
+export function isPrivacyNativeAvailable(): boolean;
+export function privacyCapabilitiesV1(): Buffer;
+export function privacyBuildProofV1(requestArchive: PrivacyNativeArchiveLike): Buffer;
+export function privacyVerifyProofV1(requestArchive: PrivacyNativeArchiveLike): Buffer;
 
 export interface Sm2Fixture {
   distid: string;
@@ -16655,7 +16848,7 @@ export function buildRevokeZkAceIdentityCommitmentInstruction(
 
 export function buildZkAceAuthorizationProofV1(
   input: ZkAceAuthorizationProofV1Input,
-): { public_inputs: object; proof: object };
+): ZkAceAuthorizationProofV1;
 
 export function buildZkAceAuthorizedTransferInstruction(
   input: ZkAceAuthorizedTransferInstructionInput,

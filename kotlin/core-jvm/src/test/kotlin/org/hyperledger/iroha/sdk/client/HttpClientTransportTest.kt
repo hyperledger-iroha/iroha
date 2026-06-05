@@ -306,6 +306,43 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift() {
+        for ((name, mutate) in listOf<Pair<String, (MutableMap<String, Any?>) -> Unit>>(
+            "missing relinearization component digest" to { operationVectors ->
+                val evaluationKey = mutableObj(operationVectors, "evaluation_key_bundle")
+                mutableListOfMaps(evaluationKey, "relinearization_entries")[0].remove("b_sha256")
+            },
+            "duplicate BFV component digest" to { operationVectors ->
+                val evaluationKey = mutableObj(operationVectors, "evaluation_key_bundle")
+                val entries = mutableListOfMaps(evaluationKey, "relinearization_entries")
+                entries[1]["a_sha256"] = string(entries[0], "b_sha256")
+            },
+            "noncanonical lowercase component digest" to { operationVectors ->
+                val evaluationKey = mutableObj(operationVectors, "evaluation_key_bundle")
+                val entries = mutableListOfMaps(evaluationKey, "relinearization_entries")
+                entries[0]["b_sha256"] = string(entries[0], "b_sha256").lowercase()
+            },
+            "zero rotation refresh component digest" to { operationVectors ->
+                val rotationKey = mutableListOfMaps(operationVectors, "rotation_keys")[0]
+                mutableObj(rotationKey, "zero_refresh_components")["c1_sha256"] = "0".repeat(64)
+            },
+            "bootstrap refresh coefficient-count drift" to { operationVectors ->
+                val bootstrap = mutableObj(operationVectors, "bootstrap_key")
+                mutableObj(bootstrap, "zero_refresh_components")["coefficient_count"] = 63L
+            },
+            "rotation key count drift" to { operationVectors ->
+                mutableObj(operationVectors, "evaluation_key_bundle")["rotation_key_count"] = 99L
+            },
+        )) {
+            val operationVectors = mutableObj(loadSharedBfvFixture(), "operation_vectors")
+            mutate(operationVectors)
+            assertFailsWith<Throwable>(name) {
+                assertBfvOperationKeyComponentVectors(operationVectors)
+            }
+        }
+    }
+
+    @Test
     fun identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters() {
         val seed = ByteArray(32) { it.toByte() }
         val baseParameters = sampleBfvParameters()
@@ -1137,6 +1174,149 @@ class HttpClientTransportTest {
         assertEquals("DELETE", executor.requests[2].method)
         assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
         assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
+    }
+
+    @Test
+    fun verifierKeyRegisterAndUpdatePostSignedPayloads() {
+        val backend = "halo2/ipa"
+        val registerBytes = byteArrayOf(1, 2, 3)
+        val updateBytes = byteArrayOf(10)
+        val executor = QueueResponseExecutor(listOf(202 to "", 202 to ""))
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val registerResponse = transport.registerVerifyingKey(
+            verifierKeyRegisterRequest(
+                authority = " alice ",
+                privateKey = " privkey ",
+                backend = backend,
+                name = " transfer_vk ",
+                publicInputsSchemaHashHex = "0x${"AA".repeat(32)}",
+                gasScheduleId = " halo2-default ",
+                activationHeight = 10,
+                withdrawHeight = 10,
+                commitmentHex = verifierKeyCommitment(backend, registerBytes).uppercase(),
+                verifyingKeyBytes = registerBytes,
+                status = "active",
+            ),
+        ).join()
+        val updateResponse = transport.updateVerifyingKey(
+            verifierKeyUpdateRequest(
+                backend = backend,
+                name = "transfer_vk",
+                version = 2,
+                commitmentHex = verifierKeyCommitment(backend, updateBytes),
+                verifyingKeyBytes = updateBytes,
+                verifyingKeyLength = 1,
+                status = "withdrawn",
+            ),
+        ).join()
+
+        assertEquals(202, registerResponse.statusCode)
+        assertEquals(202, updateResponse.statusCode)
+        assertEquals(2, executor.requests.size)
+
+        val registerRequest = executor.requests[0]
+        assertEquals("POST", registerRequest.method)
+        assertEquals("https://torii.example/api/v1/zk/vk/register", registerRequest.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val registerPayload = JsonParser.parse(readBody(registerRequest)) as Map<String, Any?>
+        assertEquals("alice", registerPayload["authority"])
+        assertEquals("privkey", registerPayload["private_key"])
+        assertEquals(backend, registerPayload["backend"])
+        assertEquals("transfer_vk", registerPayload["name"])
+        assertEquals(1L, (registerPayload["version"] as Number).toLong())
+        assertEquals("transfer-v1", registerPayload["circuit_id"])
+        assertEquals("aa".repeat(32), registerPayload["public_inputs_schema_hash_hex"])
+        assertEquals("halo2-default", registerPayload["gas_schedule_id"])
+        assertEquals(10L, (registerPayload["activation_height"] as Number).toLong())
+        assertEquals(10L, (registerPayload["withdraw_height"] as Number).toLong())
+        assertEquals(verifierKeyCommitment(backend, registerBytes), registerPayload["commitment_hex"])
+        assertEquals(Base64.getEncoder().encodeToString(registerBytes), registerPayload["vk_bytes"])
+        assertEquals(3L, (registerPayload["vk_len"] as Number).toLong())
+        assertEquals("Active", registerPayload["status"])
+
+        val updateRequest = executor.requests[1]
+        assertEquals("POST", updateRequest.method)
+        assertEquals("https://torii.example/api/v1/zk/vk/update", updateRequest.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val updatePayload = JsonParser.parse(readBody(updateRequest)) as Map<String, Any?>
+        assertEquals("alice", updatePayload["authority"])
+        assertEquals("privkey", updatePayload["private_key"])
+        assertEquals(backend, updatePayload["backend"])
+        assertEquals("transfer_vk", updatePayload["name"])
+        assertEquals(2L, (updatePayload["version"] as Number).toLong())
+        assertEquals("transfer-v1", updatePayload["circuit_id"])
+        assertEquals("aa".repeat(32), updatePayload["public_inputs_schema_hash_hex"])
+        assertFalse(updatePayload.containsKey("gas_schedule_id"))
+        assertEquals(verifierKeyCommitment(backend, updateBytes), updatePayload["commitment_hex"])
+        assertEquals(Base64.getEncoder().encodeToString(updateBytes), updatePayload["vk_bytes"])
+        assertEquals(1L, (updatePayload["vk_len"] as Number).toLong())
+        assertEquals("Withdrawn", updatePayload["status"])
+    }
+
+    @Test
+    fun verifierKeyRequestsRejectMalformedInputsBeforeRequest() {
+        val backend = "halo2/ipa"
+        val bytes = byteArrayOf(1, 2, 3)
+        val commitment = verifierKeyCommitment(backend, bytes)
+        val executor = CapturingExecutor()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        fun expectReject(block: () -> Unit) {
+            val before = executor.requestCount
+            assertFailsWith<IllegalArgumentException> { block() }
+            assertEquals(before, executor.requestCount)
+        }
+
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(backend = "mock/dev")) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(authority = " ")) }
+        expectReject { transport.updateVerifyingKey(verifierKeyUpdateRequest(privateKey = " ")) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(name = "scope:vk")) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(version = 0)) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(publicInputsSchemaHashHex = "abc")) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(gasScheduleId = " ")) }
+        expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(verifyingKeyBytes = byteArrayOf())) }
+        expectReject {
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequest(verifyingKeyBytes = bytes, verifyingKeyLength = 2),
+            )
+        }
+        expectReject {
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequest(
+                    backend = backend,
+                    verifyingKeyBytes = bytes,
+                    commitmentHex = "00".repeat(32),
+                ),
+            )
+        }
+        expectReject { transport.updateVerifyingKey(verifierKeyUpdateRequest(activationHeight = 8, withdrawHeight = 7)) }
+        expectReject { transport.updateVerifyingKey(verifierKeyUpdateRequest(status = "retired")) }
+        expectReject {
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequest(
+                    verifyingKeyBytes = null,
+                    verifyingKeyLength = 3,
+                    commitmentHex = null,
+                ),
+            )
+        }
+        expectReject {
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequest(
+                    backend = backend,
+                    verifyingKeyBytes = bytes,
+                    commitmentHex = commitment,
+                    maxProofBytes = 4_294_967_296L,
+                ),
+            )
+        }
     }
 
     @Test
@@ -2016,6 +2196,109 @@ class HttpClientTransportTest {
         """.trimIndent()
     }
 
+    private fun verifierKeyRegisterRequest(
+        authority: String = "alice",
+        privateKey: String = "privkey",
+        backend: String = "halo2/ipa",
+        name: String = "transfer_vk",
+        version: Long = 1,
+        circuitId: String = "transfer-v1",
+        publicInputsSchemaHashHex: String = "aa".repeat(32),
+        gasScheduleId: String = "halo2-default",
+        curve: String? = null,
+        maxProofBytes: Long? = null,
+        metadataUriCid: String? = null,
+        verifyingKeyBytesCid: String? = null,
+        activationHeight: Long? = null,
+        withdrawHeight: Long? = null,
+        commitmentHex: String? = null,
+        verifyingKeyBytes: ByteArray? = null,
+        verifyingKeyLength: Long? = null,
+        status: String? = null,
+    ): VerifyingKeyRegisterRequest =
+        VerifyingKeyRegisterRequest(
+            authority = authority,
+            privateKey = privateKey,
+            backend = backend,
+            name = name,
+            version = version,
+            circuitId = circuitId,
+            publicInputsSchemaHashHex = publicInputsSchemaHashHex,
+            gasScheduleId = gasScheduleId,
+            curve = curve,
+            maxProofBytes = maxProofBytes,
+            metadataUriCid = metadataUriCid,
+            verifyingKeyBytesCid = verifyingKeyBytesCid,
+            activationHeight = activationHeight,
+            withdrawHeight = withdrawHeight,
+            commitmentHex = commitmentHex,
+            verifyingKeyBytes = verifyingKeyBytes,
+            verifyingKeyLength = verifyingKeyLength,
+            status = status,
+        )
+
+    private fun verifierKeyUpdateRequest(
+        authority: String = "alice",
+        privateKey: String = "privkey",
+        backend: String = "halo2/ipa",
+        name: String = "transfer_vk",
+        version: Long = 1,
+        circuitId: String = "transfer-v1",
+        publicInputsSchemaHashHex: String = "aa".repeat(32),
+        gasScheduleId: String? = null,
+        curve: String? = null,
+        maxProofBytes: Long? = null,
+        metadataUriCid: String? = null,
+        verifyingKeyBytesCid: String? = null,
+        activationHeight: Long? = null,
+        withdrawHeight: Long? = null,
+        commitmentHex: String? = null,
+        verifyingKeyBytes: ByteArray? = null,
+        verifyingKeyLength: Long? = null,
+        status: String? = null,
+    ): VerifyingKeyUpdateRequest =
+        VerifyingKeyUpdateRequest(
+            authority = authority,
+            privateKey = privateKey,
+            backend = backend,
+            name = name,
+            version = version,
+            circuitId = circuitId,
+            publicInputsSchemaHashHex = publicInputsSchemaHashHex,
+            gasScheduleId = gasScheduleId,
+            curve = curve,
+            maxProofBytes = maxProofBytes,
+            metadataUriCid = metadataUriCid,
+            verifyingKeyBytesCid = verifyingKeyBytesCid,
+            activationHeight = activationHeight,
+            withdrawHeight = withdrawHeight,
+            commitmentHex = commitmentHex,
+            verifyingKeyBytes = verifyingKeyBytes,
+            verifyingKeyLength = verifyingKeyLength,
+            status = status,
+        )
+
+    private fun verifierKeyCommitment(backend: String, bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val backendBytes = backend.toByteArray(StandardCharsets.UTF_8)
+        digest.update("iroha:zk:v1:vk".toByteArray(StandardCharsets.UTF_8))
+        digest.update(u64Be(backendBytes.size.toLong()))
+        digest.update(backendBytes)
+        digest.update(u64Be(bytes.size.toLong()))
+        digest.update(bytes)
+        return hex(digest.digest()).lowercase()
+    }
+
+    private fun u64Be(value: Long): ByteArray {
+        var remaining = value
+        val out = ByteArray(8)
+        for (index in 7 downTo 0) {
+            out[index] = (remaining and 0xffL).toByte()
+            remaining = remaining ushr 8
+        }
+        return out
+    }
+
     private fun sampleTransaction(seed: Int): SignedTransaction {
         val codec = NoritoJavaCodecAdapter()
         val encoded = codec.encodeTransaction(
@@ -2543,6 +2826,19 @@ class HttpClientTransportTest {
     private fun listOfMaps(root: Map<String, Any?>, key: String): List<Map<String, Any?>> =
         root[key] as? List<Map<String, Any?>>
             ?: error("$key must be a list of objects")
+
+    @Suppress("UNCHECKED_CAST")
+    private fun mutableObj(root: Map<String, Any?>, key: String): MutableMap<String, Any?> =
+        root[key] as? MutableMap<String, Any?>
+            ?: error("$key must be a mutable object")
+
+    @Suppress("UNCHECKED_CAST")
+    private fun mutableListOfMaps(
+        root: Map<String, Any?>,
+        key: String,
+    ): MutableList<MutableMap<String, Any?>> =
+        root[key] as? MutableList<MutableMap<String, Any?>>
+            ?: error("$key must be a mutable list of objects")
 
     private fun string(root: Map<String, Any?>, key: String): String =
         root[key] as? String ?: error("$key must be a string")

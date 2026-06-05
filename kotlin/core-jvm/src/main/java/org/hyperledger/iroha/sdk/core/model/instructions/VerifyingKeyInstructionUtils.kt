@@ -11,10 +11,16 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 internal object VerifyingKeyInstructionUtils {
 
     internal fun Map<String, String>.nonEmptyString(key: String): String {
-        return checkNotNull(getValue(key).takeIf { it.isNotBlank() }){
+        return requireNotNull(getValue(key).takeIf { it.isNotBlank() }) {
             "Instruction argument '$key' is required"
         }
     }
+
+    internal fun Map<String, String>.productionBackend(key: String): String =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(nonEmptyString(key), key)
+
+    internal fun productionBackend(value: String): String =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(value)
 
     internal fun Map<String, String>.nonEmptyOrNull(key: String) = this[key]?.trim()?.takeIf { it.isNotBlank() }
     internal fun Map<String, String>.intOrNull(key: String): Int? = nonEmptyOrNull(key)?.toInt()

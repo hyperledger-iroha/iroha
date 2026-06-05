@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.zk;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -147,6 +148,12 @@ public final class VerifyingKeyRecordDescription {
     */
   public Map<String, String> toArguments(final String backend) {
     Objects.requireNonNull(backend, "backend");
+    if (inlineKeyBytes != null) {
+      final String expectedCommitmentHex = Builder.computeCommitmentHex(backend, inlineKeyBytes);
+      if (!commitmentHex.equalsIgnoreCase(expectedCommitmentHex)) {
+        throw new IllegalArgumentException("backend does not match inline key commitment");
+      }
+    }
     final Map<String, String> args = new LinkedHashMap<>();
     args.put("record.version", Integer.toUnsignedString(version));
     args.put("record.circuit_id", circuitId);
@@ -387,7 +394,7 @@ public final class VerifyingKeyRecordDescription {
     private static String computeCommitmentHex(final String backend, final byte[] bytes) {
       try {
         final MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        digest.update(backend.getBytes());
+        digest.update(backend.getBytes(StandardCharsets.UTF_8));
         digest.update(bytes);
         final byte[] hash = digest.digest();
         final StringBuilder builder = new StringBuilder(hash.length * 2);

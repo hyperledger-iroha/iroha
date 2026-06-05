@@ -57,6 +57,26 @@ final class ConnectEnvelopeCodecTests: XCTestCase {
         }
     }
 
+    func testEncodeSignResultOkRejectsConfusableAlgorithmsBeforeBridge() {
+        let signature = Data(repeating: 0x44, count: 64)
+        for algorithm in [
+            "secp256k1",
+            "ed\t25519",
+            "ed\u{200B}25519",
+            "\u{0435}d25519",
+            "ed\u{FF0D}25519"
+        ] {
+            XCTAssertThrowsError(try ConnectEnvelopeCodec.encodeSignResultOk(sequence: 7,
+                                                                             algorithm: algorithm,
+                                                                             signature: signature)) { error in
+                guard case ConnectEnvelopeCodecError.unsupportedSignatureAlgorithm = error else {
+                    XCTFail("Expected unsupportedSignatureAlgorithm, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
     func testEncryptEnvelopeValidatesLengths() {
         let envelope = Data([0x01, 0x02])
         XCTAssertThrowsError(try ConnectEnvelopeCodec.encryptEnvelope(envelope,

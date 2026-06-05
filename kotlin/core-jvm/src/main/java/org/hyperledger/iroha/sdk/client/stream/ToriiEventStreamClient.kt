@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.client.stream
 
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
@@ -9,12 +11,14 @@ import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.TransportStreamResponse
+import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStreamReader
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -77,7 +81,10 @@ class ToriiEventStreamClient(
     }
 
     private fun buildRequest(path: String?, options: ToriiEventStreamOptions): TransportRequest {
-        val target = appendQueryParameters(resolvePath(path), options.queryParameters)
+        val target = appendQueryParameters(
+            normalizeEventSseUriFilter(resolvePath(path)),
+            normalizeEventSseQueryParameters(options.queryParameters),
+        )
         val headers = LinkedHashMap(defaultHeaders)
         headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE)
         headers.putIfAbsent("Cache-Control", "no-cache")
@@ -305,6 +312,140 @@ class ToriiEventStreamClient(
             }
             sb.append(query)
             return URI.create(sb.toString())
+        }
+
+        private fun normalizeEventSseUriFilter(target: URI): URI {
+            val rawQuery = target.rawQuery ?: return target
+            val normalizedQuery = normalizeEventSseQuery(rawQuery)
+            if (normalizedQuery == rawQuery) return target
+            val targetText = target.toString()
+            val fragmentIndex = targetText.indexOf('#')
+            val withoutFragment = if (fragmentIndex >= 0) targetText.substring(0, fragmentIndex) else targetText
+            val fragment = if (fragmentIndex >= 0) targetText.substring(fragmentIndex) else ""
+            val base = withoutFragment.substringBefore('?')
+            return URI.create("$base?$normalizedQuery$fragment")
+        }
+
+        private fun normalizeEventSseQueryParameters(params: Map<String, String>): Map<String, String> {
+            if (!params.containsKey("filter")) return params
+            val normalized = LinkedHashMap(params)
+            normalized["filter"] = normalizeEventFilterPayload(params.getValue("filter"), "eventFilter")
+            return normalized
+        }
+
+        private fun normalizeEventSseQuery(rawQuery: String): String {
+            val segments = rawQuery.split('&').toMutableList()
+            var changed = false
+            for (index in segments.indices) {
+                val segment = segments[index]
+                if (segment.isEmpty()) continue
+                val equals = segment.indexOf('=')
+                val rawName = if (equals >= 0) segment.substring(0, equals) else segment
+                val rawValue = if (equals >= 0) segment.substring(equals + 1) else ""
+                val name = decodeQueryComponent(rawName)
+                if (name != "filter") continue
+                val value = decodeQueryComponent(rawValue)
+                val normalized = normalizeEventFilterPayload(value, "eventFilter")
+                if (normalized != value) {
+                    segments[index] = "${URLEncoder.encode(name, "UTF-8")}=${URLEncoder.encode(normalized, "UTF-8")}"
+                    changed = true
+                }
+            }
+            return if (changed) segments.joinToString("&") else rawQuery
+        }
+
+        private fun decodeQueryComponent(value: String): String =
+            URLDecoder.decode(value.replace("+", " "), "UTF-8")
+
+        private fun normalizeEventFilterPayload(filter: String, context: String): String {
+            val trimmed = filter.trim()
+            if (trimmed.isEmpty() || (trimmed[0] != '{' && trimmed[0] != '[')) return filter
+            val parsed = try {
+                JsonParser.parse(trimmed)
+            } catch (_: IllegalStateException) {
+                return filter
+            }
+            @Suppress("UNCHECKED_CAST")
+            val obj = parsed as? MutableMap<String, Any?> ?: return filter
+            return if (normalizeProductionEventFilterObject(obj, context)) JsonEncoder.encode(obj) else filter
+        }
+
+        private fun normalizeProductionEventFilterObject(filter: MutableMap<String, Any?>, context: String): Boolean {
+            var changed = false
+            for (eventKind in listOf("VerifyingKey", "Proof")) {
+                @Suppress("UNCHECKED_CAST")
+                val body = filter[eventKind] as? MutableMap<String, Any?> ?: continue
+                @Suppress("UNCHECKED_CAST")
+                val matcher = body["id_matcher"] as? MutableMap<String, Any?> ?: continue
+                if (!matcher.containsKey("backend")) continue
+                val backendContext = "$context.$eventKind.id_matcher.backend"
+                val backend = matcher["backend"] as? String
+                    ?: throw IllegalArgumentException("$backendContext must be a string")
+                val normalizedBackend =
+                    VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, backendContext)
+                if (normalizedBackend != backend) {
+                    matcher["backend"] = normalizedBackend
+                    changed = true
+                }
+                if (eventKind == "Proof") {
+                    changed = normalizeProofHashMatcher(matcher, "hash_hex", "$context.$eventKind.id_matcher.hash_hex") || changed
+                    changed = normalizeProofHashMatcher(
+                        matcher,
+                        "proof_hash_hex",
+                        "$context.$eventKind.id_matcher.proof_hash_hex",
+                    ) || changed
+                } else {
+                    changed = normalizeVerifyingKeyNameMatcher(
+                        matcher,
+                        "$context.$eventKind.id_matcher.name",
+                    ) || changed
+                }
+            }
+            return changed
+        }
+
+        private fun normalizeVerifyingKeyNameMatcher(
+            matcher: MutableMap<String, Any?>,
+            context: String,
+        ): Boolean {
+            if (!matcher.containsKey("name")) return false
+            val raw = matcher["name"] as? String
+                ?: throw IllegalArgumentException("$context must be a string")
+            val normalized = raw.trim()
+            require(normalized.isNotEmpty()) {
+                "$context must be a non-empty string"
+            }
+            require(!normalized.contains(':')) {
+                "$context must not contain ':' characters"
+            }
+            if (normalized == raw) return false
+            matcher["name"] = normalized
+            return true
+        }
+
+        private fun normalizeProofHashMatcher(
+            matcher: MutableMap<String, Any?>,
+            propertyName: String,
+            context: String,
+        ): Boolean {
+            if (!matcher.containsKey(propertyName)) return false
+            val raw = matcher[propertyName] as? String
+                ?: throw IllegalArgumentException("$context must be a string")
+            val normalized = normalizeHex32String(raw, context)
+            if (normalized == raw) return false
+            matcher[propertyName] = normalized
+            return true
+        }
+
+        private fun normalizeHex32String(raw: String, context: String): String {
+            var normalized = raw.trim().lowercase()
+            if (normalized.startsWith("0x")) {
+                normalized = normalized.substring(2)
+            }
+            require(normalized.length == 64 && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
+                "$context must be a 32-byte hex string"
+            }
+            return normalized
         }
 
         private fun encodeQuery(params: Map<String, String>): String {

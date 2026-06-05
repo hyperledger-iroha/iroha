@@ -8,23 +8,10 @@ use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::{
         ff::{Field as _, PrimeField as _},
-        pasta::{EqAffine as Curve, Fp as Scalar},
+        pasta::Fp as Scalar,
     },
-    plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, ProvingKey, Selector, VerifyingKey,
-        create_proof, keygen_pk, keygen_vk, verify_proof,
-    },
-    poly::{
-        Rotation, VerificationStrategy as _,
-        ipa::{
-            commitment::IPACommitmentScheme, multiopen::ProverIPA,
-            strategy::SingleStrategy as SingleVerifier,
-        },
-    },
-    transcript::{
-        Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer as _,
-        TranscriptWriterBuffer as _,
-    },
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+    poly::Rotation,
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_crypto::Hash as CryptoHash;
@@ -35,9 +22,6 @@ use iroha_data_model::{
     proof::{ProofBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use rand_core_06::OsRng;
-
 pub const CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
@@ -145,10 +129,10 @@ pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type ConfidentialV2ProvingKey = ProvingKey<Curve>;
+type ConfidentialV2ProvingKey = super::halo2_backend::ProvingKey;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type ConfidentialV2VerifyingKey = VerifyingKey<Curve>;
+type ConfidentialV2VerifyingKey = super::halo2_backend::VerifyingKey;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn build_confidential_v2_vk_box<C>(
@@ -160,7 +144,7 @@ where
     C: Circuit<Scalar>,
 {
     let params = super::pasta_params_new(k);
-    let vk = keygen_vk(&params, circuit)
+    let vk = super::halo2_backend::keygen_vk(&params, circuit)
         .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
     let mut bytes = super::zk1::wrap_start();
     super::zk1::wrap_append_ipa_k(&mut bytes, k);
@@ -170,6 +154,33 @@ where
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
         bytes,
     ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn ensure_confidential_v2_vk_box_shape(
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    ipa_k: u32,
+    label: &str,
+) -> Result<(), String> {
+    let actual_ipa_k =
+        super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(&vk_box.bytes, circuit_id)
+            .map_err(|err| format!("{label} verifier key {err}"))?;
+    if actual_ipa_k != ipa_k {
+        return Err(format!(
+            "{label} verifier key IPAK `{actual_ipa_k}` is not `{ipa_k}`"
+        ));
+    }
+    let h2vk = super::zk1::h2vk_payload(vk_box.bytes.as_slice())
+        .map_err(|err| format!("{label} verifier key {err}"))?;
+    let (h2vk_k, _compress_selectors, _fixed_columns) = super::zk1::halo2_pasta_vk_header(h2vk)
+        .map_err(|err| format!("{label} verifier key {err}"))?;
+    if h2vk_k != actual_ipa_k {
+        return Err(format!(
+            "{label} verifier key IPAK `{actual_ipa_k}` does not match H2VK domain `{h2vk_k}`"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -202,6 +213,12 @@ pub fn ensure_confidential_transfer_v2_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            "Confidential transfer v2",
+        )?;
         let canonical = confidential_transfer_v2_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -243,6 +260,12 @@ pub fn ensure_confidential_unshield_v2_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V2_IPA_K,
+            "Confidential unshield v2",
+        )?;
         let canonical = confidential_unshield_v2_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -284,6 +307,12 @@ pub fn ensure_confidential_unshield_v3_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V3_IPA_K,
+            "Confidential unshield v3",
+        )?;
         let canonical = confidential_unshield_v3_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -2325,7 +2354,7 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV3<DEPTH
 fn parse_vk_for_transfer(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, halo2_proofs::plonk::VerifyingKey<Curve>), String> {
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
     if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
         return Err("confidential v2 proving requires a halo2/ipa verifying key".to_owned());
     }
@@ -2349,7 +2378,7 @@ fn parse_vk_for_transfer(
 fn parse_vk_for_unshield_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, halo2_proofs::plonk::VerifyingKey<Curve>), String> {
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
     if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
         return Err("confidential v2 proving requires a halo2/ipa verifying key".to_owned());
     }
@@ -2403,7 +2432,7 @@ fn derive_confidential_v2_proving_key<C>(
 where
     C: Circuit<Scalar>,
 {
-    keygen_pk(params, parsed_vk, empty_circuit)
+    super::halo2_backend::keygen_pk(params, parsed_vk, empty_circuit)
         .map_err(|err| format!("failed to derive confidential {context} proving key: {err}"))
 }
 
@@ -2484,17 +2513,10 @@ fn create_confidential_v2_proof<C>(
 where
     C: Circuit<Scalar>,
 {
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
-        params,
-        proving_key,
-        &[circuit],
-        instance_wrapper,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
-    Ok(transcript.finalize())
+    let proof_raw =
+        super::halo2_backend::create_ipa_proof(params, proving_key, &[circuit], instance_wrapper)
+            .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
+    Ok(proof_raw)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2695,17 +2717,12 @@ pub fn build_confidential_transfer_proof_v2(
         )?
     };
     {
-        let mut verify_transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
-            std::io::Cursor::new(proof_raw.as_slice()),
-        );
-        let strategy = SingleVerifier::new(&params);
         let proofs_instances = [&instance_refs[..]];
-        verify_proof(
+        super::halo2_backend::verify_ipa_proof(
             &params,
             &parsed_vk,
-            strategy,
+            proof_raw.as_slice(),
             &proofs_instances,
-            &mut verify_transcript,
         )
         .map_err(|err| {
             format!("generated confidential transfer proof failed local self-verification: {err}")
@@ -3175,6 +3192,21 @@ mod tests {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
+    fn confidential_transfer_v2_canonical_vk_guard_rejects_malformed_key_preflight() {
+        use iroha_data_model::proof::VerifyingKeyBox;
+
+        let malformed =
+            VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC9; 32]);
+        let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&malformed)
+            .expect_err("malformed verifier key must reject before canonical key generation");
+        assert!(
+            err.contains("invalid CID1/Halo2 IPA verifier-key envelope"),
+            "unexpected malformed-key error: {err}"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
     fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
 
@@ -3252,13 +3284,13 @@ mod tests {
         let err = super::ensure_confidential_unshield_v3_canonical_vk_box(&v2)
             .expect_err("unshield v2 key must not satisfy unshield v3 canonical guard");
         assert!(
-            err.contains("canonical semantic circuit key"),
+            err.contains("CID1"),
             "unexpected v2-as-v3 canonical-guard error: {err}"
         );
         let err = super::ensure_confidential_unshield_v2_canonical_vk_box(&v3)
             .expect_err("unshield v3 key must not satisfy unshield v2 canonical guard");
         assert!(
-            err.contains("canonical semantic circuit key"),
+            err.contains("CID1"),
             "unexpected v3-as-v2 canonical-guard error: {err}"
         );
     }

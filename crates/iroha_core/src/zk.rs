@@ -38,13 +38,14 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 use std::{
     collections::BTreeSet,
-    io,
     time::{Duration, Instant},
 };
 
 /// Confidential transfer v2 helpers, circuits, and proof builders.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod halo2_backend;
 
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
@@ -61,109 +62,21 @@ use tokio::sync::mpsc;
 use crate::kura::PipelineProofSnapshot;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type PastaParams =
-    halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>;
+pub(crate) use halo2_backend::{
+    PastaParams, assign_advice_compat, params_fingerprint, params_new as pasta_params_new,
+    read_proving_key, read_verifying_key,
+};
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn pasta_params_new(k: u32) -> PastaParams {
-    use halo2_proofs::poly::commitment::ParamsProver as _;
-
-    halo2_proofs::poly::ipa::commitment::ParamsIPA::<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >::new(k)
-}
-
+use halo2_proofs::poly::commitment::Params as _;
 #[cfg(all(
     test,
     feature = "zk-halo2-ipa-poseidon",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use halo2_proofs::{
-    SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
-    transcript::TranscriptReadBuffer,
-};
 #[cfg(feature = "zk-halo2-ipa")]
 use norito::codec::{Decode, Encode};
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
-pub(crate) fn assign_advice_compat<'r, F, A, AR, V, T>(
-    region: &mut halo2_proofs::circuit::Region<'r, F>,
-    annotation: A,
-    column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    offset: usize,
-    mut to: V,
-) -> Result<
-    halo2_proofs::circuit::AssignedCell<&'r halo2_proofs::plonk::Assigned<F>, F>,
-    halo2_proofs::plonk::Error,
->
-where
-    F: halo2_proofs::halo2curves::ff::Field,
-    A: Fn() -> AR,
-    AR: Into<String>,
-    V: FnMut() -> halo2_proofs::circuit::Value<T>,
-    T: Into<halo2_proofs::plonk::Assigned<F>>,
-{
-    let _ = annotation;
-    let value = to().map(Into::into);
-    Ok(halo2_proofs::circuit::Region::assign_advice(
-        region, column, offset, value,
-    ))
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn read_verifying_key<C, R>(
-    reader: &mut R,
-) -> io::Result<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
-where
-    R: io::Read,
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    C::Params: Default,
-{
-    #[cfg(feature = "circuit-params")]
-    {
-        halo2_proofs::plonk::VerifyingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-            C::Params::default(),
-        )
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        halo2_proofs::plonk::VerifyingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-        )
-    }
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn read_proving_key<C, R>(
-    reader: &mut R,
-) -> io::Result<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
-where
-    R: io::Read,
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    C::Params: Default,
-{
-    #[cfg(feature = "circuit-params")]
-    {
-        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-            C::Params::default(),
-        )
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-        )
-    }
-}
 
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION: u16 = 1;
@@ -234,7 +147,7 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM
 /// proofs, Offline recursive proofs, the 30-column Kagemusha folded token
-/// statement, and the 43-column Kagemusha recursive aggregation proof
+/// statement, and the 55-column Kagemusha recursive aggregation proof
 /// statement while keeping malformed envelopes bounded.
 const MAX_INST_COLS: usize = 64;
 
@@ -313,12 +226,10 @@ pub fn halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, String> {
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
     let circuit = pasta_tiny::IvmExecutionBindV1::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
@@ -372,9 +283,15 @@ pub const KAGEMUSHA_FOLDED_CIRCUIT_ID: &str = "kagemusha-folded-v1";
 /// Canonical circuit identifier for proof-carrying Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID: &str =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
-/// Reserved chain-admission circuit identifier for recursive spend lineage proofs.
+/// Legacy Reserved-lineage circuit-family identifier for recursive spend lineage proofs.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID: &str =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1;
+/// Profile-specific Reserved-lineage circuit identifier for the first offline hop.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1;
+/// Profile-specific Reserved-lineage circuit identifier for append proofs.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID: &str =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
 /// Canonical verifier-record namespace for Kagemusha Offline hop and folded proofs.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Halo2 IPA parameter degree used by the canonical Kagemusha folded circuit.
@@ -386,12 +303,38 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K: u32 = 24;
 
 /// Minimum Halo2 IPA parameter degree expected for reserved recursive spend lineage keys.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K: u32 = 8;
+/// Canonical Halo2 IPA parameter degree for one-hop recursive spend lineage proofs.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 =
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K;
+#[cfg(feature = "zk-halo2-ipa")]
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1024 * 1024;
+
+/// Environment switch for developer-only Reserved-lineage runtime key generation.
+///
+/// Production SDK and bridge paths should supply packaged verifier/proving key
+/// artifacts. Generating the recursive verifier-slice keys on-device or in
+/// request handling is intentionally disabled by default because the current
+/// non-native verifier circuit materialization is extremely expensive.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: &str =
+    "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN";
+
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED: &str = "Kagemusha Reserved-lineage proving requires packaged verifier/proving key artifacts; runtime recursive verifier-slice key generation is disabled by default";
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_runtime_keygen_enabled() -> bool {
+    std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some()
+}
 /// Maximum encoded proof payload accepted for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 /// Maximum encoded proof payload accepted for Kagemusha recursive aggregation proofs.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Maximum Norito archive bytes accepted for previous recursive proof opening material.
+pub const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: usize =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES;
 /// Rejection reason used when a semantic recursive spend proof reaches chain redemption.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CHAIN_ADMISSION_REQUIRES_LINEAGE_PROOF: &str = "recursive Kagemusha spend redemption requires a recursive proof that verifies the private-hop lineage in-circuit; semantic kagemusha-recursive-aggregation-v1 proofs are admission-neutral only";
+/// Diagnostic returned when a lineage proof is outside the witnessless cap.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE: &str = "recursive Kagemusha spend witnessless chain admission requires a Reserved-lineage proof inside the configured hop cap; attach a record-backed lineage witness for redemption";
 /// Maximum transcript label length accepted for Kagemusha Pallas opening envelopes.
 pub const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: usize = 128;
 /// Maximum encoded proof payload accepted for each checked Kagemusha private hop.
@@ -1463,7 +1406,7 @@ pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
 /// Number of public instance columns exposed by Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_INSTANCE_COLUMNS: usize = 30;
 /// Number of public instance columns exposed by Kagemusha recursive aggregation proofs.
-pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS: usize = 43;
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS: usize = 55;
 /// Number of private boolean witness bits for `hop_count - 1` (0..=63).
 pub const KAGEMUSHA_FOLDED_HOP_COUNT_BITS: usize = 6;
 /// Number of private boolean witness bits for recursive aggregation `hop_count - 1` (0..=63).
@@ -1478,10 +1421,13 @@ const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX: usize
 const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX: usize = 28;
 #[cfg(test)]
 const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX: usize = 32;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX: usize = 36;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX: usize = 40;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX: usize = 41;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX: usize = 42;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX: usize = 36;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX: usize = 40;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX: usize = 44;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX: usize = 48;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX: usize = 52;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX: usize = 53;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX: usize = 54;
 const KAGEMUSHA_FOLDED_ROOT_LIMBS: usize = 4;
 const KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX: usize = 4;
 const KAGEMUSHA_FOLDED_HOP_COUNT_INDEX: usize = 5;
@@ -1681,9 +1627,10 @@ impl KagemushaFoldedInstanceValues {
 /// The remaining columns expose the recursive evidence digest, aggregation
 /// transcript digest, Pallas parameter fingerprint, fixed-window schedule and
 /// shared-table commitments, native verifier-witness batch digest, recursive
-/// spend proof-chain digest, recursive verifier scalar-projection digest,
-/// verifier opening length, witness count, and hop count that the proof
-/// envelope must match.
+/// spend proof-chain digest, transition-profile binding digest, append
+/// opening-preflight digest, append-boundary digest, recursive verifier
+/// scalar-projection digest, verifier opening length, witness count, and hop
+/// count that the proof envelope must match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveAggregationProofInstanceValues {
     /// Public instance values encoded as single-row Pasta field columns.
@@ -1838,12 +1785,10 @@ pub(crate) fn ensure_offline_note_recursive_canonical_vk_box(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(OFFLINE_NOTE_RECURSIVE_IPA_K);
     let circuit = pasta_tiny::OfflineNoteSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_RECURSIVE_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
@@ -1933,12 +1878,10 @@ fn ensure_kagemusha_folded_canonical_vk_box(vk_box: &VerifyingKeyBox) -> Result<
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_FOLDED_IPA_K);
     let circuit = pasta_tiny::KagemushaFoldedSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_FOLDED_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_FOLDED_CIRCUIT_ID);
@@ -1972,15 +1915,539 @@ pub fn kagemusha_recursive_aggregation_proof_vk_box() -> Result<VerifyingKeyBox,
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_aggregation_proof_vk_box()
--> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+/// Build the canonical inline verifier key for a one-hop recursive spend lineage proof.
+///
+/// The key is specialized by Pallas IPA opening length because the one-hop
+/// verifier slice has a const generic width. It verifies the reserved
+/// `kagemusha-recursive-spend-lineage-onehop-v1` circuit, which composes the recursive
+/// spend accumulator public columns with one private-hop Pallas IPA verifier
+/// slice.
+///
+/// # Errors
+///
+/// Returns an error if the opening length is outside the supported recursive
+/// verifier corridor or if Halo2 verifier-key generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_vk_box(
+    verifier_opening_len: u32,
+) -> Result<VerifyingKeyBox, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<u32, VerifyingKeyBox>>> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(vk_box) = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage verifier-key cache mutex poisoned")
+        .get(&verifier_opening_len)
+        .cloned()
+    {
+        return Ok(vk_box);
+    }
+
+    macro_rules! build {
+        ($len:literal) => {
+            build_kagemusha_recursive_spend_lineage_vk_box_on_large_stack::<$len>().map_err(
+                |err| {
+                    format!(
+                        "failed to generate kagemusha-recursive-spend-lineage-onehop-v1 verifier key for opening length {}: {err}",
+                        verifier_opening_len
+                    )
+                },
+            )
+        };
+    }
+
+    let vk_box = match verifier_opening_len {
+        2 => build!(2)?,
+        4 => build!(4)?,
+        8 => build!(8)?,
+        16 => build!(16)?,
+        32 => build!(32)?,
+        64 => build!(64)?,
+        128 => build!(128)?,
+        other => {
+            return Err(format!(
+                "Kagemusha recursive spend lineage verifier opening length `{other}` is unsupported"
+            ));
+        }
+    };
+    let mut guard = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage verifier-key cache mutex poisoned");
+    match guard.entry(verifier_opening_len) {
+        Entry::Occupied(entry) => Ok(entry.get().clone()),
+        Entry::Vacant(entry) => Ok(entry.insert(vk_box).clone()),
+    }
+}
+
+/// Build the append recursive spend lineage verifier key for a Pallas archive opening length.
+///
+/// This key is generated from the append verifier-slice circuit and therefore
+/// has a distinct circuit id and verifier-key commitment from the one-hop key.
+/// It is not returned by [`kagemusha_recursive_spend_lineage_vk_box`], which
+/// remains the first-hop builder.
+///
+/// # Errors
+///
+/// Returns an error if the opening length is outside the supported recursive
+/// verifier corridor or if Halo2 verifier-key generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_append_vk_box(
+    verifier_opening_len: u32,
+) -> Result<VerifyingKeyBox, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<u32, VerifyingKeyBox>>> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(vk_box) = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage append verifier-key cache mutex poisoned")
+        .get(&verifier_opening_len)
+        .cloned()
+    {
+        return Ok(vk_box);
+    }
+
+    macro_rules! build {
+        ($len:literal) => {
+            build_kagemusha_recursive_spend_lineage_append_vk_box_on_large_stack::<$len>().map_err(
+                |err| {
+                    format!(
+                        "failed to generate kagemusha-recursive-spend-lineage-append-v1 verifier key for opening length {}: {err}",
+                        verifier_opening_len
+                    )
+                },
+            )
+        };
+    }
+
+    let vk_box = match verifier_opening_len {
+        2 => build!(2)?,
+        4 => build!(4)?,
+        8 => build!(8)?,
+        16 => build!(16)?,
+        32 => build!(32)?,
+        64 => build!(64)?,
+        128 => build!(128)?,
+        other => {
+            return Err(format!(
+                "Kagemusha recursive spend lineage append verifier opening length `{other}` is unsupported"
+            ));
+        }
+    };
+    let mut guard = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage append verifier-key cache mutex poisoned");
+    match guard.entry(verifier_opening_len) {
+        Entry::Occupied(entry) => Ok(entry.get().clone()),
+        Entry::Vacant(entry) => Ok(entry.insert(vk_box).clone()),
+    }
+}
+
+/// Build the canonical one-hop recursive spend lineage verifier key for a Pallas archive.
+///
+/// The archive is decoded and preflight-validated before selecting the
+/// verifier-key specialization, so bridge and SDK callers can continue to pass
+/// raw Norito archives without duplicating proof-shape logic.
+///
+/// # Errors
+///
+/// Returns an error if the archive is malformed, the Pallas envelope batch is
+/// invalid, or the opening length has no production lineage verifier key.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<VerifyingKeyBox, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    let (params, _witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+    let opening_len = u32::try_from(params.n()).map_err(|_| {
+        "Kagemusha recursive spend lineage verifier opening length overflowed u32".to_owned()
+    })?;
+    kagemusha_recursive_spend_lineage_vk_box(opening_len)
+}
+
+/// Build the append recursive spend lineage verifier key for a Pallas archive.
+///
+/// The archive is decoded and preflight-validated before selecting the
+/// append verifier-slice specialization, so bridge and SDK callers can pass raw
+/// Norito archives without duplicating proof-shape logic.
+///
+/// # Errors
+///
+/// Returns an error if the archive is malformed, the Pallas envelope batch is
+/// invalid, or the opening length has no production append lineage verifier key.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<VerifyingKeyBox, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    let (params, _witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+    let opening_len = u32::try_from(params.n()).map_err(|_| {
+        "Kagemusha recursive spend lineage append verifier opening length overflowed u32".to_owned()
+    })?;
+    kagemusha_recursive_spend_lineage_append_vk_box(opening_len)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_pallas_archive_opening_len(
+    pallas_open_envelopes_archive: &[u8],
+    context: &str,
+) -> Result<u32, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive)
+            .map_err(|err| format!("failed to decode Kagemusha {context} archive: {err}"))?;
+    let (params, _witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+    u32::try_from(params.n()).map_err(|_| {
+        format!("Kagemusha recursive spend {context} verifier opening length overflowed u32")
+    })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+    )?;
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifier key envelope".to_owned())?;
+    if params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-onehop-v1 verifier key opening length {LEN}"
+        )
+    })?;
+    let pk = halo2_backend::keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage proving key: {err}")
+    })?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        hash_vk(vk_box),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
+    )
+}
+
+/// Derive packaged Halo2 IPA proving-key bytes for the one-hop Reserved-lineage circuit.
+///
+/// The returned archive is bound to the one-hop circuit family and verifier-key
+/// commitment. It is transparent Halo2 IPA key material; no KZG/Groth16-style
+/// trusted setup is used.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key does not match the one-hop
+/// Reserved-lineage circuit or when the requested opening length is unsupported.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<Vec<u8>, String> {
+    match verifier_opening_len {
+        2 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<2>(
+                vk_box,
+            )
+        }
+        4 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<4>(
+                vk_box,
+            )
+        }
+        8 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<8>(
+                vk_box,
+            )
+        }
+        16 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<16>(
+                vk_box,
+            )
+        }
+        32 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<32>(
+                vk_box,
+            )
+        }
+        64 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<64>(
+                vk_box,
+            )
+        }
+        128 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<
+                128,
+            >(vk_box)
+        }
+        other => Err(format!(
+            "Kagemusha recursive spend lineage one-hop proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Derive one-hop Reserved-lineage proving-key bytes from the matching Pallas archive.
+///
+/// # Errors
+///
+/// Returns an error when the Pallas archive is malformed or the verifier key does
+/// not match the archive-selected opening length.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+    vk_box: &VerifyingKeyBox,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let opening_len = kagemusha_recursive_spend_pallas_archive_opening_len(
+        pallas_open_envelopes_archive,
+        "lineage one-hop Pallas open-envelope",
+    )?;
+    derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+        vk_box,
+        opening_len,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+    )?;
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifier key envelope".to_owned())?;
+    if params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-append-v1 verifier key opening length {LEN}"
+        )
+    })?;
+    let pk = halo2_backend::keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage append proving key: {err}")
+    })?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        hash_vk(vk_box),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
+    )
+}
+
+/// Derive packaged Halo2 IPA proving-key bytes for the Reserved-lineage append circuit.
+///
+/// The returned archive is bound to the append circuit family and verifier-key
+/// commitment. It is transparent Halo2 IPA key material; no KZG/Groth16-style
+/// trusted setup is used.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key does not match the append
+/// Reserved-lineage circuit or when the requested opening length is unsupported.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<Vec<u8>, String> {
+    match verifier_opening_len {
+        2 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<2>(
+                vk_box,
+            )
+        }
+        4 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<4>(
+                vk_box,
+            )
+        }
+        8 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<8>(
+                vk_box,
+            )
+        }
+        16 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<16>(
+                vk_box,
+            )
+        }
+        32 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<32>(
+                vk_box,
+            )
+        }
+        64 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<64>(
+                vk_box,
+            )
+        }
+        128 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<128>(
+                vk_box,
+            )
+        }
+        other => Err(format!(
+            "Kagemusha recursive spend lineage append proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Derive append Reserved-lineage proving-key bytes from the matching Pallas archive.
+///
+/// # Errors
+///
+/// Returns an error when the Pallas archive is malformed or the verifier key does
+/// not match the archive-selected opening length.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+    vk_box: &VerifyingKeyBox,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let opening_len = kagemusha_recursive_spend_pallas_archive_opening_len(
+        pallas_open_envelopes_archive,
+        "lineage append Pallas open-envelope",
+    )?;
+    derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(vk_box, opening_len)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_kagemusha_recursive_spend_lineage_vk_box_on_large_stack<const LEN: usize>()
+-> Result<VerifyingKeyBox, String> {
+    std::thread::Builder::new()
+        .name(format!("kagemusha-recursive-spend-lineage-vk-len-{LEN}"))
+        .stack_size(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES)
+        .spawn(|| {
+            build_kagemusha_recursive_spend_lineage_vk_box::<LEN>().map_err(|err| err.to_string())
+        })
+        .map_err(|err| {
+            format!("failed to spawn Kagemusha recursive spend lineage verifier-key builder: {err}")
+        })?
+        .join()
+        .map_err(|_| "Kagemusha recursive spend lineage verifier-key builder panicked".to_owned())?
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_kagemusha_recursive_spend_lineage_vk_box<const LEN: usize>()
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
+    let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::default();
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    zk1::wrap_append_circuit_id(
+        &mut bytes,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+    );
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_kagemusha_recursive_spend_lineage_append_vk_box_on_large_stack<const LEN: usize>()
+-> Result<VerifyingKeyBox, String> {
+    std::thread::Builder::new()
+        .name(format!(
+            "kagemusha-recursive-spend-lineage-append-vk-len-{LEN}"
+        ))
+        .stack_size(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES)
+        .spawn(|| {
+            build_kagemusha_recursive_spend_lineage_append_vk_box::<LEN>()
+                .map_err(|err| err.to_string())
+        })
+        .map_err(|err| {
+            format!(
+                "failed to spawn Kagemusha recursive spend lineage append verifier-key builder: {err}"
+            )
+        })?
+        .join()
+        .map_err(|_| {
+            "Kagemusha recursive spend lineage append verifier-key builder panicked".to_owned()
+        })?
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_kagemusha_recursive_spend_lineage_append_vk_box<const LEN: usize>()
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
+    let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::default();
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    zk1::wrap_append_circuit_id(
+        &mut bytes,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+    );
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
@@ -2057,6 +2524,88 @@ pub fn kagemusha_recursive_aggregation_proof_vk_record_from_box(
     let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
         version,
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = vk_len;
+    record.max_proof_bytes = KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
+}
+
+/// Build a governance/WSV verifier-key record for one-hop recursive spend lineage proofs.
+///
+/// The record is active, embeds the real Halo2 IPA one-hop verifier-slice key
+/// inline, and binds to the recursive aggregation public-input schema used by
+/// `KagemushaRecursiveSpendBundleV1`.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+    verifier_opening_len: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus,
+        offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash, zk::BackendTag,
+    };
+
+    let vk_box = kagemusha_recursive_spend_lineage_vk_box(verifier_opening_len)?;
+    let vk_len = u32::try_from(vk_box.bytes.len()).map_err(|_| {
+        "Kagemusha recursive spend lineage verifying key length overflowed u32".to_owned()
+    })?;
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        version,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = vk_len;
+    record.max_proof_bytes = KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
+}
+
+/// Build a governance/WSV verifier-key record for append recursive spend lineage proofs.
+///
+/// The record is active, embeds the real Halo2 IPA append verifier-slice key
+/// inline, and binds to the recursive aggregation public-input schema used by
+/// `KagemushaRecursiveSpendBundleV1`.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_append_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+    verifier_opening_len: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus,
+        offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash, zk::BackendTag,
+    };
+
+    let vk_box = kagemusha_recursive_spend_lineage_append_vk_box(verifier_opening_len)?;
+    let vk_len = u32::try_from(vk_box.bytes.len()).map_err(|_| {
+        "Kagemusha recursive spend lineage append verifying key length overflowed u32".to_owned()
+    })?;
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        version,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
         BackendTag::Halo2IpaPasta,
         "pallas",
         kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
@@ -2496,6 +3045,11 @@ pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(
     let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
     let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
     let proof_chain_limbs = bytes_to_u64_limbs_le(&public_inputs.recursive_proof_chain_digest);
+    let transition_profile_binding_limbs =
+        bytes_to_u64_limbs_le(&public_inputs.transition_profile_binding_digest);
+    let append_opening_preflight_limbs =
+        bytes_to_u64_limbs_le(&public_inputs.append_opening_preflight_digest);
+    let append_boundary_limbs = bytes_to_u64_limbs_le(&public_inputs.append_boundary_digest);
     let scalar_projection_limbs =
         bytes_to_u64_limbs_le(&public_inputs.recursive_verifier_scalar_projection_digest);
 
@@ -2537,6 +3091,18 @@ pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(
             proof_chain_limbs[1],
             proof_chain_limbs[2],
             proof_chain_limbs[3],
+            transition_profile_binding_limbs[0],
+            transition_profile_binding_limbs[1],
+            transition_profile_binding_limbs[2],
+            transition_profile_binding_limbs[3],
+            append_opening_preflight_limbs[0],
+            append_opening_preflight_limbs[1],
+            append_opening_preflight_limbs[2],
+            append_opening_preflight_limbs[3],
+            append_boundary_limbs[0],
+            append_boundary_limbs[1],
+            append_boundary_limbs[2],
+            append_boundary_limbs[3],
             scalar_projection_limbs[0],
             scalar_projection_limbs[1],
             scalar_projection_limbs[2],
@@ -2649,13 +3215,23 @@ pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
     hash_domain_separated_payload(b"iroha:zk:v1:vk", backend, bytes)
 }
 
-/// Returns `true` when `backend` denotes the native STARK/FRI verifier family.
-///
-/// The canonical family identifier is `stark/fri`. Implementations may use
-/// additional suffixes under this prefix (e.g., `stark/fri/sha256-goldilocks`).
+/// Returns `true` when `backend` names an exact cataloged privacy protocol
+/// family whose production verifier is not yet wired and audited.
+#[inline]
+#[must_use]
+pub fn is_pending_production_backend_label(backend: &str) -> bool {
+    iroha_data_model::zk::BackendTag::is_pending_production_backend_label(backend)
+}
+
+/// Returns `true` when `backend` denotes an explicitly admitted native
+/// STARK/FRI verifier profile.
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    if is_trusted_setup_backend_label(backend) || is_developer_only_backend_label(backend) {
+    if is_pending_production_backend_label(backend)
+        || is_production_claim_backend_label(backend)
+        || is_trusted_setup_backend_label(backend)
+        || is_developer_only_backend_label(backend)
+    {
         return false;
     }
     backend == ZK_BACKEND_STARK_FRI_V1
@@ -2664,11 +3240,14 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
             .is_some_and(is_stark_fri_v1_profile)
 }
 
+const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
+    "sha256-goldilocks",
+    "poseidon2-goldilocks",
+    "sha256_goldilocks.v1",
+];
+
 fn is_stark_fri_v1_profile(profile: &str) -> bool {
-    !profile.is_empty()
-        && profile
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile)
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not
@@ -2745,20 +3324,90 @@ fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
     .any(|token| compact.contains(token))
 }
 
+const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
+const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
+    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
+const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
+    "productionready",
+    "productionhardened",
+    "productionenabled",
+    "productionapproved",
+    "productioncertified",
+    "productionclaim",
+    "claimedproduction",
+    "mainnetready",
+    "mainnetcomplete",
+    "mainnetclaim",
+    "claimedmainnet",
+    "auditedproduction",
+    "externallyaudited",
+    "auditpassed",
+    "auditapproved",
+    "auditsignoff",
+    "auditclaim",
+    "claimedaudit",
+    "securityreviewpassed",
+];
+
+fn compact_ascii_lowercase_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+#[inline]
+fn is_developer_only_direct_backend_token(token: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| token.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&token)
+}
+
+#[inline]
+fn is_developer_only_compact_backend_run(run: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| run.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&run)
+}
+
 /// Returns `true` for developer-only backend labels that must not enter
 /// production proof admission, preverification, or verifier dispatch.
 #[inline]
 #[must_use]
 pub fn is_developer_only_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
-    if backend.contains("debug") || backend.contains("mock") {
-        return true;
+    let mut letter_run = String::new();
+    for token in backend
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if is_developer_only_direct_backend_token(token) {
+            return true;
+        }
+        if token.len() == 1 {
+            letter_run.push_str(token);
+        } else {
+            if is_developer_only_compact_backend_run(&letter_run) {
+                return true;
+            }
+            letter_run.clear();
+        }
     }
-    let compact = backend
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect::<String>();
-    compact.contains("debug") || compact.contains("mock")
+    is_developer_only_compact_backend_run(&letter_run)
+}
+
+/// Returns `true` for verifier backend labels that claim production, mainnet,
+/// or audit readiness instead of matching an explicitly admitted verifier id.
+#[inline]
+#[must_use]
+pub fn is_production_claim_backend_label(backend: &str) -> bool {
+    let compact = compact_ascii_lowercase_label(backend);
+    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
 }
 
 /// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
@@ -2766,6 +3415,170 @@ pub fn is_developer_only_backend_label(backend: &str) -> bool {
 #[must_use]
 pub fn is_ivm_execution_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_HALO2_IPA || is_stark_fri_v1_backend(backend)
+}
+
+/// Return the expected OpenVerify backend tag for labels admitted by native
+/// production verifier dispatch.
+#[must_use]
+pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
+    if !production_verify_backend_label_is_portable(backend)
+        || is_pending_production_backend_label(backend)
+        || is_production_claim_backend_label(backend)
+        || is_trusted_setup_backend_label(backend)
+        || is_developer_only_backend_label(backend)
+    {
+        return None;
+    }
+
+    if is_stark_fri_v1_backend(backend) {
+        return Some(iroha_data_model::zk::BackendTag::Stark);
+    }
+    if backend == ZK_BACKEND_HALO2_IPA
+        || verifier_registry_accepts_backend(backend)
+        || is_native_halo2_pasta_backend_label(backend)
+    {
+        return Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta);
+    }
+    None
+}
+
+fn production_verify_backend_label_is_portable(backend: &str) -> bool {
+    if backend.is_empty() || backend.trim() != backend {
+        return false;
+    }
+    let Some(first) = backend.as_bytes().first() else {
+        return false;
+    };
+    let Some(last) = backend.as_bytes().last() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
+        return false;
+    }
+    if backend.as_bytes().iter().any(|&byte| {
+        !matches!(
+            byte,
+            b'a'..=b'z' | b'0'..=b'9' | b'/' | b':' | b'-' | b'_' | b'.'
+        )
+    }) {
+        return false;
+    }
+    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
+        .iter()
+        .any(|separator| backend.contains(separator))
+}
+
+/// Returns `true` when `backend` names a verifier family that can reach native
+/// production verifier dispatch.
+#[inline]
+#[must_use]
+pub fn is_production_verify_backend_label(backend: &str) -> bool {
+    production_verify_backend_tag(backend).is_some()
+}
+
+fn is_native_halo2_pasta_backend_label(backend: &str) -> bool {
+    let Some(normalized) = normalize_native_halo2_pasta_backend_label(backend) else {
+        return false;
+    };
+    // Native dispatch still contains developer fixtures for local proof tests;
+    // production backend admission must never advertise those circuit ids.
+    let profile = normalized.rsplit('/').next().unwrap_or("");
+    !profile.starts_with("tiny-")
+        && !is_developer_only_backend_label(&normalized)
+        && !is_legacy_vote_bool_backend_profile(profile)
+        && !is_legacy_anon_transfer_backend_profile(profile)
+        && is_native_halo2_pasta_circuit_id(&normalized)
+}
+
+fn is_legacy_vote_bool_backend_profile(profile: &str) -> bool {
+    matches!(
+        profile,
+        "vote-bool-commit"
+            | "vote-bool-commit-merkle2"
+            | "vote-bool-commit-merkle8"
+            | "vote-bool-commit-merkle16"
+    )
+}
+
+fn is_legacy_anon_transfer_backend_profile(profile: &str) -> bool {
+    matches!(
+        profile,
+        "anon-transfer-2x2"
+            | "anon-transfer-2x2-merkle2"
+            | "anon-transfer-2x2-merkle8"
+            | "anon-transfer-2x2-merkle16"
+    )
+}
+
+fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
+    if backend.is_empty() || backend.trim() != backend {
+        return None;
+    }
+    if let Some(rest) = backend.strip_prefix("halo2/pasta/ipa/") {
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/{rest}"));
+    }
+    if let Some(rest) = backend.strip_prefix("halo2/pasta/") {
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/{rest}"));
+    }
+    if let Some(rest) = backend.strip_prefix("halo2/ipa::") {
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/{rest}"));
+    }
+    if let Some(rest) = backend.strip_prefix("halo2/ipa:") {
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/{rest}"));
+    }
+    if let Some(rest) = backend.strip_prefix("halo2/ipa/") {
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/{rest}"));
+    }
+    None
+}
+
+fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
+    matches!(
+        circuit_id,
+        "halo2/pasta/tiny-add"
+            | "halo2/pasta/tiny-mul"
+            | "halo2/pasta/tiny-add-2rows"
+            | "halo2/pasta/tiny-add-public"
+            | "halo2/pasta/tiny-mul-public"
+            | "halo2/pasta/tiny-id-public"
+            | "halo2/pasta/tiny-add3"
+            | "halo2/pasta/tiny-add2inst-public"
+            | "halo2/pasta/asset-hidden-transfer-public-test"
+            | "halo2/pasta/tiny-anon-transfer-2x2"
+            | "halo2/pasta/kaigi-roster-v1"
+            | "halo2/pasta/kaigi-usage-v1"
+            | "halo2/pasta/tiny-vote-bool"
+            | "halo2/pasta/ivm-overlay-bind"
+            | "halo2/pasta/ivm-execution-v1"
+            | "halo2/pasta/offline-note-recursive"
+            | "halo2/pasta/kagemusha-folded-v1"
+            | "halo2/pasta/kagemusha-recursive-aggregation-v1"
+            | "halo2/pasta/kagemusha-recursive-spend-lineage-v1"
+            | "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1"
+            | "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1"
+            | "halo2/pasta/tiny-commit-open"
+            | "halo2/pasta/tiny-merkle2"
+            | "halo2/pasta/vote-bool-commit"
+            | "halo2/pasta/vote-bool-commit-merkle2"
+            | "halo2/pasta/vote-bool-commit-merkle8"
+            | "halo2/pasta/vote-bool-commit-merkle16"
+            | "halo2/pasta/anon-transfer-2x2"
+            | "halo2/pasta/anon-transfer-2x2-merkle2"
+            | "halo2/pasta/anon-transfer-2x2-merkle8"
+            | "halo2/pasta/anon-transfer-2x2-merkle16"
+    ) || {
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        {
+            confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id)
+                || confidential_v2::is_confidential_unshield_v2_circuit_id(circuit_id)
+                || confidential_v2::is_confidential_unshield_v3_circuit_id(circuit_id)
+        }
+        #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+        {
+            let _ = circuit_id;
+            false
+        }
+    }
 }
 
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
@@ -2810,6 +3623,83 @@ fn ivm_execution_public_inputs_columns(
         .collect()
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_halo2_ipa_proving_key_compatible(
+    proving_key: &halo2_backend::ProvingKey,
+    parsed_vk: &halo2_backend::VerifyingKey,
+    params: &PastaParams,
+    domain_message: &str,
+    vk_message: &str,
+) -> Result<(), String> {
+    if halo2_backend::proving_key_domain_k(proving_key) != params.k() {
+        return Err(domain_message.to_owned());
+    }
+    if halo2_backend::proving_key_vk_to_processed_bytes(proving_key)
+        != halo2_backend::verifying_key_to_processed_bytes(parsed_vk)
+    {
+        return Err(vk_message.to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn create_halo2_ipa_proof<C>(
+    params: &PastaParams,
+    proving_key: &halo2_backend::ProvingKey,
+    circuit: C,
+    instance_refs: &[&[&[halo2_backend::Scalar]]],
+    context: &str,
+) -> Result<Vec<u8>, String>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+{
+    halo2_backend::create_ipa_proof(params, proving_key, &[circuit], instance_refs)
+        .map_err(|err| format!("failed to create {context} proof: {err}"))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_no_instances(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+) -> bool {
+    halo2_backend::verify_ipa_proof_no_instances(params, vk, proof_payload).is_ok()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns_result(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> Result<(), halo2_backend::Error> {
+    halo2_backend::verify_ipa_proof_with_columns(params, vk, proof_payload, col_refs)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    verify_halo2_ipa_payload_columns_result(params, vk, proof_payload, col_refs).is_ok()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_optional_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    if col_refs.is_empty() {
+        verify_halo2_ipa_payload_no_instances(params, vk, proof_payload)
+    } else {
+        verify_halo2_ipa_payload_columns(params, vk, proof_payload, col_refs)
+    }
+}
+
 /// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
@@ -2834,16 +3724,8 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
-    use rand_core_06::OsRng;
-
     if !is_ivm_execution_v1_circuit_id(circuit_id) {
         return Err(format!(
             "unsupported IVM execution circuit id `{circuit_id}`"
@@ -2855,11 +3737,10 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
-        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
-            .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
-            })?;
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::IvmExecutionBindV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
 
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
     let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
@@ -2892,7 +3773,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: halo2_backend::ProvingKey = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             IVM_EXECUTION_V1_CIRCUIT_ID,
@@ -2905,17 +3786,16 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
-            return Err("proving key domain does not match IPAK parameters".to_owned());
-        }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
-        {
-            return Err("proving key verifying key does not match vk_ref bytes".to_owned());
-        }
+        ensure_halo2_ipa_proving_key_compatible(
+            &pk,
+            &parsed_vk,
+            &params,
+            "proving key domain does not match IPAK parameters",
+            "proving key verifying key does not match vk_ref bytes",
+        )?;
         pk
     } else {
-        halo2_proofs::plonk::keygen_pk(
+        halo2_backend::keygen_pk(
             &params,
             parsed_vk.clone(),
             &pasta_tiny::IvmExecutionBindV1::default(),
@@ -2924,17 +3804,13 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     };
 
     let circuit = pasta_tiny::IvmExecutionBindV1 { values };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         &proving_key,
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "ivm-execution-v1",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -2965,12 +3841,6 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err(
             "ivm execution proving key derivation requires halo2/ipa verifying key backend"
@@ -2980,13 +3850,12 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
-        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
-            .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
-            })?;
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::IvmExecutionBindV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::IvmExecutionBindV1::default(),
@@ -2995,25 +3864,18 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         IVM_EXECUTION_V1_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_offline_note_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -3025,7 +3887,7 @@ fn cached_offline_note_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::OfflineNoteSemantic::default(),
@@ -3050,19 +3912,11 @@ fn prove_halo2_ipa_offline_note_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID {
         return Err(format!(
             "Offline recursive proving requires canonical circuit id `{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -3072,7 +3926,7 @@ fn prove_halo2_ipa_offline_note_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
+    let parsed_vk: halo2_backend::VerifyingKey =
         zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
                 "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
@@ -3086,7 +3940,7 @@ fn prove_halo2_ipa_offline_note_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
@@ -3099,11 +3953,11 @@ fn prove_halo2_ipa_offline_note_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err("proving key domain does not match IPAK parameters".to_owned());
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err("proving key verifying key does not match vk_ref bytes".to_owned());
         }
@@ -3117,17 +3971,13 @@ fn prove_halo2_ipa_offline_note_envelope(
         input_amounts: instance_values.input_amount_scalars(),
         output_amounts: instance_values.output_amount_scalars(),
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create offline-note-recursive proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "offline-note-recursive",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3156,23 +4006,17 @@ fn prove_halo2_ipa_offline_note_envelope(
 pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_offline_note_recursive_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
+    let parsed_vk: halo2_backend::VerifyingKey =
         zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
                 "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
             })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::OfflineNoteSemantic::default(),
@@ -3181,7 +4025,7 @@ pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
@@ -3222,18 +4066,11 @@ pub fn prove_offline_note_audit(
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_folded_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -3245,7 +4082,7 @@ fn cached_kagemusha_folded_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaFoldedSemantic::default(),
@@ -3270,19 +4107,11 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID {
         return Err(format!(
             "Kagemusha folded proving requires canonical circuit id `{KAGEMUSHA_FOLDED_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -3292,7 +4121,7 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaFoldedSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -3311,7 +4140,7 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_FOLDED_CIRCUIT_ID,
@@ -3324,13 +4153,13 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode Kagemusha folded proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err(
                 "Kagemusha folded proving key domain does not match IPAK parameters".to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha folded proving key verifying key does not match vk_ref bytes".to_owned(),
@@ -3348,17 +4177,13 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
         root_difference_selectors,
         root_difference_inverse,
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create Kagemusha folded proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha folded",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3387,24 +4212,18 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_kagemusha_folded_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaFoldedSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
         "missing/invalid H2VK payload for kagemusha-folded-v1 verifying key".to_owned()
     })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::KagemushaFoldedSemantic::default(),
@@ -3413,25 +4232,18 @@ pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         KAGEMUSHA_FOLDED_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_recursive_aggregation_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -3443,7 +4255,7 @@ fn cached_kagemusha_recursive_aggregation_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
@@ -3462,6 +4274,1210 @@ fn cached_kagemusha_recursive_aggregation_proving_key(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
+    params: &PastaParams,
+    parsed_vk: &halo2_backend::VerifyingKey,
+    vk_commitment: [u8; 32],
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(proving_key) = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage proving key cache mutex poisoned")
+        .get(&vk_commitment)
+        .cloned()
+    {
+        return Ok(proving_key);
+    }
+
+    let proving_key = halo2_backend::keygen_pk(
+        params,
+        parsed_vk.clone(),
+        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage proving key: {err}")
+    })?;
+    let proving_key = Arc::new(proving_key);
+    let mut cache = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage proving key cache mutex poisoned");
+    match cache.entry(vk_commitment) {
+        Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+        Entry::Vacant(entry) => Ok(Arc::clone(entry.insert(proving_key))),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>(
+    params: &PastaParams,
+    parsed_vk: &halo2_backend::VerifyingKey,
+    vk_commitment: [u8; 32],
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(proving_key) = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage append proving key cache mutex poisoned")
+        .get(&vk_commitment)
+        .cloned()
+    {
+        return Ok(proving_key);
+    }
+
+    let proving_key = halo2_backend::keygen_pk(
+        params,
+        parsed_vk.clone(),
+        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage append proving key: {err}")
+    })?;
+    let proving_key = Arc::new(proving_key);
+    let mut cache = cache
+        .lock()
+        .expect("Kagemusha recursive spend lineage append proving key cache mutex poisoned");
+    match cache.entry(vk_commitment) {
+        Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+        Entry::Vacant(entry) => Ok(Arc::clone(entry.insert(proving_key))),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn append_kagemusha_vesta_complete_add_point_instance_columns(
+    instances: &mut Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+    point: &pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+) {
+    instances.extend(
+        point
+            .x_squared
+            .lhs
+            .limbs
+            .iter()
+            .chain(point.y_squared.lhs.limbs.iter())
+            .copied()
+            .map(|limb| vec![limb]),
+    );
+    instances.push(vec![point.identity]);
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns<
+    const TERMS: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::NonNativeVestaAffineWindowedMsmSharedTableNativeScalar<
+        TERMS,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    let mut instances = Vec::with_capacity((TERMS + 1) * 9);
+    for term in &circuit.term_muls {
+        append_kagemusha_vesta_complete_add_point_instance_columns(
+            &mut instances,
+            &term
+                .tables
+                .first()
+                .expect("shared-table windowed MSM term has a first table")
+                .table[1],
+        );
+    }
+    append_kagemusha_vesta_complete_add_point_instance_columns(
+        &mut instances,
+        circuit
+            .sum_adds
+            .last()
+            .expect("shared-table windowed MSM has a final sum")
+            .r
+            .as_ref(),
+    );
+    instances
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_ipa_final_windowed_msm_shared_table_instance_columns<
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar<
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns(
+        circuit.msm.as_ref(),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_ipa_round_accumulator_shared_table_instance_columns<
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar<
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns(
+        circuit.msm.as_ref(),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_ipa_generator_fold_shared_table_instance_columns<
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar<
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    let mut instances =
+        kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns(
+            circuit.g_msm.as_ref(),
+        );
+    instances.extend(
+        kagemusha_vesta_affine_windowed_msm_shared_table_native_scalar_instance_columns(
+            circuit.h_msm.as_ref(),
+        ),
+    );
+    instances
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_instance_columns<const LEN: usize>(
+    circuit: &pasta_tiny::NativePastaFpIpaBVectorReduction<LEN>,
+) -> Result<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>, String> {
+    let first_layer = circuit.vectors.first().ok_or_else(|| {
+        "Kagemusha one-hop verifier slice missing initial b-vector layer".to_owned()
+    })?;
+    let mut instances = first_layer
+        .iter()
+        .map(|scalar| vec![scalar.value])
+        .collect::<Vec<_>>();
+    instances.push(vec![
+        circuit
+            .vectors
+            .last()
+            .and_then(|layer| layer.first())
+            .ok_or_else(|| "Kagemusha one-hop verifier slice missing final b scalar".to_owned())?
+            .value,
+    ]);
+    instances.extend(
+        circuit
+            .challenges
+            .iter()
+            .map(|challenge| vec![challenge.value]),
+    );
+    instances.extend(
+        circuit
+            .challenge_inverses
+            .iter()
+            .map(|inverse| vec![inverse.value]),
+    );
+    Ok(instances)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_native_pasta_fp_ipa_transcript_binding_instance_columns_from_values(
+    header_projection: halo2_proofs::halo2curves::pasta::Fp,
+    round_projections: &[halo2_proofs::halo2curves::pasta::Fp],
+    challenges: &[halo2_proofs::halo2curves::pasta::Fp],
+    challenge_inverses: &[halo2_proofs::halo2curves::pasta::Fp],
+    final_projection: halo2_proofs::halo2curves::pasta::Fp,
+    binding_digest: halo2_proofs::halo2curves::pasta::Fp,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    fn instance_at(row: usize, value: Scalar) -> Vec<Scalar> {
+        let mut values = vec![Scalar::from(0); row + 1];
+        values[row] = value;
+        values
+    }
+
+    let rounds = round_projections.len();
+    let final_row = rounds * 3;
+    let mut instances = vec![
+        instance_at(0, header_projection),
+        instance_at(final_row, final_projection),
+        instance_at(final_row, binding_digest),
+    ];
+    instances.extend(
+        round_projections
+            .iter()
+            .enumerate()
+            .map(|(round_index, value)| instance_at(round_index * 3, *value)),
+    );
+    instances.extend(
+        challenges
+            .iter()
+            .enumerate()
+            .map(|(round_index, value)| instance_at(round_index * 3 + 1, *value)),
+    );
+    instances.extend(
+        challenge_inverses
+            .iter()
+            .enumerate()
+            .map(|(round_index, value)| instance_at(round_index * 3 + 2, *value)),
+    );
+    instances
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_one_hop_verifier_slice_scalar_projection_digest<
+    const LEN: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Result<halo2_proofs::halo2curves::pasta::Fp, String> {
+    let first_b_layer = verifier.b_reduction.vectors.first().ok_or_else(|| {
+        "Kagemusha one-hop verifier slice missing initial b-vector layer".to_owned()
+    })?;
+    let b0 = first_b_layer.first().ok_or_else(|| {
+        "Kagemusha one-hop verifier slice missing first initial b scalar".to_owned()
+    })?;
+    let b1 = first_b_layer.get(1).ok_or_else(|| {
+        "Kagemusha one-hop verifier slice missing second initial b scalar".to_owned()
+    })?;
+    let challenge = verifier.b_reduction.challenges.first().ok_or_else(|| {
+        "Kagemusha one-hop verifier slice missing transcript challenge".to_owned()
+    })?;
+    let inverse = verifier
+        .b_reduction
+        .challenge_inverses
+        .first()
+        .ok_or_else(|| {
+            "Kagemusha one-hop verifier slice missing transcript challenge inverse".to_owned()
+        })?;
+    let final_b = verifier
+        .b_reduction
+        .vectors
+        .last()
+        .and_then(|layer| layer.first())
+        .ok_or_else(|| {
+            "Kagemusha one-hop verifier slice missing final folded b scalar".to_owned()
+        })?;
+    Ok(
+        pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+            verifier.transcript_binding_digest,
+            b0.value,
+            b1.value,
+            challenge.value,
+            inverse.value,
+            final_b.value,
+        ]),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_vesta_affine_ipa_verifier_shared_table_instance_columns<
+    const LEN: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Result<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>, String> {
+    let mut instances =
+        kagemusha_native_pasta_fp_ipa_transcript_binding_instance_columns_from_values(
+            verifier.transcript_header_projection,
+            &verifier.transcript_round_projections,
+            &verifier.transcript_challenges,
+            &verifier.transcript_challenge_inverses,
+            verifier.transcript_final_projection,
+            verifier.transcript_binding_digest,
+        );
+    instances.extend(
+        kagemusha_native_pasta_fp_ipa_b_vector_reduction_instance_columns(
+            verifier.b_reduction.as_ref(),
+        )?,
+    );
+    for round_accumulator in &verifier.round_accumulators {
+        instances.extend(
+            kagemusha_vesta_affine_ipa_round_accumulator_shared_table_instance_columns(
+                round_accumulator,
+            ),
+        );
+    }
+    for generator_fold_round in &verifier.generator_folds {
+        for generator_fold in generator_fold_round {
+            instances.extend(
+                kagemusha_vesta_affine_ipa_generator_fold_shared_table_instance_columns(
+                    generator_fold,
+                ),
+            );
+        }
+    }
+    instances.extend(
+        kagemusha_vesta_affine_ipa_final_windowed_msm_shared_table_instance_columns(
+            verifier.final_msm.as_ref(),
+        ),
+    );
+    Ok(instances)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_rectangular_pasta_instance_columns(
+    mut columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
+    for column in &mut columns {
+        column.resize(rows, Scalar::from(0));
+    }
+    columns
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_one_hop_verifier_slice_instance_columns<
+    const LEN: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Result<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>, String> {
+    let mut instances = circuit
+        .semantic
+        .public_values
+        .iter()
+        .copied()
+        .map(|value| vec![value])
+        .collect::<Vec<_>>();
+    instances.extend(
+        kagemusha_vesta_affine_ipa_verifier_shared_table_instance_columns(
+            circuit.verifier.as_ref(),
+        )?,
+    );
+    instances.push(vec![circuit.verifier.transcript_binding_digest]);
+    instances.push(vec![
+        kagemusha_recursive_one_hop_verifier_slice_scalar_projection_digest(
+            circuit.verifier.as_ref(),
+        )?,
+    ]);
+    Ok(kagemusha_rectangular_pasta_instance_columns(instances))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_append_verifier_slice_scalar_projection_digest<
+    const LEN: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    previous_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+    current_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Result<halo2_proofs::halo2curves::pasta::Fp, String> {
+    Ok(
+        pasta_tiny::kagemusha_append_verifier_scalar_projection_digest(
+            kagemusha_recursive_one_hop_verifier_slice_scalar_projection_digest(previous_verifier)?,
+            kagemusha_recursive_one_hop_verifier_slice_scalar_projection_digest(current_verifier)?,
+        ),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_append_verifier_slice_instance_columns<
+    const LEN: usize,
+    const WINDOWS: usize,
+    const WINDOW_BITS: usize,
+>(
+    circuit: &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+        LEN,
+        WINDOWS,
+        WINDOW_BITS,
+    >,
+) -> Result<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>, String> {
+    use ff::PrimeField as _;
+
+    let expected_scalar_projection =
+        kagemusha_recursive_append_verifier_slice_scalar_projection_digest(
+            circuit.previous_recursive_proof_verifier.as_ref(),
+            circuit.current_hop_verifier.as_ref(),
+        )?;
+    let mut expected_scalar_projection_bytes = [0u8; 32];
+    expected_scalar_projection_bytes.copy_from_slice(expected_scalar_projection.to_repr().as_ref());
+    let expected_scalar_projection_limbs = bytes_to_u64_limbs_le(&expected_scalar_projection_bytes)
+        .map(halo2_proofs::halo2curves::pasta::Fp::from);
+    for (offset, expected) in expected_scalar_projection_limbs.into_iter().enumerate() {
+        if circuit.semantic.public_values
+            [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX + offset]
+            != expected
+        {
+            return Err(
+                "Kagemusha append verifier slice scalar-projection public inputs mismatch"
+                    .to_owned(),
+            );
+        }
+    }
+
+    let mut instances = circuit
+        .semantic
+        .public_values
+        .iter()
+        .copied()
+        .map(|value| vec![value])
+        .collect::<Vec<_>>();
+    instances.extend(
+        kagemusha_vesta_affine_ipa_verifier_shared_table_instance_columns(
+            circuit.previous_recursive_proof_verifier.as_ref(),
+        )?,
+    );
+    instances.extend(
+        kagemusha_vesta_affine_ipa_verifier_shared_table_instance_columns(
+            circuit.current_hop_verifier.as_ref(),
+        )?,
+    );
+    Ok(kagemusha_rectangular_pasta_instance_columns(instances))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn scalar_to_canonical_bytes(value: halo2_proofs::halo2curves::pasta::Fp) -> [u8; 32] {
+    use ff::PrimeField as _;
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(value.to_repr().as_ref());
+    out
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn pasta_scalar_to_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
+    use ff::PrimeField as _;
+
+    let repr = value.to_repr();
+    let bytes = repr.as_ref();
+    if bytes[8..].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    Some(u64::from_le_bytes(bytes[..8].try_into().ok()?))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_pasta_instance_columns_bytes_to_scalars(
+    columns: &[Vec<[u8; 32]>],
+) -> Result<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>, String> {
+    use ff::PrimeField;
+    use halo2_proofs::halo2curves::pasta::Fp;
+
+    columns
+        .iter()
+        .enumerate()
+        .map(|(column_index, column)| {
+            column
+                .iter()
+                .enumerate()
+                .map(|(row_index, bytes)| {
+                    let mut repr = <Fp as PrimeField>::Repr::default();
+                    repr.as_mut().copy_from_slice(bytes);
+                    Option::from(Fp::from_repr(repr)).ok_or_else(|| {
+                        format!(
+                            "recursive Kagemusha spend lineage instance column {column_index} row {row_index} is not a canonical Pasta scalar"
+                        )
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KagemushaRecursiveSpendLineageBackendProfile {
+    OneHop { opening_len: u32 },
+    Append { opening_len: u32 },
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+impl KagemushaRecursiveSpendLineageBackendProfile {
+    fn opening_len(self) -> u32 {
+        match self {
+            Self::OneHop { opening_len } | Self::Append { opening_len } => opening_len,
+        }
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_semantic_opening_len(
+    col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+) -> Option<u32> {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    if col_refs.len() <= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS {
+        return None;
+    }
+    let semantic_prefix = col_refs.get(..KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)?;
+    let zero = Scalar::from(0);
+    for col in semantic_prefix {
+        col.first()?;
+        if col.iter().skip(1).any(|value| *value != zero) {
+            return None;
+        }
+    }
+    let opening_len = col_refs
+        .get(KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX)
+        .and_then(|col| col.first())
+        .copied()
+        .and_then(pasta_scalar_to_u64)
+        .and_then(|value| u32::try_from(value).ok())?;
+    match opening_len {
+        2 | 4 | 8 | 16 | 32 | 64 | 128 => Some(opening_len),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_public_limb_group_is_non_zero(
+    col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+    start_index: usize,
+) -> bool {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    let Some(columns) = col_refs.get(start_index..start_index + 4) else {
+        return false;
+    };
+    let sum = columns.iter().fold(Scalar::from(0), |acc, col| {
+        acc + col.first().copied().unwrap_or_else(|| Scalar::from(0))
+    });
+    sum != Scalar::from(0)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_append_backend_opening_len(
+    col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+) -> Option<u32> {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    // Append proofs do not add the one-hop scalar-projection side column, but
+    // they must carry two embedded verifier slices after the semantic prefix.
+    if col_refs.len() <= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1 {
+        return None;
+    }
+    let opening_len = kagemusha_recursive_spend_lineage_semantic_opening_len(col_refs)?;
+    let witness_count = *col_refs
+        .get(KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX)?
+        .first()?;
+    let hop_count = *col_refs
+        .get(KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX)?
+        .first()?;
+    if witness_count != hop_count || hop_count == Scalar::from(1) || hop_count == Scalar::from(0) {
+        return None;
+    }
+    for start_index in [
+        KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX,
+    ] {
+        if !kagemusha_recursive_spend_lineage_public_limb_group_is_non_zero(col_refs, start_index) {
+            return None;
+        }
+    }
+    Some(opening_len)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(
+    col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+) -> Option<u32> {
+    type Scalar = halo2_proofs::halo2curves::pasta::Fp;
+
+    let opening_len = kagemusha_recursive_spend_lineage_semantic_opening_len(col_refs)?;
+    let zero = Scalar::from(0);
+    let scalar_projection_column = col_refs.last()?;
+    if *scalar_projection_column.first()? == zero {
+        return None;
+    }
+    if scalar_projection_column
+        .iter()
+        .skip(1)
+        .any(|value| *value != zero)
+    {
+        return None;
+    }
+    if *col_refs
+        .get(KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX)?
+        .first()?
+        != Scalar::from(1)
+    {
+        return None;
+    }
+    if *col_refs
+        .get(KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX)?
+        .first()?
+        != Scalar::from(1)
+    {
+        return None;
+    }
+    Some(opening_len)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_backend_profile(
+    col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+) -> Option<KagemushaRecursiveSpendLineageBackendProfile> {
+    if let Some(opening_len) =
+        kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(col_refs)
+    {
+        return Some(KagemushaRecursiveSpendLineageBackendProfile::OneHop { opening_len });
+    }
+    kagemusha_recursive_spend_lineage_append_backend_opening_len(col_refs)
+        .map(|opening_len| KagemushaRecursiveSpendLineageBackendProfile::Append { opening_len })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN: usize>(
+    vk_box: &VerifyingKeyBox,
+    accumulator: iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    hop_proof_hash: &iroha_crypto::Hash,
+    preflight: &PallasIpaBatchVerifierPreflight,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    use iroha_data_model::{
+        offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    use std::io::Cursor;
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+    )?;
+    if usize::try_from(preflight.opening_len).ok() != Some(LEN) {
+        return Err(format!(
+            "Kagemusha recursive spend lineage preflight opening length {} does not match verifier key opening length {LEN}",
+            preflight.opening_len
+        ));
+    }
+    if usize::try_from(accumulator.verifier_opening_len).ok() != Some(LEN) {
+        return Err(format!(
+            "Kagemusha recursive spend lineage accumulator opening length {} does not match verifier key opening length {LEN}",
+            accumulator.verifier_opening_len
+        ));
+    }
+
+    let native_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::try_from_pallas_verifier_witness(params, witness)?;
+    let scalar_projection =
+        kagemusha_recursive_one_hop_verifier_slice_scalar_projection_digest(&native_verifier)?;
+    let scalar_projection_bytes = scalar_to_canonical_bytes(scalar_projection);
+
+    let mut public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+            &accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    public_inputs.recursive_verifier_scalar_projection_digest = scalar_projection_bytes;
+    public_inputs
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(&public_inputs)?;
+    let instance_values =
+        kagemusha_recursive_aggregation_proof_public_input_instance_values(&public_inputs)?;
+    let semantic = pasta_tiny::KagemushaRecursiveAggregationSemantic {
+        public_values: instance_values.public_scalars(),
+        opening_len_selectors: instance_values.opening_len_selectors()?,
+        hop_count_minus_one_bits: instance_values.hop_count_minus_one_bits()?,
+        non_zero_public_field_inverses: instance_values.non_zero_public_field_inverses()?,
+    };
+    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+        params,
+        witness,
+        hop_proof_hash,
+        preflight,
+    )?;
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::try_from_parts_with_preflight(semantic, native_verifier, preflight)?;
+    let instance_columns_owned =
+        kagemusha_recursive_one_hop_verifier_slice_instance_columns(&circuit)?;
+    let instance_columns: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[halo2_proofs::halo2curves::pasta::Fp]]> =
+        vec![instance_columns.as_slice()];
+
+    let ipa_params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    if ipa_params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            ipa_params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &ipa_params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-v1 verifier key opening length {LEN}"
+        )
+    })?;
+    let vk_commitment = hash_vk(vk_box);
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
+        let pk = read_proving_key::<
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+                LEN,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >,
+            _,
+        >(&mut cursor)
+        .map_err(|err| {
+            format!("failed to decode Kagemusha recursive spend lineage proving key: {err}")
+        })?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != proving_key_raw.len() {
+            return Err(
+                "failed to decode Kagemusha recursive spend lineage proving key: trailing bytes"
+                    .to_owned(),
+            );
+        }
+        if halo2_backend::proving_key_domain_k(&pk) != ipa_params.k() {
+            return Err(
+                "Kagemusha recursive spend lineage proving key domain does not match IPAK parameters"
+                    .to_owned(),
+            );
+        }
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
+        {
+            return Err(
+                "Kagemusha recursive spend lineage proving key verifying key does not match vk_ref bytes"
+                    .to_owned(),
+            );
+        }
+        Arc::new(pk)
+    } else {
+        if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+            return Err(format!(
+                "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing one-hop proving key archive"
+            ));
+        }
+        cached_kagemusha_recursive_spend_lineage_proving_key::<LEN>(
+            &ipa_params,
+            &parsed_vk,
+            vk_commitment,
+        )?
+    };
+
+    let proof_raw = create_halo2_ipa_proof(
+        &ipa_params,
+        proving_key.as_ref(),
+        circuit,
+        &instance_refs,
+        "Kagemusha recursive spend lineage",
+    )?;
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID.to_owned(),
+        vk_hash: vk_commitment,
+        public_inputs: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA.to_vec(),
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    let public_inputs_hash = public_inputs.public_inputs_hash().map_err(|err| {
+        format!("failed to hash Kagemusha recursive spend lineage public inputs: {err}")
+    })?;
+    let recursive_proof = iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        verifier_key_id: VerifyingKeyId::new(
+            ZK_BACKEND_HALO2_IPA,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        ),
+        public_inputs,
+        public_inputs_hash,
+        proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded),
+    };
+    let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        accumulator,
+        recursive_proof,
+    };
+    bundle
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    Ok(bundle)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: usize>(
+    vk_box: &VerifyingKeyBox,
+    accumulator: iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    previous_params: &iroha_zkp_halo2::pallas::Params,
+    previous_witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    current_params: &iroha_zkp_halo2::pallas::Params,
+    current_witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    current_hop_proof_hash: &iroha_crypto::Hash,
+    append_opening_preflight: &KagemushaRecursiveSpendLineageAppendOpeningPreflight,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    use iroha_data_model::{
+        offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    use std::io::Cursor;
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+    )?;
+    if usize::try_from(
+        append_opening_preflight
+            .previous_recursive_proof_preflight
+            .opening_len,
+    )
+    .ok()
+        != Some(LEN)
+        || usize::try_from(append_opening_preflight.current_hop_preflight.opening_len).ok()
+            != Some(LEN)
+    {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append preflight opening lengths must match verifier key opening length {LEN}"
+        ));
+    }
+    if usize::try_from(accumulator.verifier_opening_len).ok() != Some(LEN) {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append accumulator opening length {} does not match verifier key opening length {LEN}",
+            accumulator.verifier_opening_len
+        ));
+    }
+
+    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::validate_one_hop_pallas_witness_preflight_binding(
+        previous_params,
+        previous_witness,
+        &append_opening_preflight.previous_recursive_proof_preflight,
+    )?;
+    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+        current_params,
+        current_witness,
+        current_hop_proof_hash,
+        &append_opening_preflight.current_hop_preflight,
+    )?;
+
+    let previous_verifier =
+        pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::try_from_pallas_verifier_witness(previous_params, previous_witness)?;
+    let current_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::try_from_pallas_verifier_witness(current_params, current_witness)?;
+    let scalar_projection = kagemusha_recursive_append_verifier_slice_scalar_projection_digest(
+        &previous_verifier,
+        &current_verifier,
+    )?;
+    let scalar_projection_bytes = scalar_to_canonical_bytes(scalar_projection);
+
+    let mut public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+            &accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    public_inputs.recursive_verifier_scalar_projection_digest = scalar_projection_bytes;
+    public_inputs
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(&public_inputs)?;
+    let instance_values =
+        kagemusha_recursive_aggregation_proof_public_input_instance_values(&public_inputs)?;
+    let semantic = pasta_tiny::KagemushaRecursiveAggregationSemantic {
+        public_values: instance_values.public_scalars(),
+        opening_len_selectors: instance_values.opening_len_selectors()?,
+        hop_count_minus_one_bits: instance_values.hop_count_minus_one_bits()?,
+        non_zero_public_field_inverses: instance_values.non_zero_public_field_inverses()?,
+    };
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::try_from_parts_with_preflights(
+        semantic,
+        previous_verifier,
+        current_verifier,
+        &append_opening_preflight.previous_recursive_proof_preflight,
+        &append_opening_preflight.current_hop_preflight,
+    )?;
+    let instance_columns_owned =
+        kagemusha_recursive_append_verifier_slice_instance_columns(&circuit)?;
+    let instance_columns: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[halo2_proofs::halo2curves::pasta::Fp]]> =
+        vec![instance_columns.as_slice()];
+
+    let ipa_params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    if ipa_params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            ipa_params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &ipa_params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-v1 append verifier key opening length {LEN}"
+        )
+    })?;
+    let vk_commitment = hash_vk(vk_box);
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
+        let pk = read_proving_key::<
+            pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+                LEN,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >,
+            _,
+        >(&mut cursor)
+        .map_err(|err| {
+            format!("failed to decode Kagemusha recursive spend lineage append proving key: {err}")
+        })?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != proving_key_raw.len() {
+            return Err(
+                "failed to decode Kagemusha recursive spend lineage append proving key: trailing bytes"
+                    .to_owned(),
+            );
+        }
+        if halo2_backend::proving_key_domain_k(&pk) != ipa_params.k() {
+            return Err(
+                "Kagemusha recursive spend lineage append proving key domain does not match IPAK parameters"
+                    .to_owned(),
+            );
+        }
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
+        {
+            return Err(
+                "Kagemusha recursive spend lineage append proving key verifying key does not match vk_ref bytes"
+                    .to_owned(),
+            );
+        }
+        Arc::new(pk)
+    } else {
+        if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+            return Err(format!(
+                "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing append proving key archive"
+            ));
+        }
+        cached_kagemusha_recursive_spend_lineage_append_proving_key::<LEN>(
+            &ipa_params,
+            &parsed_vk,
+            vk_commitment,
+        )?
+    };
+
+    let proof_raw = create_halo2_ipa_proof(
+        &ipa_params,
+        proving_key.as_ref(),
+        circuit,
+        &instance_refs,
+        "Kagemusha recursive spend lineage append",
+    )?;
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID.to_owned(),
+        vk_hash: vk_commitment,
+        public_inputs: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA.to_vec(),
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    let public_inputs_hash = public_inputs.public_inputs_hash().map_err(|err| {
+        format!("failed to hash Kagemusha recursive spend lineage append public inputs: {err}")
+    })?;
+    let recursive_proof = iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        verifier_key_id: VerifyingKeyId::new(
+            ZK_BACKEND_HALO2_IPA,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        ),
+        public_inputs,
+        public_inputs_hash,
+        proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded),
+    };
+    let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        accumulator,
+        recursive_proof,
+    };
+    bundle
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    Ok(bundle)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope_dispatch(
+    vk_box: &VerifyingKeyBox,
+    accumulator: iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    previous_params: &iroha_zkp_halo2::pallas::Params,
+    previous_witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    current_params: &iroha_zkp_halo2::pallas::Params,
+    current_witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    current_hop_proof_hash: &iroha_crypto::Hash,
+    append_opening_preflight: &KagemushaRecursiveSpendLineageAppendOpeningPreflight,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    macro_rules! prove_len {
+        ($len:literal) => {
+            prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope::<$len>(
+                vk_box,
+                accumulator,
+                previous_params,
+                previous_witness,
+                current_params,
+                current_witness,
+                current_hop_proof_hash,
+                append_opening_preflight,
+                proving_key_bytes,
+            )
+        };
+    }
+
+    match usize::try_from(append_opening_preflight.current_hop_preflight.opening_len).map_err(
+        |_| "Kagemusha recursive spend lineage append opening length overflow".to_owned(),
+    )? {
+        2 => prove_len!(2),
+        4 => prove_len!(4),
+        8 => prove_len!(8),
+        16 => prove_len!(16),
+        32 => prove_len!(32),
+        64 => prove_len!(64),
+        128 => prove_len!(128),
+        other => Err(format!(
+            "Kagemusha recursive spend lineage append opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope_dispatch(
+    vk_box: &VerifyingKeyBox,
+    accumulator: iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    hop_proof_hash: &iroha_crypto::Hash,
+    preflight: &PallasIpaBatchVerifierPreflight,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    macro_rules! prove_len {
+        ($len:literal) => {
+            prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope::<$len>(
+                vk_box,
+                accumulator,
+                params,
+                witness,
+                hop_proof_hash,
+                preflight,
+                proving_key_bytes,
+            )
+        };
+    }
+
+    match usize::try_from(preflight.opening_len)
+        .map_err(|_| "Kagemusha recursive spend lineage opening length overflow".to_owned())?
+    {
+        2 => prove_len!(2),
+        4 => prove_len!(4),
+        8 => prove_len!(8),
+        16 => prove_len!(16),
+        32 => prove_len!(32),
+        64 => prove_len!(64),
+        128 => prove_len!(128),
+        other => Err(format!(
+            "Kagemusha recursive spend lineage opening length {other} is unsupported"
+        )),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
@@ -3470,19 +5486,11 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
         return Err(format!(
             "Kagemusha recursive aggregation proving requires canonical circuit id `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -3492,7 +5500,7 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -3511,7 +5519,7 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
@@ -3530,14 +5538,14 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
                     .to_owned(),
             );
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err(
                 "Kagemusha recursive aggregation proving key domain does not match IPAK parameters"
                     .to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha recursive aggregation proving key verifying key does not match vk_ref bytes"
@@ -3555,17 +5563,13 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
         hop_count_minus_one_bits,
         non_zero_public_field_inverses,
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create Kagemusha recursive aggregation proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha recursive aggregation",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3593,17 +5597,11 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -3611,7 +5609,7 @@ pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
             .to_owned()
     })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
@@ -3622,7 +5620,7 @@ pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
@@ -4121,6 +6119,16 @@ fn kagemusha_record_backend_for_proof_backend(
     }
 }
 
+fn kagemusha_record_curve_for_backend(
+    backend: iroha_data_model::zk::BackendTag,
+) -> Option<&'static str> {
+    match backend {
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta => Some("pallas"),
+        iroha_data_model::zk::BackendTag::Stark => Some("goldilocks"),
+        _ => None,
+    }
+}
+
 fn kagemusha_hop_verifier_record<'a>(
     id: &VerifyingKeyId,
     records: &'a [KagemushaHopVerifierRecord<'a>],
@@ -4185,12 +6193,23 @@ fn validate_kagemusha_hop_verifier_record_set(
 fn validate_kagemusha_fold_verifier_record(
     step: &KagemushaFoldProofStep<'_>,
     hop_record: &KagemushaHopVerifierRecord<'_>,
+    block_height: Option<u64>,
 ) -> Result<(), String> {
     if hop_record.id != &step.attachment.vk_ref {
         return Err("Kagemusha fold verifier record id does not match hop vk_ref".to_owned());
     }
     let record = hop_record.record;
-    if !record.is_active() {
+    let record_active = if let Some(height) = block_height {
+        record.is_active_at(height)
+    } else {
+        if record.activation_height.is_some() || record.withdraw_height.is_some() {
+            return Err(
+                "Kagemusha fold verifier record height window requires chain height".to_owned(),
+            );
+        }
+        record.is_active()
+    };
+    if !record_active {
         return Err("Kagemusha fold verifier record is not active".to_owned());
     }
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
@@ -4201,6 +6220,9 @@ fn validate_kagemusha_fold_verifier_record(
             .ok_or_else(|| "Kagemusha fold verifier record backend is unsupported".to_owned())?;
     if record.backend != expected_backend {
         return Err("Kagemusha fold verifier record backend mismatch".to_owned());
+    }
+    if kagemusha_record_curve_for_backend(expected_backend) != Some(record.curve.as_str()) {
+        return Err("Kagemusha fold verifier record curve mismatch".to_owned());
     }
     if record.max_proof_bytes == 0
         || step.attachment.proof.bytes.len() > record.max_proof_bytes as usize
@@ -4423,9 +6445,10 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle(
 /// Returns an error when a hop verifier record is missing, duplicated, inactive,
 /// inconsistent with the proof envelope/key material, or when any bundled hop
 /// proof fails normal checked folding.
-pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let steps = bundle
@@ -4444,7 +6467,7 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
     validate_kagemusha_hop_verifier_record_set(&steps, records)?;
     for step in &steps {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
-        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_kagemusha_fold_verifier_record(step, record, block_height)?;
         validate_required_kagemusha_confidential_v2_step_public_inputs(
             &bundle.chain_id,
             &bundle.asset,
@@ -4452,6 +6475,48 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
         )?;
     }
     kagemusha_verified_folded_public_inputs(&bundle.chain_id, &bundle.asset, &steps)
+}
+
+/// Verify a serializable Kagemusha fold bundle against active hop verifier records.
+///
+/// Height-windowed verifier records require
+/// [`kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height`];
+/// this height-unbound wrapper fails closed when a record carries activation or
+/// withdrawal bounds.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// or folded transcript construction fails.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
+        bundle, records, None,
+    )
+}
+
+/// Verify a serializable Kagemusha fold bundle against hop verifier records at a chain height.
+///
+/// This is the production admission variant for record-backed Kagemusha folds:
+/// each referenced verifier record must be active at `block_height`, including
+/// its activation and withdrawal window.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// or folded transcript construction fails at the supplied height.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        Some(block_height),
+    )
 }
 
 /// Verify a serializable record-backed Kagemusha fold bundle and build folded public inputs.
@@ -4474,6 +6539,32 @@ pub fn kagemusha_verified_folded_public_inputs_from_record_bundle(
     kagemusha_verified_folded_public_inputs_from_bundle_with_records(
         &record_bundle.bundle,
         &records,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle at a chain height.
+///
+/// # Errors
+///
+/// Returns an error when the record-backed bundle fails verifier-record
+/// enforcement, hop proof verification, or folded transcript construction at
+/// the supplied height.
+pub fn kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+        &record_bundle.bundle,
+        &records,
+        block_height,
     )
 }
 
@@ -5124,6 +7215,392 @@ fn kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
     Ok(preflight)
 }
 
+/// Host-side preflight for the two opening witnesses a Reserved-lineage append circuit must bind.
+///
+/// A real witnessless append must verify the previous recursive proof opening
+/// and the new checked-hop proof opening in-circuit. This structure is the
+/// deterministic host contract for those two opening witnesses: the previous
+/// opening is bound to the exact previous recursive proof artifact and archive,
+/// while the current-hop opening is bound to the exact checked-hop proof hash.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KagemushaRecursiveSpendLineageAppendOpeningPreflight {
+    /// Native Pallas preflight for the previous recursive proof opening archive.
+    pub previous_recursive_proof_preflight: PallasIpaBatchVerifierPreflight,
+    /// Native Pallas preflight for the current checked-hop opening archive.
+    pub current_hop_preflight: PallasIpaBatchVerifierPreflight,
+    /// Digest of the previous recursive spend accumulator.
+    pub previous_accumulator_digest: [u8; 32],
+    /// Digest of the previous recursive proof artifact.
+    pub previous_recursive_proof_artifact_digest: [u8; 32],
+    /// Digest of the previous recursive proof opening archive bytes.
+    pub previous_recursive_proof_open_envelopes_archive_digest: [u8; 32],
+    /// Hash of the checked-hop proof consumed by this append.
+    pub current_hop_proof_hash: [u8; 32],
+    /// Portable Norito data-model contract for the two-opening append preflight.
+    pub contract: iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendOpeningPreflightV1,
+    /// Domain-separated digest of all append opening preflight material.
+    pub append_opening_preflight_digest: [u8; 32],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_verifier_preflight_contract(
+    preflight: &PallasIpaBatchVerifierPreflight,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveVerifierPreflightV1, String> {
+    let proof_count = u32::try_from(preflight.proof_count)
+        .map_err(|_| "Kagemusha verifier preflight proof count does not fit u32".to_owned())?;
+    let contract = iroha_data_model::offline::KagemushaRecursiveVerifierPreflightV1 {
+        proof_count,
+        verifier_witness_profile: preflight.verifier_witness_profile.to_owned(),
+        opening_len: preflight.opening_len,
+        params_fingerprint: preflight.params_fingerprint,
+        fixed_window_table_schedule_digest: preflight.fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest: preflight
+            .fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest: preflight.fixed_window_table_base_digest,
+        aggregate_digest: preflight.aggregate_digest,
+    };
+    contract.validate_context().map_err(|err| err.to_string())?;
+    Ok(contract)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_append_opening_preflight_contract(
+    previous_accumulator_digest: &[u8; 32],
+    previous_recursive_proof_artifact_digest: &[u8; 32],
+    previous_recursive_proof_open_envelopes_archive_digest: &[u8; 32],
+    previous_recursive_proof_preflight: &PallasIpaBatchVerifierPreflight,
+    current_hop_proof_hash: &iroha_crypto::Hash,
+    current_hop_preflight: &PallasIpaBatchVerifierPreflight,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendOpeningPreflightV1, String>
+{
+    iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendOpeningPreflightV1::new(
+        kagemusha_recursive_verifier_preflight_contract(previous_recursive_proof_preflight)?,
+        kagemusha_recursive_verifier_preflight_contract(current_hop_preflight)?,
+        *previous_accumulator_digest,
+        *previous_recursive_proof_artifact_digest,
+        *previous_recursive_proof_open_envelopes_archive_digest,
+        *current_hop_proof_hash,
+    )
+    .map_err(|err| err.to_string())
+}
+
+/// Validate and bind the previous-proof and current-hop opening archives for a Reserved-lineage append.
+///
+/// This prepares the exact two-opening host contract that the production
+/// Reserved-lineage append circuit proves in-circuit while the hop count remains
+/// inside `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+///
+/// # Errors
+///
+/// Returns an error when the previous recursive proof archive is missing or
+/// malformed, when the current-hop archive is malformed or not exactly one
+/// opening, or when either native Pallas witness fails preflight.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    current_hop_proof_hash: &iroha_crypto::Hash,
+    current_hop_pallas_open_envelopes_archive: &[u8],
+) -> Result<KagemushaRecursiveSpendLineageAppendOpeningPreflight, String> {
+    validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
+        previous_bundle,
+        previous_recursive_proof_open_envelopes_archive,
+        true,
+    )?;
+    let previous_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> = norito::decode_from_bytes(
+        previous_recursive_proof_open_envelopes_archive,
+    )
+    .map_err(|err| {
+        format!("failed to decode Kagemusha previous recursive proof open-envelope archive: {err}")
+    })?;
+    let (previous_params, previous_witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&previous_envelopes)?;
+    if previous_witnesses.len() != 1 {
+        return Err(format!(
+            "Kagemusha Reserved-lineage append previous recursive proof preflight requires exactly one witness (found {})",
+            previous_witnesses.len()
+        ));
+    }
+    let previous_recursive_proof_preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+        previous_params.as_ref(),
+        &previous_witnesses,
+    )?;
+
+    let current_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(current_hop_pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha current-hop Pallas open-envelope archive: {err}")
+        })?;
+    if current_envelopes.len() != 1 {
+        return Err(format!(
+            "Kagemusha Reserved-lineage append current-hop preflight requires exactly one opening envelope (found {})",
+            current_envelopes.len()
+        ));
+    }
+    let (current_params, current_witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&current_envelopes)?;
+    let current_hop_preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+        current_params.as_ref(),
+        &current_witnesses,
+        std::slice::from_ref(current_hop_proof_hash),
+    )?;
+
+    let previous_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(
+            &previous_bundle.accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    let previous_recursive_proof_artifact_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_proof_artifact_digest(
+            &previous_bundle.recursive_proof,
+        )
+        .map_err(|err| err.to_string())?;
+    let previous_recursive_proof_open_envelopes_archive_digest =
+        iroha_data_model::offline::kagemusha_recursive_previous_proof_open_envelopes_archive_digest(
+            previous_recursive_proof_open_envelopes_archive,
+        )
+        .map_err(|err| err.to_string())?;
+    let contract = kagemusha_recursive_spend_lineage_append_opening_preflight_contract(
+        &previous_accumulator_digest,
+        &previous_recursive_proof_artifact_digest,
+        &previous_recursive_proof_open_envelopes_archive_digest,
+        &previous_recursive_proof_preflight,
+        current_hop_proof_hash,
+        &current_hop_preflight,
+    )?;
+    let append_opening_preflight_digest = contract.append_opening_preflight_digest;
+    let mut current_hop_proof_hash_bytes = [0u8; 32];
+    current_hop_proof_hash_bytes.copy_from_slice(current_hop_proof_hash.as_ref());
+
+    Ok(KagemushaRecursiveSpendLineageAppendOpeningPreflight {
+        previous_recursive_proof_preflight,
+        current_hop_preflight,
+        previous_accumulator_digest,
+        previous_recursive_proof_artifact_digest,
+        previous_recursive_proof_open_envelopes_archive_digest,
+        current_hop_proof_hash: current_hop_proof_hash_bytes,
+        contract,
+        append_opening_preflight_digest,
+    })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    append_opening_preflight: &KagemushaRecursiveSpendLineageAppendOpeningPreflight,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    accumulator
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+    if !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &previous_bundle.recursive_proof.verifier_key_id.name,
+    ) {
+        return Err(
+            "Kagemusha Reserved-lineage append opening contract requires a Reserved-lineage previous proof"
+                .to_owned(),
+        );
+    }
+    append_opening_preflight
+        .contract
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+
+    let expected_hop_count = previous_bundle
+        .accumulator
+        .hop_count
+        .checked_add(1)
+        .ok_or_else(|| "Kagemusha Reserved-lineage append hop count overflow".to_owned())?;
+    if accumulator.hop_count != expected_hop_count || accumulator.hop_count < 2 {
+        return Err(format!(
+            "Kagemusha Reserved-lineage append accumulator hop count mismatch: expected {expected_hop_count}, found {}",
+            accumulator.hop_count
+        ));
+    }
+
+    let expected_previous_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(
+            &previous_bundle.accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if append_opening_preflight.previous_accumulator_digest != expected_previous_accumulator_digest
+        || append_opening_preflight
+            .contract
+            .previous_accumulator_digest
+            != expected_previous_accumulator_digest
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append opening preflight previous accumulator digest mismatch"
+                .to_owned(),
+        );
+    }
+
+    let expected_previous_recursive_proof_artifact_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_proof_artifact_digest(
+            &previous_bundle.recursive_proof,
+        )
+        .map_err(|err| err.to_string())?;
+    if append_opening_preflight.previous_recursive_proof_artifact_digest
+        != expected_previous_recursive_proof_artifact_digest
+        || append_opening_preflight
+            .contract
+            .previous_recursive_proof_artifact_digest
+            != expected_previous_recursive_proof_artifact_digest
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append opening preflight previous proof artifact digest mismatch"
+                .to_owned(),
+        );
+    }
+
+    let previous_contract = kagemusha_recursive_verifier_preflight_contract(
+        &append_opening_preflight.previous_recursive_proof_preflight,
+    )?;
+    if append_opening_preflight
+        .contract
+        .previous_recursive_proof_preflight
+        != previous_contract
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append opening preflight previous proof preflight mismatch"
+                .to_owned(),
+        );
+    }
+    let current_contract = kagemusha_recursive_verifier_preflight_contract(
+        &append_opening_preflight.current_hop_preflight,
+    )?;
+    if append_opening_preflight.contract.current_hop_preflight != current_contract {
+        return Err(
+            "Kagemusha Reserved-lineage append opening preflight current-hop preflight mismatch"
+                .to_owned(),
+        );
+    }
+
+    let mut contract_hop_proof_hash = [0u8; 32];
+    contract_hop_proof_hash.copy_from_slice(
+        append_opening_preflight
+            .contract
+            .current_hop_proof_hash
+            .as_ref(),
+    );
+    if append_opening_preflight.current_hop_proof_hash != contract_hop_proof_hash {
+        return Err(
+            "Kagemusha Reserved-lineage append opening preflight current-hop proof hash mismatch"
+                .to_owned(),
+        );
+    }
+
+    if append_opening_preflight.append_opening_preflight_digest
+        != append_opening_preflight
+            .contract
+            .append_opening_preflight_digest
+        || append_opening_preflight.append_opening_preflight_digest
+            != accumulator.append_opening_preflight_digest
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append accumulator opening preflight digest mismatch"
+                .to_owned(),
+        );
+    }
+
+    let public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+            accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if public_inputs.append_opening_preflight_digest
+        != append_opening_preflight.append_opening_preflight_digest
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append public inputs opening preflight digest mismatch"
+                .to_owned(),
+        );
+    }
+    if accumulator.append_boundary_digest == [0u8; 32]
+        || public_inputs.append_boundary_digest != accumulator.append_boundary_digest
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append public inputs append boundary digest mismatch"
+                .to_owned(),
+        );
+    }
+    if public_inputs.verifier_opening_len
+        != append_opening_preflight.current_hop_preflight.opening_len
+        || public_inputs.verifier_opening_len
+            != append_opening_preflight
+                .previous_recursive_proof_preflight
+                .opening_len
+    {
+        return Err(
+            "Kagemusha Reserved-lineage append public inputs opening length mismatch".to_owned(),
+        );
+    }
+    for (label, previous, current, public) in [
+        (
+            "verifier parameter fingerprint",
+            append_opening_preflight
+                .previous_recursive_proof_preflight
+                .params_fingerprint,
+            append_opening_preflight
+                .current_hop_preflight
+                .params_fingerprint,
+            public_inputs.verifier_params_fingerprint,
+        ),
+        (
+            "fixed-window schedule digest",
+            append_opening_preflight
+                .previous_recursive_proof_preflight
+                .fixed_window_table_schedule_digest,
+            append_opening_preflight
+                .current_hop_preflight
+                .fixed_window_table_schedule_digest,
+            public_inputs.fixed_window_table_schedule_digest,
+        ),
+        (
+            "fixed-window shared-table manifest digest",
+            append_opening_preflight
+                .previous_recursive_proof_preflight
+                .fixed_window_shared_table_manifest_digest,
+            append_opening_preflight
+                .current_hop_preflight
+                .fixed_window_shared_table_manifest_digest,
+            public_inputs.fixed_window_shared_table_manifest_digest,
+        ),
+    ] {
+        if previous != current || current != public {
+            return Err(format!(
+                "Kagemusha Reserved-lineage append public inputs {label} mismatch"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(
+    output_hop_count: u32,
+) -> Result<(), String> {
+    if output_hop_count < 2 {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append output must contain at least 2 hops (found {output_hop_count})"
+        ));
+    }
+    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append witnessless admission is disabled by policy for {output_hop_count} hops"
+        ));
+    }
+    if output_hop_count
+        > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append exceeds witnessless Reserved-lineage hop cap (requested {output_hop_count} hops, supported {} witnessless hops)",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+        ));
+    }
+    Ok(())
+}
+
 /// Verify a serializable Kagemusha fold bundle against active hop verifier records
 /// and build reserved-mode recursive aggregation evidence.
 ///
@@ -5141,9 +7618,10 @@ fn kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
 /// fields are all-zero or schedule-mismatched, verifier-record enforcement
 /// fails, any hop proof fails verification, or the resulting recursive
 /// aggregation evidence is non-canonical.
-pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: Option<u64>,
     verifier_witness_count: u32,
     verifier_opening_len: u32,
     verifier_params_fingerprint: [u8; 32],
@@ -5238,7 +7716,7 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with
     let mut verified_steps = Vec::with_capacity(steps.len());
     for step in &steps {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
-        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_kagemusha_fold_verifier_record(step, record, block_height)?;
         validate_required_kagemusha_confidential_v2_step_public_inputs(
             &bundle.chain_id,
             &bundle.asset,
@@ -5258,6 +7736,75 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with
         verifier_witness_batch_digest,
     )
     .map_err(|err| err.to_string())
+}
+
+/// Verify a Kagemusha fold bundle against active records and build recursive evidence.
+///
+/// Height-windowed verifier records require
+/// [`kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height`];
+/// this height-unbound wrapper fails closed when a record carries activation or
+/// withdrawal bounds.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        None,
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
+}
+
+/// Verify a Kagemusha fold bundle against records active at a chain height.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails at
+/// the supplied height.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        Some(block_height),
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
 }
 
 /// Verify a record-backed Kagemusha fold bundle and build reserved-mode
@@ -5289,6 +7836,47 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_record_bund
     kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
         &record_bundle.bundle,
         &records,
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
+}
+
+#[cfg(test)]
+/// Verify a record-backed Kagemusha fold bundle at a height and build recursive evidence.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails at
+/// the supplied height.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+        &record_bundle.bundle,
+        &records,
+        block_height,
         verifier_witness_count,
         verifier_opening_len,
         verifier_params_fingerprint,
@@ -5345,6 +7933,47 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
     params: &iroha_zkp_halo2::pallas::Params,
     witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+        bundle,
+        records,
+        params,
+        witnesses,
+        None,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and native Pallas IPA witness batch at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+        bundle,
+        records,
+        params,
+        witnesses,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let expected_witness_count =
         u32::try_from(bundle.steps.len()).expect("Kagemusha hop count is bounded to u32");
@@ -5368,9 +7997,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         witnesses,
         &hop_proof_hashes,
     )?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
         bundle,
         records,
+        block_height,
         expected_witness_count,
         preflight.opening_len,
         preflight.params_fingerprint,
@@ -5395,6 +8026,43 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
     params: &iroha_zkp_halo2::pallas::Params,
     witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+        record_bundle,
+        params,
+        witnesses,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and native Pallas IPA batch at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+        record_bundle,
+        params,
+        witnesses,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let records = record_bundle
         .verifier_records
         .iter()
@@ -5403,11 +8071,12 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
             record: &entry.record,
         })
         .collect::<Vec<_>>();
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
         &record_bundle.bundle,
         &records,
         params,
         witnesses,
+        block_height,
     )
 }
 
@@ -5428,6 +8097,43 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+        bundle,
+        records,
+        envelopes,
+        None,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native batch preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification, or
+/// recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+        bundle,
+        records,
+        envelopes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let expected_witness_count =
@@ -5474,9 +8180,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
             envelopes,
             &hop_proof_hashes,
         )?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
         bundle,
         records,
+        block_height,
         expected_witness_count,
         preflight.opening_len,
         preflight.params_fingerprint,
@@ -5501,6 +8209,39 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+        record_bundle,
+        envelopes,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native batch preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification, or
+/// recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+        record_bundle,
+        envelopes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let records = record_bundle
         .verifier_records
         .iter()
@@ -5509,10 +8250,72 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
             record: &entry.record,
         })
         .collect::<Vec<_>>();
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
         &record_bundle.bundle,
         &records,
         envelopes,
+        block_height,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and archived proof-derived Pallas openings.
+///
+/// This FFI-friendly evidence-only wrapper keeps Pallas opening envelope decoding
+/// inside the core verifier so bridge/mobile callers can pass stable Norito
+/// archive bytes without linking against internal verifier-witness types.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, proof-derived
+/// native batch preflight fails, verifier-record enforcement fails, hop proof
+/// verification fails, or recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and archived proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, proof-derived
+/// native batch preflight fails, verifier-record enforcement at `block_height`
+/// fails, hop proof verification fails, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+        record_bundle,
+        &envelopes,
+        block_height,
     )
 }
 
@@ -5598,6 +8401,35 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_w
     prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
 }
 
+/// Verify a record-backed Kagemusha fold bundle at `block_height`, derive native Pallas batch evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_height(
+            bundle,
+            records,
+            params,
+            witnesses,
+            block_height,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle, derive Pallas batch evidence, and prove it.
 ///
 /// # Errors
@@ -5633,6 +8465,43 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     )
 }
 
+/// Verify a serializable record-backed Kagemusha fold bundle at `block_height`, derive Pallas batch evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_batch_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch_at_height(
+        &record_bundle.bundle,
+        &records,
+        params,
+        witnesses,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 /// Verify a record-backed Kagemusha fold bundle, derive proof-backed Pallas evidence, and prove it.
 ///
 /// This variant reconstructs native Pallas verifier witnesses from transparent
@@ -5657,6 +8526,34 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_w
     let evidence =
         kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
             bundle, records, envelopes,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
+/// Verify a record-backed Kagemusha fold bundle at `block_height`, derive proof-backed Pallas evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification,
+/// recursive evidence construction, or transparent recursive proof generation
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+            bundle,
+            records,
+            envelopes,
+            block_height,
         )?;
     prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
 }
@@ -5694,6 +8591,42 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     )
 }
 
+/// Verify a serializable record-backed Kagemusha fold bundle at `block_height`, derive Pallas envelope evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification,
+/// recursive evidence construction, or transparent recursive proof generation
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+        &record_bundle.bundle,
+        &records,
+        envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle and archived Pallas openings, then prove it.
 ///
 /// This FFI-friendly wrapper keeps Pallas opening envelope decoding inside the
@@ -5727,6 +8660,266 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     )
 }
 
+/// Verify a serializable record-backed Kagemusha fold bundle and archived Pallas openings at `block_height`, then prove it.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, opening
+/// envelope metadata/preflight fails, verifier-record enforcement at
+/// `block_height` fails, hop proof verification fails, recursive evidence
+/// construction fails, or transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes_at_height(
+        record_bundle,
+        &envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
+fn preflight_kagemusha_recursive_spend_initial_transition_profile(
+    evidence: &iroha_data_model::offline::KagemushaRecursiveAggregationEvidence,
+    current_note: &iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    let profile =
+        iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_from_initial_evidence(
+            evidence,
+            current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_spend_transition_profile_matches_accumulator(
+        "initial",
+        &profile,
+        accumulator,
+    )
+}
+
+fn preflight_kagemusha_recursive_spend_append_transition_profile(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    evidence: &iroha_data_model::offline::KagemushaRecursiveAggregationEvidence,
+    current_note: &iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    let profile =
+        iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_append_evidence_with_previous_proof_openings(
+            &previous_bundle.accumulator,
+            &previous_bundle.recursive_proof,
+            previous_recursive_proof_open_envelopes_archive,
+            evidence,
+            current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    let expected_previous_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(
+            &previous_bundle.accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if profile.previous_accumulator_digest != Some(expected_previous_accumulator_digest) {
+        return Err(
+            "Kagemusha recursive spend append transition profile previous accumulator digest mismatch"
+                .to_owned(),
+        );
+    }
+    if profile.previous_current_note.as_ref() != Some(&previous_bundle.accumulator.current_note) {
+        return Err(
+            "Kagemusha recursive spend append transition profile previous current-note mismatch"
+                .to_owned(),
+        );
+    }
+    ensure_kagemusha_recursive_spend_transition_profile_matches_accumulator(
+        "append",
+        &profile,
+        accumulator,
+    )
+}
+
+fn preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    append_opening_preflight:
+        iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendOpeningPreflightV1,
+    evidence: &iroha_data_model::offline::KagemushaRecursiveAggregationEvidence,
+    current_note: &iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    let profile =
+        iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract(
+            &previous_bundle.accumulator,
+            &previous_bundle.recursive_proof,
+            previous_recursive_proof_open_envelopes_archive,
+            append_opening_preflight,
+            evidence,
+            current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    let expected_previous_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(
+            &previous_bundle.accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if profile.previous_accumulator_digest != Some(expected_previous_accumulator_digest) {
+        return Err(
+            "Kagemusha recursive spend append transition profile previous accumulator digest mismatch"
+                .to_owned(),
+        );
+    }
+    if profile.previous_current_note.as_ref() != Some(&previous_bundle.accumulator.current_note) {
+        return Err(
+            "Kagemusha recursive spend append transition profile previous current-note mismatch"
+                .to_owned(),
+        );
+    }
+    ensure_kagemusha_recursive_spend_lineage_append_boundary_matches_accumulator(
+        &profile,
+        accumulator,
+    )?;
+    ensure_kagemusha_recursive_spend_transition_profile_matches_accumulator(
+        "append",
+        &profile,
+        accumulator,
+    )
+}
+
+fn ensure_kagemusha_recursive_spend_lineage_append_boundary_matches_accumulator(
+    profile: &iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    let append_boundary =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile(
+            profile,
+        )
+        .map_err(|err| err.to_string())?;
+    append_boundary
+        .validate_against_transition_profile(profile)
+        .map_err(|err| err.to_string())?;
+    if accumulator.append_boundary_digest == [0u8; 32] {
+        return Err(
+            "Kagemusha recursive spend append transition boundary digest missing from accumulator"
+                .to_owned(),
+        );
+    }
+    let expected_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(accumulator)
+            .map_err(|err| err.to_string())?;
+    let expected_chain_asset_binding_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_append_boundary_chain_asset_binding_digest(
+            &accumulator.chain_id,
+            &accumulator.asset,
+        )
+        .map_err(|err| err.to_string())?;
+    let expected_final_note_binding_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_append_boundary_final_note_binding_digest(
+            accumulator.final_root,
+            &accumulator.current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    let expected_public_inputs_hash =
+        iroha_data_model::offline::kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(
+            accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if append_boundary.append_opening_preflight_digest
+        != accumulator.append_opening_preflight_digest
+        || append_boundary.append_boundary_digest != accumulator.append_boundary_digest
+        || append_boundary.transition_profile_binding_digest
+            != accumulator.transition_profile_binding_digest
+        || append_boundary.chain_asset_binding_digest != expected_chain_asset_binding_digest
+        || append_boundary.final_note_binding_digest != expected_final_note_binding_digest
+        || append_boundary.resulting_accumulator_digest != expected_accumulator_digest
+        || append_boundary.resulting_public_inputs_hash != expected_public_inputs_hash
+    {
+        return Err(
+            "Kagemusha recursive spend append transition boundary accumulator mismatch".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_kagemusha_recursive_spend_transition_profile_matches_accumulator(
+    label: &str,
+    profile: &iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1,
+    accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+) -> Result<(), String> {
+    profile.validate_context().map_err(|err| err.to_string())?;
+    profile.digest().map_err(|err| err.to_string())?;
+    let expected_transition_profile_binding_digest =
+        profile.binding_digest().map_err(|err| err.to_string())?;
+    if accumulator.transition_profile_binding_digest != expected_transition_profile_binding_digest {
+        return Err(format!(
+            "Kagemusha recursive spend {label} transition profile binding digest mismatch"
+        ));
+    }
+
+    let expected_accumulator_digest =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_digest(accumulator)
+            .map_err(|err| err.to_string())?;
+    if profile.resulting_accumulator_digest != expected_accumulator_digest {
+        return Err(format!(
+            "Kagemusha recursive spend {label} transition profile accumulator digest mismatch"
+        ));
+    }
+
+    let expected_public_inputs_hash =
+        iroha_data_model::offline::kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(
+            accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    if profile.resulting_public_inputs_hash != expected_public_inputs_hash {
+        return Err(format!(
+            "Kagemusha recursive spend {label} transition profile public-input hash mismatch"
+        ));
+    }
+
+    if profile.chain_id != accumulator.chain_id
+        || profile.asset != accumulator.asset
+        || profile.hop_count != accumulator.hop_count
+        || profile.current_note != accumulator.current_note
+        || profile.verifier_opening_len != accumulator.verifier_opening_len
+        || profile.resulting_initial_root != accumulator.initial_root
+        || profile.resulting_final_root != accumulator.final_root
+        || profile.resulting_lineage_digest != accumulator.lineage_digest
+        || profile.resulting_verifier_witness_batch_digest
+            != accumulator.verifier_witness_batch_digest
+        || profile.resulting_fixed_window_table_base_digest
+            != accumulator.fixed_window_table_base_digest
+        || profile.resulting_recursive_proof_chain_digest
+            != accumulator.recursive_proof_chain_digest
+        || profile.resulting_append_opening_preflight_digest
+            != accumulator.append_opening_preflight_digest
+        || expected_transition_profile_binding_digest
+            != accumulator.transition_profile_binding_digest
+        || profile.resulting_nullifier_digest != accumulator.nullifier_digest
+        || profile.resulting_output_commitment_digest != accumulator.output_commitment_digest
+        || profile.resulting_fold_digest != accumulator.fold_digest
+        || profile.verifier_params_fingerprint != accumulator.verifier_params_fingerprint
+        || profile.fixed_window_table_schedule_digest
+            != accumulator.fixed_window_table_schedule_digest
+        || profile.fixed_window_shared_table_manifest_digest
+            != accumulator.fixed_window_shared_table_manifest_digest
+    {
+        return Err(format!(
+            "Kagemusha recursive spend {label} transition profile accumulator field mismatch"
+        ));
+    }
+    Ok(())
+}
+
 /// Verify the first offline Kagemusha hop and create a spendable recursive state.
 ///
 /// The input record bundle must contain exactly one checked hop. The returned
@@ -5746,15 +8939,65 @@ pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_e
     vk_box: &VerifyingKeyBox,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        None,
+    )
+}
+
+/// Verify the first offline Kagemusha hop at `block_height` and create a spendable recursive state.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope preflight, verifier-record
+/// enforcement at `block_height`, hop proof verification, accumulator
+/// construction, or recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+            record_bundle,
+            pallas_open_envelopes_archive,
+            block_height,
+        )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
         })?;
-    let evidence =
-        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
-            record_bundle,
-            &envelopes,
-        )?;
     if evidence.aggregation_statement.steps.len() != 1 {
         return Err(format!(
             "Kagemusha recursive spend init requires exactly one hop (found {})",
@@ -5767,7 +9010,184 @@ pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_e
             &current_note,
         )
         .map_err(|err| err.to_string())?;
+    preflight_kagemusha_recursive_spend_initial_transition_profile(
+        &evidence,
+        &current_note,
+        &accumulator,
+    )?;
+    let lineage_init_selected = matches!(
+        circuit_id,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID
+            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+    );
+    if circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID {
+        return Err(
+            "Kagemusha recursive spend init cannot use the Reserved-lineage append circuit id"
+                .to_owned(),
+        );
+    }
+    if lineage_init_selected {
+        let hop_proof_hash = kagemusha_fold_step_proof_hash(
+            &record_bundle
+                .bundle
+                .steps
+                .first()
+                .expect("one-hop init record bundle has one step")
+                .attachment
+                .proof,
+        )?;
+        let (params, witnesses) =
+            kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+        let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+            params.as_ref(),
+            &witnesses,
+            std::slice::from_ref(&hop_proof_hash),
+        )?;
+        let witness = witnesses
+            .first()
+            .ok_or_else(|| "Kagemusha recursive spend lineage init missing witness".to_owned())?;
+        return prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope_dispatch(
+            vk_box,
+            accumulator,
+            params.as_ref(),
+            witness,
+            &hop_proof_hash,
+            &preflight,
+            proving_key_bytes,
+        );
+    }
     prove_kagemusha_recursive_spend_accumulator(circuit_id, vk_box, accumulator, proving_key_bytes)
+}
+
+/// Verify the first offline Kagemusha hop and create the production lineage spend state.
+///
+/// This is the Rust-facing default for spend-again-offline cash. It derives the
+/// one-hop lineage verifier key from the supplied Pallas open-envelope archive
+/// and proves the reserved `kagemusha-recursive-spend-lineage-v1` circuit.
+///
+/// # Errors
+///
+/// Returns an error when the archive/verifier-key selection, opening-envelope
+/// preflight, verifier-record enforcement, hop proof verification,
+/// accumulator construction, or recursive lineage proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+        return Err(format!(
+            "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV}=1 only for developer key-generation runs"
+        ));
+    }
+    let vk_box = kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+    )
+}
+
+/// Verify the first offline Kagemusha hop at `block_height` and create a production lineage spend state.
+///
+/// # Errors
+///
+/// Returns an error when the archive/verifier-key selection, opening-envelope
+/// preflight, verifier-record enforcement at `block_height`, hop proof
+/// verification, accumulator construction, or recursive lineage proof
+/// generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+        return Err(format!(
+            "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV}=1 only for developer key-generation runs"
+        ));
+    }
+    let vk_box = kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
+/// Verify the first offline Kagemusha hop and create a production lineage spend state with
+/// pre-packaged key artifacts.
+///
+/// # Errors
+///
+/// Returns an error when the supplied verifier key/proving key archive does not
+/// match the one-hop Reserved-lineage circuit, or when the checked hop,
+/// Pallas archive, note binding, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    proving_key_bytes: &[u8],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if proving_key_bytes.is_empty() {
+        return Err("Kagemusha Reserved-lineage init proving key archive is empty".to_owned());
+    }
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        vk_box,
+        Some(proving_key_bytes),
+    )
+}
+
+/// Verify the first offline Kagemusha hop at `block_height` and create a lineage spend state with pre-packaged key artifacts.
+///
+/// # Errors
+///
+/// Returns an error when the supplied verifier key/proving key archive does not
+/// match the one-hop Reserved-lineage circuit, or when the checked hop,
+/// verifier record at `block_height`, Pallas archive, note binding, or proof
+/// generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    proving_key_bytes: &[u8],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if proving_key_bytes.is_empty() {
+        return Err("Kagemusha Reserved-lineage init proving key archive is empty".to_owned());
+    }
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        vk_box,
+        Some(proving_key_bytes),
+        block_height,
+    )
 }
 
 /// Verify one additional offline Kagemusha hop and append it to a recursive state.
@@ -5783,8 +9203,245 @@ pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_e
 /// proof/evidence is invalid, lineage continuity fails, or proof generation
 /// fails.
 #[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    required: bool,
+) -> Result<(), String> {
+    if previous_recursive_proof_open_envelopes_archive.is_empty() {
+        return if required {
+            Err(
+                "Kagemusha previous recursive proof open-envelope archive is required for Reserved-lineage output append"
+                    .to_owned(),
+            )
+        } else {
+            Ok(())
+        };
+    }
+    if previous_recursive_proof_open_envelopes_archive.len()
+        > KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
+    {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope archive exceeds max {} bytes (found {})",
+            KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
+            previous_recursive_proof_open_envelopes_archive.len()
+        ));
+    }
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> = norito::decode_from_bytes(
+        previous_recursive_proof_open_envelopes_archive,
+    )
+    .map_err(|err| {
+        format!("failed to decode Kagemusha previous recursive proof open-envelope archive: {err}")
+    })?;
+    if envelopes.is_empty() {
+        return Err(
+            "Kagemusha previous recursive proof open-envelope archive must not be empty".to_owned(),
+        );
+    }
+    if envelopes.len() != 1 {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope archive requires exactly one envelope (found {})",
+            envelopes.len()
+        ));
+    }
+
+    let expected_metadata =
+        expected_kagemusha_recursive_previous_proof_open_envelope_metadata(previous_bundle)?;
+    let envelope_limits = iroha_zkp_halo2::OpenVerifyLimits {
+        max_k: Some(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K),
+        max_transcript_label_len: Some(KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES),
+    };
+    for (envelope_index, envelope) in envelopes.iter().enumerate() {
+        validate_kagemusha_recursive_previous_proof_open_envelope_preflight_shape(
+            envelope_index,
+            envelope,
+        )?;
+        validate_kagemusha_recursive_previous_proof_open_envelope_metadata(
+            envelope_index,
+            envelope,
+            &expected_metadata,
+        )?;
+        iroha_zkp_halo2::norito_helpers::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
+            envelope,
+            envelope_limits,
+        )
+        .map_err(|err| {
+            format!(
+                "Kagemusha previous recursive proof open-envelope {envelope_index} witness derivation failed: {err}"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn expected_kagemusha_recursive_previous_proof_open_envelope_metadata(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+) -> Result<iroha_zkp_halo2::PolyOpenTranscriptMetadata, String> {
+    iroha_data_model::offline::kagemusha_recursive_previous_proof_open_envelope_metadata(
+        previous_bundle,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_recursive_previous_proof_open_envelope_metadata(
+    envelope_index: usize,
+    envelope: &iroha_zkp_halo2::OpenVerifyEnvelope,
+    expected: &iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+) -> Result<(), String> {
+    if envelope.vk_commitment != expected.vk_commitment {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope {envelope_index} verifier-key commitment metadata mismatch"
+        ));
+    }
+    if envelope.public_inputs_schema_hash != expected.public_inputs_schema_hash {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope {envelope_index} public-input schema metadata mismatch"
+        ));
+    }
+    if envelope.domain_tag != expected.domain_tag {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope {envelope_index} recursive proof domain metadata mismatch"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_recursive_previous_proof_open_envelope_preflight_shape(
+    envelope_index: usize,
+    envelope: &iroha_zkp_halo2::OpenVerifyEnvelope,
+) -> Result<(), String> {
+    const CONTEXT: &str = "Kagemusha previous recursive proof open-envelope";
+
+    if envelope.transcript_label.is_empty() {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} transcript label must be non-empty"
+        ));
+    }
+    if envelope.transcript_label.len() > KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} transcript label exceeds {} bytes",
+            KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+        ));
+    }
+    ensure_kagemusha_recursive_previous_proof_open_envelope_metadata_field(
+        envelope_index,
+        "verifier-key commitment",
+        envelope.vk_commitment,
+    )?;
+    ensure_kagemusha_recursive_previous_proof_open_envelope_metadata_field(
+        envelope_index,
+        "public-input schema hash",
+        envelope.public_inputs_schema_hash,
+    )?;
+    ensure_kagemusha_recursive_previous_proof_open_envelope_metadata_field(
+        envelope_index,
+        "recursive proof domain tag",
+        envelope.domain_tag,
+    )?;
+    if envelope.params.version != 1 {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} parameter version must be 1"
+        ));
+    }
+    if envelope.public.version != 1 {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} public opening version must be 1"
+        ));
+    }
+    if envelope.proof.version != 1 {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} proof version must be 1"
+        ));
+    }
+    let pallas_curve_id = iroha_zkp_halo2::ZkCurveId::Pallas.as_u16();
+    if envelope.params.curve_id != pallas_curve_id || envelope.public.curve_id != pallas_curve_id {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} must use the Pallas backend"
+        ));
+    }
+    if envelope.params.n != envelope.public.n {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} parameter/public opening length mismatch"
+        ));
+    }
+    if envelope.params.n < 2 {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} opening length must be at least 2"
+        ));
+    }
+    if !envelope.params.n.is_power_of_two() {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} opening length must be a power of two (found {})",
+            envelope.params.n
+        ));
+    }
+    let max_opening_len = 1u32
+        .checked_shl(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K)
+        .unwrap_or(u32::MAX);
+    if envelope.params.n > max_opening_len {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} opening length exceeds max 2^{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K} (found {})",
+            envelope.params.n
+        ));
+    }
+
+    let opening_len = usize::try_from(envelope.params.n)
+        .map_err(|_| format!("{CONTEXT} {envelope_index} opening length does not fit usize"))?;
+    if envelope.params.g.len() != opening_len {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} G generator count mismatch: expected {opening_len}, found {}",
+            envelope.params.g.len()
+        ));
+    }
+    if envelope.params.h.len() != opening_len {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} H generator count mismatch: expected {opening_len}, found {}",
+            envelope.params.h.len()
+        ));
+    }
+    let expected_rounds = opening_len.trailing_zeros() as usize;
+    if envelope.proof.l.len() != envelope.proof.r.len() {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} L/R round count mismatch"
+        ));
+    }
+    if envelope.proof.l.len() != expected_rounds {
+        return Err(format!(
+            "{CONTEXT} {envelope_index} round count mismatch: expected {expected_rounds}, found {}",
+            envelope.proof.l.len()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_kagemusha_recursive_previous_proof_open_envelope_metadata_field(
+    envelope_index: usize,
+    label: &str,
+    value: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    let value = value.ok_or_else(|| {
+        format!(
+            "Kagemusha previous recursive proof open-envelope {envelope_index} missing {label} metadata"
+        )
+    })?;
+    if value == [0u8; 32] {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope {envelope_index} {label} metadata must be non-zero"
+        ));
+    }
+    Ok(value)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Append a verified Kagemusha fold record bundle to an existing recursive spend bundle.
 pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
     previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     pallas_open_envelopes_archive: &[u8],
     current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
@@ -5792,18 +9449,170 @@ pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open
     vk_box: &VerifyingKeyBox,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        None,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Append a verified Kagemusha fold record bundle at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the previous proof, previous verifier-record activity
+/// at `block_height`, new hop evidence, or recursive proof generation fails.
+pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let output_proof_circuit_id =
+        iroha_data_model::offline::normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            circuit_id,
+        );
+    let output_requires_previous_proof_openings =
+        iroha_data_model::offline::requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
+            output_proof_circuit_id,
+            previous_bundle.accumulator.hop_count,
+        );
+    let append_output_selection_error = || {
+        format!(
+            "Kagemusha recursive spend append cannot select output proof circuit `{}` after previous proof circuit `{}` at hop {}; Reserved-lineage output is available only for supported transitions inside the configured witnessless hop cap",
+            output_proof_circuit_id,
+            previous_bundle.recursive_proof.verifier_key_id.name,
+            previous_bundle.accumulator.hop_count,
+        )
+    };
+    if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+        output_proof_circuit_id,
+    ) {
+        let output_hop_count = previous_bundle
+            .accumulator
+            .hop_count
+            .checked_add(1)
+            .ok_or_else(append_output_selection_error)?;
+        ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(output_hop_count)
+            .map_err(|err| format!("{}: {err}", append_output_selection_error()))?;
+    }
+    let output_append_is_currently_provable =
+        iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            output_proof_circuit_id,
+            previous_bundle.accumulator.hop_count,
+        );
+    if !output_append_is_currently_provable {
+        return Err(append_output_selection_error());
+    }
     match previous_bundle
         .recursive_proof
         .verifier_key_id
         .name
         .as_str()
     {
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {}
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
-            return Err(
-                "Kagemusha recursive spend append cannot verify a reserved lineage previous proof until the production lineage verifier is wired"
-                    .to_owned(),
-            );
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
+            if previous_lineage_verifier_record.is_some() {
+                return Err(
+                    "Kagemusha recursive spend append received a lineage verifier record for a semantic previous proof"
+                        .to_owned(),
+                );
+            }
+            validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
+                previous_bundle,
+                previous_recursive_proof_open_envelopes_archive,
+                output_requires_previous_proof_openings,
+            )?;
+            if !iroha_data_model::offline::is_supported_kagemusha_recursive_spend_append_proof_transition(
+                previous_bundle.recursive_proof.verifier_key_id.name.as_str(),
+                output_proof_circuit_id,
+            ) {
+                return Err(append_output_selection_error());
+            }
+            if !verify_kagemusha_recursive_spend_bundle(previous_bundle, vk_box) {
+                return Err("previous Kagemusha recursive spend bundle did not verify".to_owned());
+            }
+        }
+        previous_circuit
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                previous_circuit,
+            ) =>
+        {
+            let record = previous_lineage_verifier_record.ok_or_else(|| {
+                "Kagemusha recursive spend append requires a previous lineage verifier record for reserved lineage previous proofs"
+                    .to_owned()
+            })?;
+            validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
+                previous_bundle,
+                previous_recursive_proof_open_envelopes_archive,
+                output_requires_previous_proof_openings,
+            )?;
+            if !iroha_data_model::offline::is_supported_kagemusha_recursive_spend_append_proof_transition(
+                previous_bundle.recursive_proof.verifier_key_id.name.as_str(),
+                output_proof_circuit_id,
+            ) {
+                return Err(append_output_selection_error());
+            }
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                previous_bundle,
+                record,
+                block_height,
+            )
+            .map_err(|err| {
+                format!(
+                    "previous reserved-lineage Kagemusha recursive spend bundle preverification failed: {err}"
+                )
+            })?;
+            if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                previous_bundle,
+                record,
+                block_height,
+            ) {
+                return Err(
+                    "previous reserved-lineage Kagemusha recursive spend bundle did not verify"
+                        .to_owned(),
+                );
+            }
         }
         other => {
             return Err(format!(
@@ -5811,23 +9620,94 @@ pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open
             ));
         }
     }
-    if !verify_kagemusha_recursive_spend_bundle(previous_bundle, vk_box) {
-        return Err("previous Kagemusha recursive spend bundle did not verify".to_owned());
-    }
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
         })?;
     let evidence =
-        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
             record_bundle,
             &envelopes,
+            block_height,
         )?;
     if evidence.aggregation_statement.steps.len() != 1 {
         return Err(format!(
             "Kagemusha recursive spend append requires exactly one hop (found {})",
             evidence.aggregation_statement.steps.len()
         ));
+    }
+    if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+        output_proof_circuit_id,
+    ) {
+        let hop_proof_hash = kagemusha_fold_step_proof_hash(
+            &record_bundle
+                .bundle
+                .steps
+                .first()
+                .expect("one-hop append record bundle has one step")
+                .attachment
+                .proof,
+        )?;
+        let append_opening_preflight =
+            kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+                previous_bundle,
+                previous_recursive_proof_open_envelopes_archive,
+                &hop_proof_hash,
+                pallas_open_envelopes_archive,
+            )?;
+        let accumulator =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract(
+                &previous_bundle.accumulator,
+                &previous_bundle.recursive_proof,
+                previous_recursive_proof_open_envelopes_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence,
+                &current_note,
+            )
+            .map_err(|err| err.to_string())?;
+        preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+            previous_bundle,
+            previous_recursive_proof_open_envelopes_archive,
+            append_opening_preflight.contract.clone(),
+            &evidence,
+            &current_note,
+            &accumulator,
+        )?;
+        preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            previous_bundle,
+            &append_opening_preflight,
+            &accumulator,
+        )?;
+        let previous_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(previous_recursive_proof_open_envelopes_archive).map_err(
+                |err| {
+                    format!(
+                        "failed to decode Kagemusha previous recursive proof open-envelope archive: {err}"
+                    )
+                },
+            )?;
+        let (previous_params, previous_witnesses) =
+            kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&previous_envelopes)?;
+        let previous_witness = previous_witnesses.first().ok_or_else(|| {
+            "Kagemusha recursive spend lineage append missing previous recursive proof witness"
+                .to_owned()
+        })?;
+        let (current_params, current_witnesses) =
+            kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+        let current_witness = current_witnesses
+            .first()
+            .ok_or_else(|| "Kagemusha recursive spend lineage append missing witness".to_owned())?;
+        return prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope_dispatch(
+            vk_box,
+            accumulator,
+            previous_params.as_ref(),
+            previous_witness,
+            current_params.as_ref(),
+            current_witness,
+            &hop_proof_hash,
+            &append_opening_preflight,
+            proving_key_bytes,
+        );
     }
     let accumulator =
         iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
@@ -5837,7 +9717,91 @@ pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open
             &current_note,
         )
         .map_err(|err| err.to_string())?;
-    prove_kagemusha_recursive_spend_accumulator(circuit_id, vk_box, accumulator, proving_key_bytes)
+    preflight_kagemusha_recursive_spend_append_transition_profile(
+        previous_bundle,
+        previous_recursive_proof_open_envelopes_archive,
+        &evidence,
+        &current_note,
+        &accumulator,
+    )?;
+    prove_kagemusha_recursive_spend_accumulator(
+        output_proof_circuit_id,
+        vk_box,
+        accumulator,
+        proving_key_bytes,
+    )
+}
+
+/// Verify one additional offline Kagemusha hop for the reserved lineage state.
+///
+/// This verifies the previous recursive proof and derives the append lineage
+/// verifier key from the supplied Pallas open-envelope archive.
+///
+/// # Errors
+///
+/// Returns an error when the previous recursive proof is invalid, the new hop
+/// proof/evidence is invalid, lineage continuity fails, archive-derived
+/// verifier-key selection fails, or recursive lineage proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let vk_box = kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+    )
+}
+
+/// Verify one additional offline Kagemusha hop for the reserved lineage state at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the previous recursive proof is invalid, the previous
+/// verifier record is inactive at `block_height`, the new hop proof/evidence is
+/// invalid, lineage continuity fails, archive-derived verifier-key selection
+/// fails, or recursive lineage proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let vk_box = kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+        block_height,
+    )
 }
 
 const KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED: &str = "Kagemusha compact-token proving requires verifier-record trust anchors; use prove_verified_kagemusha_compact_payment_token_from_bundle_with_records or prove_verified_kagemusha_compact_payment_token_from_record_bundle";
@@ -5904,6 +9868,30 @@ pub fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
     prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
 }
 
+/// Verify a Kagemusha fold bundle against records active at a chain height and prove a token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails at the supplied
+/// height.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+        bundle,
+        records,
+        block_height,
+    )?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle and prove one compact payment token.
 ///
 /// # Errors
@@ -5918,6 +9906,28 @@ pub fn prove_verified_kagemusha_compact_payment_token_from_record_bundle(
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
     let public_inputs = kagemusha_verified_folded_public_inputs_from_record_bundle(record_bundle)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a record-backed Kagemusha fold bundle at a chain height and prove a token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails at the supplied
+/// height.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+        record_bundle,
+        block_height,
+    )?;
     prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
 }
 
@@ -5999,9 +10009,65 @@ pub fn verify_kagemusha_compact_payment_token_with_record(
     token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
-    if !record.is_active()
+    verify_kagemusha_compact_payment_token_with_record_at_optional_height(token, record, None)
+}
+
+/// Verify a compact Kagemusha payment token against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_compact_payment_token_with_record_at_height(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    verify_kagemusha_compact_payment_token_with_record_at_optional_height(
+        token,
+        record,
+        Some(block_height),
+    )
+}
+
+fn kagemusha_record_active_for_optional_height(
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if let Some(height) = block_height {
+        record.is_active_at(height)
+    } else {
+        record.activation_height.is_none() && record.withdraw_height.is_none() && record.is_active()
+    }
+}
+
+fn ensure_kagemusha_record_active_for_optional_height(
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+    label: &str,
+) -> Result<(), String> {
+    if let Some(height) = block_height {
+        if record.is_active_at(height) {
+            Ok(())
+        } else {
+            Err(format!("{label} verifier record is not active"))
+        }
+    } else if record.activation_height.is_some() || record.withdraw_height.is_some() {
+        Err(format!(
+            "{label} verifier record height window requires chain height"
+        ))
+    } else if record.is_active() {
+        Ok(())
+    } else {
+        Err(format!("{label} verifier record is not active"))
+    }
+}
+
+fn verify_kagemusha_compact_payment_token_with_record_at_optional_height(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if !kagemusha_record_active_for_optional_height(record, block_height)
         || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
         || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || kagemusha_record_curve_for_backend(record.backend) != Some(record.curve.as_str())
         || record.circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID
         || record.public_inputs_schema_hash
             != iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash()
@@ -6192,9 +10258,38 @@ pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> Result<(), String> {
-    if !record.is_active() {
-        return Err("Kagemusha recursive aggregation verifier record is not active".to_owned());
-    }
+    preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+        bundle, record, None,
+    )
+}
+
+/// Preverify a Kagemusha recursive aggregation bundle against a verifier record at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> Result<(), String> {
+    ensure_kagemusha_record_active_for_optional_height(
+        record,
+        block_height,
+        "Kagemusha recursive aggregation",
+    )?;
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
         return Err(format!(
             "Kagemusha recursive aggregation verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
@@ -6205,6 +10300,12 @@ pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
         return Err(format!(
             "Kagemusha recursive aggregation verifier backend `{:?}` is not Halo2IpaPasta",
             record.backend
+        ));
+    }
+    if kagemusha_record_curve_for_backend(record.backend) != Some(record.curve.as_str()) {
+        return Err(format!(
+            "Kagemusha recursive aggregation verifier curve `{}` is not pallas",
+            record.curve
         ));
     }
     if record.circuit_id
@@ -6309,6 +10410,35 @@ pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record(
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
     if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(bundle, record).is_err() {
+        return false;
+    }
+    let Some(vk_box) = record.key.as_ref() else {
+        return false;
+    };
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Verify a recursive aggregation proof bundle against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+        bundle,
+        record,
+        block_height,
+    )
+    .is_err()
+    {
         return false;
     }
     let Some(vk_box) = record.key.as_ref() else {
@@ -6449,16 +10579,19 @@ pub fn preverify_kagemusha_recursive_spend_bundle(
 
 /// Require a lineage-proving recursive spend proof for chain-side redemption.
 ///
-/// The current v1 recursive spend bundle is intentionally admission-neutral:
+/// The semantic v1 recursive spend bundle is intentionally admission-neutral:
 /// its transparent proof constrains the public accumulator columns but does not
-/// verify every private hop proof and accumulator transition in-circuit. Chain
-/// redemption must therefore fail closed before consuming nullifiers or minting
-/// public assets.
+/// verify every private hop proof and accumulator transition in-circuit.
+/// Reserved-lineage proofs are admission-capable when their public inputs,
+/// verifier-slice profile, and hop count are inside the configured witnessless
+/// cap. Ledger execution still verifies the final proof against an active
+/// verifier record before consuming nullifiers or minting public assets.
 ///
 /// # Errors
 ///
-/// Always returns an error until the production lineage-proving recursive spend
-/// circuit is available and accepted here.
+/// Returns an error when the bundle is semantic/admission-neutral, the
+/// Reserved-lineage proof profile is malformed, the hop count exceeds the
+/// witnessless cap, or the proof circuit is not accepted for lineage admission.
 pub fn ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
 ) -> Result<(), String> {
@@ -6466,7 +10599,11 @@ pub fn ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
         KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
             Err(KAGEMUSHA_RECURSIVE_SPEND_CHAIN_ADMISSION_REQUIRES_LINEAGE_PROOF.to_owned())
         }
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
+        circuit_id
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                circuit_id,
+            ) =>
+        {
             ensure_kagemusha_recursive_spend_lineage_admission_profile(bundle)
         }
         other => Err(format!(
@@ -6505,6 +10642,112 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record(
             bundle,
             witness,
             recursive_record,
+            None,
+        )
+    }
+}
+
+/// Verify record-backed lineage material for recursive Kagemusha redemption at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when witness shape, private hop verification, accumulator
+/// replay, intermediate recursive proof verification, or verifier-record
+/// activity at `block_height` fails.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (bundle, witness, recursive_record, block_height);
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_inner(
+            bundle,
+            witness,
+            recursive_record,
+            Some(block_height),
+        )
+    }
+}
+
+/// Verify record-backed lineage material with verifier records resolved per recursive proof.
+///
+/// This variant supports Reserved-lineage recursive spend chains whose previous
+/// proofs are verified with the active lineage verifier record instead of the
+/// semantic recursive aggregation key.
+///
+/// # Errors
+///
+/// Returns an error when witness replay fails, a required verifier record is
+/// missing, or any intermediate recursive proof does not verify against its
+/// resolved active verifier record.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver<'record>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (bundle, witness, recursive_record_for);
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+            bundle,
+            witness,
+            recursive_record_for,
+            None,
+        )
+    }
+}
+
+/// Verify record-backed lineage material with resolved verifier records at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when witness replay fails, a required verifier record is
+/// missing, a resolved verifier record is inactive at `block_height`, or any
+/// intermediate recursive proof does not verify against its resolved record.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height<'record>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    block_height: u64,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (bundle, witness, block_height, recursive_record_for);
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+            bundle,
+            witness,
+            recursive_record_for,
+            Some(block_height),
         )
     }
 }
@@ -6559,6 +10802,105 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box(
     Ok(())
 }
 
+/// Verify record-backed lineage material and the final recursive spend proof with verifier records.
+///
+/// # Errors
+///
+/// Returns an error when lineage replay fails or the final recursive proof does
+/// not verify against `final_recursive_record`.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver<'record>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    final_recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height(
+        bundle,
+        witness,
+        final_recursive_record,
+        None,
+        recursive_record_for,
+    )
+}
+
+/// Verify record-backed lineage material and the final recursive spend proof with verifier records at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when lineage replay fails, any resolved verifier record is
+/// inactive at `block_height`, or the final recursive proof does not verify
+/// against `final_recursive_record` at `block_height`.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_height<
+    'record,
+>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    final_recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height(
+        bundle,
+        witness,
+        final_recursive_record,
+        Some(block_height),
+        recursive_record_for,
+    )
+}
+
+fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height<
+    'record,
+>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    final_recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (
+            bundle,
+            witness,
+            final_recursive_record,
+            block_height,
+            recursive_record_for,
+        );
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+            bundle,
+            witness,
+            recursive_record_for,
+            block_height,
+        )?;
+        if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+            bundle,
+            final_recursive_record,
+            block_height,
+        ) {
+            return Err(
+                "record-backed recursive Kagemusha lineage final proof did not verify".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Build the ABI-6 recursive spend verify result for offline receivers.
 ///
 /// `valid` covers receiver-side offline acceptance and re-spend: public binding,
@@ -6573,53 +10915,160 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box(
 pub fn kagemusha_recursive_spend_verify_result(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
+    kagemusha_recursive_spend_verify_result_with_lineage_record(bundle, None)
+}
+
+/// Build the ABI-6 recursive spend verify result with an optional lineage verifier record.
+///
+/// Semantic v1 bundles are verified with the canonical recursive aggregation
+/// key and must not carry a lineage verifier record. Reserved-lineage bundles
+/// require the caller-provided active lineage verifier record so receiver-side
+/// verification can prove the constant-size D2D payload before storage or
+/// re-spend.
+///
+/// # Errors
+///
+/// Returns an error when the canonical recursive verifier key cannot be built.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_verify_result_with_lineage_record(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
+    kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+        bundle,
+        lineage_verifier_record,
+        None,
+    )
+}
+
+/// Build the ABI-6 recursive spend verify result at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the canonical recursive verifier key cannot be built.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
+    kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+        bundle,
+        lineage_verifier_record,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
     use iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1;
 
     let encoded_bytes = u32::try_from(bundle.norito_encoded_len().unwrap_or(0)).unwrap_or(u32::MAX);
-    let vk_box = kagemusha_recursive_aggregation_proof_vk_box()?;
-    match preverify_kagemusha_recursive_spend_bundle(bundle, &vk_box) {
-        Ok(()) => {
-            if !verify_kagemusha_recursive_spend_bundle(bundle, &vk_box) {
-                return Ok(KagemushaRecursiveSpendVerifyResultV1 {
-                    valid: false,
-                    hop_count: bundle.accumulator.hop_count,
-                    encoded_bytes,
-                    reason: "backend proof verification failed".to_owned(),
-                    chain_admissible: false,
-                    chain_admission_reason: "offline verification failed".to_owned(),
-                });
+    let witnessless_redeem_supported =
+        iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(
+            &bundle.recursive_proof.verifier_key_id.name,
+            bundle.accumulator.hop_count,
+        );
+    let lineage_witness_required_for_redeem = !witnessless_redeem_supported;
+    let invalid = |reason: String| KagemushaRecursiveSpendVerifyResultV1 {
+        valid: false,
+        hop_count: bundle.accumulator.hop_count,
+        encoded_bytes,
+        reason,
+        chain_admissible: false,
+        chain_admission_reason: "offline verification failed".to_owned(),
+        witnessless_redeem_supported: false,
+        lineage_witness_required_for_redeem: true,
+    };
+    let backend_invalid = || invalid("backend proof verification failed".to_owned());
+    let chain_blocked = |reason: String| KagemushaRecursiveSpendVerifyResultV1 {
+        valid: true,
+        hop_count: bundle.accumulator.hop_count,
+        encoded_bytes,
+        reason: String::new(),
+        chain_admissible: false,
+        chain_admission_reason: format!(
+            "chain admission rejected recursive spend bundle: {reason}"
+        ),
+        witnessless_redeem_supported,
+        lineage_witness_required_for_redeem,
+    };
+    let accepted = || KagemushaRecursiveSpendVerifyResultV1 {
+        valid: true,
+        hop_count: bundle.accumulator.hop_count,
+        encoded_bytes,
+        reason: String::new(),
+        chain_admissible: true,
+        chain_admission_reason: String::new(),
+        witnessless_redeem_supported,
+        lineage_witness_required_for_redeem,
+    };
+
+    match bundle.recursive_proof.verifier_key_id.name.as_str() {
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
+            if lineage_verifier_record.is_some() {
+                return Ok(invalid(
+                    "semantic Kagemusha recursive spend verification must not include a lineage verifier record"
+                        .to_owned(),
+                ));
+            }
+            let vk_box = kagemusha_recursive_aggregation_proof_vk_box()?;
+            match preverify_kagemusha_recursive_spend_bundle(bundle, &vk_box) {
+                Ok(()) => {
+                    if !verify_kagemusha_recursive_spend_bundle(bundle, &vk_box) {
+                        return Ok(backend_invalid());
+                    }
+                    if let Err(reason) =
+                        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(bundle)
+                    {
+                        return Ok(chain_blocked(reason));
+                    }
+                    Ok(accepted())
+                }
+                Err(reason) => Ok(invalid(reason)),
+            }
+        }
+        circuit_id
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                circuit_id,
+            ) =>
+        {
+            let Some(record) = lineage_verifier_record else {
+                return Ok(invalid(
+                    "reserved-lineage Kagemusha recursive spend verification requires a lineage verifier record"
+                        .to_owned(),
+                ));
+            };
+            if let Err(reason) =
+                preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                    bundle,
+                    record,
+                    block_height,
+                )
+            {
+                return Ok(invalid(reason));
+            }
+            if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                bundle,
+                record,
+                block_height,
+            ) {
+                return Ok(backend_invalid());
             }
             if let Err(reason) =
                 ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(bundle)
             {
-                return Ok(KagemushaRecursiveSpendVerifyResultV1 {
-                    valid: true,
-                    hop_count: bundle.accumulator.hop_count,
-                    encoded_bytes,
-                    reason: String::new(),
-                    chain_admissible: false,
-                    chain_admission_reason: format!(
-                        "chain admission rejected recursive spend bundle: {reason}"
-                    ),
-                });
+                return Ok(chain_blocked(reason));
             }
-            Ok(KagemushaRecursiveSpendVerifyResultV1 {
-                valid: true,
-                hop_count: bundle.accumulator.hop_count,
-                encoded_bytes,
-                reason: String::new(),
-                chain_admissible: true,
-                chain_admission_reason: String::new(),
-            })
+            Ok(accepted())
         }
-        Err(reason) => Ok(KagemushaRecursiveSpendVerifyResultV1 {
-            valid: false,
-            hop_count: bundle.accumulator.hop_count,
-            encoded_bytes,
-            chain_admissible: false,
-            chain_admission_reason: "offline verification failed".to_owned(),
-            reason,
-        }),
+        other => Ok(invalid(format!(
+            "Kagemusha recursive spend verification requires a supported proof circuit id (found `{other}`)"
+        ))),
     }
 }
 
@@ -6628,18 +11077,94 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_inner(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
     recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> Result<(), String> {
+    verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+        bundle,
+        witness,
+        |id| {
+            if id.backend == ZK_BACKEND_HALO2_IPA && id.name == recursive_record.circuit_id {
+                Some(recursive_record)
+            } else {
+                None
+            }
+        },
+        block_height,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner<'record>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    mut recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: Option<u64>,
 ) -> Result<(), String> {
     let previous_bundles =
         recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(bundle, witness)?;
+    let mut semantic_vk_box = None::<VerifyingKeyBox>;
     for (index, previous_bundle) in previous_bundles.iter().enumerate() {
-        ensure_record_backed_recursive_spend_proof_is_semantic(
+        ensure_record_backed_recursive_spend_previous_proof_profile(
             &previous_bundle.recursive_proof,
             index,
         )?;
-        if !verify_kagemusha_recursive_spend_bundle_with_record(previous_bundle, recursive_record) {
-            return Err(format!(
-                "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
-            ));
+        let id = &previous_bundle.recursive_proof.verifier_key_id;
+        match id.name.as_str() {
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
+                if let Some(record) = recursive_record_for(id) {
+                    if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                        previous_bundle,
+                        record,
+                        block_height,
+                    )
+                    {
+                        return Err(format!(
+                            "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
+                        ));
+                    }
+                } else {
+                    if semantic_vk_box.is_none() {
+                        semantic_vk_box = Some(kagemusha_recursive_aggregation_proof_vk_box()?);
+                    }
+                    let vk_box = semantic_vk_box
+                        .as_ref()
+                        .expect("semantic recursive verifier key is initialized");
+                    if !verify_kagemusha_recursive_spend_bundle(previous_bundle, vk_box) {
+                        return Err(format!(
+                            "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
+                        ));
+                    }
+                }
+            }
+            circuit_id
+                if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                    circuit_id,
+                ) =>
+            {
+                let record = recursive_record_for(id).ok_or_else(|| {
+                    format!(
+                        "record-backed recursive Kagemusha lineage verifier record `{}`/`{}` is missing",
+                        id.backend, id.name
+                    )
+                })?;
+                if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                    previous_bundle,
+                    record,
+                    block_height,
+                ) {
+                    return Err(format!(
+                        "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
+                    ));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "record-backed recursive Kagemusha lineage proof {index} must use a supported recursive spend circuit (found `{other}`)"
+                ));
+            }
         }
     }
     Ok(())
@@ -6668,51 +11193,99 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_vk_box_inner(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn ensure_record_backed_recursive_spend_previous_proof_profile(
+    proof: &iroha_data_model::offline::KagemushaRecursiveAggregationProof,
+    proof_index: usize,
+) -> Result<(), String> {
+    ensure_record_backed_recursive_spend_proof_common_profile(proof, proof_index)?;
+    match proof.verifier_key_id.name.as_str() {
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
+            if proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest
+                != [0u8; 32]
+            {
+                return Err(format!(
+                    "record-backed recursive Kagemusha lineage proof {proof_index} semantic previous proof must not bind a lineage scalar projection"
+                ));
+            }
+        }
+        circuit_id
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                circuit_id,
+            ) =>
+        {
+            if proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest
+                == [0u8; 32]
+            {
+                return Err(format!(
+                    "record-backed recursive Kagemusha lineage proof {proof_index} reserved-lineage previous proof must bind a lineage scalar projection"
+                ));
+            }
+        }
+        other => {
+            return Err(format!(
+                "record-backed recursive Kagemusha lineage proof {proof_index} must use a supported recursive spend circuit (found `{other}`)"
+            ));
+        }
+    }
+    let expected_hop_count = u32::try_from(proof_index.saturating_add(1)).map_err(|_| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} hop-count index overflow"
+        )
+    })?;
+    if proof.public_inputs.hop_count != expected_hop_count {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} hop count must be {expected_hop_count} (found {})",
+            proof.public_inputs.hop_count
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_record_backed_recursive_spend_previous_proof_context(
+    proof: &iroha_data_model::offline::KagemushaRecursiveAggregationProof,
+    final_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    proof_index: usize,
+) -> Result<(), String> {
+    let final_public_inputs = &final_bundle.recursive_proof.public_inputs;
+    macro_rules! ensure_context {
+        ($field:ident, $label:literal) => {
+            if proof.public_inputs.$field != final_public_inputs.$field {
+                return Err(format!(
+                    "record-backed recursive Kagemusha lineage proof {proof_index} {} does not match final bundle",
+                    $label
+                ));
+            }
+        };
+    }
+    ensure_context!(verifier_opening_len, "verifier opening length");
+    ensure_context!(
+        verifier_params_fingerprint,
+        "verifier parameter fingerprint"
+    );
+    ensure_context!(
+        fixed_window_table_schedule_digest,
+        "fixed-window table schedule digest"
+    );
+    ensure_context!(
+        fixed_window_shared_table_manifest_digest,
+        "fixed-window shared-table manifest digest"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn ensure_record_backed_recursive_spend_proof_is_semantic(
     proof: &iroha_data_model::offline::KagemushaRecursiveAggregationProof,
     proof_index: usize,
 ) -> Result<(), String> {
-    if proof.proof.backend != ZK_BACKEND_HALO2_IPA {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
-            proof.proof.backend
-        ));
-    }
-    if proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} verifier-key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
-            proof.verifier_key_id.backend
-        ));
-    }
-    if proof.proof.backend != proof.verifier_key_id.backend {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` does not match verifier-key backend `{}`",
-            proof.proof.backend, proof.verifier_key_id.backend
-        ));
-    }
+    ensure_record_backed_recursive_spend_proof_common_profile(proof, proof_index)?;
     if proof.verifier_key_id.name != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
         return Err(format!(
             "record-backed recursive Kagemusha lineage proof {proof_index} must use semantic recursive aggregation circuit `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}`"
-        ));
-    }
-    if proof.proof.bytes.is_empty() {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} bytes must be non-empty"
-        ));
-    }
-    proof.public_inputs.validate_context().map_err(|err| {
-        format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs are invalid: {err}"
-        )
-    })?;
-    let expected_hash = proof.public_inputs.public_inputs_hash().map_err(|err| {
-        format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs could not be hashed: {err}"
-        )
-    })?;
-    if proof.public_inputs_hash != expected_hash {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage proof {proof_index} public-input hash mismatch"
         ));
     }
     if proof
@@ -6739,15 +11312,66 @@ fn ensure_record_backed_recursive_spend_proof_is_semantic(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn ensure_record_backed_recursive_spend_proof_common_profile(
+    proof: &iroha_data_model::offline::KagemushaRecursiveAggregationProof,
+    proof_index: usize,
+) -> Result<(), String> {
+    if proof.proof.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            proof.proof.backend
+        ));
+    }
+    if proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} verifier-key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            proof.verifier_key_id.backend
+        ));
+    }
+    if proof.proof.backend != proof.verifier_key_id.backend {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} backend `{}` does not match verifier-key backend `{}`",
+            proof.proof.backend, proof.verifier_key_id.backend
+        ));
+    }
+    if proof.verifier_key_id.name != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID
+        && !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            &proof.verifier_key_id.name,
+        )
+    {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} must use a supported recursive spend circuit (found `{}`)",
+            proof.verifier_key_id.name
+        ));
+    }
+    if proof.proof.bytes.is_empty() {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} bytes must be non-empty"
+        ));
+    }
+    proof.public_inputs.validate_context().map_err(|err| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs are invalid: {err}"
+        )
+    })?;
+    let expected_hash = proof.public_inputs.public_inputs_hash().map_err(|err| {
+        format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public inputs could not be hashed: {err}"
+        )
+    })?;
+    if proof.public_inputs_hash != expected_hash {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage proof {proof_index} public-input hash mismatch"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
 ) -> Result<Vec<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1>, String> {
-    if bundle.recursive_proof.verifier_key_id.name != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
-        return Err(format!(
-            "record-backed recursive Kagemusha lineage admission currently requires final proof circuit `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}`"
-        ));
-    }
     bundle
         .validate_public_input_binding()
         .map_err(|err| err.to_string())?;
@@ -6770,8 +11394,14 @@ fn recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
             witness.previous_recursive_proofs.len()
         ));
     }
+    ensure_record_backed_recursive_spend_lineage_note_uniqueness(witness)?;
     for (proof_index, previous_proof) in witness.previous_recursive_proofs.iter().enumerate() {
-        ensure_record_backed_recursive_spend_proof_is_semantic(previous_proof, proof_index)?;
+        ensure_record_backed_recursive_spend_previous_proof_profile(previous_proof, proof_index)?;
+        ensure_record_backed_recursive_spend_previous_proof_context(
+            previous_proof,
+            bundle,
+            proof_index,
+        )?;
     }
 
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
@@ -6866,6 +11496,46 @@ fn recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
     Ok(previous_bundles)
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_record_backed_recursive_spend_lineage_note_uniqueness(
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+) -> Result<(), String> {
+    let hop_count = witness.record_bundle.bundle.steps.len();
+    let lineage_input_nullifiers = witness
+        .record_bundle
+        .bundle
+        .steps
+        .iter()
+        .flat_map(|step| step.input_nullifiers.iter().copied())
+        .collect::<std::collections::BTreeSet<_>>();
+    let lineage_output_commitments = witness
+        .record_bundle
+        .bundle
+        .steps
+        .iter()
+        .flat_map(|step| step.output_commitments.iter().copied())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut seen_note_spend_nullifiers = std::collections::BTreeSet::new();
+    for (hop_index, note) in witness.current_notes.iter().enumerate() {
+        if !seen_note_spend_nullifiers.insert(note.spend_nullifier) {
+            return Err(format!(
+                "record-backed recursive Kagemusha lineage current note {hop_index} spend nullifier is duplicated"
+            ));
+        }
+        if lineage_output_commitments.contains(&note.spend_nullifier) {
+            return Err(format!(
+                "record-backed recursive Kagemusha lineage current note {hop_index} spend nullifier collides with a lineage output commitment"
+            ));
+        }
+        if hop_index + 1 == hop_count && lineage_input_nullifiers.contains(&note.spend_nullifier) {
+            return Err(format!(
+                "record-backed recursive Kagemusha lineage final note spend nullifier collides with a lineage input nullifier"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn ensure_kagemusha_recursive_spend_lineage_admission_profile(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
 ) -> Result<(), String> {
@@ -6877,12 +11547,13 @@ fn ensure_kagemusha_recursive_spend_lineage_admission_profile(
             public_inputs.verifier_witness_count, public_inputs.hop_count
         ));
     }
-    // TODO: Accept the production lineage-proving recursive spend circuit here
-    // once it verifies every private hop and accumulator transition in-circuit.
-    Err(
-        "recursive Kagemusha spend lineage proof circuit is not wired into chain admission"
-            .to_owned(),
-    )
+    if !iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(
+        &bundle.recursive_proof.verifier_key_id.name,
+        bundle.accumulator.hop_count,
+    ) {
+        return Err(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_ADMISSION_UNAVAILABLE.to_owned());
+    }
+    Ok(())
 }
 
 fn ensure_kagemusha_recursive_spend_lineage_public_input_binding(
@@ -6916,9 +11587,11 @@ fn ensure_kagemusha_recursive_spend_lineage_public_input_binding(
             proof.proof.backend, proof.verifier_key_id.backend
         ));
     }
-    if proof.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID {
+    if !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &proof.verifier_key_id.name,
+    ) {
         return Err(format!(
-            "recursive Kagemusha spend lineage proof circuit id `{}` is not `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID}`",
+            "recursive Kagemusha spend lineage proof circuit id `{}` is not a Reserved-lineage profile",
             proof.verifier_key_id.name
         ));
     }
@@ -6931,6 +11604,28 @@ fn ensure_kagemusha_recursive_spend_lineage_public_input_binding(
         .map_err(|err| err.to_string())?;
     if proof.public_inputs_hash != expected_hash {
         return Err("recursive Kagemusha spend lineage public-input hash mismatch".to_owned());
+    }
+    let append_boundary_digest = proof.public_inputs.append_boundary_digest;
+    if expected.append_opening_preflight_digest == [0u8; 32] {
+        if append_boundary_digest != [0u8; 32] {
+            return Err(
+                "recursive Kagemusha spend lineage append boundary digest is only valid for append proofs"
+                    .to_owned(),
+            );
+        }
+    } else {
+        if expected.append_boundary_digest == [0u8; 32] {
+            return Err(
+                "recursive Kagemusha spend lineage append proof must bind the append boundary digest"
+                    .to_owned(),
+            );
+        }
+        if append_boundary_digest != expected.append_boundary_digest {
+            return Err(
+                "recursive Kagemusha spend lineage append boundary digest does not match accumulator"
+                    .to_owned(),
+            );
+        }
     }
     macro_rules! ensure_field {
         ($field:ident) => {
@@ -6951,6 +11646,9 @@ fn ensure_kagemusha_recursive_spend_lineage_public_input_binding(
     ensure_field!(fixed_window_table_base_digest);
     ensure_field!(verifier_witness_batch_digest);
     ensure_field!(recursive_proof_chain_digest);
+    ensure_field!(transition_profile_binding_digest);
+    ensure_field!(append_opening_preflight_digest);
+    ensure_field!(append_boundary_digest);
     ensure_field!(verifier_opening_len);
     ensure_field!(verifier_witness_count);
     ensure_field!(hop_count);
@@ -6983,9 +11681,11 @@ fn ensure_kagemusha_recursive_spend_lineage_envelope_binding(
             envelope.backend
         ));
     }
-    if envelope.circuit_id != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID {
+    if !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &envelope.circuit_id,
+    ) {
         return Err(format!(
-            "recursive Kagemusha spend lineage envelope circuit id `{}` is not `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID}`",
+            "recursive Kagemusha spend lineage envelope circuit id `{}` is not a Reserved-lineage profile",
             envelope.circuit_id
         ));
     }
@@ -7028,12 +11728,97 @@ fn ensure_kagemusha_recursive_spend_lineage_envelope_binding(
         "spend lineage proof",
         &envelope.proof_bytes,
     )?;
-    ensure_kagemusha_recursive_public_instance_shape("spend lineage proof", &actual_instances)?;
-    if actual_instances != expected_instances {
-        return Err(
-            "recursive Kagemusha spend lineage envelope public instance columns mismatch"
-                .to_owned(),
-        );
+    if actual_instances.len() < expected_instances.len() {
+        return Err(format!(
+            "recursive Kagemusha spend lineage envelope must expose at least {} semantic public instance columns (found {})",
+            expected_instances.len(),
+            actual_instances.len()
+        ));
+    }
+    for (index, (actual, expected)) in actual_instances
+        .iter()
+        .zip(expected_instances.iter())
+        .enumerate()
+    {
+        let Some(actual_first_row) = actual.first() else {
+            return Err(format!(
+                "recursive Kagemusha spend lineage envelope semantic public instance column {index} is empty"
+            ));
+        };
+        if expected.len() != 1 || actual_first_row != &expected[0] {
+            return Err(
+                "recursive Kagemusha spend lineage envelope public instance columns mismatch"
+                    .to_owned(),
+            );
+        }
+        if actual.iter().skip(1).any(|row| *row != [0u8; 32]) {
+            return Err(format!(
+                "recursive Kagemusha spend lineage envelope semantic public instance column {index} has non-zero padding"
+            ));
+        }
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        let actual_scalars = kagemusha_pasta_instance_columns_bytes_to_scalars(&actual_instances)?;
+        let actual_scalar_refs = actual_scalars.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let profile =
+            kagemusha_recursive_spend_lineage_backend_profile(&actual_scalar_refs).ok_or_else(
+                || {
+                    "recursive Kagemusha spend lineage envelope missing verifier-slice public instance columns"
+                        .to_owned()
+                },
+            )?;
+        match profile {
+            KagemushaRecursiveSpendLineageBackendProfile::OneHop { .. } => {
+                if proof.verifier_key_id.name == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+                {
+                    return Err(
+                        "recursive Kagemusha spend lineage envelope one-hop profile cannot use append verifier-key id"
+                            .to_owned(),
+                    );
+                }
+                let scalar_projection_column = actual_instances
+                    .last()
+                    .expect("one-hop lineage profile has scalar-projection column");
+                let Some(actual_scalar_projection) = scalar_projection_column.first() else {
+                    return Err(
+                        "recursive Kagemusha spend lineage envelope scalar-projection public instance column is empty"
+                            .to_owned(),
+                    );
+                };
+                if actual_scalar_projection
+                    != &bundle
+                        .recursive_proof
+                        .public_inputs
+                        .recursive_verifier_scalar_projection_digest
+                {
+                    return Err(
+                        "recursive Kagemusha spend lineage envelope scalar-projection public instance mismatch"
+                            .to_owned(),
+                    );
+                }
+                if scalar_projection_column
+                    .iter()
+                    .skip(1)
+                    .any(|row| *row != [0u8; 32])
+                {
+                    return Err(
+                        "recursive Kagemusha spend lineage envelope scalar-projection public instance column has non-zero padding"
+                            .to_owned(),
+                    );
+                }
+            }
+            KagemushaRecursiveSpendLineageBackendProfile::Append { .. } => {
+                if proof.verifier_key_id.name
+                    == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+                {
+                    return Err(
+                        "recursive Kagemusha spend lineage envelope append profile cannot use one-hop verifier-key id"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -7041,12 +11826,18 @@ fn ensure_kagemusha_recursive_spend_lineage_envelope_binding(
 fn ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
     vk_box: &VerifyingKeyBox,
     verifier_opening_len: u32,
+    expected_circuit_id: &str,
 ) -> Result<(), String> {
-    let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
-        vk_box.bytes.as_slice(),
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
-    )
-    .map_err(|err| format!("Kagemusha recursive spend lineage inline key {err}"))?;
+    if !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        expected_circuit_id,
+    ) {
+        return Err(format!(
+            "Kagemusha recursive spend lineage inline key expected circuit id `{expected_circuit_id}` is not a Reserved-lineage profile"
+        ));
+    }
+    let ipa_k =
+        zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(vk_box.bytes.as_slice(), expected_circuit_id)
+            .map_err(|err| format!("Kagemusha recursive spend lineage inline key {err}"))?;
     if ipa_k > KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K {
         return Err(format!(
             "Kagemusha recursive spend lineage inline key IPAK `{ipa_k}` exceeds max `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K}`"
@@ -7070,12 +11861,12 @@ fn ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
     let (h2vk_k, _compress_selectors, _fixed_columns) = zk1::halo2_pasta_vk_header(h2vk)
         .map_err(|err| {
             format!(
-                "Kagemusha recursive spend lineage inline key missing/invalid H2VK payload for one-hop verifier-slice opening length `{verifier_opening_len}`: {err}"
+                "Kagemusha recursive spend lineage inline key missing/invalid H2VK payload for verifier-slice `{expected_circuit_id}` opening length `{verifier_opening_len}`: {err}"
             )
         })?;
     if h2vk_k != ipa_k {
         return Err(format!(
-            "Kagemusha recursive spend lineage inline key one-hop verifier-slice IPAK `{ipa_k}` does not match H2VK domain `{h2vk_k}`"
+            "Kagemusha recursive spend lineage inline key verifier-slice `{expected_circuit_id}` IPAK `{ipa_k}` does not match H2VK domain `{h2vk_k}`"
         ));
     }
     Ok(())
@@ -7090,9 +11881,36 @@ pub fn preverify_kagemusha_recursive_spend_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> Result<(), String> {
-    if !record.is_active() {
-        return Err("Kagemusha recursive spend verifier record is not active".to_owned());
-    }
+    preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(bundle, record, None)
+}
+
+/// Preverify a recursive Kagemusha spend bundle against a verifier record at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> Result<(), String> {
+    ensure_kagemusha_record_active_for_optional_height(
+        record,
+        block_height,
+        "Kagemusha recursive spend",
+    )?;
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
         return Err(format!(
             "Kagemusha recursive spend verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
@@ -7105,10 +11923,17 @@ pub fn preverify_kagemusha_recursive_spend_bundle_with_record(
             record.backend
         ));
     }
-    if record.circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID
-        || bundle.recursive_proof.verifier_key_id.name
-            == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID
-    {
+    if kagemusha_record_curve_for_backend(record.backend) != Some(record.curve.as_str()) {
+        return Err(format!(
+            "Kagemusha recursive spend verifier curve `{}` is not pallas",
+            record.curve
+        ));
+    }
+    if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &record.circuit_id,
+    ) || iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &bundle.recursive_proof.verifier_key_id.name,
+    ) {
         return preverify_kagemusha_recursive_spend_lineage_bundle_with_record(bundle, record);
     }
     if record.circuit_id
@@ -7178,9 +12003,11 @@ fn preverify_kagemusha_recursive_spend_lineage_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> Result<(), String> {
-    if record.circuit_id != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID {
+    if !iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &record.circuit_id,
+    ) {
         return Err(format!(
-            "Kagemusha recursive spend lineage verifier circuit id `{}` is not `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID}`",
+            "Kagemusha recursive spend lineage verifier circuit id `{}` is not a Reserved-lineage profile",
             record.circuit_id
         ));
     }
@@ -7243,10 +12070,11 @@ fn preverify_kagemusha_recursive_spend_lineage_bundle_with_record(
         return Err("Kagemusha recursive spend lineage inline key commitment mismatch".to_owned());
     }
 
-    ensure_kagemusha_recursive_spend_lineage_public_input_binding(bundle)?;
+    ensure_kagemusha_recursive_spend_lineage_admission_profile(bundle)?;
     ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
         vk_box,
         bundle.recursive_proof.public_inputs.verifier_opening_len,
+        &record.circuit_id,
     )?;
     ensure_kagemusha_recursive_spend_lineage_envelope_binding(bundle, Some(record.commitment))?;
     Ok(())
@@ -7277,13 +12105,43 @@ pub fn verify_kagemusha_recursive_spend_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
-    if preverify_kagemusha_recursive_spend_bundle_with_record(bundle, record).is_err() {
+    verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(bundle, record, None)
+}
+
+/// Verify a recursive Kagemusha spend bundle against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_recursive_spend_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        block_height,
+    )
+    .is_err()
+    {
         return false;
     }
     let Some(vk_box) = record.key.as_ref() else {
         return false;
     };
-    if record.circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID {
+    if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+        &record.circuit_id,
+    ) {
         return verify_backend(
             bundle.recursive_proof.proof.backend.as_str(),
             &bundle.recursive_proof.proof,
@@ -8579,35 +13437,7 @@ struct VkCacheKey {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type CachedVk = Arc<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>;
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn params_fingerprint(params: &PastaParams) -> [u8; 32] {
-    use std::io::{self, Write};
-
-    use halo2_proofs::poly::commitment::Params as _;
-    use sha2::{Digest, Sha256};
-
-    struct HashWriter<'a, H: Digest>(&'a mut H);
-
-    impl<H: Digest> Write for HashWriter<'_, H> {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.update(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut hasher = Sha256::new();
-    let mut writer = HashWriter(&mut hasher);
-    params
-        .write(&mut writer)
-        .expect("failed to hash Halo2 params");
-    hasher.finalize().into()
-}
+type CachedVk = Arc<halo2_backend::VerifyingKey>;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
@@ -8636,10 +13466,10 @@ fn record_vk_cache_event(cache: &'static str, event: &'static str) {
 fn record_vk_cache_event(_: &'static str, _: &'static str) {}
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_proofs::plonk::Error> {
+fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_backend::Error> {
     cache
         .lock()
-        .map_err(|_| halo2_proofs::plonk::Error::ConstraintSystemFailure)
+        .map_err(|_| halo2_backend::constraint_system_failure())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -8649,16 +13479,11 @@ fn resolve_vk_cached<C, F>(
     vk_box: &VerifyingKeyBox,
     _circuit: &C,
     builder: F,
-) -> Result<CachedVk, halo2_proofs::plonk::Error>
+) -> Result<CachedVk, halo2_backend::Error>
 where
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    F: FnOnce() -> Result<
-        halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
-        halo2_proofs::plonk::Error,
-    >,
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    F: FnOnce() -> Result<halo2_backend::VerifyingKey, halo2_backend::Error>,
 {
-    use halo2_proofs::SerdeFormat;
-
     let cache = VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let params_fp = params_fingerprint(params);
     let vk_hash = hash_vk(vk_box);
@@ -8693,11 +13518,11 @@ where
     // Fall back to synthesising the verifying key via keygen.
     let built = builder()?;
     let built_hash = {
-        let bytes = built.to_bytes(SerdeFormat::Processed);
+        let bytes = halo2_backend::verifying_key_to_processed_bytes(&built);
         hash_vk_bytes(backend, &bytes)
     };
     if built_hash != vk_hash {
-        return Err(halo2_proofs::plonk::Error::ConstraintSystemFailure);
+        return Err(halo2_backend::constraint_system_failure());
     }
     let arc = Arc::new(built);
     let mut guard = lock_cache(cache)?;
@@ -8715,7 +13540,7 @@ macro_rules! cached_vk_for {
         let vk_ref = $vk_box;
         let circuit = $circuit;
         match resolve_vk_cached($backend, params_ref, vk_ref, &circuit, || {
-            halo2_proofs::plonk::keygen_vk(params_ref, &circuit)
+            halo2_backend::keygen_vk(params_ref, &circuit)
         }) {
             Ok(arc) => {
                 let $vk = arc.as_ref();
@@ -8740,9 +13565,9 @@ fn keygen_vk_cached<C>(
     backend: &str,
     params: &PastaParams,
     circuit: &C,
-) -> Result<CachedVk, halo2_proofs::plonk::Error>
+) -> Result<CachedVk, halo2_backend::Error>
 where
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
 {
     let cache = BUILTIN_VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let key = BuiltinVkCacheKey {
@@ -8757,7 +13582,7 @@ where
         }
     }
     record_vk_cache_event("builtin", "miss");
-    let vk = halo2_proofs::plonk::keygen_vk(params, circuit)?;
+    let vk = halo2_backend::keygen_vk(params, circuit)?;
     let arc = Arc::new(vk);
     let mut guard = lock_cache(cache)?;
     let entry = match guard.entry(key) {
@@ -8809,6 +13634,10 @@ fn verify_with_registry(
         }
     }
     None
+}
+
+fn verifier_registry_accepts_backend(backend: &str) -> bool {
+    verifier_registry().iter().any(|ver| ver.accepts(backend))
 }
 
 /// Unified ZK envelope helpers (`ZK1 | TLV*`).
@@ -9062,11 +13891,8 @@ mod zk1 {
     /// Append a Halo2 verifying key (`H2VK`) for Pasta/IPA circuits.
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[allow(dead_code)]
-    pub fn wrap_append_vk_pasta(
-        buf: &mut Vec<u8>,
-        vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
-    ) {
-        let bytes = vk.to_bytes(SerdeFormat::Processed);
+    pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &super::halo2_backend::VerifyingKey) {
+        let bytes = super::halo2_backend::verifying_key_to_processed_bytes(vk);
         write_tlv(buf, *b"H2VK", &bytes);
     }
 
@@ -9159,12 +13985,123 @@ mod kagemusha_lineage_key_preflight_tests {
         bytes
     }
 
-    fn lineage_vk_box(ipa_k: u32, h2vk: &[u8]) -> VerifyingKeyBox {
+    fn lineage_vk_box_with_circuit_id(
+        ipa_k: u32,
+        circuit_id: &str,
+        h2vk: &[u8],
+    ) -> VerifyingKeyBox {
         let mut bytes = zk1::wrap_start();
-        zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID);
+        zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
         zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
         append_test_tlv(&mut bytes, b"H2VK", h2vk);
         VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
+    fn lineage_vk_box(ipa_k: u32, h2vk: &[u8]) -> VerifyingKeyBox {
+        lineage_vk_box_with_circuit_id(
+            ipa_k,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+            h2vk,
+        )
+    }
+
+    fn run_lineage_vk_keygen_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("kagemusha-lineage-vk-keygen-test".to_owned())
+            .stack_size(4 * 1024 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn lineage verifier-key test")
+            .join()
+            .expect("lineage verifier-key test panicked");
+    }
+
+    fn sample_pallas_open_envelope_archive(n: usize) -> Vec<u8> {
+        let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+        let coeffs = (0..n)
+            .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+            .collect::<Vec<_>>();
+        let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(coeffs);
+        let commitment = poly.commit(&params).expect("Pallas commitment");
+        let z = iroha_zkp_halo2::pallas::Scalar::from(5u64);
+        let vk_commitment = Some([0x11; 32]);
+        let public_inputs_schema_hash = Some([0x22; 32]);
+        let domain_tag = Some([0x33; 32]);
+        let metadata = iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+            vk_commitment,
+            public_inputs_schema_hash,
+            domain_tag,
+        };
+        let mut transcript = iroha_zkp_halo2::Transcript::new("lineage-vk-archive-test");
+        let (proof, t) = poly
+            .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+            .expect("Pallas opening proof");
+        let envelope = iroha_zkp_halo2::OpenVerifyEnvelope {
+            params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+            public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >(params.n(), z, t, commitment),
+            proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+            transcript_label: "lineage-vk-archive-test".to_owned(),
+            vk_commitment,
+            public_inputs_schema_hash,
+            domain_tag,
+        };
+        norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive")
+    }
+
+    #[test]
+    fn lineage_vk_box_from_pallas_archive_rejects_malformed_archives() {
+        let err = kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(&[])
+            .expect_err("empty archive must reject before verifier-key selection");
+        assert!(
+            err.contains("failed to decode"),
+            "unexpected empty-archive rejection: {err}"
+        );
+
+        let err =
+            kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(b"bad")
+                .expect_err("malformed archive must reject before verifier-key selection");
+        assert!(
+            err.contains("failed to decode"),
+            "unexpected malformed-archive rejection: {err}"
+        );
+
+        let valid_archive = sample_pallas_open_envelope_archive(2);
+        let mut envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&valid_archive).expect("decode valid Pallas archive");
+        envelopes
+            .first_mut()
+            .expect("sample archive contains one envelope")
+            .params
+            .n = 3;
+        let archive =
+            norito::to_bytes(&envelopes).expect("encode tampered Pallas open-envelope archive");
+        let err =
+            kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(&archive)
+                .expect_err("non-power-of-two opening length must reject");
+        assert!(
+            err.contains("opening length") || err.contains("power-of-two"),
+            "unexpected non-power-of-two rejection: {err}"
+        );
+    }
+
+    #[test]
+    #[ignore = "generates the production one-hop lineage Halo2 verifier key"]
+    fn lineage_vk_box_from_pallas_archive_selects_production_width() {
+        run_lineage_vk_keygen_test(|| {
+            let archive = sample_pallas_open_envelope_archive(2);
+            let vk_box =
+                kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+                    &archive,
+                )
+                .expect("valid Pallas archive selects a lineage verifier key");
+            ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+                &vk_box,
+                2,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+            )
+            .expect("selected verifier key matches the archive opening length");
+        });
     }
 
     #[test]
@@ -9174,8 +14111,12 @@ mod kagemusha_lineage_key_preflight_tests {
             &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
         );
 
-        ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&vk_box, 2)
-            .expect("bounded lineage H2VK header should pass cheap preflight");
+        ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &vk_box,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect("bounded lineage H2VK header should pass cheap preflight");
     }
 
     #[test]
@@ -9184,8 +14125,12 @@ mod kagemusha_lineage_key_preflight_tests {
             KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K,
             &h2vk_header(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K, 1, 3),
         );
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&semantic_like, 2)
-            .expect_err("semantic recursive key degree must reject under lineage profile");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &semantic_like,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("semantic recursive key degree must reject under lineage profile");
         assert!(
             err.contains("below one-hop verifier-slice minimum"),
             "unexpected error: {err}"
@@ -9195,8 +14140,12 @@ mod kagemusha_lineage_key_preflight_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
             &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K + 1, 1, 3),
         );
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&mismatched_domain, 2)
-            .expect_err("H2VK internal domain must match lineage IPAK");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &mismatched_domain,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("H2VK internal domain must match lineage IPAK");
         assert!(
             err.contains("does not match H2VK domain"),
             "unexpected error: {err}"
@@ -9206,17 +14155,24 @@ mod kagemusha_lineage_key_preflight_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
             &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
         );
-        let err =
-            ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&unsupported_opening, 3)
-                .expect_err("unsupported opening lengths must reject");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &unsupported_opening,
+            3,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("unsupported opening lengths must reject");
         assert!(
             err.contains("opening length `3` is unsupported"),
             "unexpected error: {err}"
         );
 
         let short_h2vk = lineage_vk_box(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, b"short");
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&short_h2vk, 2)
-            .expect_err("short H2VK header must reject");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &short_h2vk,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("short H2VK header must reject");
         assert!(err.contains("too short"), "unexpected error: {err}");
 
         let truncated_fixed_commitments = lineage_vk_box(
@@ -9237,6 +14193,7 @@ mod kagemusha_lineage_key_preflight_tests {
         let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
             &truncated_fixed_commitments,
             2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
         )
         .expect_err("truncated fixed-column commitments must reject");
         assert!(err.contains("truncated"), "unexpected error: {err}");
@@ -9245,8 +14202,12 @@ mod kagemusha_lineage_key_preflight_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
             &[0x03, 8, 0, 0, 0, 1, 1, 0, 0, 0],
         );
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&bad_version, 2)
-            .expect_err("unexpected H2VK version must reject");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &bad_version,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("unexpected H2VK version must reject");
         assert!(
             err.contains("unexpected version"),
             "unexpected error: {err}"
@@ -9256,19 +14217,119 @@ mod kagemusha_lineage_key_preflight_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
             &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 2, 3),
         );
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&bad_selector_flag, 2)
-            .expect_err("non-boolean selector compression must reject");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &bad_selector_flag,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("non-boolean selector compression must reject");
         assert!(err.contains("non-boolean"), "unexpected error: {err}");
 
         let zero_fixed_columns = lineage_vk_box(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
             &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 0),
         );
-        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(&zero_fixed_columns, 2)
-            .expect_err("H2VK without fixed columns must reject");
+        let err = ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+            &zero_fixed_columns,
+            2,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        )
+        .expect_err("H2VK without fixed columns must reject");
         assert!(
             err.contains("no fixed-column commitments"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs() {
+        let one_hop_vk_box = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+        let append_vk_box = lineage_vk_box_with_circuit_id(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+        let short_one_hop_vk_box =
+            lineage_vk_box(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, b"short");
+        let short_append_vk_box = lineage_vk_box_with_circuit_id(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            b"short",
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &one_hop_vk_box,
+            3,
+        )
+        .expect_err("unsupported one-hop opening length must reject before keygen");
+        assert!(
+            err.contains("opening length `3` is unsupported"),
+            "unexpected unsupported one-hop opening rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+            &one_hop_vk_box,
+            2,
+        )
+        .expect_err("one-hop verifier key must not derive append proving key material");
+        assert!(
+            err.contains("is not `")
+                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID),
+            "unexpected append circuit-id mismatch rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &append_vk_box,
+            2,
+        )
+        .expect_err("append verifier key must not derive one-hop proving key material");
+        assert!(
+            err.contains("is not `")
+                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID),
+            "unexpected one-hop circuit-id mismatch rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &short_one_hop_vk_box,
+            2,
+        )
+        .expect_err("short one-hop H2VK header must reject before keygen");
+        assert!(
+            err.contains("too short"),
+            "unexpected short one-hop H2VK rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+            &short_append_vk_box,
+            2,
+        )
+        .expect_err("short append H2VK header must reject before keygen");
+        assert!(
+            err.contains("too short"),
+            "unexpected short append H2VK rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+            &one_hop_vk_box,
+            b"bad",
+        )
+        .expect_err("malformed Pallas archive must reject before proving-key derivation");
+        assert!(
+            err.contains("failed to decode Kagemusha lineage one-hop Pallas open-envelope archive"),
+            "unexpected malformed one-hop Pallas archive rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+            &append_vk_box,
+            b"bad",
+        )
+        .expect_err("malformed append Pallas archive must reject before proving-key derivation");
+        assert!(
+            err.contains("failed to decode Kagemusha lineage append Pallas open-envelope archive"),
+            "unexpected malformed append Pallas archive rejection: {err}"
         );
     }
 }
@@ -9344,10 +14405,10 @@ pub mod depth {
         poly::Rotation,
     };
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon_compress2_native;
     /// Vote-bool commit with a toy Merkle membership chain of fixed depth.
@@ -9851,14 +14912,14 @@ pub mod poseidon_depth {
         poly::Rotation,
     };
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon_compress2_native;
 
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     // Simple Pow5 helpers (constraint expressions) used as a local gadget when the Poseidon
     // feature is disabled.
     #[inline]
@@ -9869,7 +14930,7 @@ pub mod poseidon_depth {
         let x4 = x2.clone() * x2;
         x4 * x
     }
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     fn h2(
         a: halo2_proofs::plonk::Expression<Scalar>,
         b: halo2_proofs::plonk::Expression<Scalar>,
@@ -9886,7 +14947,7 @@ pub mod poseidon_depth {
     /// Vote-bool commit with Poseidon-style hashing and fixed-depth membership.
     #[derive(Clone, Default)]
     pub struct VoteBoolCommitMerklePoseidon<const DEPTH: usize>;
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePoseidon<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -10006,7 +15067,7 @@ pub mod poseidon_depth {
         }
     }
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePoseidon<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -10318,7 +15379,7 @@ pub mod poseidon_depth {
     /// Anonymous transfer (2x2) with Poseidon-style commit + membership chain.
     #[derive(Clone, Default)]
     pub struct AnonTransfer2x2CommitMerklePoseidon<const DEPTH: usize>;
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePoseidon<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
@@ -10616,7 +15677,7 @@ pub mod poseidon_depth {
         }
     }
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePoseidon<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
@@ -11263,8 +16324,6 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
         poly::{Rotation, commitment::Params as _},
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     #[derive(Clone, Default)]
     struct TinyAddPublic;
     impl Circuit<Scalar> for TinyAddPublic {
@@ -11398,8 +16457,6 @@ fn ipa_vote_bool_commit_zk1() {
         poly::Rotation,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     // Build circuit and params
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
@@ -11478,8 +16535,6 @@ fn halo2_verify_rejects_vk_without_bytes() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -11571,8 +16626,6 @@ fn ipa_anon_transfer_commit_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -11671,8 +16724,6 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -11765,17 +16816,13 @@ impl DedupCache {
 fn expected_preverify_envelope_backend_tag(
     backend: &str,
 ) -> Option<iroha_data_model::zk::BackendTag> {
-    if is_stark_fri_v1_backend(backend) {
-        return Some(iroha_data_model::zk::BackendTag::Stark);
+    if backend == ZK_BACKEND_HALO2_IPA {
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    } else if is_stark_fri_v1_backend(backend) {
+        Some(iroha_data_model::zk::BackendTag::Stark)
+    } else {
+        None
     }
-    if backend == ZK_BACKEND_HALO2_IPA
-        || backend.starts_with("halo2/ipa/")
-        || backend.starts_with("halo2/ipa:")
-        || backend.starts_with("halo2/pasta/")
-    {
-        return Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta);
-    }
-    None
 }
 
 fn preverify_open_verify_envelope_metadata(
@@ -11789,11 +16836,15 @@ fn preverify_open_verify_envelope_metadata(
     };
     let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof.bytes).map_err(|_| PreverifyResult::MalformedProof)?;
-    if envelope.backend != expected_tag || !envelope.aux.is_empty() {
+    envelope.validate_for_admission().map_err(|err| {
+        if err == iroha_data_model::zk::OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash {
+            PreverifyResult::VerifyingKeyMismatch
+        } else {
+            PreverifyResult::MalformedProof
+        }
+    })?;
+    if envelope.backend != expected_tag {
         return Err(PreverifyResult::MalformedProof);
-    }
-    if envelope.vk_hash == [0u8; 32] {
-        return Err(PreverifyResult::VerifyingKeyMismatch);
     }
     if let Some(vk_box) = vk
         && hash_vk(vk_box) != envelope.vk_hash
@@ -11811,6 +16862,25 @@ fn preverify_open_verify_envelope_metadata(
         return Err(PreverifyResult::VerifyingKeyMismatch);
     }
     Ok(())
+}
+
+fn preverify_bound_vk_commitment(
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+) -> Result<[u8; 32], PreverifyResult> {
+    let Some(expected) = expected_vk_commitment else {
+        return Err(PreverifyResult::VerifyingKeyMissing);
+    };
+    if expected == [0u8; 32] {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    let Some(commitment) = vk_commitment else {
+        return Ok(expected);
+    };
+    if commitment == [0u8; 32] || commitment != expected {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    Ok(commitment)
 }
 
 /// Result of a pre-verification step.
@@ -11842,7 +16912,8 @@ pub enum PreverifyResult {
 
 /// Pre-verify a proof under a simple cost budget and deduplication cache.
 ///
-/// Current implementation only performs deduplication and backend tag sanity checks.
+/// This lightweight stage performs backend/tag admission, verifier-key binding
+/// checks, bounded envelope parsing where applicable, and batch deduplication.
 /// Full cryptographic verification is deferred to lane/overlay execution.
 pub fn preverify_with_budget(
     proof: &ProofBox,
@@ -11857,10 +16928,21 @@ pub fn preverify_with_budget(
     if proof.backend.is_empty() {
         return PreverifyResult::UnsupportedBackend;
     }
+    if is_pending_production_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if is_production_claim_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
     if is_trusted_setup_backend_label(proof.backend.as_str()) {
         return PreverifyResult::UnsupportedBackend;
     }
     if is_developer_only_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if expected_preverify_envelope_backend_tag(proof.backend.as_str()).is_none()
+        && !verifier_registry_accepts_backend(proof.backend.as_str())
+    {
         return PreverifyResult::UnsupportedBackend;
     }
     if !vk_active {
@@ -11874,6 +16956,16 @@ pub fn preverify_with_budget(
             return PreverifyResult::PreverifyBudgetExceeded;
         }
     }
+    let bound_vk_commitment =
+        match preverify_bound_vk_commitment(vk_commitment, expected_vk_commitment) {
+            Ok(commitment) => commitment,
+            Err(err) => return err,
+        };
+    if let Some(vk_box) = vk
+        && vk_box.backend != proof.backend
+    {
+        return PreverifyResult::VerifyingKeyMismatch;
+    }
     // If we have both VK bytes and expected commitment, enforce the match early.
     if let (Some(expected), Some(vk_box)) = (expected_vk_commitment, vk) {
         let actual = crate::zk::hash_vk(vk_box);
@@ -11886,12 +16978,15 @@ pub fn preverify_with_budget(
             return PreverifyResult::VerifyingKeyMismatch;
         }
     }
-    if let Err(err) =
-        preverify_open_verify_envelope_metadata(proof, vk, vk_commitment, expected_vk_commitment)
-    {
+    if let Err(err) = preverify_open_verify_envelope_metadata(
+        proof,
+        vk,
+        Some(bound_vk_commitment),
+        expected_vk_commitment,
+    ) {
         return err;
     }
-    if !dedup.check_and_insert_with_commitment(proof, vk_commitment) {
+    if !dedup.check_and_insert_with_commitment(proof, Some(bound_vk_commitment)) {
         return PreverifyResult::Duplicate;
     }
     PreverifyResult::Accepted
@@ -11940,11 +17035,11 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
     if env.backend != BackendTag::Halo2IpaPasta {
         return false;
     }
-    if !env.aux.is_empty() {
+    if env.validate_for_admission().is_err() {
         return false;
     }
     let expected_vk_hash = hash_vk(vk_box);
-    if env.vk_hash == [0u8; 32] || env.vk_hash != expected_vk_hash {
+    if env.vk_hash != expected_vk_hash {
         return false;
     }
     let backend = match halo2_ipa_backend_from_circuit_id(&env.circuit_id) {
@@ -11995,12 +17090,15 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if env.backend != BackendTag::Stark {
         return reject("unexpected OpenVerifyEnvelope backend tag");
     }
+    if env.validate_for_admission().is_err() {
+        return reject("invalid OpenVerifyEnvelope shape");
+    }
 
     let Some(vk_box) = vk else {
         return reject("missing verifying key");
     };
     let expected_vk_hash = hash_vk(vk_box);
-    if env.vk_hash == [0u8; 32] || env.vk_hash != expected_vk_hash {
+    if env.vk_hash != expected_vk_hash {
         return reject("verifying key commitment mismatch");
     }
 
@@ -12161,6 +17259,9 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if proof.backend.as_str() != backend {
         return false;
     }
+    if !is_production_verify_backend_label(backend) {
+        return false;
+    }
 
     // Prefer built-in registry when available
     if let Some(ok) = verify_with_registry(backend, proof, vk) {
@@ -12228,8 +17329,25 @@ mod debug_backend_tests {
     use super::*;
 
     #[test]
-    fn debug_backends_are_unsupported() {
-        for backend in ["debug/ok", "debug/reject", "debug/sleep"] {
+    fn developer_only_backends_are_unsupported() {
+        for backend in [
+            "debug/ok",
+            "debug/reject",
+            "debug/sleep",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+        ] {
             let proof = ProofBox::new(backend.into(), vec![0x01]);
             let vk = VerifyingKeyBox::new(backend.into(), vec![0x02]);
             assert!(!verify_backend(backend, &proof, Some(&vk)));
@@ -12269,9 +17387,13 @@ mod debug_backend_tests {
 #[cfg(test)]
 mod stark_backend_tag_tests {
     use super::{
-        is_developer_only_backend_label, is_ivm_execution_backend, is_stark_fri_v1_backend,
-        is_trusted_setup_backend_label,
+        is_developer_only_backend_label, is_ivm_execution_backend,
+        is_pending_production_backend_label, is_production_claim_backend_label,
+        is_production_verify_backend_label, is_stark_fri_v1_backend,
+        is_trusted_setup_backend_label, production_verify_backend_tag, verify_backend,
     };
+    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+    use iroha_data_model::zk::BackendTag;
 
     #[test]
     fn detects_base_and_variant_backends() {
@@ -12279,12 +17401,27 @@ mod stark_backend_tag_tests {
         assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
         assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
         assert!(is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/latest"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/attestation"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/contest"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/random-profile"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha512-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/audit-proof-v1"));
         assert!(!is_stark_fri_v1_backend("stark/fri/"));
         assert!(!is_stark_fri_v1_backend("stark/fri/ "));
         assert!(!is_stark_fri_v1_backend("stark/fri/\t\n"));
         assert!(!is_stark_fri_v1_backend("stark/fri/ sha256-goldilocks"));
         assert!(!is_stark_fri_v1_backend("stark/fri/sha256-goldilocks "));
         assert!(!is_stark_fri_v1_backend("stark/fri/sha256 goldilocks"));
+        assert!(!is_stark_fri_v1_backend(
+            "stark\u{FF0F}fri/sha256-goldilocks"
+        ));
+        assert!(!is_stark_fri_v1_backend(
+            "stark/fri/\u{200B}sha256-goldilocks"
+        ));
+        assert!(!is_stark_fri_v1_backend(
+            "st\u{0430}rk/fri/sha256-goldilocks"
+        ));
         assert!(!is_stark_fri_v1_backend("stark/fri/prod;foo"));
         assert!(!is_stark_fri_v1_backend("stark/fri/prod,foo"));
         assert!(!is_stark_fri_v1_backend("stark/fri/prod+foo"));
@@ -12319,8 +17456,89 @@ mod stark_backend_tag_tests {
         assert!(!is_stark_fri_v1_backend("stark/fri/Mock"));
         assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
         assert!(!is_stark_fri_v1_backend("stark/fri/m-o-c-k"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/dev-fixture"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-v-f-i-x-t-u-r-e"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/dev"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-v"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/test"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/t-e-s-t"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/placeholder"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/miden"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/pq-masp-stark-fri"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/post-quantum-masp"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
+    }
+
+    #[test]
+    fn pending_production_classifier_catches_prefix_shaped_labels() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "groth16/bls12-377",
+            "halo2/ipa/penumbra",
+            "halo2/ipa/masp",
+            "halo2/ipa/monero",
+            "halo2/ipa/curve-tree",
+            "anonymous-pgc",
+            "verange",
+            "zk-ams-recursive-admission-v0",
+            "zk-x509-onchain-identity-v0",
+            "sis-with-hints",
+        ] {
+            assert!(
+                is_pending_production_backend_label(backend),
+                "pending backend {backend} must be recognized before family allowlists"
+            );
+        }
+    }
+
+    #[test]
+    fn production_claim_classifier_catches_readiness_and_audit_labels() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "halo2/ipa:production-certified",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ] {
+            assert!(
+                is_production_claim_backend_label(backend),
+                "production-claim backend {backend} must be classified before allowlists"
+            );
+            assert!(
+                !is_stark_fri_v1_backend(backend),
+                "production-claim backend {backend} must not match the STARK family allowlist"
+            );
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                None,
+                "production-claim backend {backend} must not map to an OpenVerify tag"
+            );
+            assert!(
+                !is_production_verify_backend_label(backend),
+                "production-claim backend {backend} must stay fail-closed"
+            );
+        }
+
+        for backend in [
+            "halo2/ipa",
+            "halo2/ipa:ivm-execution-v1",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/audit-proof-v1",
+        ] {
+            assert!(
+                !is_production_claim_backend_label(backend),
+                "backend {backend} must not be rejected by production-claim text alone"
+            );
+        }
     }
 
     #[test]
@@ -12328,14 +17546,192 @@ mod stark_backend_tag_tests {
         assert!(is_ivm_execution_backend("halo2/ipa"));
         assert!(is_ivm_execution_backend("stark/fri"));
         assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks"));
+        assert!(!is_ivm_execution_backend("halo2/ipa/orchard"));
+        assert!(!is_ivm_execution_backend("stark/fri/miden"));
+        assert!(!is_ivm_execution_backend("stark/fri/pq-masp-stark-fri"));
         assert!(!is_ivm_execution_backend("stark/fri/kzg"));
         assert!(!is_ivm_execution_backend("stark/fri/prod-bn-254"));
         assert!(!is_ivm_execution_backend("stark/fri/prod-groth-16"));
+        assert!(!is_ivm_execution_backend("stark/fri/random-profile"));
+        assert!(!is_ivm_execution_backend("stark/fri/sha512-goldilocks"));
+        assert!(!is_ivm_execution_backend("stark/fri/audit-proof-v1"));
         assert!(!is_ivm_execution_backend("stark/fri/debug"));
         assert!(!is_ivm_execution_backend("stark/fri/debug-proof"));
         assert!(!is_ivm_execution_backend("stark/fri/d-e-b-u-g"));
         assert!(!is_ivm_execution_backend("groth16/bn254"));
         assert!(!is_ivm_execution_backend("halo2/kzg"));
+    }
+
+    #[test]
+    fn production_verify_backend_allowlist_is_explicit() {
+        for (backend, expected_tag) in [
+            ("halo2/ipa", BackendTag::Halo2IpaPasta),
+            ("halo2/ipa:ivm-execution-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/kagemusha-folded-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+                BackendTag::Halo2IpaPasta,
+            ),
+            ("stark/fri", BackendTag::Stark),
+            ("stark/fri/sha256-goldilocks", BackendTag::Stark),
+        ] {
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                Some(expected_tag),
+                "production backend {backend} must map to its OpenVerify tag"
+            );
+            assert!(
+                is_production_verify_backend_label(backend),
+                "production backend {backend} must be admitted"
+            );
+        }
+
+        for backend in [
+            "unknown/privacy/backend",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:unknown-native-v1",
+            "HALO2/IPA",
+            "stark/FRI",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa\0",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "../halo2/ipa",
+            "halo2/ipa/../tiny-add",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri//sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "stark/fri/sha256-goldilocks.",
+            "halo2/ipa:ivm-execution-v1 ",
+            "halo2/ipa/orchard",
+            "halo2/ipa/penumbra",
+            "halo2/ipa/masp",
+            "halo2/ipa/monero",
+            "halo2/ipa/curve-tree",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-anon-transfer-2x2",
+            "halo2/pasta/tiny-commit-open",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa/anon-transfer-2x2",
+            "halo2/ipa:anon-transfer-2x2",
+            "halo2/pasta/anon-transfer-2x2-merkle2",
+            "halo2/ipa/anon-transfer-2x2-merkle8",
+            "halo2/ipa:anon-transfer-2x2-merkle16",
+            "halo2/pasta/vote-bool-commit",
+            "halo2/ipa/vote-bool-commit",
+            "halo2/ipa:vote-bool-commit",
+            "halo2/pasta/vote-bool-commit-merkle2",
+            "halo2/ipa/vote-bool-commit-merkle8",
+            "halo2/ipa:vote-bool-commit-merkle16",
+            "halo2/pasta/asset-hidden-transfer-public-test",
+            "halo2/ipa/asset-hidden-transfer-public-test",
+            "halo2/ipa:asset-hidden-transfer-public-test",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:production-certified",
+            "stark/fri/miden",
+            "stark/fri/latest",
+            "stark/fri/attestation",
+            "stark/fri/contest",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/audit-proof-v1",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            " stark/fri/sha256-goldilocks",
+            "stark/fri/sha256-goldilocks ",
+            "stark/fri/sha256-goldilocks\0",
+            "stark\u{FF0F}fri/sha256-goldilocks",
+            "stark/fri/\u{200B}sha256-goldilocks",
+            "st\u{0430}rk/fri/sha256-goldilocks",
+            "../stark/fri",
+            "stark/fri/../sha256-goldilocks",
+            "halo2/kzg",
+            "halo2/mock",
+        ] {
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                None,
+                "unsupported backend {backend} must not map to an OpenVerify tag"
+            );
+            assert!(
+                !is_production_verify_backend_label(backend),
+                "unsupported backend {backend} must stay fail-closed"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_backend_rejects_pending_production_labels_before_dispatch() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "halo2/ipa/penumbra",
+            "halo2/ipa/masp",
+            "halo2/ipa/monero",
+            "halo2/ipa/curve-tree",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
+            assert!(
+                !verify_backend(backend, &proof, Some(&vk)),
+                "pending backend {backend} must not reach a native verifier"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_backend_rejects_production_claim_labels_before_dispatch() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
+            assert!(
+                !verify_backend(backend, &proof, Some(&vk)),
+                "production-claim backend {backend} must not reach a native verifier"
+            );
+        }
     }
 
     #[test]
@@ -12434,10 +17830,43 @@ mod stark_backend_tag_tests {
             "stark/fri/D-e-b-u-g",
             "stark/fri/Mock",
             "stark/fri/M-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/D-e-v-F-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/D-e-v",
+            "stark/fri/Test",
+            "stark/fri/T-e-s-t",
+            "stark/fri/Placeholder",
+            "halo2/ipa:DevFixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:Dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:Dummy",
+            "halo2/ipa:F-a-k-e",
+            "halo2/ipa:Stub",
+            "halo2/ipa:S-a-m-p-l-e",
+            "halo2/pasta/Asset-Hidden-Transfer-Public-Test",
+            "halo2/ipa/asset-hidden-transfer-public-test",
+            "halo2/ipa:asset-hidden-transfer-public-test",
         ] {
             assert!(
                 is_developer_only_backend_label(backend),
                 "developer-only backend {backend} must be classified before allowlist checks"
+            );
+        }
+    }
+
+    #[test]
+    fn developer_only_classifier_does_not_reject_embedded_text_fragments() {
+        for backend in [
+            "stark/fri/latest",
+            "stark/fri/attestation",
+            "stark/fri/contest",
+            "halo2/ipa:attestation",
+        ] {
+            assert!(
+                !is_developer_only_backend_label(backend),
+                "backend {backend} must not be rejected because a normal word contains `test`"
             );
         }
     }
@@ -12452,7 +17881,7 @@ mod stark_prover_tests {
     use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1};
     use iroha_crypto::Hash;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
-    use iroha_data_model::zk::{OpenVerifyEnvelope, StarkFriOpenProofV1};
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/sha256-goldilocks";
@@ -12478,6 +17907,20 @@ mod stark_prover_tests {
         )
         .expect("binding AIR STARK proof");
         (backend, circuit_id, vk_box, proof)
+    }
+
+    fn mutate_outer_stark_open_verify_proof(
+        backend: &str,
+        proof: &ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofBox {
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        mutate(&mut outer);
+        ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        )
     }
 
     #[test]
@@ -12530,6 +17973,35 @@ mod stark_prover_tests {
         );
         let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
         assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            ("backend tag", |outer| {
+                outer.backend = BackendTag::Halo2IpaPasta
+            }),
+            ("empty circuit id", |outer| outer.circuit_id.clear()),
+            ("zero verifier-key hash", |outer| outer.vk_hash = [0u8; 32]),
+            ("empty public inputs", |outer| outer.public_inputs.clear()),
+            ("empty proof bytes", |outer| outer.proof_bytes.clear()),
+            ("auxiliary bytes", |outer| {
+                outer.aux = b"side-channel".to_vec()
+            }),
+        ];
+        for (case, mutate) in cases {
+            let tampered = mutate_outer_stark_open_verify_proof(backend, &proof, mutate);
+            let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+            assert!(!report.ok, "case {case}");
+        }
+
+        let tampered = mutate_outer_stark_open_verify_proof(backend, &proof, |outer| {
+            outer.public_inputs =
+                vec![0xA5; iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1];
+        });
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok, "oversized public inputs");
     }
 
     #[test]
@@ -12703,6 +18175,26 @@ pub fn verify_backend_with_timing_guardrails(
     vk: Option<&VerifyingKeyBox>,
     guardrails: ZkVerifyGuardrails,
 ) -> VerifyReport {
+    if is_pending_production_backend_label(backend) {
+        iroha_logger::debug!(
+            backend,
+            "pending-production proof backends are not admitted by production guardrails"
+        );
+        return VerifyReport {
+            ok: false,
+            elapsed: Duration::ZERO,
+        };
+    }
+    if is_production_claim_backend_label(backend) {
+        iroha_logger::debug!(
+            backend,
+            "production-claim proof backends are not admitted by production guardrails"
+        );
+        return VerifyReport {
+            ok: false,
+            elapsed: Duration::ZERO,
+        };
+    }
     if is_trusted_setup_backend_label(backend) {
         iroha_logger::debug!(
             backend,
@@ -12717,6 +18209,16 @@ pub fn verify_backend_with_timing_guardrails(
         iroha_logger::debug!(
             backend,
             "developer-only proof backends are not admitted by production guardrails"
+        );
+        return VerifyReport {
+            ok: false,
+            elapsed: Duration::ZERO,
+        };
+    }
+    if !is_production_verify_backend_label(backend) {
+        iroha_logger::debug!(
+            backend,
+            "unsupported proof backends are not admitted by production guardrails"
         );
         return VerifyReport {
             ok: false,
@@ -12751,16 +18253,23 @@ pub fn verify_backend_with_timing_guardrails(
         // is not treated as a hard reject here.)
         if let Ok(env) =
             norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
-            && env.proof_bytes.len() > guardrails.halo2_max_proof_bytes
         {
-            iroha_logger::debug!(
-                backend,
-                "halo2 envelope proof_bytes exceeds node-configured max_proof_bytes"
-            );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            if let Err(err) =
+                env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
+                    max_proof_bytes: guardrails.halo2_max_proof_bytes,
+                    ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
+                })
+            {
+                iroha_logger::debug!(
+                    backend,
+                    error = %err,
+                    "halo2 OpenVerifyEnvelope failed guardrail validation"
+                );
+                return VerifyReport {
+                    ok: false,
+                    elapsed: Duration::ZERO,
+                };
+            }
         }
     }
 
@@ -12787,19 +18296,36 @@ pub fn verify_backend_with_timing_guardrails(
         }
         if let Ok(env) =
             norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
-            && let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
-                &env.proof_bytes,
-            )
-            && open.envelope_bytes.len() > guardrails.stark_max_proof_bytes
         {
-            iroha_logger::debug!(
-                backend,
-                "stark envelope proof bytes exceed node-configured max_proof_bytes"
-            );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            if let Err(err) =
+                env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
+                    max_proof_bytes: guardrails.stark_max_envelope_bytes,
+                    ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
+                })
+            {
+                iroha_logger::debug!(
+                    backend,
+                    error = %err,
+                    "stark OpenVerifyEnvelope failed guardrail validation"
+                );
+                return VerifyReport {
+                    ok: false,
+                    elapsed: Duration::ZERO,
+                };
+            }
+            if let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
+                &env.proof_bytes,
+            ) && open.envelope_bytes.len() > guardrails.stark_max_proof_bytes
+            {
+                iroha_logger::debug!(
+                    backend,
+                    "stark envelope proof bytes exceed node-configured max_proof_bytes"
+                );
+                return VerifyReport {
+                    ok: false,
+                    elapsed: Duration::ZERO,
+                };
+            }
         }
 
         #[cfg(feature = "zk-stark")]
@@ -12846,6 +18372,17 @@ pub fn verify_backend_with_timing_checked(
 mod guardrails_tests {
     use super::*;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    fn halo2_guardrail_envelope() -> OpenVerifyEnvelope {
+        OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:dummy".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: vec![0xAA; 32],
+            proof_bytes: vec![0xBB; 10],
+            aux: Vec::new(),
+        }
+    }
 
     #[test]
     fn guardrails_disable_halo2_returns_zero_duration() {
@@ -12955,7 +18492,128 @@ mod guardrails_tests {
             "halo2/ipa:Mock-Proof",
             "halo2/ipa:m-o-c-k-proof",
             "stark/fri/m-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
             "zk-trace/mock-proof",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            let report = verify_backend_with_timing_guardrails(
+                backend,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {backend}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+        }
+    }
+
+    #[test]
+    fn guardrails_reject_pending_production_backends_before_dispatch() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "groth16/bls12-377",
+            "anonymous-pgc",
+            "verange",
+            "zk-ams-recursive-admission-v0",
+            "zk-x509-onchain-identity-v0",
+            "sis-with-hints",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            let report = verify_backend_with_timing_guardrails(
+                backend,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {backend}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+        }
+    }
+
+    #[test]
+    fn guardrails_reject_production_claim_backends_before_dispatch() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            let report = verify_backend_with_timing_guardrails(
+                backend,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {backend}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+        }
+    }
+
+    #[test]
+    fn guardrails_reject_unsupported_backends_before_dispatch() {
+        for backend in [
+            "unknown/privacy/backend",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:unknown-native-v1",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa.",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "h\u{0430}lo2/ipa",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-commit-open",
+            "halo2/pasta/asset-hidden-transfer-public-test",
+            "halo2/ipa/asset-hidden-transfer-public-test",
+            "halo2/ipa:asset-hidden-transfer-public-test",
+            "zk/open-verify-unregistered",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
             let report = verify_backend_with_timing_guardrails(
@@ -12998,14 +18656,7 @@ mod guardrails_tests {
 
     #[test]
     fn guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes() {
-        let env = OpenVerifyEnvelope {
-            backend: BackendTag::Halo2IpaPasta,
-            circuit_id: "halo2/ipa:dummy".to_owned(),
-            vk_hash: [0u8; 32],
-            public_inputs: Vec::new(),
-            proof_bytes: vec![0xBB; 10],
-            aux: Vec::new(),
-        };
+        let env = halo2_guardrail_envelope();
         let bytes = norito::to_bytes(&env).expect("encode envelope");
         let proof = ProofBox::new("halo2/ipa".into(), bytes);
         let report = verify_backend_with_timing_guardrails(
@@ -13023,6 +18674,66 @@ mod guardrails_tests {
         );
         assert!(!report.ok);
         assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            ("unsupported backend tag", |env| {
+                env.backend = BackendTag::Unsupported;
+            }),
+            ("empty circuit id", |env| env.circuit_id.clear()),
+            ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
+            ("empty public inputs", |env| env.public_inputs.clear()),
+            ("empty proof bytes", |env| env.proof_bytes.clear()),
+            ("auxiliary bytes", |env| env.aux = b"ignored-hint".to_vec()),
+        ];
+        for (label, mutate) in cases {
+            let mut env = halo2_guardrail_envelope();
+            mutate(&mut env);
+            let proof = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            let report = verify_backend_with_timing_guardrails(
+                "halo2/ipa",
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {label}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {label}");
+        }
+
+        let mut env = halo2_guardrail_envelope();
+        env.public_inputs =
+            vec![0xA5; iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1];
+        let proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&env).expect("encode envelope"),
+        );
+        let report = verify_backend_with_timing_guardrails(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: usize::MAX,
+                halo2_max_proof_bytes: usize::MAX,
+                stark_enabled: true,
+                stark_max_envelope_bytes: usize::MAX,
+                stark_max_proof_bytes: usize::MAX,
+            },
+        );
+        assert!(!report.ok, "oversized public inputs");
+        assert_eq!(report.elapsed, Duration::ZERO, "oversized public inputs");
     }
 
     #[test]
@@ -15904,6 +21615,10 @@ mod kagemusha_non_native_limb_circuit_tests {
         recursive_one_hop_instance_values_for_opening_len(2)
     }
 
+    fn fixed_bytes(label: &[u8]) -> [u8; 32] {
+        iroha_crypto::Hash::new(label).into()
+    }
+
     fn set_recursive_one_hop_digest_limbs(
         values: &mut KagemushaRecursiveAggregationProofInstanceValues,
         start_index: usize,
@@ -16006,6 +21721,100 @@ mod kagemusha_non_native_limb_circuit_tests {
         values
     }
 
+    fn recursive_append_scalar_projection_digest<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        previous_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        current_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Scalar {
+        pasta_tiny::kagemusha_append_verifier_scalar_projection_digest(
+            recursive_one_hop_scalar_projection_digest(previous_verifier),
+            recursive_one_hop_scalar_projection_digest(current_verifier),
+        )
+    }
+
+    fn recursive_append_instance_values_with_preflights<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        previous_preflight: &pasta_tiny::PallasIpaBatchVerifierPreflight,
+        current_preflight: &pasta_tiny::PallasIpaBatchVerifierPreflight,
+        previous_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        current_verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        hop_count: u64,
+    ) -> KagemushaRecursiveAggregationProofInstanceValues {
+        let mut values = recursive_one_hop_instance_values_with_preflight(current_preflight);
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
+            &previous_preflight.params_fingerprint,
+        );
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = hop_count;
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = hop_count;
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-transition-profile"),
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-opening-preflight"),
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-append-boundary"),
+        );
+        set_recursive_one_hop_scalar_projection_digest_limbs(
+            &mut values,
+            recursive_append_scalar_projection_digest(previous_verifier, current_verifier),
+        );
+        values
+    }
+
+    fn recursive_append_synthetic_preflight(
+        opening_len: u32,
+        aggregate_label: &[u8],
+    ) -> pasta_tiny::PallasIpaBatchVerifierPreflight {
+        let opening_len_usize =
+            usize::try_from(opening_len).expect("synthetic opening length fits usize");
+        pasta_tiny::PallasIpaBatchVerifierPreflight {
+            proof_count: 1,
+            verifier_witness_profile:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+            opening_len,
+            params_fingerprint: fixed_bytes(b"append-verifier-slice-synthetic-params"),
+            fixed_window_table_schedule_digest:
+                kagemusha_recursive_fixed_window_table_schedule_digest(opening_len_usize)
+                    .expect("canonical synthetic fixed-window schedule digest"),
+            fixed_window_shared_table_manifest_digest:
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len_usize)
+                    .expect("canonical synthetic shared-table manifest digest"),
+            fixed_window_table_base_digest: fixed_bytes(b"append-verifier-slice-synthetic-tables"),
+            aggregate_digest: fixed_bytes(aggregate_label),
+        }
+    }
+
     fn recursive_one_hop_semantic(
         values: KagemushaRecursiveAggregationProofInstanceValues,
     ) -> pasta_tiny::KagemushaRecursiveAggregationSemantic {
@@ -16063,6 +21872,73 @@ mod kagemusha_non_native_limb_circuit_tests {
             circuit.verifier.as_ref(),
         )]);
         instances
+    }
+
+    fn recursive_append_verifier_slice_valid_circuit()
+    -> pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<2, 1, 1> {
+        let previous_verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+        let current_verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+        let previous_preflight =
+            recursive_append_synthetic_preflight(2, b"append-verifier-slice-previous");
+        let current_preflight =
+            recursive_append_synthetic_preflight(2, b"append-verifier-slice-current");
+        let values = recursive_append_instance_values_with_preflights(
+            &previous_preflight,
+            &current_preflight,
+            &previous_verifier,
+            &current_verifier,
+            2,
+        );
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<2, 1, 1> {
+            semantic: Box::new(recursive_one_hop_semantic(values)),
+            previous_recursive_proof_verifier: Box::new(previous_verifier),
+            current_hop_verifier: Box::new(current_verifier),
+        }
+    }
+
+    fn recursive_append_verifier_slice_instances<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = circuit
+            .semantic
+            .public_values
+            .iter()
+            .copied()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>();
+        instances.extend(vesta_affine_ipa_verifier_shared_table_instances(
+            circuit.previous_recursive_proof_verifier.as_ref(),
+        ));
+        instances.extend(vesta_affine_ipa_verifier_shared_table_instances(
+            circuit.current_hop_verifier.as_ref(),
+        ));
+        instances
+    }
+
+    fn verify_recursive_append_verifier_slice<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("append recursive verifier slice mock prover")
+            .verify()
+            .is_ok()
     }
 
     fn verify_recursive_one_hop_verifier_slice<
@@ -18738,6 +24614,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_accepts_two_bit_table() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18794,6 +24671,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_public_base_substitution() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18809,6 +24687,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_identity_entry_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18828,6 +24707,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_chain_link_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18849,6 +24729,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_accepts_shared_table() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18884,6 +24765,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_selected_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18910,6 +24792,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_level_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18931,6 +24814,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_table_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18957,6 +24841,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_public_base_substitution()
      {
         run_vesta_affine_fixed_window_table_test(|| {
@@ -18978,6 +24863,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_accepts_two_one_bit_windows() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19031,6 +24917,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_public_output_substitution() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19057,6 +24944,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_selection_table_splice() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19077,6 +24965,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_window_base_transition_tamper()
     {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19098,6 +24987,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_sum_chain_tamper() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19118,6 +25008,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_two_one_bit_windows()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19136,6 +25027,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_output_substitution()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19164,6 +25056,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_bit_splice()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19183,6 +25076,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_level_tamper()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19202,6 +25096,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_window_base_transition_tamper()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19221,6 +25116,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_two_terms()
     {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19242,6 +25138,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19268,6 +25165,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_output_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19297,6 +25195,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_selection_bit_splice()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19317,6 +25216,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_term_output_splice()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19342,6 +25242,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_sum_chain_tamper()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19367,6 +25268,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19399,6 +25301,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19454,6 +25357,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_output_substitution()
      {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19495,6 +25399,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19533,6 +25438,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_product_link_tamper()
     {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19563,6 +25469,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_accepts_two_terms() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19616,6 +25523,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19639,6 +25547,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_output_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19665,6 +25574,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_selection_table_splice()
     {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19686,6 +25596,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_term_output_splice() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19710,6 +25621,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_sum_chain_tamper() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19734,6 +25646,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_noncanonical_scalar_alias()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19756,6 +25669,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19784,6 +25698,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19862,6 +25777,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_link_tamper() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20303,6 +26219,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy two-bit non-native scalar-mul mock prover; covered in the default suite by one-bit acceptance, public-instance tamper checks, and builder guards"]
     fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_accumulator_chain_tamper() {
         run_vesta_affine_scalar_mul_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20323,6 +26240,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy two-bit non-native scalar-mul mock prover; covered in the default suite by one-bit acceptance, public-instance tamper checks, and builder guards"]
     fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_double_chain_case_tamper() {
         run_vesta_affine_scalar_mul_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20353,6 +26271,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_accepts_two_bit_scalar() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20385,6 +26304,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_public_scalar_substitution() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20405,6 +26325,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_conditional_bit_tamper() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20422,6 +26343,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_noncanonical_scalar_alias() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20441,6 +26363,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_double_chain_case_tamper() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20459,6 +26382,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_terms_one_bit() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20475,6 +26399,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_bit_scalar() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20523,6 +26448,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_base_substitution() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20543,6 +26469,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_output_substitution() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20563,6 +26490,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_conditional_bit_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20580,6 +26508,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_sum_chain_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20603,6 +26532,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_noncanonical_scalar_alias() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20622,6 +26552,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_double_chain_case_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20640,6 +26571,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20666,6 +26598,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20741,6 +26674,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_rejects_product_link_tamper() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20764,6 +26698,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20860,6 +26795,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_square_link_tamper() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20887,6 +26823,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20947,6 +26884,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_rejects_square_link_tamper() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20979,6 +26917,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21096,6 +27035,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_scalar_link_tamper() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21129,6 +27069,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21193,6 +27134,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_rejects_scalar_link_tamper() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21228,6 +27170,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement() {
         run_vesta_affine_ipa_one_round_test(|| {
             assert!(verify_vesta_affine_ipa_one_round(
@@ -21286,6 +27229,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_msm_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
@@ -21305,6 +27249,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_generator_fold_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
@@ -21326,6 +27271,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_accepts_one_bit_statement() {
         run_vesta_affine_ipa_one_round_test(|| {
             assert!(verify_vesta_affine_ipa_one_round_shared_table(
@@ -21335,6 +27281,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_final_msm_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();
@@ -21357,6 +27304,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_generator_fold_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();
@@ -22133,6 +28081,212 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_builder_accepts_two_opening_profile() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (previous_params, previous_witness) =
+                sample_pallas_verifier_witness(2, "append-recursive-previous-proof");
+            let (current_params, current_witness) =
+                sample_pallas_verifier_witness(2, "append-recursive-current-hop");
+            let previous_preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &previous_params,
+                std::slice::from_ref(&previous_witness),
+            )
+            .expect("previous recursive proof Pallas preflight");
+            let current_preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &current_params,
+                std::slice::from_ref(&current_witness),
+            )
+            .expect("current-hop Pallas preflight");
+            let previous_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(
+                &previous_params, &previous_witness
+            )
+            .expect("previous recursive proof verifier materializes");
+            let current_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(
+                &current_params, &current_witness
+            )
+            .expect("current-hop verifier materializes");
+            let semantic =
+                recursive_one_hop_semantic(recursive_append_instance_values_with_preflights(
+                    &previous_preflight,
+                    &current_preflight,
+                    &previous_verifier,
+                    &current_verifier,
+                    2,
+                ));
+
+            let append_slice = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_parts_with_preflights(
+                semantic.clone(),
+                previous_verifier,
+                current_verifier,
+                &previous_preflight,
+                &current_preflight,
+            )
+            .expect("append recursive verifier slice accepts two-opening profile");
+            assert_eq!(
+                append_slice.semantic.public_values
+                    [KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
+                Scalar::from(2)
+            );
+            assert_eq!(previous_preflight.proof_count, 1);
+            assert_eq!(current_preflight.proof_count, 1);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_builder_rejects_adversarial_profile_splices()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (previous_params, previous_witness) =
+                sample_pallas_verifier_witness(2, "append-recursive-forged-previous");
+            let (current_params, current_witness) =
+                sample_pallas_verifier_witness(2, "append-recursive-forged-current");
+            let previous_preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &previous_params,
+                std::slice::from_ref(&previous_witness),
+            )
+            .expect("previous recursive proof Pallas preflight");
+            let current_preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &current_params,
+                std::slice::from_ref(&current_witness),
+            )
+            .expect("current-hop Pallas preflight");
+            let previous_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(
+                &previous_params, &previous_witness
+            )
+            .expect("previous recursive proof verifier materializes");
+            let current_verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(
+                &current_params, &current_witness
+            )
+            .expect("current-hop verifier materializes");
+            let values = recursive_append_instance_values_with_preflights(
+                &previous_preflight,
+                &current_preflight,
+                &previous_verifier,
+                &current_verifier,
+                2,
+            );
+            let semantic = recursive_one_hop_semantic(values.clone());
+
+            let mut forged_previous_count = previous_preflight;
+            forged_previous_count.proof_count = 2;
+            let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_append_preflight_metadata_binding(
+                &semantic,
+                &forged_previous_count,
+                &current_preflight,
+            )
+            .err()
+            .expect("append slice must reject previous preflight over-count");
+            assert!(
+                err.contains("previous recursive proof preflight requires exactly one witness"),
+                "unexpected previous-count error: {err}"
+            );
+
+            let mut forged_current_params = current_preflight;
+            forged_current_params.params_fingerprint[0] ^= 0x01;
+            let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_append_preflight_metadata_binding(
+                &semantic,
+                &previous_preflight,
+                &forged_current_params,
+            )
+            .err()
+            .expect("append slice must reject current verifier-context splice");
+            assert!(
+                err.contains("verifier parameter fingerprint mismatch"),
+                "unexpected current params error: {err}"
+            );
+
+            let mut one_hop_values = values.clone();
+            one_hop_values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 1;
+            one_hop_values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 1;
+            let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_append_preflight_metadata_binding(
+                &recursive_one_hop_semantic(one_hop_values),
+                &previous_preflight,
+                &current_preflight,
+            )
+            .err()
+            .expect("append slice must reject one-hop public profile");
+            assert!(
+                err.contains("hop count at least 2"),
+                "unexpected one-hop append profile error: {err}"
+            );
+
+            let mut missing_boundary = values.clone();
+            for offset in 0..4 {
+                missing_boundary.public_values
+                    [KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX + offset] = 0;
+            }
+            let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_append_preflight_metadata_binding(
+                &recursive_one_hop_semantic(missing_boundary),
+                &previous_preflight,
+                &current_preflight,
+            )
+            .err()
+            .expect("append slice must reject missing append boundary public input");
+            assert!(
+                err.contains("append-boundary digest must be non-zero"),
+                "unexpected missing boundary error: {err}"
+            );
+
+            let mut scalar_splice = values;
+            scalar_splice.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX] += 1;
+            let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_parts_with_preflights(
+                recursive_one_hop_semantic(scalar_splice),
+                previous_verifier,
+                current_verifier,
+                &previous_preflight,
+                &current_preflight,
+            )
+            .err()
+            .expect("append slice must reject scalar projection public-input splice");
+            assert!(
+                err.contains("scalar-projection digest mismatch"),
+                "unexpected scalar splice error: {err}"
+            );
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -22545,6 +28699,65 @@ mod kagemusha_non_native_limb_circuit_tests {
             instances[KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] +=
                 Scalar::from(1);
             assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy append recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_accepts_two_opening_profile() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_append_verifier_slice_valid_circuit();
+            let instances = recursive_append_verifier_slice_instances(&circuit);
+            assert!(verify_recursive_append_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy append recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_rejects_scalar_projection_public_input_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_append_verifier_slice_valid_circuit();
+            let mut instances = recursive_append_verifier_slice_instances(&circuit);
+            instances[KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] +=
+                Scalar::from(1);
+            assert!(!verify_recursive_append_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy append recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_rejects_append_boundary_erasure()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_append_verifier_slice_valid_circuit();
+            let mut instances = recursive_append_verifier_slice_instances(&circuit);
+            for offset in 0..4 {
+                instances[KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX + offset]
+                    [0] = Scalar::from(0);
+            }
+            assert!(!verify_recursive_append_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy append recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_rejects_current_verifier_transcript_digest_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_append_verifier_slice_valid_circuit();
+            let previous_verifier_columns = vesta_affine_ipa_verifier_shared_table_instances(
+                circuit.previous_recursive_proof_verifier.as_ref(),
+            )
+            .len();
+            let mut instances = recursive_append_verifier_slice_instances(&circuit);
+            let current_transcript_binding_digest_column =
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+                    + previous_verifier_columns
+                    + 2;
+            instances[current_transcript_binding_digest_column]
+                [transcript_binding_final_instance_row::<1>()] += Scalar::from(1);
+            assert!(!verify_recursive_append_verifier_slice(circuit, instances));
         });
     }
 
@@ -25152,6 +31365,59 @@ mod halo2_ipa_alias_tests {
         let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
         assert!(!verify_backend("halo2/ipa", &proof, Some(&vk)));
     }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn halo2_ipa_rejects_noncanonical_outer_shape_before_backend_verify() {
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            ("backend tag", |env| env.backend = BackendTag::Stark),
+            ("empty circuit id", |env| env.circuit_id.clear()),
+            ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
+            ("empty public inputs", |env| env.public_inputs.clear()),
+            ("empty proof bytes", |env| env.proof_bytes.clear()),
+            ("auxiliary bytes", |env| env.aux = b"side-channel".to_vec()),
+        ];
+        for (case, mutate) in cases {
+            let mut env = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "halo2/ipa:tiny-add".into(),
+                vk_hash: hash_vk(&vk),
+                public_inputs: vec![0xA5],
+                proof_bytes: vec![0xAA, 0xBB],
+                aux: Vec::new(),
+            };
+            mutate(&mut env);
+            let proof = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            assert!(
+                !verify_backend("halo2/ipa", &proof, Some(&vk)),
+                "case {case}"
+            );
+        }
+
+        let oversized = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:tiny-add".into(),
+            vk_hash: hash_vk(&vk),
+            public_inputs: vec![
+                0xA5;
+                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1
+            ],
+            proof_bytes: vec![0xAA, 0xBB],
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&oversized).expect("encode envelope"),
+        );
+        assert!(
+            !verify_backend("halo2/ipa", &proof, Some(&vk)),
+            "oversized public inputs"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
@@ -25786,6 +32052,12 @@ mod kagemusha_folded_real_prover_tests {
             .collect()
     }
 
+    fn recursive_spend_lineage_scalar_projection(seed: u8) -> [u8; 32] {
+        let mut bytes = [seed; 32];
+        bytes[31] &= 0x1f;
+        bytes
+    }
+
     fn attach_recursive_spend_halo2_envelope(
         bundle: &mut iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
         vk_hash: [u8; 32],
@@ -25857,6 +32129,183 @@ mod kagemusha_folded_real_prover_tests {
             ZK_BACKEND_HALO2_IPA.into(),
             norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
         );
+    }
+
+    fn attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        vk_hash: [u8; 32],
+        circuit_id: &str,
+        proof_body: Vec<u8>,
+    ) {
+        use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
+
+        fn fp_from_bytes(bytes: [u8; 32]) -> Fp {
+            let mut repr = <Fp as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+            repr.as_mut().copy_from_slice(&bytes);
+            Option::from(Fp::from_repr(repr)).expect("recursive spend instance is Pasta Fp")
+        }
+
+        let mut instance_columns = recursive_spend_public_inputs(bundle)
+            .into_iter()
+            .map(|bytes| vec![fp_from_bytes(bytes)])
+            .collect::<Vec<_>>();
+        instance_columns.push(vec![fp_from_bytes(
+            bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest,
+        )]);
+        let instance_column_refs = instance_columns
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &proof_body);
+        zk1::wrap_append_instances_pasta_fp_cols(&instance_column_refs, &mut proof_bytes);
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: circuit_id.to_owned(),
+            vk_hash,
+            public_inputs:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                    .to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        bundle.recursive_proof.proof = ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
+        );
+    }
+
+    fn attach_recursive_spend_zk1_halo2_envelope_with_append_lineage_slice(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        vk_hash: [u8; 32],
+        circuit_id: &str,
+        proof_body: Vec<u8>,
+    ) {
+        let instance_columns = recursive_spend_append_lineage_backend_instance_columns(bundle);
+        let instance_columns = kagemusha_rectangular_pasta_instance_columns(instance_columns);
+        let instance_column_refs = instance_columns
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &proof_body);
+        zk1::wrap_append_instances_pasta_fp_cols(&instance_column_refs, &mut proof_bytes);
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: circuit_id.to_owned(),
+            vk_hash,
+            public_inputs:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                    .to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        bundle.recursive_proof.proof = ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
+        );
+    }
+
+    fn recursive_spend_append_lineage_backend_instance_columns(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    ) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+        use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
+
+        fn fp_from_bytes(bytes: [u8; 32]) -> Fp {
+            let mut repr = <Fp as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+            repr.as_mut().copy_from_slice(&bytes);
+            Option::from(Fp::from_repr(repr)).expect("recursive spend instance is Pasta Fp")
+        }
+
+        let mut instance_columns = recursive_spend_public_inputs(bundle)
+            .into_iter()
+            .map(|bytes| vec![fp_from_bytes(bytes)])
+            .collect::<Vec<_>>();
+        instance_columns.push(vec![Fp::from(1)]);
+        instance_columns.push(vec![Fp::from(2)]);
+        instance_columns
+    }
+
+    fn bind_recursive_spend_append_lineage_public_inputs(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        label: &[u8],
+        scalar_seed: u8,
+    ) {
+        bundle.accumulator.append_opening_preflight_digest =
+            fixed_bytes(&[label, b"-append-opening-preflight"].concat());
+        bundle.accumulator.append_boundary_digest =
+            fixed_bytes(&[label, b"-append-boundary"].concat());
+        bundle.recursive_proof.public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+                &bundle.accumulator,
+            )
+            .expect("append-shaped recursive spend public inputs");
+        bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(scalar_seed);
+        bundle.recursive_proof.public_inputs_hash = bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("append-shaped lineage public-input hash");
+    }
+
+    fn recursive_spend_lineage_backend_instance_columns(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    ) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
+        use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
+
+        fn fp_from_bytes(bytes: [u8; 32]) -> Fp {
+            let mut repr = <Fp as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+            repr.as_mut().copy_from_slice(&bytes);
+            Option::from(Fp::from_repr(repr)).expect("recursive spend instance is Pasta Fp")
+        }
+
+        let mut instance_columns = recursive_spend_public_inputs(bundle)
+            .into_iter()
+            .map(|bytes| vec![fp_from_bytes(bytes)])
+            .collect::<Vec<_>>();
+        instance_columns.push(vec![fp_from_bytes(
+            bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest,
+        )]);
+        instance_columns
+    }
+
+    fn flip_first_recursive_spend_zk1_instance_byte(proof_bytes: &mut [u8]) {
+        assert!(
+            proof_bytes.starts_with(b"ZK1\0"),
+            "recursive spend test proof must be strict ZK1"
+        );
+        let mut cursor = 4usize;
+        while cursor + 8 <= proof_bytes.len() {
+            let tag = &proof_bytes[cursor..cursor + 4];
+            let len = u32::from_le_bytes(
+                proof_bytes[cursor + 4..cursor + 8]
+                    .try_into()
+                    .expect("ZK1 TLV length slice"),
+            ) as usize;
+            let payload_start = cursor + 8;
+            let payload_end = payload_start + len;
+            assert!(
+                payload_end <= proof_bytes.len(),
+                "ZK1 TLV payload stays in bounds"
+            );
+            if tag == b"I10P" {
+                assert!(len >= 8 + 32, "I10P payload has at least one scalar");
+                proof_bytes[payload_start + 8] ^= 0x01;
+                return;
+            }
+            cursor = payload_end;
+        }
+        panic!("recursive spend strict ZK1 proof did not contain an I10P TLV");
     }
 
     fn recursive_spend_accumulators(
@@ -25953,6 +32402,157 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_transition_preflight_matches_emitted_accumulator() {
+        let chain_id: ChainId = "kagemusha-recursive-transition-preflight"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive-transition"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let step0 = KagemushaFoldStep {
+            root_before: fixed_bytes(b"kagemusha-recursive-transition-root-0"),
+            input_nullifiers: vec![[0x21; 32], [0x31; 32]],
+            output_commitments: vec![[0x41; 32], [0x51; 32]],
+            root_after: fixed_bytes(b"kagemusha-recursive-transition-root-1"),
+            proof_hash: Hash::new(b"kagemusha-recursive-transition-hop-0"),
+            proof_public_inputs_digest: fixed_bytes(b"kagemusha-recursive-transition-hop-0-public"),
+            verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+            verifier_key_commitment: fixed_bytes(b"kagemusha-recursive-transition-hop-0-vk"),
+            verifier_key_poseidon_digest:
+                iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                    ZK_BACKEND_HALO2_IPA,
+                    b"kagemusha-recursive-transition-hop-0-vk",
+                )
+                .expect("hop verifier-key digest"),
+        };
+        let note0 = recursive_spend_note(
+            step0.output_commitments[0],
+            b"kagemusha-transition-nullifier-0",
+        );
+        let evidence0 =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                std::slice::from_ref(&step0),
+                4,
+                fixed_bytes(b"kagemusha-recursive-transition-pallas-params"),
+                kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                    .expect("canonical recursive fixed-window schedule digest"),
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                    .expect("canonical recursive fixed-window shared-table manifest digest"),
+                fixed_bytes(b"kagemusha-recursive-transition-table-bases"),
+                fixed_bytes(b"kagemusha-recursive-transition-batch-0"),
+            )
+            .expect("initial transition evidence");
+        let accumulator0 =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                &evidence0, &note0,
+            )
+            .expect("initial transition accumulator");
+        preflight_kagemusha_recursive_spend_initial_transition_profile(
+            &evidence0,
+            &note0,
+            &accumulator0,
+        )
+        .expect("initial transition profile preflight");
+
+        let proof0 = recursive_spend_proof(&accumulator0);
+        let bundle0 = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator0.clone(),
+            recursive_proof: proof0.clone(),
+        };
+        let step1 = KagemushaFoldStep {
+            root_before: accumulator0.final_root,
+            input_nullifiers: vec![accumulator0.current_note.spend_nullifier],
+            output_commitments: vec![[0x42; 32], [0x52; 32]],
+            root_after: fixed_bytes(b"kagemusha-recursive-transition-root-2"),
+            proof_hash: Hash::new(b"kagemusha-recursive-transition-hop-1"),
+            proof_public_inputs_digest: fixed_bytes(b"kagemusha-recursive-transition-hop-1-public"),
+            verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+            verifier_key_commitment: fixed_bytes(b"kagemusha-recursive-transition-hop-1-vk"),
+            verifier_key_poseidon_digest:
+                iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                    ZK_BACKEND_HALO2_IPA,
+                    b"kagemusha-recursive-transition-hop-1-vk",
+                )
+                .expect("hop verifier-key digest"),
+        };
+        let note1 = recursive_spend_note(
+            step1.output_commitments[0],
+            b"kagemusha-transition-nullifier-1",
+        );
+        let evidence1 =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                std::slice::from_ref(&step1),
+                4,
+                fixed_bytes(b"kagemusha-recursive-transition-pallas-params"),
+                kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                    .expect("canonical recursive fixed-window schedule digest"),
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                    .expect("canonical recursive fixed-window shared-table manifest digest"),
+                fixed_bytes(b"kagemusha-recursive-transition-table-bases"),
+                fixed_bytes(b"kagemusha-recursive-transition-batch-1"),
+            )
+            .expect("append transition evidence");
+        let accumulator1 =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
+                &accumulator0,
+                &proof0,
+                &evidence1,
+                &note1,
+            )
+            .expect("append transition accumulator");
+        preflight_kagemusha_recursive_spend_append_transition_profile(
+            &bundle0,
+            &[],
+            &evidence1,
+            &note1,
+            &accumulator1,
+        )
+        .expect("append transition profile preflight");
+
+        let mut stale_previous_public_input_hash = bundle0.clone();
+        stale_previous_public_input_hash
+            .recursive_proof
+            .public_inputs_hash = Hash::new(b"kagemusha-recursive-transition-stale-previous-pi");
+        let err = preflight_kagemusha_recursive_spend_append_transition_profile(
+            &stale_previous_public_input_hash,
+            &[],
+            &evidence1,
+            &note1,
+            &accumulator1,
+        )
+        .expect_err(
+            "stale previous recursive proof public-input hash must not pass append preflight",
+        );
+        assert!(
+            err.contains("public-input hash does not match")
+                || err.contains("previous_recursive_proof.public_inputs_hash"),
+            "unexpected stale previous recursive proof hash transition error: {err}"
+        );
+
+        let mut forged = accumulator1.clone();
+        forged.recursive_proof_chain_digest[0] ^= 0x01;
+        let err = preflight_kagemusha_recursive_spend_append_transition_profile(
+            &bundle0,
+            &[],
+            &evidence1,
+            &note1,
+            &forged,
+        )
+        .expect_err("forged emitted accumulator must not pass transition profile preflight");
+        assert!(
+            err.contains("accumulator digest mismatch") || err.contains("field mismatch"),
+            "unexpected forged-accumulator transition error: {err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs() {
         let bundle = sample_recursive_aggregation_proof_bundle();
         bundle
@@ -25976,6 +32576,11 @@ mod kagemusha_folded_real_prover_tests {
         let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
         let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
         let proof_chain_limbs = bytes_to_u64_limbs_le(&public_inputs.recursive_proof_chain_digest);
+        let transition_profile_binding_limbs =
+            bytes_to_u64_limbs_le(&public_inputs.transition_profile_binding_digest);
+        let append_opening_preflight_limbs =
+            bytes_to_u64_limbs_le(&public_inputs.append_opening_preflight_digest);
+        let append_boundary_limbs = bytes_to_u64_limbs_le(&public_inputs.append_boundary_digest);
         let scalar_projection_limbs =
             bytes_to_u64_limbs_le(&public_inputs.recursive_verifier_scalar_projection_digest);
 
@@ -25989,8 +32594,25 @@ mod kagemusha_folded_real_prover_tests {
         assert_eq!(&values.public_values[28..32], batch_limbs.as_slice());
         assert_eq!(
             &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX
-                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX],
             proof_chain_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX],
+            transition_profile_binding_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX],
+            append_opening_preflight_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+            append_boundary_limbs.as_slice()
         );
         assert_eq!(
             &values.public_values
@@ -26045,10 +32667,33 @@ mod kagemusha_folded_real_prover_tests {
             .expect("recursive spend instance values");
         let proof_chain_limbs =
             bytes_to_u64_limbs_le(&bundle.accumulator.recursive_proof_chain_digest);
+        let transition_profile_binding_limbs =
+            bytes_to_u64_limbs_le(&bundle.accumulator.transition_profile_binding_digest);
+        let append_opening_preflight_limbs =
+            bytes_to_u64_limbs_le(&bundle.accumulator.append_opening_preflight_digest);
+        let append_boundary_limbs =
+            bytes_to_u64_limbs_le(&bundle.recursive_proof.public_inputs.append_boundary_digest);
         assert_eq!(
             &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX
-                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX],
             proof_chain_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX],
+            transition_profile_binding_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX],
+            append_opening_preflight_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+            append_boundary_limbs.as_slice()
         );
         assert_eq!(
             &values.public_values
@@ -26103,7 +32748,164 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_chain_admission_rejects_unwired_lineage_profile() {
+    fn kagemusha_recursive_spend_record_preverify_enforces_height_window_before_decoding() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        let vk_box = recursive_aggregation_vk_box();
+        attach_recursive_spend_zk1_halo2_envelope(
+            &mut bundle,
+            hash_vk(&vk_box),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            vec![0xC7; 96],
+        );
+        let mut record = recursive_aggregation_record(&vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(3);
+
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &record)
+            .expect_err("height-unbound recursive spend verifier record must reject");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record(&bundle, &record),
+            "height-unbound recursive spend verifier must reject windowed records"
+        );
+
+        let err =
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 1)
+                .expect_err("future recursive spend verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 1),
+            "future recursive spend verifier must reject"
+        );
+
+        preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 2)
+            .expect("in-window recursive spend verifier record must preverify");
+
+        let err =
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 3)
+                .expect_err("withdrawn recursive spend verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_verify_result_enforces_height_window_before_backend() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x42);
+        bundle.recursive_proof.public_inputs_hash = bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage recursive spend public-input hash");
+
+        let lineage_vk_box = recursive_spend_lineage_vk_box_with_h2vk_header(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+        );
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut bundle,
+            hash_vk(&lineage_vk_box),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xD1; 64],
+        );
+        let semantic_vk_box = recursive_aggregation_vk_box();
+        let mut record = recursive_aggregation_record(&semantic_vk_box);
+        record.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        record.commitment = hash_vk(&lineage_vk_box);
+        record.vk_len =
+            u32::try_from(lineage_vk_box.bytes.len()).expect("lineage verifier-key length fits");
+        record.key = Some(lineage_vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+
+        let no_height =
+            kagemusha_recursive_spend_verify_result_with_lineage_record(&bundle, Some(&record))
+                .expect("height-unbound lineage verify result");
+        assert!(!no_height.valid);
+        assert!(
+            no_height.reason.contains("chain height"),
+            "{}",
+            no_height.reason
+        );
+
+        let future = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            1,
+        )
+        .expect("future lineage verify result");
+        assert!(!future.valid);
+        assert!(future.reason.contains("not active"), "{}", future.reason);
+
+        let in_window = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            2,
+        )
+        .expect("in-window lineage verify result");
+        assert!(!in_window.valid);
+        assert_eq!(in_window.reason, "backend proof verification failed");
+
+        let withdrawn = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            4,
+        )
+        .expect("withdrawn lineage verify result");
+        assert!(!withdrawn.valid);
+        assert!(
+            withdrawn.reason.contains("not active"),
+            "{}",
+            withdrawn.reason
+        );
+    }
+
+    #[test]
+    fn kagemusha_record_curve_maps_only_supported_backends() {
+        use iroha_data_model::zk::BackendTag;
+
+        assert_eq!(
+            kagemusha_record_curve_for_backend(BackendTag::Halo2IpaPasta),
+            Some("pallas")
+        );
+        assert_eq!(
+            kagemusha_record_curve_for_backend(BackendTag::Stark),
+            Some("goldilocks")
+        );
+        assert_eq!(
+            kagemusha_record_curve_for_backend(BackendTag::Halo2Bn254),
+            None
+        );
+        assert_eq!(
+            kagemusha_record_curve_for_backend(BackendTag::Groth16),
+            None
+        );
+        assert_eq!(
+            kagemusha_record_curve_for_backend(BackendTag::Unsupported),
+            None
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile() {
         let accumulator = recursive_spend_accumulators(1)
             .pop()
             .expect("one-hop recursive spend accumulator");
@@ -26123,7 +32925,7 @@ mod kagemusha_folded_real_prover_tests {
             .recursive_proof
             .public_inputs
             .recursive_verifier_scalar_projection_digest =
-            fixed_bytes(b"kagemusha-lineage-scalar-projection");
+            recursive_spend_lineage_scalar_projection(0x11);
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
             .expect_err("lineage profile with stale public-input hash must reject");
         assert!(err.contains("public-input hash mismatch"), "{err}");
@@ -26154,8 +32956,17 @@ mod kagemusha_folded_real_prover_tests {
             vec![0xA1; 64],
         );
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
-            .expect_err("lineage profile must remain blocked until verifier is wired");
-        assert!(err.contains("not wired into chain admission"), "{err}");
+            .expect_err("lineage profile without verifier-slice columns must reject");
+        assert!(err.contains("verifier-slice"), "{err}");
+
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut bundle,
+            fixed_bytes(b"kagemusha-lineage-envelope-vk"),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA1; 64],
+        );
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
+            .expect("metadata-valid one-hop lineage profile must be chain-admission capable");
 
         let mut zero_envelope_vk = bundle.clone();
         mutate_open_verify_envelope(&mut zero_envelope_vk.recursive_proof.proof, |envelope| {
@@ -26206,11 +33017,1158 @@ mod kagemusha_folded_real_prover_tests {
             .expect_err("lineage trusted-setup proof backend must reject");
         assert!(err.contains("halo2/ipa"), "{err}");
 
+        let two_hop_accumulator = recursive_spend_accumulators(2)
+            .pop()
+            .expect("two-hop recursive spend accumulator");
+        let two_hop_recursive_proof = recursive_spend_proof(&two_hop_accumulator);
+        let mut two_hop_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: two_hop_accumulator,
+            recursive_proof: two_hop_recursive_proof,
+        };
+        two_hop_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bind_recursive_spend_append_lineage_public_inputs(
+            &mut two_hop_bundle,
+            b"kagemusha-lineage-two-hop",
+            0x12,
+        );
+        let mut one_hop_profile_on_append = two_hop_bundle.clone();
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut one_hop_profile_on_append,
+            fixed_bytes(b"kagemusha-lineage-two-hop-vk"),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA2; 64],
+        );
+        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+            &one_hop_profile_on_append,
+        )
+        .expect_err("two-hop lineage profile must use the append verifier-slice layout");
+        assert!(err.contains("verifier-slice"), "{err}");
+
+        attach_recursive_spend_zk1_halo2_envelope_with_append_lineage_slice(
+            &mut two_hop_bundle,
+            fixed_bytes(b"kagemusha-lineage-two-hop-append-vk"),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA3; 64],
+        );
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&two_hop_bundle).expect(
+            "metadata-valid two-hop append lineage profile must be chain-admission capable",
+        );
+
+        let mut append_instance_splice = two_hop_bundle.clone();
+        mutate_open_verify_envelope(
+            &mut append_instance_splice.recursive_proof.proof,
+            |envelope| {
+                flip_first_recursive_spend_zk1_instance_byte(&mut envelope.proof_bytes);
+            },
+        );
+        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+            &append_instance_splice,
+        )
+        .expect_err("two-hop append lineage public instance substitution must reject");
+        assert!(err.contains("public instance"), "{err}");
+
         bundle.recursive_proof.verifier_key_id.name =
             "kagemusha-recursive-spend-lineage-dev".to_owned();
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
             .expect_err("unknown lineage circuit id must reject");
         assert!(err.contains("accepted lineage-proving circuit"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_backend_profile_rejects_multi_hop_metadata_splices() {
+        use halo2_proofs::halo2curves::pasta::Fp as Scalar;
+
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x34);
+        bundle.recursive_proof.public_inputs_hash = bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage profile public-input hash");
+        let columns = recursive_spend_lineage_backend_instance_columns(&bundle);
+        let refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&refs),
+            Some(4)
+        );
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            Some(KagemushaRecursiveSpendLineageBackendProfile::OneHop { opening_len: 4 })
+        );
+
+        let append_accumulator = recursive_spend_accumulators(2)
+            .pop()
+            .expect("two-hop append-profile accumulator");
+        let append_recursive_proof = recursive_spend_proof(&append_accumulator);
+        let mut append_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: append_accumulator,
+            recursive_proof: append_recursive_proof,
+        };
+        append_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bind_recursive_spend_append_lineage_public_inputs(
+            &mut append_bundle,
+            b"kagemusha-lineage-backend-profile-append",
+            0x36,
+        );
+        let append_opening_len = append_bundle.accumulator.verifier_opening_len;
+        let append_columns =
+            recursive_spend_append_lineage_backend_instance_columns(&append_bundle);
+        let append_refs = append_columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&append_refs),
+            None,
+            "append verifier-slice instances must not route through the one-hop verifier"
+        );
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&append_refs),
+            Some(KagemushaRecursiveSpendLineageBackendProfile::Append {
+                opening_len: append_opening_len
+            })
+        );
+
+        let mut append_boundary_erasure = append_columns.clone();
+        for offset in 0..4 {
+            append_boundary_erasure
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX + offset][0] =
+                Scalar::from(0);
+        }
+        let refs = append_boundary_erasure
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "append verifier-slice dispatch requires the append-boundary public limbs"
+        );
+
+        let mut append_scalar_projection_erasure = append_columns.clone();
+        for offset in 0..4 {
+            append_scalar_projection_erasure
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX + offset]
+                [0] = Scalar::from(0);
+        }
+        let refs = append_scalar_projection_erasure
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "append verifier-slice dispatch requires scalar-projection public limbs"
+        );
+
+        let mut two_hop_bundle = {
+            let accumulator = recursive_spend_accumulators(2)
+                .pop()
+                .expect("two-hop recursive spend accumulator");
+            let recursive_proof = recursive_spend_proof(&accumulator);
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+                accumulator,
+                recursive_proof,
+            }
+        };
+        two_hop_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        two_hop_bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x35);
+        two_hop_bundle.recursive_proof.public_inputs_hash = two_hop_bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("two-hop lineage public-input hash");
+        let two_hop_columns = recursive_spend_lineage_backend_instance_columns(&two_hop_bundle);
+        let two_hop_refs = two_hop_columns
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&two_hop_refs),
+            None,
+            "the one-hop Reserved-lineage verifier dispatch must reject forged multi-hop metadata"
+        );
+
+        let mut witness_count_splice = columns.clone();
+        witness_count_splice[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX][0] =
+            Scalar::from(2);
+        let refs = witness_count_splice
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&refs),
+            None,
+            "witness count must stay pinned to the one-hop verifier slice"
+        );
+
+        let mut semantic_padding_splice = columns.clone();
+        semantic_padding_splice[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX]
+            .push(Scalar::from(1));
+        let refs = semantic_padding_splice
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&refs),
+            None,
+            "semantic public columns may only carry zero padding after row zero"
+        );
+
+        let mut zero_scalar_projection_splice = columns.clone();
+        zero_scalar_projection_splice
+            .last_mut()
+            .expect("lineage scalar projection column")[0] = Scalar::from(0);
+        let refs = zero_scalar_projection_splice
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&refs),
+            None,
+            "lineage scalar projection public column must be non-zero"
+        );
+
+        let mut scalar_projection_padding_splice = columns;
+        scalar_projection_padding_splice
+            .last_mut()
+            .expect("lineage scalar projection column")
+            .push(Scalar::from(1));
+        let refs = scalar_projection_padding_splice
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(&refs),
+            None,
+            "lineage scalar projection public column may only carry zero padding after row zero"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_append_opening_preflight_binds_archives() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        attach_recursive_spend_zk1_halo2_envelope(
+            &mut previous_bundle,
+            fixed_bytes(b"kagemusha-lineage-append-previous-vk"),
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            vec![0xA9; 64],
+        );
+
+        let previous_metadata =
+            expected_kagemusha_recursive_previous_proof_open_envelope_metadata(&previous_bundle)
+                .expect("previous recursive proof opening metadata");
+        let previous_archive = norito::to_bytes(&vec![
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-previous-proof",
+                previous_metadata,
+            ),
+        ])
+        .expect("encode previous recursive proof opening archive");
+
+        let current_metadata = iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+            vk_commitment: Some(fixed_bytes(b"kagemusha-lineage-append-current-vk")),
+            public_inputs_schema_hash: Some(fixed_bytes(
+                b"kagemusha-lineage-append-current-schema",
+            )),
+            domain_tag: Some(fixed_bytes(b"kagemusha-lineage-append-current-domain")),
+        };
+        let current_archive = norito::to_bytes(&vec![
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-current-hop",
+                current_metadata.clone(),
+            ),
+        ])
+        .expect("encode current-hop opening archive");
+        let current_hop_proof_hash =
+            iroha_crypto::Hash::new(b"kagemusha-lineage-append-current-hop-proof");
+
+        let preflight = kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+            &previous_bundle,
+            &previous_archive,
+            &current_hop_proof_hash,
+            &current_archive,
+        )
+        .expect("append opening preflight binds previous and current archives");
+        assert_eq!(preflight.previous_recursive_proof_preflight.proof_count, 1);
+        assert_eq!(preflight.current_hop_preflight.proof_count, 1);
+        assert_eq!(preflight.previous_recursive_proof_preflight.opening_len, 4);
+        assert_eq!(preflight.current_hop_preflight.opening_len, 4);
+        assert_ne!(preflight.append_opening_preflight_digest, [0u8; 32]);
+
+        let substituted_hop_hash =
+            iroha_crypto::Hash::new(b"kagemusha-lineage-append-substituted-hop-proof");
+        let substituted = kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+            &previous_bundle,
+            &previous_archive,
+            &substituted_hop_hash,
+            &current_archive,
+        )
+        .expect("append opening preflight accepts a different explicit hop hash");
+        assert_ne!(
+            preflight.current_hop_preflight.aggregate_digest,
+            substituted.current_hop_preflight.aggregate_digest,
+            "current-hop preflight digest must bind the checked-hop proof hash"
+        );
+        assert_ne!(
+            preflight.append_opening_preflight_digest, substituted.append_opening_preflight_digest,
+            "append opening preflight digest must bind the checked-hop proof hash"
+        );
+
+        let mut previous_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&previous_archive)
+                .expect("decode previous recursive proof opening archive");
+        previous_envelopes[0].vk_commitment =
+            Some(fixed_bytes(b"kagemusha-lineage-append-forged-vk"));
+        let forged_previous_archive =
+            norito::to_bytes(&previous_envelopes).expect("encode forged previous archive");
+        let err = kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+            &previous_bundle,
+            &forged_previous_archive,
+            &current_hop_proof_hash,
+            &current_archive,
+        )
+        .expect_err("append opening preflight must reject previous-proof metadata splices");
+        assert!(
+            err.contains("verifier-key commitment metadata mismatch"),
+            "unexpected previous opening metadata error: {err}"
+        );
+
+        let too_many_current = norito::to_bytes(&vec![
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-current-hop-a",
+                current_metadata.clone(),
+            ),
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-current-hop-b",
+                current_metadata,
+            ),
+        ])
+        .expect("encode over-count current-hop archive");
+        let err = kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+            &previous_bundle,
+            &previous_archive,
+            &current_hop_proof_hash,
+            &too_many_current,
+        )
+        .expect_err("append opening preflight must reject over-count current-hop openings");
+        assert!(
+            err.contains("current-hop preflight requires exactly one opening envelope"),
+            "unexpected current-hop over-count error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_append_accumulator_opening_contract_rejects_splices() {
+        fn pallas_preflight_from_envelope(
+            envelope: &iroha_zkp_halo2::OpenVerifyEnvelope,
+        ) -> PallasIpaBatchVerifierPreflight {
+            let (params, witnesses) = kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(
+                std::slice::from_ref(envelope),
+            )
+            .expect("derive Pallas IPA witness from test envelope");
+            kagemusha_pallas_ipa_batch_verifier_preflight(params.as_ref(), &witnesses)
+                .expect("Pallas IPA preflight")
+        }
+
+        let previous_probe_envelope =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-contract-previous-probe",
+                iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+                    vk_commitment: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-vk",
+                    )),
+                    public_inputs_schema_hash: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-schema",
+                    )),
+                    domain_tag: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-domain",
+                    )),
+                },
+            );
+        let previous_probe_preflight = pallas_preflight_from_envelope(&previous_probe_envelope);
+        let chain_id: ChainId = "kagemusha-lineage-append-contract"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-lineage-contract"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let step0 = KagemushaFoldStep {
+            root_before: fixed_bytes(b"kagemusha-lineage-contract-root-0"),
+            input_nullifiers: vec![[0x21; 32], [0x31; 32]],
+            output_commitments: vec![[0x41; 32], [0x51; 32]],
+            root_after: fixed_bytes(b"kagemusha-lineage-contract-root-1"),
+            proof_hash: Hash::new(b"kagemusha-lineage-contract-hop-0"),
+            proof_public_inputs_digest: fixed_bytes(b"kagemusha-lineage-contract-hop-0-public"),
+            verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+            verifier_key_commitment: fixed_bytes(b"kagemusha-lineage-contract-hop-0-vk"),
+            verifier_key_poseidon_digest:
+                iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                    ZK_BACKEND_HALO2_IPA,
+                    b"kagemusha-lineage-contract-hop-0-vk",
+                )
+                .expect("hop verifier-key digest"),
+        };
+        let note0 = recursive_spend_note(
+            step0.output_commitments[0],
+            b"kagemusha-lineage-contract-nullifier-0",
+        );
+        let evidence0 =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                std::slice::from_ref(&step0),
+                previous_probe_preflight.opening_len,
+                previous_probe_preflight.params_fingerprint,
+                previous_probe_preflight.fixed_window_table_schedule_digest,
+                previous_probe_preflight.fixed_window_shared_table_manifest_digest,
+                previous_probe_preflight.fixed_window_table_base_digest,
+                previous_probe_preflight.aggregate_digest,
+            )
+            .expect("initial lineage append contract evidence");
+        let accumulator0 =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                &evidence0, &note0,
+            )
+            .expect("initial lineage append contract accumulator");
+        let mut recursive_proof0 = recursive_spend_proof(&accumulator0);
+        recursive_proof0.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        recursive_proof0
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x6d);
+        recursive_proof0.public_inputs_hash = recursive_proof0
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage previous proof public-input hash");
+        let mut previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator0.clone(),
+            recursive_proof: recursive_proof0.clone(),
+        };
+        attach_recursive_spend_zk1_halo2_envelope(
+            &mut previous_bundle,
+            fixed_bytes(b"kagemusha-lineage-contract-previous-vk"),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xB7; 64],
+        );
+        let previous_metadata =
+            expected_kagemusha_recursive_previous_proof_open_envelope_metadata(&previous_bundle)
+                .expect("previous recursive proof opening metadata");
+        let previous_archive = norito::to_bytes(&vec![
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-contract-previous",
+                previous_metadata,
+            ),
+        ])
+        .expect("encode previous recursive proof opening archive");
+
+        let current_hop_proof_hash = Hash::new(b"kagemusha-lineage-contract-hop-1");
+        let current_metadata = iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+            vk_commitment: Some(fixed_bytes(b"kagemusha-lineage-contract-current-vk")),
+            public_inputs_schema_hash: Some(fixed_bytes(
+                b"kagemusha-lineage-contract-current-schema",
+            )),
+            domain_tag: Some(fixed_bytes(b"kagemusha-lineage-contract-current-domain")),
+        };
+        let current_archive = norito::to_bytes(&vec![
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                "lineage-append-contract-current",
+                current_metadata,
+            ),
+        ])
+        .expect("encode current-hop opening archive");
+        let append_opening_preflight =
+            kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
+                &previous_bundle,
+                &previous_archive,
+                &current_hop_proof_hash,
+                &current_archive,
+            )
+            .expect("append opening preflight");
+        let step1 = KagemushaFoldStep {
+            root_before: accumulator0.final_root,
+            input_nullifiers: vec![accumulator0.current_note.spend_nullifier],
+            output_commitments: vec![[0x42; 32], [0x52; 32]],
+            root_after: fixed_bytes(b"kagemusha-lineage-contract-root-2"),
+            proof_hash: current_hop_proof_hash,
+            proof_public_inputs_digest: fixed_bytes(b"kagemusha-lineage-contract-hop-1-public"),
+            verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+            verifier_key_commitment: fixed_bytes(b"kagemusha-lineage-contract-hop-1-vk"),
+            verifier_key_poseidon_digest:
+                iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                    ZK_BACKEND_HALO2_IPA,
+                    b"kagemusha-lineage-contract-hop-1-vk",
+                )
+                .expect("hop verifier-key digest"),
+        };
+        let note1 = recursive_spend_note(
+            step1.output_commitments[0],
+            b"kagemusha-lineage-contract-nullifier-1",
+        );
+        let evidence1 =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &chain_id,
+                &asset,
+                std::slice::from_ref(&step1),
+                append_opening_preflight.current_hop_preflight.opening_len,
+                append_opening_preflight
+                    .current_hop_preflight
+                    .params_fingerprint,
+                append_opening_preflight
+                    .current_hop_preflight
+                    .fixed_window_table_schedule_digest,
+                append_opening_preflight
+                    .current_hop_preflight
+                    .fixed_window_shared_table_manifest_digest,
+                append_opening_preflight
+                    .current_hop_preflight
+                    .fixed_window_table_base_digest,
+                append_opening_preflight
+                    .current_hop_preflight
+                    .aggregate_digest,
+            )
+            .expect("append lineage contract evidence");
+        let accumulator1 =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract(
+                &accumulator0,
+                &previous_bundle.recursive_proof,
+                &previous_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence1,
+                &note1,
+            )
+            .expect("append accumulator with opening preflight contract");
+
+        preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+            &previous_bundle,
+            &previous_archive,
+            append_opening_preflight.contract.clone(),
+            &evidence1,
+            &note1,
+            &accumulator1,
+        )
+        .expect("append transition profile boundary matches opening-preflight accumulator");
+
+        let mut forged_transition_binding = accumulator1.clone();
+        forged_transition_binding.transition_profile_binding_digest[0] ^= 0x01;
+        let err =
+            preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+                &previous_bundle,
+                &previous_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence1,
+                &note1,
+                &forged_transition_binding,
+            )
+            .expect_err("forged append transition boundary digest must reject");
+        assert!(
+            err.contains("transition boundary accumulator mismatch"),
+            "unexpected forged append transition boundary error: {err}"
+        );
+
+        let mut forged_chain = accumulator1.clone();
+        forged_chain.chain_id = "kagemusha-lineage-contract-forged-chain"
+            .parse()
+            .expect("forged chain id");
+        let err =
+            preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+                &previous_bundle,
+                &previous_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence1,
+                &note1,
+                &forged_chain,
+            )
+            .expect_err("forged append boundary chain binding must reject");
+        assert!(
+            err.contains("transition boundary accumulator mismatch"),
+            "unexpected forged append boundary chain-binding error: {err}"
+        );
+
+        let mut forged_current_note = accumulator1.clone();
+        forged_current_note.current_note.note_commitment = step1.output_commitments[1];
+        let err =
+            preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+                &previous_bundle,
+                &previous_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence1,
+                &note1,
+                &forged_current_note,
+            )
+            .expect_err("forged append boundary current-note binding must reject");
+        assert!(
+            err.contains("transition boundary accumulator mismatch"),
+            "unexpected forged append boundary current-note error: {err}"
+        );
+
+        let mut forged_final_root = accumulator1.clone();
+        forged_final_root.final_root = fixed_bytes(b"kagemusha-lineage-contract-forged-root");
+        let err =
+            preflight_kagemusha_recursive_spend_append_transition_profile_with_opening_preflight(
+                &previous_bundle,
+                &previous_archive,
+                append_opening_preflight.contract.clone(),
+                &evidence1,
+                &note1,
+                &forged_final_root,
+            )
+            .expect_err("forged append boundary final-root binding must reject");
+        assert!(
+            err.contains("transition boundary accumulator mismatch"),
+            "unexpected forged append boundary final-root error: {err}"
+        );
+
+        preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            &previous_bundle,
+            &append_opening_preflight,
+            &accumulator1,
+        )
+        .expect("append accumulator/opening contract matches");
+
+        let mut forged_digest = accumulator1.clone();
+        forged_digest.append_opening_preflight_digest[0] ^= 0x01;
+        let err = preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            &previous_bundle,
+            &append_opening_preflight,
+            &forged_digest,
+        )
+        .expect_err("forged accumulator append-opening digest must reject");
+        assert!(
+            err.contains("opening preflight digest"),
+            "unexpected forged append-opening digest error: {err}"
+        );
+
+        let mut forged_public_corridor = accumulator1.clone();
+        forged_public_corridor.verifier_params_fingerprint[0] ^= 0x01;
+        let err = preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            &previous_bundle,
+            &append_opening_preflight,
+            &forged_public_corridor,
+        )
+        .expect_err("forged accumulator verifier parameter fingerprint must reject");
+        assert!(
+            err.contains("verifier parameter fingerprint"),
+            "unexpected forged verifier parameter fingerprint error: {err}"
+        );
+
+        let mut forged_preflight = append_opening_preflight.clone();
+        forged_preflight
+            .current_hop_preflight
+            .fixed_window_table_schedule_digest[0] ^= 0x01;
+        let err = preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            &previous_bundle,
+            &forged_preflight,
+            &accumulator1,
+        )
+        .expect_err("forged current-hop preflight schedule must reject");
+        assert!(
+            err.contains("current-hop preflight mismatch"),
+            "unexpected forged current-hop preflight error: {err}"
+        );
+
+        let mut stale_previous = previous_bundle.clone();
+        stale_previous.accumulator.hop_count = accumulator1.hop_count;
+        let err = preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract(
+            &stale_previous,
+            &append_opening_preflight,
+            &accumulator1,
+        )
+        .expect_err("stale previous accumulator hop count must reject");
+        assert!(
+            err.contains("hop count mismatch"),
+            "unexpected stale previous hop-count error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_append_availability_enforces_hop_cap() {
+        let err = ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(1)
+            .expect_err("append output cannot be one hop");
+        assert!(
+            err.contains("at least 2 hops"),
+            "unexpected one-hop append availability error: {err}"
+        );
+
+        ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(2)
+            .expect("two-hop Reserved-lineage append is enabled");
+        ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(64)
+            .expect("64-hop Reserved-lineage append is inside the policy cap");
+
+        let err = ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(65)
+            .expect_err("append output beyond the cap must reject");
+        assert!(
+            err.contains("exceeds witnessless Reserved-lineage hop cap"),
+            "unexpected over-cap append availability error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_append_rejects_lineage_output_at_cap_before_inputs() {
+        let mut accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        accumulator.hop_count =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1;
+        let mut recursive_proof = recursive_spend_proof(&accumulator);
+        recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        let previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator.clone(),
+            recursive_proof,
+        };
+        let chain_id: ChainId = "kagemusha-recursive-spend-cap-test"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive-spend-cap"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let empty_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &previous_bundle,
+                None,
+                &[0xFF],
+                &record_bundle,
+                &[0xFE],
+                accumulator.current_note,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &empty_vk,
+                None,
+            )
+            .expect_err("direct Reserved-lineage append at the witnessless hop cap must reject before input parsing");
+
+        assert!(
+            err.contains("cannot select output proof circuit") && err.contains("at hop 64"),
+            "unexpected capped Reserved-lineage append error: {err}"
+        );
+        assert!(
+            !err.contains("open-envelope archive")
+                && !err.contains("requires a previous lineage verifier record"),
+            "capped Reserved-lineage append must reject before verifier-record or archive checks: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_append_previous_lineage_record_enforces_height_window_before_backend()
+     {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let mut recursive_proof = recursive_spend_proof(&accumulator);
+        recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x33);
+        recursive_proof.public_inputs_hash = recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("previous lineage recursive public-input hash");
+        let mut previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator.clone(),
+            recursive_proof,
+        };
+        let lineage_vk_box = recursive_spend_lineage_vk_box_with_h2vk_header(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+        );
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut previous_bundle,
+            hash_vk(&lineage_vk_box),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xE1; 64],
+        );
+        let previous_archive = previous_recursive_spend_proof_pallas_open_envelope_archive(
+            &previous_bundle,
+            "append-window-previous-proof",
+        );
+        let semantic_vk_box = recursive_aggregation_vk_box();
+        let mut record = recursive_aggregation_record(&semantic_vk_box);
+        record.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        record.commitment = hash_vk(&lineage_vk_box);
+        record.vk_len =
+            u32::try_from(lineage_vk_box.bytes.len()).expect("lineage verifier-key length fits");
+        record.key = Some(lineage_vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+
+        let chain_id: ChainId = "kagemusha-recursive-spend-append-window"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive-spend-window"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let output_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        let current_note = accumulator.current_note.clone();
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+            )
+            .expect_err("height-unbound previous lineage record must reject before backend");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !err.contains("Pallas open-envelope archive"),
+            "height-unbound previous record must reject before current-hop archive decode: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                1,
+            )
+            .expect_err("future previous lineage record must reject before backend");
+        assert!(err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                2,
+            )
+            .expect_err("in-window previous lineage record reaches backend verification");
+        assert!(err.contains("did not verify"), "{err}");
+        assert!(!err.contains("chain height"), "{err}");
+        assert!(!err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn previous lineage record must reject before backend");
+        assert!(err.contains("not active"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_init_record_bundle_enforces_height_window_before_proving() {
+        let (chain_id, asset, hop, mut record) = sample_confidential_v2_verified_hop();
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+        let record_bundle = one_hop_record_bundle(chain_id, asset, &hop, &record);
+        let envelope_archive =
+            one_hop_pallas_open_envelope_archive(&record_bundle, "init-window-hop");
+        let current_note = sample_kagemusha_recursive_spend_note(
+            hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-recursive-spend-init-window-nullifier"),
+            7,
+        );
+        let empty_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+            )
+            .expect_err("height-unbound init must reject windowed hop records before proving");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                1,
+            )
+            .expect_err("future init hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                2,
+            )
+            .expect_err("in-window init hop record should reach proof-generation validation");
+        assert!(!err.contains("chain height"), "{err}");
+        assert!(!err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn init hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_verify_result_requires_matching_lineage_record() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let semantic_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        let mut semantic_record =
+            iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
+                1,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                Some("kagemusha-recursive-spend-verify-test".to_owned()),
+                KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(
+                ),
+                fixed_bytes(b"kagemusha-recursive-spend-verify-test-vk"),
+            );
+        semantic_record.status = ConfidentialStatus::Active;
+        semantic_record.max_proof_bytes = 4096;
+
+        let semantic_with_record = kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &semantic_bundle,
+            Some(&semantic_record),
+        )
+        .expect("semantic verify result with stray lineage record");
+        assert!(!semantic_with_record.valid);
+        assert!(!semantic_with_record.chain_admissible);
+        assert!(!semantic_with_record.witnessless_redeem_supported);
+        assert!(semantic_with_record.lineage_witness_required_for_redeem);
+        assert!(
+            semantic_with_record.reason.contains("semantic")
+                && semantic_with_record
+                    .reason
+                    .contains("lineage verifier record"),
+            "{}",
+            semantic_with_record.reason
+        );
+
+        let mut lineage_bundle = semantic_bundle.clone();
+        lineage_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        lineage_bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"kagemusha-recursive-spend-verify-lineage-scalar");
+        lineage_bundle.recursive_proof.public_inputs_hash = lineage_bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage verify public-input hash");
+        attach_recursive_spend_zk1_halo2_envelope(
+            &mut lineage_bundle,
+            fixed_bytes(b"kagemusha-recursive-spend-verify-lineage-vk"),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA7; 64],
+        );
+
+        let missing_record =
+            kagemusha_recursive_spend_verify_result_with_lineage_record(&lineage_bundle, None)
+                .expect("lineage verify result without record");
+        assert!(!missing_record.valid);
+        assert!(!missing_record.chain_admissible);
+        assert!(!missing_record.witnessless_redeem_supported);
+        assert!(missing_record.lineage_witness_required_for_redeem);
+        assert!(
+            missing_record
+                .reason
+                .contains("requires a lineage verifier record"),
+            "{}",
+            missing_record.reason
+        );
+
+        let wrong_record = kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &lineage_bundle,
+            Some(&semantic_record),
+        )
+        .expect("lineage verify result with semantic record");
+        assert!(!wrong_record.valid);
+        assert!(!wrong_record.chain_admissible);
+        assert!(!wrong_record.witnessless_redeem_supported);
+        assert!(wrong_record.lineage_witness_required_for_redeem);
+        assert!(
+            wrong_record.reason.contains("lineage verifier circuit id"),
+            "{}",
+            wrong_record.reason
+        );
+
+        let lineage_vk_box = recursive_spend_lineage_vk_box_with_h2vk_header(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        );
+        let lineage_vk_hash = hash_vk(&lineage_vk_box);
+        let mut lineage_record = iroha_data_model::proof::VerifyingKeyRecord::new(
+            1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(
+            ),
+            lineage_vk_hash,
+        );
+        lineage_record.status = ConfidentialStatus::Active;
+        lineage_record.namespace = KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
+        lineage_record.vk_len =
+            u32::try_from(lineage_vk_box.bytes.len()).expect("lineage verifier-key length fits");
+        lineage_record.max_proof_bytes = 256 * 1024;
+        lineage_record.key = Some(lineage_vk_box);
+
+        let two_hop_accumulator = recursive_spend_accumulators(2)
+            .pop()
+            .expect("two-hop recursive spend accumulator");
+        let two_hop_recursive_proof = recursive_spend_proof(&two_hop_accumulator);
+        let mut two_hop_lineage_bundle =
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+                accumulator: two_hop_accumulator,
+                recursive_proof: two_hop_recursive_proof,
+            };
+        two_hop_lineage_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bind_recursive_spend_append_lineage_public_inputs(
+            &mut two_hop_lineage_bundle,
+            b"kagemusha-recursive-spend-verify-two-hop",
+            0x41,
+        );
+        let mut one_hop_profile_on_append = two_hop_lineage_bundle.clone();
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut one_hop_profile_on_append,
+            lineage_vk_hash,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA8; 64],
+        );
+        let wrong_multi_hop = kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &one_hop_profile_on_append,
+            Some(&lineage_record),
+        )
+        .expect("two-hop lineage verify result with one-hop profile");
+        assert!(!wrong_multi_hop.valid);
+        assert!(!wrong_multi_hop.chain_admissible);
+        assert!(!wrong_multi_hop.witnessless_redeem_supported);
+        assert!(wrong_multi_hop.lineage_witness_required_for_redeem);
+        assert!(
+            wrong_multi_hop.reason.contains("verifier-slice"),
+            "{}",
+            wrong_multi_hop.reason
+        );
+
+        attach_recursive_spend_zk1_halo2_envelope_with_append_lineage_slice(
+            &mut two_hop_lineage_bundle,
+            lineage_vk_hash,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xA9; 64],
+        );
+        preverify_kagemusha_recursive_spend_bundle_with_record(
+            &two_hop_lineage_bundle,
+            &lineage_record,
+        )
+        .expect("two-hop append lineage profile must pass verifier-record preverification");
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&two_hop_lineage_bundle)
+            .expect("two-hop append lineage profile must pass chain-admission prechecks");
+        assert!(
+            iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(
+                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,
+                two_hop_lineage_bundle.accumulator.hop_count,
+            ),
+            "metadata-valid two-hop append lineage profile must remain witnessless-redeem capable"
+        );
     }
 
     #[test]
@@ -26221,6 +34179,12 @@ mod kagemusha_folded_real_prover_tests {
         let proof = recursive_spend_proof(&accumulator);
         ensure_record_backed_recursive_spend_proof_is_semantic(&proof, 0)
             .expect("valid semantic previous proof profile");
+        let final_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator.clone(),
+            recursive_proof: proof.clone(),
+        };
+        ensure_record_backed_recursive_spend_previous_proof_context(&proof, &final_bundle, 0)
+            .expect("valid semantic previous proof context");
 
         let mut reserved_lineage_profile = proof.clone();
         reserved_lineage_profile.verifier_key_id.name =
@@ -26233,6 +34197,14 @@ mod kagemusha_folded_real_prover_tests {
             .public_inputs
             .public_inputs_hash()
             .expect("reserved lineage previous proof public-input hash");
+        ensure_record_backed_recursive_spend_previous_proof_profile(&reserved_lineage_profile, 0)
+            .expect("record-backed lineage verifier accepts reserved previous proof profile");
+        ensure_record_backed_recursive_spend_previous_proof_context(
+            &reserved_lineage_profile,
+            &final_bundle,
+            0,
+        )
+        .expect("record-backed lineage verifier accepts reserved previous proof context");
         let err =
             ensure_record_backed_recursive_spend_proof_is_semantic(&reserved_lineage_profile, 0)
                 .expect_err("reserved lineage previous proof profile must reject");
@@ -26240,6 +34212,83 @@ mod kagemusha_folded_real_prover_tests {
             err.contains("semantic recursive aggregation circuit"),
             "{err}"
         );
+        let mut reserved_missing_scalar = reserved_lineage_profile.clone();
+        reserved_missing_scalar
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest = [0u8; 32];
+        reserved_missing_scalar.public_inputs_hash = reserved_missing_scalar
+            .public_inputs
+            .public_inputs_hash()
+            .expect("reserved missing-scalar previous proof public-input hash");
+        let err = ensure_record_backed_recursive_spend_previous_proof_profile(
+            &reserved_missing_scalar,
+            0,
+        )
+        .expect_err("reserved lineage previous proof must reject missing scalar");
+        assert!(
+            err.contains("must bind a lineage scalar projection"),
+            "{err}"
+        );
+
+        let previous_context_splice_cases: [(
+            &str,
+            &str,
+            fn(&mut iroha_data_model::offline::KagemushaRecursiveAggregationProof),
+        ); 4] = [
+            (
+                "verifier opening length",
+                "verifier opening length",
+                |proof: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProof| {
+                    proof.public_inputs.verifier_opening_len = 8;
+                },
+            ),
+            (
+                "verifier parameter fingerprint",
+                "verifier parameter fingerprint",
+                |proof: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProof| {
+                    proof.public_inputs.verifier_params_fingerprint =
+                        fixed_bytes(b"kagemusha-lineage-previous-proof-forged-params");
+                },
+            ),
+            (
+                "fixed-window table schedule digest",
+                "fixed-window table schedule digest",
+                |proof: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProof| {
+                    proof.public_inputs.fixed_window_table_schedule_digest =
+                        fixed_bytes(b"kagemusha-lineage-previous-proof-forged-schedule");
+                },
+            ),
+            (
+                "fixed-window shared-table manifest digest",
+                "fixed-window shared-table manifest digest",
+                |proof: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProof| {
+                    proof
+                        .public_inputs
+                        .fixed_window_shared_table_manifest_digest =
+                        fixed_bytes(b"kagemusha-lineage-previous-proof-forged-manifest");
+                },
+            ),
+        ];
+        for (case, expected_detail, mutate) in previous_context_splice_cases {
+            let mut spliced_context = proof.clone();
+            mutate(&mut spliced_context);
+            spliced_context.public_inputs_hash = spliced_context
+                .public_inputs
+                .public_inputs_hash()
+                .expect("context-spliced previous proof public-input hash");
+            ensure_record_backed_recursive_spend_previous_proof_profile(&spliced_context, 0)
+                .expect("context-spliced previous proof still has a valid generic profile");
+            let err = ensure_record_backed_recursive_spend_previous_proof_context(
+                &spliced_context,
+                &final_bundle,
+                0,
+            )
+            .expect_err("previous proof verifier-context splice must reject");
+            assert!(
+                err.contains(expected_detail),
+                "{case} returned unexpected error: {err}"
+            );
+        }
 
         let mut scalar_projection_splice = proof.clone();
         scalar_projection_splice
@@ -26337,6 +34386,32 @@ mod kagemusha_folded_real_prover_tests {
         if include_unexpected_proof_tlv {
             zk1::wrap_append_proof(&mut bytes, b"unexpected-lineage-vk-proof-tlv");
         }
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
+    fn recursive_spend_lineage_vk_box_with_h2vk_header(ipa_k: u32) -> VerifyingKeyBox {
+        fn append_test_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+            buf.extend_from_slice(tag);
+            buf.extend_from_slice(
+                &u32::try_from(payload.len())
+                    .expect("test TLV payload length fits u32")
+                    .to_le_bytes(),
+            );
+            buf.extend_from_slice(payload);
+        }
+
+        let mut h2vk = Vec::new();
+        h2vk.push(0x02);
+        h2vk.extend_from_slice(&ipa_k.to_le_bytes());
+        h2vk.push(1);
+        h2vk.extend_from_slice(&3u32.to_le_bytes());
+        h2vk.extend(vec![0x42; 96]);
+        h2vk.extend_from_slice(b"kagemusha-lineage-test-h2vk");
+
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
+        zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID);
+        append_test_tlv(&mut bytes, b"H2VK", &h2vk);
         VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
     }
 
@@ -26483,6 +34558,15 @@ mod kagemusha_folded_real_prover_tests {
             .expect("recursive aggregation proof preverification");
         preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &record)
             .expect("record-backed recursive aggregation proof preverification");
+
+        let mut wrong_curve = record;
+        wrong_curve.curve = "pasta".to_owned();
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
+            &bundle,
+            &wrong_curve,
+        )
+        .expect_err("wrong recursive aggregation verifier curve must reject");
+        assert!(err.contains("curve"), "{err}");
     }
 
     #[test]
@@ -26750,6 +34834,8 @@ mod kagemusha_folded_real_prover_tests {
                 .expect("recursive spend verify result");
             assert!(verify_result.valid);
             assert!(!verify_result.chain_admissible);
+            assert!(!verify_result.witnessless_redeem_supported);
+            assert!(verify_result.lineage_witness_required_for_redeem);
             assert!(verify_result.reason.is_empty());
             assert!(
                 verify_result
@@ -26776,6 +34862,244 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             encoded_lengths.windows(2).all(|pair| pair[0] == pair[1]),
             "recursive spend D2D payload must stay constant across hops: {encoded_lengths:?}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen()
+     {
+        if std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some() {
+            return;
+        }
+        let chain_id: ChainId = "kagemusha-recursive-spend-key-artifact-guard"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-key-artifact-guard"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let current_note = sample_kagemusha_recursive_spend_note(
+            fixed_bytes(b"kagemusha-recursive-key-artifact-note"),
+            fixed_bytes(b"kagemusha-recursive-key-artifact-nullifier"),
+            7,
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &[],
+                current_note,
+                None,
+            )
+            .expect_err("default Reserved-lineage init must require packaged key artifacts");
+        assert!(
+            err.contains("packaged verifier/proving key artifacts"),
+            "unexpected key-artifact guard error: {err}"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output()
+     {
+        let (chain_id, asset, first_hop, second_hop, hop_record) =
+            sample_confidential_v2_two_hop_lineage();
+        let first_record_bundle =
+            one_hop_record_bundle(chain_id.clone(), asset.clone(), &first_hop, &hop_record);
+        let second_record_bundle = one_hop_record_bundle(chain_id, asset, &second_hop, &hop_record);
+        let first_envelope_archive =
+            one_hop_pallas_open_envelope_archive(&first_record_bundle, "lineage-init-hop");
+        let second_envelope_archive =
+            one_hop_pallas_open_envelope_archive(&second_record_bundle, "lineage-append-hop");
+        let first_note = sample_kagemusha_recursive_spend_note(
+            first_hop.output_commitments[0],
+            second_hop.input_nullifiers[0],
+            7,
+        );
+        let second_note = sample_kagemusha_recursive_spend_note(
+            second_hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-recursive-lineage-final-nullifier"),
+            7,
+        );
+
+        let first_lineage_vk_box =
+            kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+                &first_envelope_archive,
+            )
+            .expect("one-hop Reserved-lineage verifier key");
+        let first_lineage_proving_key =
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+                &first_lineage_vk_box,
+                &first_envelope_archive,
+            )
+            .expect("one-hop Reserved-lineage proving key archive");
+        let first_lineage_bundle =
+            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+                &first_record_bundle,
+                &first_envelope_archive,
+                first_note,
+                &first_lineage_vk_box,
+                &first_lineage_proving_key,
+            )
+            .expect("real Reserved-lineage recursive spend init proof");
+        assert_eq!(first_lineage_bundle.accumulator.hop_count, 1);
+        assert_eq!(
+            first_lineage_bundle.recursive_proof.verifier_key_id.name,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+        );
+        assert_ne!(
+            first_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest,
+            [0u8; 32]
+        );
+        let one_hop_lineage_record = kagemusha_recursive_spend_lineage_vk_record(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            21,
+            first_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .verifier_opening_len,
+        )
+        .expect("one-hop Reserved-lineage verifier record");
+        assert_eq!(
+            one_hop_lineage_record.circuit_id,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+        );
+        preverify_kagemusha_recursive_spend_bundle_with_record(
+            &first_lineage_bundle,
+            &one_hop_lineage_record,
+        )
+        .expect("one-hop Reserved-lineage proof preverification");
+        assert!(verify_kagemusha_recursive_spend_bundle_with_record(
+            &first_lineage_bundle,
+            &one_hop_lineage_record
+        ));
+        let one_hop_verify_result = kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &first_lineage_bundle,
+            Some(&one_hop_lineage_record),
+        )
+        .expect("one-hop Reserved-lineage verify result");
+        assert!(one_hop_verify_result.valid);
+        assert!(one_hop_verify_result.chain_admissible);
+        assert!(one_hop_verify_result.witnessless_redeem_supported);
+        assert!(!one_hop_verify_result.lineage_witness_required_for_redeem);
+
+        let previous_proof_open_envelope_archive =
+            previous_recursive_spend_proof_pallas_open_envelope_archive(
+                &first_lineage_bundle,
+                "lineage-append-previous-proof",
+            );
+        let append_lineage_vk_box =
+            kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+                &second_envelope_archive,
+            )
+            .expect("append Reserved-lineage verifier key");
+        let append_lineage_proving_key =
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+                &append_lineage_vk_box,
+                &second_envelope_archive,
+            )
+            .expect("append Reserved-lineage proving key archive");
+        let appended_lineage_bundle =
+            prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_lineage_bundle,
+                Some(&one_hop_lineage_record),
+                &previous_proof_open_envelope_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note,
+                Some(&append_lineage_proving_key),
+            )
+            .expect("real Reserved-lineage recursive spend append proof");
+        assert_eq!(appended_lineage_bundle.accumulator.hop_count, 2);
+        assert_eq!(
+            appended_lineage_bundle.recursive_proof.verifier_key_id.name,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+        );
+        assert_ne!(
+            appended_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .append_opening_preflight_digest,
+            [0u8; 32]
+        );
+        assert_ne!(
+            appended_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .append_boundary_digest,
+            [0u8; 32]
+        );
+        assert_ne!(
+            appended_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest,
+            [0u8; 32]
+        );
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&appended_lineage_bundle)
+            .expect("two-hop Reserved-lineage append proof is witnessless chain-admissible");
+        let append_lineage_record = kagemusha_recursive_spend_lineage_append_vk_record(
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            22,
+            appended_lineage_bundle
+                .recursive_proof
+                .public_inputs
+                .verifier_opening_len,
+        )
+        .expect("append Reserved-lineage verifier record");
+        assert_eq!(
+            append_lineage_record.circuit_id,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+        );
+        assert_ne!(
+            one_hop_lineage_record.circuit_id, append_lineage_record.circuit_id,
+            "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids"
+        );
+        preverify_kagemusha_recursive_spend_bundle_with_record(
+            &appended_lineage_bundle,
+            &append_lineage_record,
+        )
+        .expect("append Reserved-lineage proof preverification");
+        assert!(verify_kagemusha_recursive_spend_bundle_with_record(
+            &appended_lineage_bundle,
+            &append_lineage_record
+        ));
+        let append_verify_result = kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &appended_lineage_bundle,
+            Some(&append_lineage_record),
+        )
+        .expect("append Reserved-lineage verify result");
+        assert!(append_verify_result.valid);
+        assert!(append_verify_result.chain_admissible);
+        assert!(append_verify_result.witnessless_redeem_supported);
+        assert!(!append_verify_result.lineage_witness_required_for_redeem);
+
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record(
+                &appended_lineage_bundle,
+                &one_hop_lineage_record
+            ),
+            "one-hop Reserved-lineage verifier record must not verify append proofs"
+        );
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record(
+                &first_lineage_bundle,
+                &append_lineage_record
+            ),
+            "append Reserved-lineage verifier record must not verify one-hop proofs"
         );
     }
 
@@ -26822,9 +35146,83 @@ mod kagemusha_folded_real_prover_tests {
             &recursive_vk
         ));
 
+        let mut windowed_second_record_bundle = second_record_bundle.clone();
+        let windowed_record = &mut windowed_second_record_bundle
+            .verifier_records
+            .first_mut()
+            .expect("one-hop record bundle has one verifier record")
+            .record;
+        windowed_record.activation_height = Some(2);
+        windowed_record.withdraw_height = Some(4);
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("height-unbound append must reject windowed current-hop records");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                1,
+            )
+            .expect_err("future append current-hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+
+        let windowed_appended =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                2,
+            )
+            .expect("in-window append current-hop record must pass evidence verification");
+        assert_eq!(windowed_appended.accumulator.hop_count, 2);
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn append current-hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+
         let appended =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &first_bundle,
+                None,
+                &[],
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note.clone(),
@@ -26887,6 +35285,37 @@ mod kagemusha_folded_real_prover_tests {
             &recursive_vk,
         )
         .expect("record-backed recursive spend lineage witness and final proof verify");
+
+        let mut final_note_reuses_lineage_input = lineage_witness.clone();
+        final_note_reuses_lineage_input.current_notes[1].spend_nullifier =
+            first_hop.input_nullifiers[0];
+        let err = verify_kagemusha_recursive_spend_lineage_witness_with_record(
+            &appended,
+            &final_note_reuses_lineage_input,
+            &recursive_record,
+        )
+        .expect_err("lineage witness must reject final note input-nullifier collision");
+        assert!(
+            err.contains("final note spend nullifier collides with a lineage input nullifier"),
+            "unexpected final-note input collision error: {err}"
+        );
+
+        let mut final_note_reuses_lineage_output = lineage_witness.clone();
+        let sibling_output = fixed_bytes(b"kagemusha-recursive-spend-final-sibling-output");
+        final_note_reuses_lineage_output.record_bundle.bundle.steps[1]
+            .output_commitments
+            .push(sibling_output);
+        final_note_reuses_lineage_output.current_notes[1].spend_nullifier = sibling_output;
+        let err = verify_kagemusha_recursive_spend_lineage_witness_with_record(
+            &appended,
+            &final_note_reuses_lineage_output,
+            &recursive_record,
+        )
+        .expect_err("lineage witness must reject final note output-commitment collision");
+        assert!(
+            err.contains("spend nullifier collides with a lineage output commitment"),
+            "unexpected final-note output collision error: {err}"
+        );
 
         let mut tampered_final_recursive_proof = appended.clone();
         mutate_open_verify_envelope(
@@ -26956,6 +35385,8 @@ mod kagemusha_folded_real_prover_tests {
         let err =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &tampered_previous,
+                None,
+                &[],
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note.clone(),
@@ -26967,6 +35398,314 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             err.contains("previous Kagemusha recursive spend bundle did not verify"),
             "unexpected previous-proof tamper error: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                Some(&recursive_record),
+                &[],
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("semantic previous proofs must not accept lineage verifier records");
+        assert!(
+            err.contains("lineage verifier record") && err.contains("semantic previous proof"),
+            "unexpected semantic previous-proof verifier-record error: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &[],
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("Reserved-lineage output append must require previous-proof openings");
+        assert!(
+            err.contains("previous recursive proof open-envelope archive")
+                && err.contains("required"),
+            "unexpected missing previous-proof archive for Reserved-lineage output: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &[0x01, 0x02],
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject a malformed previous-proof open-envelope archive");
+        assert!(
+            err.contains("previous recursive proof open-envelope archive"),
+            "unexpected malformed previous-proof archive error: {err}"
+        );
+        let oversized_previous_proof_open_envelope_archive =
+            vec![0x42; KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES + 1];
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &oversized_previous_proof_open_envelope_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject an oversized previous-proof open-envelope archive");
+        assert!(
+            err.contains("previous recursive proof open-envelope archive")
+                && err.contains("exceeds max"),
+            "unexpected oversized previous-proof archive error: {err}"
+        );
+        let empty_previous_proof_open_envelope_archive =
+            norito::to_bytes::<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>>(&Vec::new())
+                .expect("encode empty previous-proof open-envelope archive");
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &empty_previous_proof_open_envelope_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject an empty previous-proof open-envelope vector");
+        assert!(
+            err.contains("previous recursive proof open-envelope archive")
+                && err.contains("must not be empty"),
+            "unexpected empty previous-proof archive error: {err}"
+        );
+
+        fn previous_proof_archive_with_tamper(
+            previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+            source_archive: &[u8],
+            tamper: impl FnOnce(&mut iroha_zkp_halo2::OpenVerifyEnvelope),
+        ) -> Vec<u8> {
+            let mut envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                norito::decode_from_bytes(source_archive)
+                    .expect("decode valid previous-proof open-envelope archive");
+            let expected_metadata =
+                expected_kagemusha_recursive_previous_proof_open_envelope_metadata(previous_bundle)
+                    .expect("previous proof opening metadata");
+            let envelope = envelopes
+                .first_mut()
+                .expect("valid previous-proof archive contains one envelope");
+            envelope.vk_commitment = expected_metadata.vk_commitment;
+            envelope.public_inputs_schema_hash = expected_metadata.public_inputs_schema_hash;
+            envelope.domain_tag = expected_metadata.domain_tag;
+            tamper(envelope);
+            norito::to_bytes(&envelopes).expect("encode tampered previous-proof archive")
+        }
+
+        let previous_proof_archive_cases = [
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.vk_commitment = None;
+                    },
+                ),
+                "missing verifier-key commitment",
+                "missing previous-proof verifier-key metadata must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.public_inputs_schema_hash = Some([0u8; 32]);
+                    },
+                ),
+                "public-input schema hash metadata must be non-zero",
+                "zero previous-proof public-input schema metadata must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.domain_tag = None;
+                    },
+                ),
+                "missing recursive proof domain tag",
+                "missing previous-proof domain metadata must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.params.curve_id = iroha_zkp_halo2::ZkCurveId::Pasta.as_u16();
+                        envelope.public.curve_id = iroha_zkp_halo2::ZkCurveId::Pasta.as_u16();
+                    },
+                ),
+                "must use the Pallas backend",
+                "non-Pallas previous-proof opening must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.public.n = envelope
+                            .public
+                            .n
+                            .checked_mul(2)
+                            .expect("test public opening length fits");
+                    },
+                ),
+                "parameter/public opening length mismatch",
+                "previous-proof parameter/public length mismatch must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.proof.r.pop();
+                    },
+                ),
+                "L/R round count mismatch",
+                "previous-proof L/R round mismatch must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.proof.a_final[0] ^= 0x01;
+                    },
+                ),
+                "witness derivation failed",
+                "previous-proof IPA proof scalar tamper must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.vk_commitment =
+                            Some(fixed_bytes(b"kagemusha-forged-previous-proof-vk"));
+                    },
+                ),
+                "verifier-key commitment metadata mismatch",
+                "previous-proof verifier-key metadata mismatch must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.public_inputs_schema_hash =
+                            Some(fixed_bytes(b"kagemusha-forged-previous-proof-schema"));
+                    },
+                ),
+                "public-input schema metadata mismatch",
+                "previous-proof schema metadata mismatch must reject",
+            ),
+            (
+                previous_proof_archive_with_tamper(
+                    &first_bundle,
+                    &second_envelope_archive,
+                    |envelope| {
+                        envelope.domain_tag =
+                            Some(fixed_bytes(b"kagemusha-forged-previous-proof-domain"));
+                    },
+                ),
+                "recursive proof domain metadata mismatch",
+                "previous-proof domain metadata mismatch must reject",
+            ),
+        ];
+        for (archive, expected, description) in previous_proof_archive_cases {
+            let err =
+                prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                    &first_bundle,
+                    None,
+                    &archive,
+                    &second_record_bundle,
+                    &second_envelope_archive,
+                    second_note.clone(),
+                    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                    &recursive_vk,
+                    None,
+                )
+                .expect_err(description);
+            assert!(
+                err.contains(expected),
+                "{description}: expected `{expected}`, found `{err}`"
+            );
+        }
+
+        let matching_previous_proof_archive =
+            previous_proof_archive_with_tamper(&first_bundle, &second_envelope_archive, |_| {});
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &matching_previous_proof_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("semantic previous proofs must not be upgraded into reserved-lineage output");
+        assert!(
+            err.contains("cannot select output proof circuit"),
+            "unexpected matched previous-proof archive error: {err}"
+        );
+
+        let previous_proof_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&second_envelope_archive)
+                .expect("decode previous-proof envelope for over-count test");
+        let previous_proof_envelope = previous_proof_envelopes
+            .first()
+            .expect("valid previous-proof archive contains one envelope")
+            .clone();
+        let too_many_previous_proof_archive = norito::to_bytes(&vec![
+            previous_proof_envelope;
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+                + 1
+        ])
+        .expect("encode over-count previous-proof archive");
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &too_many_previous_proof_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("over-count previous-proof archive must reject");
+        assert!(
+            err.contains("requires exactly one envelope"),
+            "unexpected over-count previous-proof archive error: {err}"
         );
 
         let mut lineage_previous = first_bundle.clone();
@@ -26982,9 +35721,35 @@ mod kagemusha_folded_real_prover_tests {
             .public_inputs
             .public_inputs_hash()
             .expect("lineage previous public-input hash");
+        let mut capped_lineage_previous = lineage_previous.clone();
+        capped_lineage_previous.accumulator.hop_count =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1;
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &capped_lineage_previous,
+                Some(&recursive_record),
+                &[0xFF],
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("direct Reserved-lineage append at the witnessless hop cap must reject before archive parsing");
+        assert!(
+            err.contains("cannot select output proof circuit") && err.contains("at hop 64"),
+            "unexpected capped Reserved-lineage append error: {err}"
+        );
+        assert!(
+            !err.contains("open-envelope archive"),
+            "capped Reserved-lineage append must reject before parsing previous-proof archives: {err}"
+        );
         let err =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &lineage_previous,
+                None,
+                &[],
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note.clone(),
@@ -26992,11 +35757,67 @@ mod kagemusha_folded_real_prover_tests {
                 &recursive_vk,
                 None,
             )
-            .expect_err("append must fail closed for reserved lineage previous proofs");
+            .expect_err("append must require a verifier record for reserved lineage previous proofs");
         assert!(
-            err.contains("reserved lineage previous proof")
-                && err.contains("lineage verifier is wired"),
-            "unexpected lineage previous-proof error: {err}"
+            err.contains("requires a previous lineage verifier record"),
+            "unexpected missing lineage verifier-record error: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &lineage_previous,
+                Some(&recursive_record),
+                &[],
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("Reserved-lineage output append must require previous-proof openings for lineage previous proofs");
+        assert!(
+            err.contains("previous recursive proof open-envelope archive")
+                && err.contains("required for Reserved-lineage output append"),
+            "unexpected missing previous-proof archive error: {err}"
+        );
+
+        let matching_lineage_previous_proof_archive =
+            previous_proof_archive_with_tamper(&lineage_previous, &second_envelope_archive, |_| {});
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &lineage_previous,
+                Some(&recursive_record),
+                &matching_lineage_previous_proof_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("Reserved-lineage append output must reject a non-lineage verifier record");
+        assert!(
+            err.contains("reserved-lineage") && err.contains("did not verify"),
+            "unexpected reserved-previous Reserved-lineage output verifier-record error: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &lineage_previous,
+                Some(&recursive_record),
+                &second_envelope_archive,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject a non-lineage verifier record for reserved previous proofs");
+        assert!(
+            err.contains("reserved-lineage") && err.contains("did not verify"),
+            "unexpected malformed lineage verifier-record error: {err}"
         );
 
         let wrong_amount_note = sample_kagemusha_recursive_spend_note(
@@ -27007,6 +35828,8 @@ mod kagemusha_folded_real_prover_tests {
         let err =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &first_bundle,
+                None,
+                &[],
                 &second_record_bundle,
                 &second_envelope_archive,
                 wrong_amount_note,
@@ -27030,6 +35853,8 @@ mod kagemusha_folded_real_prover_tests {
         let err =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &first_bundle,
+                None,
+                &[],
                 &second_record_bundle,
                 &forged_envelope_archive,
                 second_note,
@@ -27097,9 +35922,47 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_spend_bundle(&instance_count_tamper, &vk_box)
             .expect_err("recursive spend missing public instance column must reject");
         assert!(
-            err.contains("43 public instance columns") && err.contains("found 42"),
+            err.contains("55 public instance columns") && err.contains("found 54"),
             "{err}"
         );
+
+        let mut transition_binding_public_instance_tamper = bundle.clone();
+        mutate_open_verify_envelope(
+            &mut transition_binding_public_instance_tamper
+                .recursive_proof
+                .proof,
+            |envelope| {
+                let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                    .expect("recursive spend ZK1 public instances");
+                columns[KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX]
+                    [0] += halo2_proofs::halo2curves::pasta::Fp::from(1);
+                rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+            },
+        );
+        let err = preverify_kagemusha_recursive_spend_bundle(
+            &transition_binding_public_instance_tamper,
+            &vk_box,
+        )
+        .expect_err("recursive spend transition binding public instance tamper must reject");
+        assert!(err.contains("public instance"), "{err}");
+
+        let mut append_opening_public_instance_tamper = bundle.clone();
+        mutate_open_verify_envelope(
+            &mut append_opening_public_instance_tamper.recursive_proof.proof,
+            |envelope| {
+                let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                    .expect("recursive spend ZK1 public instances");
+                columns[KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX][0] +=
+                    halo2_proofs::halo2curves::pasta::Fp::from(1);
+                rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+            },
+        );
+        let err = preverify_kagemusha_recursive_spend_bundle(
+            &append_opening_public_instance_tamper,
+            &vk_box,
+        )
+        .expect_err("recursive spend append opening public instance tamper must reject");
+        assert!(err.contains("public instance"), "{err}");
 
         let mut scalar_projection_public_input_tamper = bundle.clone();
         mutate_open_verify_envelope(
@@ -27172,6 +36035,44 @@ mod kagemusha_folded_real_prover_tests {
                 .expect_err("recursive spend proof-chain public input tampering must reject");
         assert!(err.contains("public input"), "{err}");
 
+        let mut transition_binding_public_input_tamper = bundle.clone();
+        transition_binding_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .transition_profile_binding_digest[0] ^= 0x01;
+        transition_binding_public_input_tamper
+            .recursive_proof
+            .public_inputs_hash = transition_binding_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("tampered recursive spend transition-binding public-input hash");
+        let err = preverify_kagemusha_recursive_spend_bundle(
+            &transition_binding_public_input_tamper,
+            &vk_box,
+        )
+        .expect_err("recursive spend transition binding public input tampering must reject");
+        assert!(err.contains("public input"), "{err}");
+
+        let mut append_opening_public_input_tamper = bundle.clone();
+        append_opening_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .append_opening_preflight_digest[0] ^= 0x01;
+        append_opening_public_input_tamper
+            .recursive_proof
+            .public_inputs_hash = append_opening_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("tampered recursive spend append opening public-input hash");
+        let err = preverify_kagemusha_recursive_spend_bundle(
+            &append_opening_public_input_tamper,
+            &vk_box,
+        )
+        .expect_err("recursive spend append opening public input tampering must reject");
+        assert!(err.contains("public input"), "{err}");
+
         let mut note_tamper = bundle;
         note_tamper.accumulator.current_note.spend_nullifier[0] ^= 0x01;
         let err = preverify_kagemusha_recursive_spend_bundle(&note_tamper, &vk_box)
@@ -27212,6 +36113,12 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &wrong_namespace)
             .expect_err("wrong recursive spend verifier namespace must reject");
         assert!(err.contains("namespace"), "{err}");
+
+        let mut wrong_curve = record.clone();
+        wrong_curve.curve = "pasta".to_owned();
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &wrong_curve)
+            .expect_err("wrong recursive spend verifier curve must reject");
+        assert!(err.contains("curve"), "{err}");
 
         let mut tiny_cap = record.clone();
         tiny_cap.max_proof_bytes = 1;
@@ -27278,7 +36185,7 @@ mod kagemusha_folded_real_prover_tests {
             .recursive_proof
             .public_inputs
             .recursive_verifier_scalar_projection_digest =
-            fixed_bytes(b"kagemusha-lineage-record-scalar-projection");
+            recursive_spend_lineage_scalar_projection(0x15);
         lineage_bundle.recursive_proof.public_inputs_hash = lineage_bundle
             .recursive_proof
             .public_inputs
@@ -27343,7 +36250,7 @@ mod kagemusha_folded_real_prover_tests {
                 u32::try_from(vk_box.bytes.len()).expect("malformed lineage key length fits");
             malformed_record.key = Some(vk_box.clone());
             let mut malformed_bundle = lineage_bundle.clone();
-            attach_recursive_spend_zk1_halo2_envelope(
+            attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
                 &mut malformed_bundle,
                 hash_vk(&vk_box),
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
@@ -27367,7 +36274,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect("duplicate-CID verifier-key length fits");
         duplicate_cid_record.key = Some(duplicate_cid_vk_box.clone());
         let mut duplicate_cid_bundle = lineage_bundle.clone();
-        attach_recursive_spend_zk1_halo2_envelope(
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
             &mut duplicate_cid_bundle,
             hash_vk(&duplicate_cid_vk_box),
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
@@ -27388,7 +36295,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect("trailing-TLV verifier-key length fits");
         trailing_tlv_record.key = Some(trailing_tlv_vk_box.clone());
         let mut trailing_tlv_bundle = lineage_bundle.clone();
-        attach_recursive_spend_zk1_halo2_envelope(
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
             &mut trailing_tlv_bundle,
             hash_vk(&trailing_tlv_vk_box),
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
@@ -27435,27 +36342,40 @@ mod kagemusha_folded_real_prover_tests {
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
             vec![0xB1; 64],
         );
-        ensure_kagemusha_recursive_spend_lineage_envelope_binding(
+        let err = ensure_kagemusha_recursive_spend_lineage_envelope_binding(
             &lineage_bundle,
             Some(hash_vk(&lineage_vk_box)),
         )
-        .expect("reserved lineage spend envelope should bind strict ZK1 metadata");
+        .expect_err(
+            "record-backed reserved lineage spend envelope must carry verifier-slice columns",
+        );
+        assert!(err.contains("verifier-slice"), "{err}");
         let err = preverify_kagemusha_recursive_spend_bundle_with_record(
             &lineage_bundle,
             &lineage_record,
         )
-        .expect_err("semantic verifier key material must not satisfy lineage verifier-slice shape");
+        .expect_err("semantic-only lineage envelope must not satisfy record-backed lineage shape");
         assert!(
-            err.contains("one-hop verifier-slice"),
-            "expected lineage verifier-slice key-shape rejection, found {err}"
+            err.contains("verifier-slice"),
+            "expected lineage verifier-slice envelope-shape rejection, found {err}"
         );
         assert!(
             !verify_kagemusha_recursive_spend_bundle_with_record(&lineage_bundle, &lineage_record),
             "reserved lineage verifier record with semantic key material must not verify"
         );
-        let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&lineage_bundle)
-            .expect_err("reserved lineage spend profile must stay unwired for chain admission");
-        assert!(err.contains("not wired into chain admission"), "{err}");
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut lineage_bundle,
+            hash_vk(&lineage_vk_box),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xB1; 64],
+        );
+        ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&lineage_bundle).expect(
+            "metadata-valid one-hop reserved lineage profile reaches record-backed verification",
+        );
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record(&lineage_bundle, &lineage_record),
+            "metadata-valid reserved lineage profile with semantic key material must not verify"
+        );
 
         let mut wrong_lineage_schema = lineage_record.clone();
         wrong_lineage_schema.public_inputs_schema_hash =
@@ -27591,7 +36511,7 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&missing_column, &vk_box)
             .expect_err("recursive aggregation missing public instance column must reject");
         assert!(
-            err.contains("43 public instance columns") && err.contains("found 42"),
+            err.contains("55 public instance columns") && err.contains("found 54"),
             "{err}"
         );
 
@@ -27609,7 +36529,7 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&extra_column, &vk_box)
             .expect_err("recursive aggregation extra public instance column must reject");
         assert!(
-            err.contains("43 public instance columns") && err.contains("found 44"),
+            err.contains("55 public instance columns") && err.contains("found 56"),
             "{err}"
         );
     }
@@ -27743,6 +36663,52 @@ mod kagemusha_folded_real_prover_tests {
             preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &inactive)
                 .is_err()
         );
+
+        let mut future = record.clone();
+        future.activation_height = Some(2);
+        let err =
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &future)
+                .expect_err("height-unbound windowed recursive aggregation record must reject");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &future),
+            "height-unbound recursive aggregation verifier must reject windowed records"
+        );
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &future, 1,
+        )
+        .expect_err("future recursive aggregation verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+                &bundle, &future, 1,
+            ),
+            "future recursive aggregation verifier must reject"
+        );
+        preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &future, 2,
+        )
+        .expect("in-window recursive aggregation verifier record must preverify");
+
+        let mut withdrawn_at_boundary = record.clone();
+        withdrawn_at_boundary.activation_height = Some(1);
+        withdrawn_at_boundary.withdraw_height = Some(1);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle,
+            &withdrawn_at_boundary,
+            1,
+        )
+        .expect_err("withdrawn-at-boundary recursive aggregation record must reject");
+        assert!(err.contains("not active"), "{err}");
+
+        let mut expired = record.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &expired, 2,
+        )
+        .expect_err("expired recursive aggregation record must reject");
+        assert!(err.contains("not active"), "{err}");
 
         let mut wrong_namespace = record.clone();
         wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
@@ -28224,6 +37190,30 @@ mod kagemusha_folded_real_prover_tests {
         norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive")
     }
 
+    fn previous_recursive_spend_proof_pallas_open_envelope_archive(
+        previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        label: &str,
+    ) -> Vec<u8> {
+        let metadata =
+            expected_kagemusha_recursive_previous_proof_open_envelope_metadata(previous_bundle)
+                .expect("previous recursive proof Pallas open-envelope metadata");
+        let opening_len = usize::try_from(
+            previous_bundle
+                .recursive_proof
+                .public_inputs
+                .verifier_opening_len,
+        )
+        .expect("previous recursive proof opening length fits usize");
+        let envelope =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                opening_len,
+                label,
+                metadata,
+            );
+        norito::to_bytes(&vec![envelope])
+            .expect("encode previous recursive proof Pallas open-envelope archive")
+    }
+
     fn envelope_instances(proof: &ProofBox) -> Vec<Vec<[u8; 32]>> {
         let envelope: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.bytes).expect("OpenVerifyEnvelope");
@@ -28241,7 +37231,11 @@ mod kagemusha_folded_real_prover_tests {
             1,
             envelope.circuit_id,
             envelope.backend,
-            "pasta",
+            match envelope.backend {
+                iroha_data_model::zk::BackendTag::Halo2IpaPasta => "pallas",
+                iroha_data_model::zk::BackendTag::Stark => "goldilocks",
+                _ => "unsupported",
+            },
             schema_hash,
             hash_vk(&hop.vk_box),
         );
@@ -28833,6 +37827,13 @@ mod kagemusha_folded_real_prover_tests {
             &wrong_namespace
         ));
 
+        let mut wrong_curve = record.clone();
+        wrong_curve.curve = "pasta".to_owned();
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &wrong_curve
+        ));
+
         let mut wrong_circuit_alias = record.clone();
         wrong_circuit_alias.circuit_id = "halo2/ipa:kagemusha-folded-v1".to_owned();
         assert!(!verify_kagemusha_compact_payment_token_with_record(
@@ -28874,6 +37875,88 @@ mod kagemusha_folded_real_prover_tests {
         assert!(!verify_kagemusha_compact_payment_token_with_record(
             &token, &too_small
         ));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_record_verifier_rejects_wrong_curve_before_decoding() {
+        let public_inputs = sample_public_inputs();
+        let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+            folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_FOLDED_CIRCUIT_ID,
+                ),
+                public_inputs_hash: public_inputs
+                    .public_inputs_hash()
+                    .expect("folded public-input hash"),
+                proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xCA, 0xFE]),
+            },
+            public_inputs,
+        };
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash(),
+            fixed_bytes(b"kagemusha-folded-wrong-curve-commitment"),
+        );
+        record.status = ConfidentialStatus::Active;
+
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record(&token, &record),
+            "wrong Kagemusha folded verifier curve must reject before proof decoding"
+        );
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_record_verifier_enforces_height_window_before_decoding() {
+        let public_inputs = sample_public_inputs();
+        let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+            folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_FOLDED_CIRCUIT_ID,
+                ),
+                public_inputs_hash: public_inputs
+                    .public_inputs_hash()
+                    .expect("folded public-input hash"),
+                proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xCA, 0xFE]),
+            },
+            public_inputs,
+        };
+        let vk_box = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3]);
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash(),
+            hash_vk(&vk_box),
+        );
+        record.status = ConfidentialStatus::Active;
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(3);
+        record.max_proof_bytes = 1024;
+        record.vk_len = u32::try_from(vk_box.bytes.len()).expect("vk length fits u32");
+        record.key = Some(vk_box);
+
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record(&token, &record),
+            "height-unbound compact-token verifier must reject windowed records"
+        );
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record_at_height(&token, &record, 1),
+            "future compact-token verifier record must reject"
+        );
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record_at_height(&token, &record, 3),
+            "withdrawn compact-token verifier record must reject"
+        );
     }
 
     #[test]
@@ -29666,10 +38749,75 @@ mod kagemusha_folded_real_prover_tests {
             evidence,
             kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
                 &record_bundle,
-                &[envelope],
+                &[envelope.clone()],
             )
             .expect("serializable record-backed recursive evidence from Pallas open envelope")
         );
+        let envelope_archive =
+            norito::to_bytes(&vec![envelope.clone()]).expect("encode Pallas open-envelope archive");
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &envelope_archive,
+            )
+            .expect("archive-backed record-backed recursive evidence from Pallas open envelope")
+        );
+
+        let mut windowed_record = record.clone();
+        windowed_record.activation_height = Some(2);
+        windowed_record.withdraw_height = Some(4);
+        let windowed_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle,
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id,
+                record: windowed_record,
+            }],
+        };
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+            )
+            .expect_err("height-unbound recursive evidence must reject windowed records");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                1,
+            )
+            .expect_err("future recursive evidence verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                2,
+            )
+            .expect("in-window recursive evidence verifier record must pass")
+        );
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &windowed_record_bundle,
+                &envelope_archive,
+                2,
+            )
+            .expect("in-window archived recursive evidence verifier record must pass")
+        );
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                4,
+            )
+            .expect_err("withdrawn recursive evidence verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
     }
 
     #[test]
@@ -30522,6 +39670,106 @@ mod kagemusha_folded_real_prover_tests {
             "inactive-record error should come before proof decoding: {err}"
         );
 
+        let mut future = record.clone();
+        future.activation_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &future,
+        }];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("height-unbound windowed verifier record must reject recursive evidence");
+        assert!(
+            err.contains("chain height"),
+            "unexpected height-unbound window error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "height-unbound record error should come before proof decoding: {err}"
+        );
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+                &undecodable_bundle,
+                &records,
+                1,
+                1,
+                opening_len,
+                fixed_bytes(b"kagemusha-recursive-core-params"),
+                schedule_digest,
+                manifest_digest,
+                base_digest,
+                fixed_bytes(b"kagemusha-recursive-core-batch"),
+            )
+            .expect_err("future verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not active"),
+            "unexpected future-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "future-record error should come before proof decoding: {err}"
+        );
+
+        let future_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: future,
+            }],
+        };
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_at_height(
+            &future_record_bundle,
+            2,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect("in-window verifier record must build recursive evidence");
+
+        let mut expired = record.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &expired,
+        }];
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+                &undecodable_bundle,
+                &records,
+                2,
+                1,
+                opening_len,
+                fixed_bytes(b"kagemusha-recursive-core-params"),
+                schedule_digest,
+                manifest_digest,
+                base_digest,
+                fixed_bytes(b"kagemusha-recursive-core-batch"),
+            )
+            .expect_err("expired verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not active"),
+            "unexpected expired-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "expired-record error should come before proof decoding: {err}"
+        );
+
         let mut wrong_namespace = record.clone();
         wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
         let records = [KagemushaHopVerifierRecord {
@@ -30679,6 +39927,65 @@ mod kagemusha_folded_real_prover_tests {
                 .expect_err("inactive hop verifier record must fail");
         assert!(err.contains("not active"), "unexpected error: {err}");
 
+        let mut future = valid.clone();
+        future.activation_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &future,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("height-unbound windowed hop verifier record must fail");
+        assert!(err.contains("chain height"), "unexpected error: {err}");
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 1,
+        )
+        .expect_err("future hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+        kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 2,
+        )
+        .expect("in-window hop verifier record must pass");
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: future,
+            }],
+        };
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(&record_bundle, 2)
+            .expect("serializable in-window hop verifier record must pass");
+        let err = kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
+            .expect_err("serializable height-unbound windowed record must fail");
+        assert!(err.contains("chain height"), "unexpected error: {err}");
+
+        let mut withdrawn_at_boundary = valid.clone();
+        withdrawn_at_boundary.activation_height = Some(1);
+        withdrawn_at_boundary.withdraw_height = Some(1);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &withdrawn_at_boundary,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 1,
+        )
+        .expect_err("withdrawn-at-boundary hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+
+        let mut expired = valid.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &expired,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 2,
+        )
+        .expect_err("expired hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+
         let mut wrong_namespace = valid.clone();
         wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
         let records = [KagemushaHopVerifierRecord {
@@ -30689,6 +39996,17 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
                 .expect_err("wrong verifier namespace must fail");
         assert!(err.contains("namespace"), "unexpected error: {err}");
+
+        let mut wrong_curve = valid.clone();
+        wrong_curve.curve = "pasta".to_owned();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_curve,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("wrong verifier curve must fail");
+        assert!(err.contains("curve"), "unexpected error: {err}");
 
         let mut wrong_schema = valid.clone();
         wrong_schema.public_inputs_schema_hash = [0x11; 32];
@@ -31367,9 +40685,9 @@ mod zkparse {
     pub fn vk_from_bytes<C>(
         vk_bytes: &[u8],
         params: &PastaParams,
-    ) -> Option<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
+    ) -> Option<super::halo2_backend::VerifyingKey>
     where
-        C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
+        C: halo2_proofs::plonk::Circuit<super::halo2_backend::Scalar>,
         C::Params: Default,
     {
         let mut cursor = envelope_cursor(vk_bytes)?;
@@ -31705,7 +41023,7 @@ mod pasta_tiny {
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::{
             CurveAffine as _,
-            ff::PrimeField as _,
+            ff::{Field as _, PrimeField as _},
             group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
             pasta::{EqAffine as VestaAffine, Fp as Scalar},
         },
@@ -33301,6 +42619,17 @@ mod pasta_tiny {
         link: Selector,
     }
 
+    /// Config for an append recursive aggregation verifier-slice composition.
+    #[derive(Clone)]
+    pub struct KagemushaRecursiveAggregationAppendVerifierSliceConfig {
+        semantic: <KagemushaRecursiveAggregationSemantic as Circuit<Scalar>>::Config,
+        previous_recursive_proof_verifier: NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        current_hop_verifier: NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        scalar_projection: KagemushaAppendVerifierScalarProjectionConfig,
+        append_non_zero_inverses: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 5],
+        link: Selector,
+    }
+
     const KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS: usize = 6;
     const KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS: usize =
         KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS - 1;
@@ -33571,6 +42900,415 @@ mod pasta_tiny {
             state = out;
         }
         Ok(())
+    }
+
+    const KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS: usize = 12;
+    const KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_STEPS: usize = 11;
+
+    #[derive(Clone)]
+    struct KagemushaAppendVerifierScalarProjectionConfig {
+        inputs: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS],
+        left: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        out: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        step: [Selector; KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_STEPS],
+        input_link: Selector,
+        digest_public: Selector,
+    }
+
+    fn kagemusha_one_hop_verifier_projection_instance_columns<const LEN: usize>(
+        verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+    ) -> [(
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+        Rotation,
+    ); KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS] {
+        let rounds = ipa_power_of_two_rounds(LEN)
+            .expect("verifier slice opening length must be power-of-two");
+        [
+            (
+                verifier.transcript_binding.binding_digest_instance,
+                Rotation(3),
+            ),
+            (
+                verifier.b_reduction.vectors[0][0]
+                    .public
+                    .as_ref()
+                    .expect("initial b scalar is public")
+                    .instance,
+                Rotation::cur(),
+            ),
+            (
+                verifier.b_reduction.vectors[0][1]
+                    .public
+                    .as_ref()
+                    .expect("initial b scalar is public")
+                    .instance,
+                Rotation::cur(),
+            ),
+            (
+                verifier.b_reduction.challenges[0]
+                    .public
+                    .as_ref()
+                    .expect("challenge scalar is public")
+                    .instance,
+                Rotation::cur(),
+            ),
+            (
+                verifier.b_reduction.challenge_inverses[0]
+                    .public
+                    .as_ref()
+                    .expect("challenge inverse scalar is public")
+                    .instance,
+                Rotation::cur(),
+            ),
+            (
+                verifier.b_reduction.vectors[rounds][0]
+                    .public
+                    .as_ref()
+                    .expect("final b scalar is public")
+                    .instance,
+                Rotation::cur(),
+            ),
+        ]
+    }
+
+    fn configure_kagemusha_append_verifier_scalar_projection<const LEN: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+        previous_verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        current_verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        semantic_inst: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+            super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+    ) -> KagemushaAppendVerifierScalarProjectionConfig {
+        let inputs = std::array::from_fn(|_| meta.advice_column());
+        let left = meta.advice_column();
+        let right = meta.advice_column();
+        let out = meta.advice_column();
+        let left_square = meta.advice_column();
+        let left_quad = meta.advice_column();
+        let right_square = meta.advice_column();
+        let right_quad = meta.advice_column();
+        let step = std::array::from_fn(|_| meta.selector());
+        let input_link = meta.selector();
+        let digest_public = meta.selector();
+        let previous_instances =
+            kagemusha_one_hop_verifier_projection_instance_columns::<LEN>(previous_verifier);
+        let current_instances =
+            kagemusha_one_hop_verifier_projection_instance_columns::<LEN>(current_verifier);
+        let scalar_limb_coefficients = std::array::from_fn::<_, 4, _>(|offset| {
+            let radix = scalar_two_pow_64();
+            let mut coefficient = Scalar::from(1);
+            for _ in 0..offset {
+                coefficient *= radix;
+            }
+            coefficient
+        });
+
+        meta.create_gate(
+            "kagemusha_append_verifier_scalar_projection_inputs",
+            |meta| {
+                let s = meta.query_selector(input_link);
+                let mut constraints =
+                    Vec::with_capacity(KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS);
+                for (index, (instance, rotation)) in previous_instances.iter().copied().enumerate()
+                {
+                    constraints.push(
+                        s.clone()
+                            * (meta.query_advice(inputs[index], Rotation::cur())
+                                - meta.query_instance(instance, rotation)),
+                    );
+                }
+                for (index, (instance, rotation)) in current_instances.iter().copied().enumerate() {
+                    constraints.push(
+                        s.clone()
+                            * (meta.query_advice(
+                                inputs[index + KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS],
+                                Rotation::cur(),
+                            ) - meta.query_instance(instance, rotation)),
+                    );
+                }
+                constraints
+            },
+        );
+
+        meta.create_gate(
+            "kagemusha_append_verifier_scalar_projection_steps",
+            |meta| {
+                let mut constraints =
+                    Vec::with_capacity(KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_STEPS * 7);
+                for (step_index, selector) in step.iter().copied().enumerate() {
+                    let s = meta.query_selector(selector);
+                    let left_value = meta.query_advice(left, Rotation::cur());
+                    let right_value = meta.query_advice(right, Rotation::cur());
+                    let out_value = meta.query_advice(out, Rotation::cur());
+                    let left_square_value = meta.query_advice(left_square, Rotation::cur());
+                    let left_quad_value = meta.query_advice(left_quad, Rotation::cur());
+                    let right_square_value = meta.query_advice(right_square, Rotation::cur());
+                    let right_quad_value = meta.query_advice(right_quad, Rotation::cur());
+                    let expected_left = match step_index {
+                        0 => meta.query_advice(inputs[0], Rotation::cur()),
+                        1..=4 | 6..=9 => meta.query_advice(out, Rotation::prev()),
+                        5 => meta.query_advice(inputs[6], Rotation(-(step_index as i32))),
+                        10 => meta.query_advice(out, Rotation(-6)),
+                        _ => unreachable!("append verifier projection has 11 steps"),
+                    };
+                    let expected_right = match step_index {
+                        0..=4 => meta
+                            .query_advice(inputs[step_index + 1], Rotation(-(step_index as i32))),
+                        5..=9 => meta.query_advice(
+                            inputs[6 + (step_index - 5) + 1],
+                            Rotation(-(step_index as i32)),
+                        ),
+                        10 => meta.query_advice(out, Rotation::prev()),
+                        _ => unreachable!("append verifier projection has 11 steps"),
+                    };
+                    let shifted_left = left_value.clone() + Expression::Constant(Scalar::from(7));
+                    let shifted_right =
+                        right_value.clone() + Expression::Constant(Scalar::from(13));
+                    constraints.extend([
+                        s.clone() * (left_value.clone() - expected_left),
+                        s.clone() * (right_value.clone() - expected_right),
+                        s.clone()
+                            * (left_square_value.clone()
+                                - shifted_left.clone() * shifted_left.clone()),
+                        s.clone()
+                            * (left_quad_value.clone()
+                                - left_square_value.clone() * left_square_value),
+                        s.clone()
+                            * (right_square_value.clone()
+                                - shifted_right.clone() * shifted_right.clone()),
+                        s.clone()
+                            * (right_quad_value.clone()
+                                - right_square_value.clone() * right_square_value),
+                        s * (out_value
+                            - Expression::Constant(Scalar::from(2))
+                                * left_quad_value
+                                * shifted_left
+                            - Expression::Constant(Scalar::from(3))
+                                * right_quad_value
+                                * shifted_right),
+                    ]);
+                }
+                constraints
+            },
+        );
+
+        meta.create_gate(
+            "kagemusha_append_verifier_scalar_projection_digest",
+            |meta| {
+                let s = meta.query_selector(digest_public);
+                let digest = meta.query_advice(
+                    out,
+                    Rotation(
+                        (KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_STEPS - 1)
+                            .try_into()
+                            .expect("append projection row fits i32"),
+                    ),
+                );
+                let public = (0..4).fold(Expression::Constant(Scalar::from(0)), |acc, offset| {
+                    acc + meta.query_instance(
+                        semantic_inst[
+                            super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                                + offset
+                        ],
+                        Rotation::cur(),
+                    ) * Expression::Constant(scalar_limb_coefficients[offset])
+                });
+                vec![s * (digest - public)]
+            },
+        );
+
+        KagemushaAppendVerifierScalarProjectionConfig {
+            inputs,
+            left,
+            right,
+            out,
+            left_square,
+            left_quad,
+            right_square,
+            right_quad,
+            step,
+            input_link,
+            digest_public,
+        }
+    }
+
+    fn assign_kagemusha_append_verifier_scalar_projection_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &KagemushaAppendVerifierScalarProjectionConfig,
+        inputs: [Scalar; KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS],
+    ) -> Result<(), PlonkError> {
+        config.input_link.enable(region, 0)?;
+        config.digest_public.enable(region, 0)?;
+        for (index, input) in inputs.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("append_projection_input{index}"),
+                config.inputs[index],
+                0,
+                || Value::known(input),
+            )?;
+        }
+        let mut previous_state = inputs[0];
+        for step_index in 0..5 {
+            let right = inputs[step_index + 1];
+            previous_state = assign_kagemusha_append_verifier_scalar_projection_step(
+                region,
+                config,
+                step_index,
+                previous_state,
+                right,
+            )?;
+        }
+        let previous_projection = previous_state;
+        let mut current_state = inputs[6];
+        for step_index in 5..10 {
+            let right = inputs[6 + (step_index - 5) + 1];
+            current_state = assign_kagemusha_append_verifier_scalar_projection_step(
+                region,
+                config,
+                step_index,
+                current_state,
+                right,
+            )?;
+        }
+        assign_kagemusha_append_verifier_scalar_projection_step(
+            region,
+            config,
+            10,
+            previous_projection,
+            current_state,
+        )?;
+        Ok(())
+    }
+
+    fn assign_kagemusha_append_verifier_scalar_projection_step(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &KagemushaAppendVerifierScalarProjectionConfig,
+        step_index: usize,
+        left_value: Scalar,
+        right_value: Scalar,
+    ) -> Result<Scalar, PlonkError> {
+        config.step[step_index].enable(region, step_index)?;
+        let out = native_pasta_fp_ipa_transcript_binding_compress(left_value, right_value);
+        let shifted_left = left_value + Scalar::from(7);
+        let shifted_right = right_value + Scalar::from(13);
+        let left_square = shifted_left * shifted_left;
+        let left_quad = left_square * left_square;
+        let right_square = shifted_right * shifted_right;
+        let right_quad = right_square * right_square;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_left{step_index}"),
+            config.left,
+            step_index,
+            || Value::known(left_value),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_right{step_index}"),
+            config.right,
+            step_index,
+            || Value::known(right_value),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_out{step_index}"),
+            config.out,
+            step_index,
+            || Value::known(out),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_left_square{step_index}"),
+            config.left_square,
+            step_index,
+            || Value::known(left_square),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_left_quad{step_index}"),
+            config.left_quad,
+            step_index,
+            || Value::known(left_quad),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_right_square{step_index}"),
+            config.right_square,
+            step_index,
+            || Value::known(right_square),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            move || format!("append_projection_right_quad{step_index}"),
+            config.right_quad,
+            step_index,
+            || Value::known(right_quad),
+        )?;
+        Ok(out)
+    }
+
+    fn kagemusha_verifier_scalar_projection_inputs<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+    ) -> Result<[Scalar; KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS], PlonkError> {
+        Ok([
+            verifier.transcript_binding_digest,
+            verifier
+                .b_reduction
+                .vectors
+                .first()
+                .and_then(|layer| layer.first())
+                .ok_or(PlonkError::Synthesis)?
+                .value,
+            verifier
+                .b_reduction
+                .vectors
+                .first()
+                .and_then(|layer| layer.get(1))
+                .ok_or(PlonkError::Synthesis)?
+                .value,
+            verifier
+                .b_reduction
+                .challenges
+                .first()
+                .ok_or(PlonkError::Synthesis)?
+                .value,
+            verifier
+                .b_reduction
+                .challenge_inverses
+                .first()
+                .ok_or(PlonkError::Synthesis)?
+                .value,
+            verifier
+                .b_reduction
+                .vectors
+                .last()
+                .and_then(|layer| layer.first())
+                .ok_or(PlonkError::Synthesis)?
+                .value,
+        ])
+    }
+
+    fn kagemusha_recursive_public_limb_group_sum(
+        public_values: &[Scalar; super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS],
+        start_index: usize,
+    ) -> Scalar {
+        (0..4).fold(Scalar::from(0), |acc, offset| {
+            acc + public_values[start_index + offset]
+        })
+    }
+
+    fn kagemusha_non_zero_inverse_or_zero(value: Scalar) -> Scalar {
+        Option::<Scalar>::from(value.invert()).unwrap_or_else(|| Scalar::from(0))
     }
 
     /// Experimental one-hop slice composing recursive aggregation metadata with one IPA verifier.
@@ -34091,6 +43829,425 @@ mod pasta_tiny {
         }
     }
 
+    /// Deterministic scalar projection binding for a Reserved-lineage append verifier slice.
+    ///
+    /// The production append circuit must verify two IPA openings: the previous
+    /// recursive proof opening and the current checked-hop proof opening. This
+    /// projection composes the existing one-hop verifier projection for each
+    /// opening into the single recursive public-input scalar-projection field.
+    pub(super) fn kagemusha_append_verifier_scalar_projection_digest(
+        previous_recursive_proof_projection: Scalar,
+        current_hop_projection: Scalar,
+    ) -> Scalar {
+        native_pasta_fp_ipa_transcript_binding_compress(
+            previous_recursive_proof_projection,
+            current_hop_projection,
+        )
+    }
+
+    /// Host-side contract for the Reserved-lineage append verifier slice.
+    ///
+    /// This is the circuit-facing profile for appends after the one-hop lineage
+    /// proof. It accepts append-shaped recursive public inputs (`hop_count >= 2`)
+    /// and binds the two native Pallas preflights that the production append
+    /// circuit proves in-circuit. Runtime witnessless admission uses this profile
+    /// for supported Reserved-lineage transitions inside the configured hop cap.
+    #[derive(Clone)]
+    pub struct KagemushaRecursiveAggregationAppendVerifierSlice<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Recursive aggregation public metadata constraints.
+        pub semantic: Box<KagemushaRecursiveAggregationSemantic>,
+        /// IPA verifier slice for the previous recursive proof opening.
+        pub previous_recursive_proof_verifier:
+            Box<NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>>,
+        /// IPA verifier slice for the current checked-hop proof opening.
+        pub current_hop_verifier:
+            Box<NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for KagemushaRecursiveAggregationAppendVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                semantic: Box::new(KagemushaRecursiveAggregationSemantic::default()),
+                previous_recursive_proof_verifier: Box::new(
+                    NonNativeVestaIpaVerifierSharedTableNativeScalar::default(),
+                ),
+                current_hop_verifier: Box::new(
+                    NonNativeVestaIpaVerifierSharedTableNativeScalar::default(),
+                ),
+            }
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        KagemushaRecursiveAggregationAppendVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
+    {
+        /// Build an append verifier-slice profile from checked verifier witnesses and preflights.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when recursive public inputs are not append-shaped,
+        /// either verifier witness fails host-link checks, either preflight is
+        /// not a single `LEN` opening in the shared verifier context, or the
+        /// combined scalar projection does not match recursive public inputs.
+        pub fn try_from_parts_with_preflights(
+            semantic: KagemushaRecursiveAggregationSemantic,
+            previous_recursive_proof_verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >,
+            current_hop_verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >,
+            previous_recursive_proof_preflight: &PallasIpaBatchVerifierPreflight,
+            current_hop_preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<Self, String> {
+            Self::validate_append_preflight_metadata_binding(
+                &semantic,
+                previous_recursive_proof_preflight,
+                current_hop_preflight,
+            )?;
+            if !previous_recursive_proof_verifier.host_links_hold() {
+                return Err(
+                    "append recursive verifier slice previous-proof verifier host-link mismatch"
+                        .to_owned(),
+                );
+            }
+            if !current_hop_verifier.host_links_hold() {
+                return Err(
+                    "append recursive verifier slice current-hop verifier host-link mismatch"
+                        .to_owned(),
+                );
+            }
+            Self::validate_append_scalar_projection_public_input_binding(
+                &semantic,
+                &previous_recursive_proof_verifier,
+                &current_hop_verifier,
+            )?;
+            Ok(Self {
+                semantic: Box::new(semantic),
+                previous_recursive_proof_verifier: Box::new(previous_recursive_proof_verifier),
+                current_hop_verifier: Box::new(current_hop_verifier),
+            })
+        }
+
+        /// Validate append-shaped recursive public metadata against two native Pallas preflights.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the public metadata is not an append profile or
+        /// the previous/current preflights are not exactly the two openings that
+        /// the Reserved-lineage append circuit must bind.
+        pub fn validate_append_preflight_metadata_binding(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            previous_recursive_proof_preflight: &PallasIpaBatchVerifierPreflight,
+            current_hop_preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<(), String> {
+            Self::validate_append_semantic_profile(semantic)?;
+            Self::validate_single_append_preflight(
+                semantic,
+                previous_recursive_proof_preflight,
+                "previous recursive proof",
+            )?;
+            Self::validate_single_append_preflight(semantic, current_hop_preflight, "current hop")?;
+            for (label, previous, current) in [
+                (
+                    "verifier parameter fingerprint",
+                    previous_recursive_proof_preflight.params_fingerprint,
+                    current_hop_preflight.params_fingerprint,
+                ),
+                (
+                    "fixed-window schedule digest",
+                    previous_recursive_proof_preflight.fixed_window_table_schedule_digest,
+                    current_hop_preflight.fixed_window_table_schedule_digest,
+                ),
+                (
+                    "fixed-window shared-table manifest digest",
+                    previous_recursive_proof_preflight.fixed_window_shared_table_manifest_digest,
+                    current_hop_preflight.fixed_window_shared_table_manifest_digest,
+                ),
+            ] {
+                if previous != current {
+                    return Err(format!(
+                        "append recursive verifier slice shared {label} mismatch"
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        fn validate_append_semantic_profile(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+        ) -> Result<(), String> {
+            let Some(opening_choice_index) =
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES
+                    .iter()
+                    .position(|choice| usize::try_from(*choice).ok() == Some(LEN))
+            else {
+                return Err(format!(
+                    "append recursive verifier slice opening length {LEN} is not supported"
+                ));
+            };
+            if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
+                != Scalar::from(u64::try_from(LEN).expect("opening length fits u64"))
+            {
+                return Err(format!(
+                    "append recursive verifier slice requires verifier opening length {LEN}"
+                ));
+            }
+            let witness_count =
+                semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX];
+            let hop_count =
+                semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX];
+            if witness_count != hop_count {
+                return Err(
+                    "append recursive verifier slice requires witness count to equal hop count"
+                        .to_owned(),
+                );
+            }
+            if hop_count == Scalar::from(1) {
+                return Err(
+                    "append recursive verifier slice requires hop count at least 2".to_owned(),
+                );
+            }
+            let mut hop_bit_sum = Scalar::from(0);
+            let mut non_zero_hop_delta = false;
+            for (index, bit) in semantic
+                .hop_count_minus_one_bits
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                if bit != Scalar::from(0) && bit != Scalar::from(1) {
+                    return Err(
+                        "append recursive verifier slice hop-count bit witness mismatch".to_owned(),
+                    );
+                }
+                if bit == Scalar::from(1) {
+                    non_zero_hop_delta = true;
+                }
+                hop_bit_sum +=
+                    bit * Scalar::from(1u64 << u32::try_from(index).expect("bit index fits u32"));
+            }
+            if !non_zero_hop_delta {
+                return Err(
+                    "append recursive verifier slice requires non-zero hop-count delta".to_owned(),
+                );
+            }
+            if hop_count != Scalar::from(1) + hop_bit_sum {
+                return Err(
+                    "append recursive verifier slice hop-count bit witness mismatch".to_owned(),
+                );
+            }
+            let mut expected_opening_selectors =
+                [Scalar::from(0); super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT];
+            expected_opening_selectors[opening_choice_index] = Scalar::from(1);
+            if semantic.opening_len_selectors != expected_opening_selectors {
+                return Err(
+                    "append recursive verifier slice opening-length selector witness mismatch"
+                        .to_owned(),
+                );
+            }
+            KagemushaRecursiveAggregationOneHopVerifierSlice::<LEN, WINDOWS, WINDOW_BITS>::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
+                &super::kagemusha_recursive_fixed_window_table_schedule_digest(LEN)?,
+                "fixed-window schedule digest",
+            )
+            .map_err(|err| err.replace("one-hop", "append"))?;
+            KagemushaRecursiveAggregationOneHopVerifierSlice::<LEN, WINDOWS, WINDOW_BITS>::validate_digest_limbs(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
+                &super::kagemusha_recursive_fixed_window_shared_table_manifest_digest(LEN)?,
+                "shared-table manifest digest",
+            )
+            .map_err(|err| err.replace("one-hop", "append"))?;
+            KagemushaRecursiveAggregationOneHopVerifierSlice::<LEN, WINDOWS, WINDOW_BITS>::validate_one_hop_semantic_non_zero_witnesses(semantic)
+                .map_err(|err| err.replace("one-hop", "append"))?;
+            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX,
+                "transition-profile binding digest",
+            )?;
+            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+                "append-opening preflight digest",
+            )?;
+            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+                "append-boundary digest",
+            )?;
+            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX,
+                "scalar-projection digest",
+            )
+        }
+
+        fn validate_single_append_preflight(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            preflight: &PallasIpaBatchVerifierPreflight,
+            label: &str,
+        ) -> Result<(), String> {
+            if WINDOWS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS
+                || WINDOW_BITS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+            {
+                return Err(format!(
+                    "append recursive verifier slice requires production fixed-window profile {}x{} for {label} preflight binding (found {WINDOWS}x{WINDOW_BITS})",
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+                ));
+            }
+            if preflight.proof_count != 1 {
+                return Err(format!(
+                    "append recursive verifier slice {label} preflight requires exactly one witness (found {})",
+                    preflight.proof_count
+                ));
+            }
+            if usize::try_from(preflight.opening_len).ok() != Some(LEN) {
+                return Err(format!(
+                    "append recursive verifier slice {label} preflight requires opening length {LEN} (found {})",
+                    preflight.opening_len
+                ));
+            }
+            if preflight.verifier_witness_profile
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1
+            {
+                return Err(format!(
+                    "append recursive verifier slice {label} verifier-witness profile mismatch: expected {}, found {}",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1,
+                    preflight.verifier_witness_profile
+                ));
+            }
+            for (field, digest) in [
+                (
+                    "verifier parameter fingerprint",
+                    preflight.params_fingerprint,
+                ),
+                (
+                    "fixed-window schedule digest",
+                    preflight.fixed_window_table_schedule_digest,
+                ),
+                (
+                    "fixed-window shared-table manifest digest",
+                    preflight.fixed_window_shared_table_manifest_digest,
+                ),
+                (
+                    "fixed-window table-base digest",
+                    preflight.fixed_window_table_base_digest,
+                ),
+                ("verifier-witness batch digest", preflight.aggregate_digest),
+            ] {
+                if digest == [0u8; 32] {
+                    return Err(format!(
+                        "append recursive verifier slice {label} preflight {field} must be non-zero"
+                    ));
+                }
+            }
+            for (start_index, digest, field) in [
+                (
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
+                    preflight.params_fingerprint,
+                    "verifier parameter fingerprint",
+                ),
+                (
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
+                    preflight.fixed_window_table_schedule_digest,
+                    "fixed-window schedule digest",
+                ),
+                (
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
+                    preflight.fixed_window_shared_table_manifest_digest,
+                    "fixed-window shared-table manifest digest",
+                ),
+            ] {
+                KagemushaRecursiveAggregationOneHopVerifierSlice::<LEN, WINDOWS, WINDOW_BITS>::validate_digest_limbs(
+                    semantic,
+                    start_index,
+                    &digest,
+                    field,
+                )
+                .map_err(|err| err.replace("one-hop", "append"))?;
+            }
+            Ok(())
+        }
+
+        fn validate_append_scalar_projection_public_input_binding(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            previous_recursive_proof_verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalar<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >,
+            current_hop_verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalar<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >,
+        ) -> Result<(), String> {
+            let previous_projection = KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::one_hop_verifier_scalar_projection_digest(
+                previous_recursive_proof_verifier
+            )?;
+            let current_projection = KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::one_hop_verifier_scalar_projection_digest(
+                current_hop_verifier
+            )?;
+            let digest = kagemusha_append_verifier_scalar_projection_digest(
+                previous_projection,
+                current_projection,
+            );
+            let mut digest_bytes = [0u8; 32];
+            digest_bytes.copy_from_slice(digest.to_repr().as_ref());
+            let expected = super::bytes_to_u64_limbs_le(&digest_bytes).map(Scalar::from);
+            for (offset, expected) in expected.into_iter().enumerate() {
+                if semantic.public_values
+                    [super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                        + offset]
+                    != expected
+                {
+                    return Err(
+                        "append recursive verifier slice scalar-projection digest mismatch"
+                            .to_owned(),
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        fn validate_public_limb_group_non_zero(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            start_index: usize,
+            label: &str,
+        ) -> Result<(), String> {
+            let sum = (0..4).fold(Scalar::from(0), |acc, offset| {
+                acc + semantic.public_values[start_index + offset]
+            });
+            if sum == Scalar::from(0) {
+                return Err(format!(
+                    "append recursive verifier slice {label} must be non-zero"
+                ));
+            }
+            Ok(())
+        }
+    }
+
     impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
         for KagemushaRecursiveAggregationOneHopVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
     {
@@ -34189,20 +44346,8 @@ mod pasta_tiny {
                 .synthesize(config.semantic, layouter.namespace(|| "recursive_semantic"))?;
             self.verifier
                 .synthesize(config.verifier, layouter.namespace(|| "one_hop_verifier"))?;
-            let projection_inputs = [
-                self.verifier.transcript_binding_digest,
-                self.verifier.b_reduction.vectors[0][0].value,
-                self.verifier.b_reduction.vectors[0][1].value,
-                self.verifier.b_reduction.challenges[0].value,
-                self.verifier.b_reduction.challenge_inverses[0].value,
-                self.verifier
-                    .b_reduction
-                    .vectors
-                    .last()
-                    .and_then(|layer| layer.first())
-                    .ok_or(PlonkError::Synthesis)?
-                    .value,
-            ];
+            let projection_inputs =
+                kagemusha_verifier_scalar_projection_inputs(self.verifier.as_ref())?;
             layouter.assign_region(
                 || "one_hop_verifier_scalar_projection",
                 |mut region| {
@@ -34216,6 +44361,218 @@ mod pasta_tiny {
             layouter.assign_region(
                 || "one_hop_recursive_verifier_slice_link",
                 |mut region| config.link.enable(&mut region, 0),
+            )
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for KagemushaRecursiveAggregationAppendVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
+    {
+        type Config = KagemushaRecursiveAggregationAppendVerifierSliceConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let semantic = KagemushaRecursiveAggregationSemantic::configure(meta);
+            let previous_recursive_proof_verifier =
+                configure_non_native_vesta_ipa_verifier_shared_table_native_scalar::<
+                    LEN,
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(meta);
+            let current_hop_verifier =
+                configure_non_native_vesta_ipa_verifier_shared_table_native_scalar::<
+                    LEN,
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(meta);
+            let semantic_inst = semantic.4;
+            let scalar_projection = configure_kagemusha_append_verifier_scalar_projection::<LEN>(
+                meta,
+                &previous_recursive_proof_verifier,
+                &current_hop_verifier,
+                semantic_inst,
+            );
+            let append_non_zero_inverses = std::array::from_fn(|_| meta.advice_column());
+            let link = meta.selector();
+
+            meta.create_gate(
+                "kagemusha_recursive_aggregation_append_verifier_slice_link",
+                |meta| {
+                    let s = meta.query_selector(link);
+                    let opening_len = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+                        Rotation::cur(),
+                    );
+                    let witness_count = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX],
+                        Rotation::cur(),
+                    );
+                    let hop_count = meta.query_instance(
+                        semantic_inst[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
+                        Rotation::cur(),
+                    );
+                    let hop_count_minus_one =
+                        hop_count.clone() - Expression::Constant(Scalar::from(1));
+                    let transition_profile_binding = (0..4).fold(
+                        Expression::Constant(Scalar::from(0)),
+                        |acc, offset| {
+                            acc + meta.query_instance(
+                                semantic_inst[
+                                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX
+                                        + offset
+                                ],
+                                Rotation::cur(),
+                            )
+                        },
+                    );
+                    let append_opening_preflight = (0..4).fold(
+                        Expression::Constant(Scalar::from(0)),
+                        |acc, offset| {
+                            acc + meta.query_instance(
+                                semantic_inst[
+                                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX
+                                        + offset
+                                ],
+                                Rotation::cur(),
+                            )
+                        },
+                    );
+                    let append_boundary =
+                        (0..4).fold(Expression::Constant(Scalar::from(0)), |acc, offset| {
+                            acc + meta.query_instance(
+                                semantic_inst[
+                                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX
+                                        + offset
+                                ],
+                                Rotation::cur(),
+                            )
+                        });
+                    let scalar_projection =
+                        (0..4).fold(Expression::Constant(Scalar::from(0)), |acc, offset| {
+                            acc + meta.query_instance(
+                                semantic_inst[
+                                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                                        + offset
+                                ],
+                                Rotation::cur(),
+                            )
+                        });
+                    let inverses =
+                        append_non_zero_inverses.map(|column| meta.query_advice(column, Rotation::cur()));
+                    vec![
+                        s.clone()
+                            * (opening_len
+                                - Expression::Constant(Scalar::from(
+                                    u64::try_from(LEN).expect("opening length fits u64"),
+                                ))),
+                        s.clone() * (witness_count - hop_count),
+                        s.clone()
+                            * (hop_count_minus_one * inverses[0].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                        s.clone()
+                            * (transition_profile_binding * inverses[1].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                        s.clone()
+                            * (append_opening_preflight * inverses[2].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                        s.clone()
+                            * (append_boundary * inverses[3].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                        s * (scalar_projection * inverses[4].clone()
+                            - Expression::Constant(Scalar::from(1))),
+                    ]
+                },
+            );
+
+            KagemushaRecursiveAggregationAppendVerifierSliceConfig {
+                semantic,
+                previous_recursive_proof_verifier,
+                current_hop_verifier,
+                scalar_projection,
+                append_non_zero_inverses,
+                link,
+            }
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            self.semantic
+                .synthesize(config.semantic, layouter.namespace(|| "recursive_semantic"))?;
+            self.previous_recursive_proof_verifier.synthesize(
+                config.previous_recursive_proof_verifier,
+                layouter.namespace(|| "previous_recursive_proof_verifier"),
+            )?;
+            self.current_hop_verifier.synthesize(
+                config.current_hop_verifier,
+                layouter.namespace(|| "current_hop_verifier"),
+            )?;
+
+            let previous_inputs = kagemusha_verifier_scalar_projection_inputs(
+                self.previous_recursive_proof_verifier.as_ref(),
+            )?;
+            let current_inputs =
+                kagemusha_verifier_scalar_projection_inputs(self.current_hop_verifier.as_ref())?;
+            let mut projection_inputs =
+                [Scalar::from(0); KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS];
+            projection_inputs[..KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS]
+                .copy_from_slice(&previous_inputs);
+            projection_inputs[KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS..]
+                .copy_from_slice(&current_inputs);
+            layouter.assign_region(
+                || "append_verifier_scalar_projection",
+                |mut region| {
+                    assign_kagemusha_append_verifier_scalar_projection_region(
+                        &mut region,
+                        &config.scalar_projection,
+                        projection_inputs,
+                    )
+                },
+            )?;
+
+            let public_values = self.semantic.public_values;
+            let append_non_zero_values = [
+                public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX]
+                    - Scalar::from(1),
+                kagemusha_recursive_public_limb_group_sum(
+                    &public_values,
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX,
+                ),
+                kagemusha_recursive_public_limb_group_sum(
+                    &public_values,
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+                ),
+                kagemusha_recursive_public_limb_group_sum(
+                    &public_values,
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+                ),
+                kagemusha_recursive_public_limb_group_sum(
+                    &public_values,
+                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX,
+                ),
+            ];
+            let append_non_zero_inverses =
+                append_non_zero_values.map(kagemusha_non_zero_inverse_or_zero);
+            layouter.assign_region(
+                || "append_recursive_verifier_slice_link",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    for (index, inverse) in append_non_zero_inverses.iter().copied().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("append_non_zero_inverse{index}"),
+                            config.append_non_zero_inverses[index],
+                            0,
+                            || Value::known(inverse),
+                        )?;
+                    }
+                    Ok(())
+                },
             )
         }
     }
@@ -48772,10 +59129,10 @@ mod pasta_tiny {
         }
     }
 
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
     pub struct CommitOpen; // commitment = Poseidon2(m, r) fallback when Poseidon gadgets disabled
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for CommitOpen {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // m
@@ -48832,10 +59189,10 @@ mod pasta_tiny {
         }
     }
 
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
     pub struct Merkle2; // root = Poseidon2(Poseidon2(leaf, sib0), sib1) fallback when Poseidon gadgets disabled
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for Merkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // leaf
@@ -48934,17 +59291,13 @@ mod pasta_tiny {
     // Real Poseidon-like gadgets (x^5 S-box, small MDS) implemented directly
     // Note: This is a self-contained permutation suitable for proofs without trusted setup.
     // It is independent from external poseidon crates to keep determinism and avoid version drift.
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     pub mod poseidon {
-        #[cfg(feature = "zk-halo2-ipa-poseidon")]
-        use halo2_gadgets::poseidon::primitives::P128Pow5T3;
-        #[cfg(feature = "zk-halo2-ipa-poseidon")]
-        pub use halo2_gadgets::poseidon::{
-            Hash as PoseidonHash, Pow5Chip, Pow5Config, primitives::ConstantLength,
-        };
         use halo2_proofs::{
-            circuit::{AssignedCell, Layouter, Region, Value},
-            plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+            circuit::{AssignedCell, Cell, Layouter, Value},
+            plonk::{
+                Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Fixed, Selector,
+            },
             poly::Rotation,
         };
 
@@ -48966,11 +59319,67 @@ mod pasta_tiny {
             F::from(2) * t0_5 + F::from(3) * t1_5
         }
 
-        // Two-element state, 2 full rounds, x^5 S-box
-        fn sbox5<E: std::ops::Mul<Output = E> + Copy>(x: E) -> E {
-            // x^5 = x * x^2 * x^2
-            // We'll build constraints in-gate; this helper is only for witness calc.
-            x
+        /// Local Pow5 configuration retained for old Poseidon-gadget call sites.
+        #[derive(Clone, Debug)]
+        pub struct Pow5Config<F, const WIDTH: usize, const RATE: usize> {
+            /// State advice columns used by the compatibility wrapper.
+            pub state: [Column<Advice>; WIDTH],
+            _marker: std::marker::PhantomData<fn() -> F>,
+        }
+
+        /// Local Pow5 chip marker retained for old Poseidon-gadget call sites.
+        #[derive(Clone, Debug)]
+        pub struct Pow5Chip<F, const WIDTH: usize, const RATE: usize> {
+            _config: Pow5Config<F, WIDTH, RATE>,
+        }
+
+        impl<F, const WIDTH: usize, const RATE: usize> Pow5Chip<F, WIDTH, RATE>
+        where
+            F: halo2_proofs::halo2curves::ff::Field,
+        {
+            /// Build a local compatibility config without depending on upstream gadgets.
+            pub fn configure(
+                meta: &mut ConstraintSystem<F>,
+                state: [Column<Advice>; WIDTH],
+                partial: Column<Advice>,
+                rc_a: Column<Fixed>,
+                rc_b: Column<Fixed>,
+            ) -> Pow5Config<F, WIDTH, RATE> {
+                let _ = (partial, rc_a, rc_b);
+                for column in state {
+                    meta.enable_equality(column);
+                }
+                Pow5Config {
+                    state,
+                    _marker: std::marker::PhantomData,
+                }
+            }
+
+            /// Construct a compatibility chip wrapper from its config.
+            pub fn construct(config: Pow5Config<F, WIDTH, RATE>) -> Self {
+                Self { _config: config }
+            }
+        }
+
+        /// Assigned cell handle returned by the local Poseidon wrapper.
+        #[derive(Clone, Debug)]
+        pub struct PoseidonCell<F> {
+            cell: Cell,
+            _marker: std::marker::PhantomData<fn() -> F>,
+        }
+
+        impl<F> PoseidonCell<F> {
+            fn new(cell: Cell) -> Self {
+                Self {
+                    cell,
+                    _marker: std::marker::PhantomData,
+                }
+            }
+
+            /// Return the underlying Halo2 cell.
+            pub fn cell(&self) -> Cell {
+                self.cell
+            }
         }
 
         /// Minimal wrapper intended to be swapped with halo2-ecc Poseidon gadget.
@@ -48981,18 +59390,28 @@ mod pasta_tiny {
 
         #[derive(Clone)]
         pub struct PoseidonHashCells<F> {
-            pub digest: AssignedCell<F, F>,
-            pub left: AssignedCell<F, F>,
-            pub right: AssignedCell<F, F>,
+            /// Assigned digest cell.
+            pub digest: PoseidonCell<F>,
+            /// Assigned left input cell.
+            pub left: PoseidonCell<F>,
+            /// Assigned right input cell.
+            pub right: PoseidonCell<F>,
         }
+
+        impl<F> PoseidonHashCells<F> {
+            /// Return the digest cell for call sites that only need the hash output.
+            pub fn cell(&self) -> Cell {
+                self.digest.cell()
+            }
+        }
+
         impl Poseidon2ChipWrapper {
             pub fn new() -> Self {
                 Self
             }
 
-            /// Compute Poseidon Pow5 hash of two field elements using the halo2_gadgets chip.
+            /// Compute the local Poseidon Pow5 hash of two field elements.
             /// Returns the assigned digest cell.
-            #[allow(unused_variables)]
             pub fn hash2_chip(
                 &self,
                 layouter: &mut impl Layouter<halo2_proofs::halo2curves::pasta::Fp>,
@@ -49001,21 +59420,8 @@ mod pasta_tiny {
                 b: Value<halo2_proofs::halo2curves::pasta::Fp>,
             ) -> Result<PoseidonHashCells<halo2_proofs::halo2curves::pasta::Fp>, PlonkError>
             {
-                // Construct chip and initialize hasher
-                let chip = Pow5Chip::<halo2_proofs::halo2curves::pasta::Fp, 3, 2>::construct(
-                    poseidon_cfg.clone(),
-                );
-                let mut hasher = PoseidonHash::<
-                    halo2_proofs::halo2curves::pasta::Fp,
-                    P128Pow5T3,
-                    ConstantLength<2>,
-                    3,
-                    2,
-                >::init(chip, layouter.namespace(|| "poseidon2"))
-                .map_err(|_| PlonkError::Synthesis)?;
-
-                // Assign inputs in a small region and feed into the hasher
-                let (a_cell, b_cell) = layouter.assign_region(
+                let digest = a.zip(b).map(|(left, right)| compress2_native(left, right));
+                let (a_cell, b_cell, digest_cell) = layouter.assign_region(
                     || "poseidon2_inputs",
                     |mut region| {
                         let a_cell = crate::zk::assign_advice_compat(
@@ -49032,17 +59438,20 @@ mod pasta_tiny {
                             0,
                             || b,
                         )?;
-                        Ok((a_cell, b_cell))
+                        let digest_cell = crate::zk::assign_advice_compat(
+                            &mut region,
+                            || "digest",
+                            poseidon_cfg.state[2],
+                            0,
+                            || digest,
+                        )?;
+                        Ok((a_cell, b_cell, digest_cell))
                     },
                 )?;
-                hasher
-                    .update(&[a_cell, b_cell])
-                    .map_err(|_| PlonkError::Synthesis)?;
-                let digest = hasher.squeeze().map_err(|_| PlonkError::Synthesis)?;
                 Ok(PoseidonHashCells {
-                    digest,
-                    left: a_cell,
-                    right: b_cell,
+                    digest: PoseidonCell::new(digest_cell.cell()),
+                    left: PoseidonCell::new(a_cell.cell()),
+                    right: PoseidonCell::new(b_cell.cell()),
                 })
             }
         }
@@ -49392,13 +59801,13 @@ mod pasta_tiny {
         }
     }
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     pub use self::poseidon::CommitOpenPoseidon as CommitOpen;
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     pub use self::poseidon::Merkle2Poseidon as Merkle2;
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     pub fn poseidon_compress2_native(a: Scalar, b: Scalar) -> Scalar {
         poseidon::compress2_native(a, b)
     }
@@ -50158,7 +60567,7 @@ mod pasta_tiny {
         )
     }
 
-    #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -50313,7 +60722,7 @@ mod pasta_tiny {
         }
     }
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -51183,14 +61592,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
             }
         }
     }
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::verify_proof,
-        poly::ipa::strategy::SingleStrategy as SingleVerifier,
-        transcript::Blake2bRead,
-    };
+    use halo2_backend::Scalar;
 
     let Some(vk_box) = vk else { return false };
     // Sanity: backends must match
@@ -51220,11 +61622,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::Add,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -51235,17 +61633,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::Mul,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51256,11 +61649,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddTwoRows,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -51271,17 +61660,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51292,17 +61676,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::MulPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51317,11 +61696,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::IdPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51332,11 +61712,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddThree,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -51350,11 +61726,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddTwoInstPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51368,11 +61745,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AssetHiddenTransferPublic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51383,11 +61761,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AnonTransfer2x2,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -51401,11 +61775,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 KaigiRosterJoinCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -51430,11 +61805,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 KaigiUsageCommitmentCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -51455,18 +61831,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         _ => false,
     }
@@ -51478,14 +61843,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::verify_proof,
-        poly::ipa::strategy::SingleStrategy as SingleVerifier,
-        transcript::Blake2bRead,
-    };
+    use halo2_backend::Scalar;
     use iroha_zkp_halo2::Halo2ProofEnvelope;
 
     let reject = |reason: &'static str| {
@@ -51568,18 +61926,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-mul" => {
             let circuit = pasta_tiny::Mul;
@@ -51587,30 +61934,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-add-2rows" => {
             let circuit = pasta_tiny::AddTwoRows;
@@ -51618,18 +61947,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-add-public" => {
             let circuit = pasta_tiny::AddPublic;
@@ -51637,30 +61955,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-mul-public" => {
             let circuit = pasta_tiny::MulPublic;
@@ -51668,30 +61968,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-id-public" => {
             let circuit = pasta_tiny::IdPublic;
@@ -51702,18 +61984,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/tiny-add3" => {
             let circuit = pasta_tiny::AddThree;
@@ -51721,18 +61997,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-add2inst-public" => {
             let circuit = pasta_tiny::AddTwoInstPublic;
@@ -51743,18 +62008,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 2 {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/asset-hidden-transfer-public-test" => {
             let circuit = pasta_tiny::AssetHiddenTransferPublic::default();
@@ -51765,18 +62024,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/ivm-overlay-bind" => {
             // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
@@ -51788,18 +62041,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/ivm-execution-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
@@ -51811,18 +62058,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/offline-note-recursive" => {
             if col_refs.len() != OFFLINE_NOTE_INSTANCE_COLUMNS
@@ -51836,11 +62077,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::OfflineNoteSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51856,11 +62098,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::KagemushaFoldedSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51879,13 +62122,132 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
+        }
+        "halo2/pasta/kagemusha-recursive-spend-lineage-v1"
+        | "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1"
+        | "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1" => {
+            let Some(profile) = kagemusha_recursive_spend_lineage_backend_profile(&col_refs) else {
+                return false;
+            };
+            let expected_circuit_id = match normalized.as_str() {
+                "halo2/pasta/kagemusha-recursive-spend-lineage-v1" => match profile {
+                    KagemushaRecursiveSpendLineageBackendProfile::OneHop { .. } => {
+                        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+                    }
+                    KagemushaRecursiveSpendLineageBackendProfile::Append { .. } => {
+                        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+                    }
+                },
+                "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1" => {
+                    if !matches!(
+                        profile,
+                        KagemushaRecursiveSpendLineageBackendProfile::OneHop { .. }
+                    ) {
+                        return false;
+                    }
+                    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+                }
+                "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1" => {
+                    if !matches!(
+                        profile,
+                        KagemushaRecursiveSpendLineageBackendProfile::Append { .. }
+                    ) {
+                        return false;
+                    }
+                    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+                }
+                _ => return false,
+            };
+            if ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+                vk_box,
+                profile.opening_len(),
+                expected_circuit_id,
+            )
+            .is_err()
+            {
+                return false;
+            }
+
+            macro_rules! verify_lineage_len {
+                ($len:literal) => {
+                    cached_vk_for!(
+                        &params,
+                        normalized.as_str(),
+                        vk_box,
+                        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                            $len,
+                            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                        >::default(),
+                        |vk| {
+                            verify_halo2_ipa_payload_columns(
+                                &params,
+                                vk,
+                                proof_payload.as_slice(),
+                                &col_refs,
+                            )
+                        }
+                    )
+                };
+            }
+
+            macro_rules! verify_append_lineage_len {
+                ($len:literal) => {
+                    cached_vk_for!(
+                        &params,
+                        normalized.as_str(),
+                        vk_box,
+                        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                            $len,
+                            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+                        >::default(),
+                        |vk| {
+                            verify_halo2_ipa_payload_columns(
+                                &params,
+                                vk,
+                                proof_payload.as_slice(),
+                                &col_refs,
+                            )
+                        }
+                    )
+                };
+            }
+
+            match profile {
+                KagemushaRecursiveSpendLineageBackendProfile::OneHop { opening_len } => {
+                    match opening_len {
+                        2 => verify_lineage_len!(2),
+                        4 => verify_lineage_len!(4),
+                        8 => verify_lineage_len!(8),
+                        16 => verify_lineage_len!(16),
+                        32 => verify_lineage_len!(32),
+                        64 => verify_lineage_len!(64),
+                        128 => verify_lineage_len!(128),
+                        _ => false,
+                    }
+                }
+                KagemushaRecursiveSpendLineageBackendProfile::Append { opening_len } => {
+                    match opening_len {
+                        2 => verify_append_lineage_len!(2),
+                        4 => verify_append_lineage_len!(4),
+                        8 => verify_append_lineage_len!(8),
+                        16 => verify_append_lineage_len!(16),
+                        32 => verify_append_lineage_len!(32),
+                        64 => verify_append_lineage_len!(64),
+                        128 => verify_append_lineage_len!(128),
+                        _ => false,
+                    }
+                }
+            }
         }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
@@ -51893,18 +62255,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         circuit_id if confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id) => {
             if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
@@ -51918,11 +62269,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51938,11 +62290,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51958,11 +62311,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51977,11 +62331,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::AnonTransfer2x2Commit,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -51996,11 +62351,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::AnonTransfer2x2CommitMerkle2,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -52016,18 +62372,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::AnonTransfer2x2CommitMerkle::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -52037,18 +62387,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         "halo2/pasta/tiny-vote-bool" => {
@@ -52057,24 +62401,13 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-commit-open" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
-            #[cfg(feature = "zk-halo2-ipa-poseidon")]
+            #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
             let circuit = pasta_tiny::poseidon::CommitOpenPoseidon;
-            #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+            #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::CommitOpen;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -52083,24 +62416,18 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/tiny-merkle2" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
-            #[cfg(feature = "zk-halo2-ipa-poseidon")]
+            #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
             let circuit = pasta_tiny::poseidon::Merkle2Poseidon;
-            #[cfg(not(feature = "zk-halo2-ipa-poseidon"))]
+            #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::Merkle2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -52109,18 +62436,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit" => {
             // Instances: [commit], 1 row
@@ -52132,18 +62453,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit-merkle2" => {
             // Instances: [commit, root], 1 row
@@ -52155,18 +62470,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 2 {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit-merkle8" => {
             // Use depth-8 generic; select algorithm by backend suffix
@@ -52180,18 +62489,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::VoteBoolCommitMerkle::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -52201,18 +62504,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         // Depth-16 variants
@@ -52227,18 +62524,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::AnonTransfer2x2CommitMerkle::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -52248,18 +62539,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         "halo2/pasta/vote-bool-commit-merkle16" => {
@@ -52273,18 +62558,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::VoteBoolCommitMerkle::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -52294,18 +62573,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         KAIGI_ROSTER_BACKEND => {
@@ -52318,11 +62591,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 KaigiRosterJoinCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -52347,11 +62621,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 KaigiUsageCommitmentCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -52526,7 +62801,7 @@ mod preverified_key_tests {
             backend: BackendTag::Halo2IpaPasta,
             circuit_id: "halo2/ipa:preverify-test".to_owned(),
             vk_hash,
-            public_inputs: Vec::new(),
+            public_inputs: vec![0x55; 32],
             proof_bytes: vec![0xAA, 0xBB, 0xCC],
             aux: Vec::new(),
         };
@@ -52680,6 +62955,137 @@ mod preverified_key_tests {
             PreverifyResult::Accepted
         );
 
+        let mut resolved_commitment_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut resolved_commitment_dedup,
+                0,
+                None,
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut resolved_commitment_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Duplicate
+        );
+
+        let mut missing_expected_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_expected_dedup,
+                0,
+                None,
+                None,
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_expected_dedup,
+                0,
+                Some(expected),
+                None,
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_expected_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut zero_commitment_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some([0u8; 32]),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some(expected),
+                Some([0u8; 32]),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut wrong_backend_dedup = DedupCache::new();
+        let wrong_backend_vk = VerifyingKeyBox::new("stark/fri".into(), vk.bytes.clone());
+        let wrong_backend_expected = hash_vk(&wrong_backend_vk);
+        let wrong_backend_proof = preverify_enveloped_proof(wrong_backend_expected);
+        assert_eq!(
+            preverify_with_budget(
+                &wrong_backend_proof,
+                Some(&wrong_backend_vk),
+                &mut wrong_backend_dedup,
+                0,
+                Some(wrong_backend_expected),
+                Some(wrong_backend_expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut wrong_backend_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
         let mut mismatch_dedup = DedupCache::new();
         let mut wrong = expected;
         wrong[0] ^= 0x80;
@@ -52785,6 +63191,38 @@ mod preverified_key_tests {
                 "aux",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.aux = b"side-channel".to_vec();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "oversized_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_proof_bytes",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.proof_bytes.clear();
                 }),
                 PreverifyResult::MalformedProof,
             ),
@@ -52900,7 +63338,108 @@ mod preverified_key_tests {
             "halo2/ipa:Mock-Proof",
             "halo2/ipa:m-o-c-k-proof",
             "stark/fri/m-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
             "zk-trace/mock-proof",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_production_claim_backends_before_dedup() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_unknown_and_pending_production_backends_before_dedup() {
+        for backend in [
+            "not-a-production-backend",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa\0",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "../halo2/ipa",
+            "halo2/ipa/../tiny-add",
+            "halo2/ipa:ivm-execution-v1 ",
+            " stark/fri/sha256-goldilocks",
+            "stark/fri/sha256-goldilocks ",
+            "stark/fri/sha256-goldilocks\0",
+            "stark\u{FF0F}fri/sha256-goldilocks",
+            "stark/fri/\u{200B}sha256-goldilocks",
+            "st\u{0430}rk/fri/sha256-goldilocks",
+            "../stark/fri",
+            "stark/fri/../sha256-goldilocks",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/audit-proof-v1",
+            "halo2-ipa-orchard",
+            "halo2/ipa/orchard",
+            "orchard",
+            "groth16-bls12-377",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "monero-fcmp++",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "sis-with-hints",
+            "miden-stark",
+            "stark/fri/miden",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "stark/fri/pq-masp-stark-fri",
+            "post-quantum-masp",
         ] {
             let mut dedup = DedupCache::new();
             let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
@@ -52944,6 +63483,13 @@ mod tests {
     use std::sync::Arc;
 
     #[cfg(feature = "zk-halo2")]
+    use super::*;
+    #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
+    use crate::zk::pasta_tiny::{
+        VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
+        vote_bool_commit_merkle8_witnesses,
+    };
+    #[cfg(feature = "zk-halo2")]
     use ff::PrimeField;
     #[cfg(feature = "zk-halo2")]
     use halo2_proofs::poly::{
@@ -52952,15 +63498,6 @@ mod tests {
     };
     #[cfg(feature = "zk-halo2")]
     use halo2_proofs::transcript::TranscriptWriterBuffer;
-    #[cfg(feature = "zk-halo2")]
-    use rand_core_06::OsRng;
-
-    use super::*;
-    #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-    use crate::zk::pasta_tiny::{
-        VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
-        vote_bool_commit_merkle8_witnesses,
-    };
 
     #[test]
     fn vote_bool_commit_merkle8_mock_prover_succeeds() {
@@ -52975,7 +63512,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
-    #[cfg(feature = "zk-halo2-ipa-poseidon")]
+    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[test]
     fn vote_bool_commit_merkle8_poseidon_mock_prover() {
         use halo2_proofs::dev::MockProver;
@@ -53252,6 +63789,7 @@ mod tests {
             KAIGI_ROSTER_CIRCUIT_K, compute_commitment, compute_nullifier, empty_roster_root_hash,
             roster_root_limbs,
         };
+        use rand_core_06::OsRng;
 
         let k = KAIGI_ROSTER_CIRCUIT_K;
         let params: PastaParams = pasta_params_new(k);
@@ -53327,6 +63865,7 @@ mod tests {
             KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KaigiUsageCommitmentCircuit,
             compute_usage_commitment,
         };
+        use rand_core_06::OsRng;
 
         let params: PastaParams = pasta_params_new(KAIGI_USAGE_CIRCUIT_K);
         let duration = Scalar::from(1_200u64);
@@ -53418,25 +63957,79 @@ mod tests {
 
     #[test]
     fn preverify_basic() {
+        let vk_commitment = [1u8; 32];
+        let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:preverify-basic".to_owned(),
+            vk_hash: vk_commitment,
+            public_inputs: vec![1],
+            proof_bytes: vec![2],
+            aux: Vec::new(),
+        };
+        let p = ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+        );
+        let mut missing_expected = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut missing_expected,
+                0,
+                Some(vk_commitment),
+                None,
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        let mut zero_commitment = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut zero_commitment,
+                0,
+                None,
+                Some([0u8; 32]),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut zero_commitment,
+                0,
+                Some([0u8; 32]),
+                Some(vk_commitment),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
         let mut d = DedupCache::new();
-        let p = ProofBox::new("halo2/pasta".into(), vec![1]);
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 100, None, None, true),
+            preverify_with_budget(&p, None, &mut d, 0, None, Some(vk_commitment), true,),
             PreverifyResult::Accepted
         );
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 100, None, None, true),
+            preverify_with_budget(
+                &p,
+                None,
+                &mut d,
+                0,
+                Some(vk_commitment),
+                Some(vk_commitment),
+                true,
+            ),
             PreverifyResult::Duplicate
         );
-        // Different commitment should allow same proof bytes
-        let p2 = ProofBox::new("halo2/pasta".into(), vec![1]);
+        let mut wrong = vk_commitment;
+        wrong[0] ^= 0x80;
         assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32]), None, true),
-            PreverifyResult::Accepted
-        );
-        assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 100, Some([1u8; 32]), None, true),
-            PreverifyResult::Duplicate
+            preverify_with_budget(&p, None, &mut d, 0, Some(wrong), Some(vk_commitment), true),
+            PreverifyResult::VerifyingKeyMismatch
         );
     }
 

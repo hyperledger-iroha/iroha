@@ -86,7 +86,10 @@ pub mod isi {
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
-        zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1},
+        zk::{
+            BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
+            OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
+        },
     };
     use iroha_primitives::{
         json::Json,
@@ -609,10 +612,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if crate::zk::is_trusted_setup_backend_label(backend)
-            || crate::zk::is_developer_only_backend_label(backend)
-            || !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend))
-        {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -730,6 +730,20 @@ pub mod isi {
     }
 
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
+        if BackendTag::is_pending_production_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "pending-production verifying key backends are not supported".into(),
+                ),
+            ));
+        }
+        if crate::zk::is_production_claim_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "production-claim verifying key backends are not supported".into(),
+                ),
+            ));
+        }
         if crate::zk::is_trusted_setup_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -744,7 +758,42 @@ pub mod isi {
                 ),
             ));
         }
+        if !crate::zk::is_production_verify_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "unsupported verifying key backends are not supported".into(),
+                ),
+            ));
+        }
         Ok(())
+    }
+
+    fn pending_production_verifying_key_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "pending-production verifying key backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn pending_production_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "pending-production proof backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn production_claim_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "production-claim proof backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn unsupported_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "unsupported proof backends are not supported".into(),
+        ))
+        .into()
     }
 
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -769,9 +818,12 @@ pub mod isi {
         envelope: &ZkOpenVerifyEnvelope,
         vk_record: &VerifyingKeyRecord,
     ) -> Result<(), Error> {
-        if !envelope.aux.is_empty() {
+        envelope
+            .validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
+        if !open_verify_backend_tag_matches(backend, vk_record.backend) {
             return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} envelope auxiliary bytes must be empty").into(),
+                format!("{label} verifying key backend mismatch").into(),
             ));
         }
         if !circuit_id_matches(backend, &vk_record.circuit_id, &envelope.circuit_id) {
@@ -787,17 +839,28 @@ pub mod isi {
                 ));
             }
         }
-        if envelope.vk_hash == [0u8; 32] {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
-            ));
-        }
         if envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
             ));
         }
         Ok(())
+    }
+
+    fn open_verify_envelope_validation_error(
+        label: &str,
+        err: OpenVerifyEnvelopeValidationError,
+    ) -> InstructionExecutionError {
+        let msg = match err {
+            OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash => {
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero")
+            }
+            OpenVerifyEnvelopeValidationError::NonEmptyAux => {
+                format!("{label} envelope auxiliary bytes must be empty")
+            }
+            _ => format!("{label} invalid OpenVerifyEnvelope: {err}"),
+        };
+        InstructionExecutionError::InvariantViolation(msg.into())
     }
 
     fn validate_confidential_v2_open_verify_envelope_metadata(
@@ -813,6 +876,9 @@ pub mod isi {
                     format!("{label} proof must use OpenVerifyEnvelope payload").into(),
                 )
             })?;
+        envelope
+            .validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
         if envelope.backend != BackendTag::Halo2IpaPasta {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
@@ -2234,6 +2300,9 @@ pub mod isi {
                             ),
                         ));
                     }
+                }
+                backend if backend.is_pending_production_backend() => {
+                    return Err(pending_production_verifying_key_backend_error());
                 }
                 _ => {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -6205,6 +6274,9 @@ pub mod isi {
                     ));
                 }
             }
+            backend if backend.is_pending_production_backend() => {
+                return Err(pending_production_verifying_key_backend_error());
+            }
             _ => {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -7081,6 +7153,12 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
+        if BackendTag::is_pending_production_backend_label(attachment.backend.as_str()) {
+            return Err(pending_production_proof_backend_error());
+        }
+        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
+            return Err(production_claim_proof_backend_error());
+        }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -7094,6 +7172,9 @@ pub mod isi {
                     "developer-only proof backends are not supported".into(),
                 ),
             ));
+        }
+        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
+            return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -7114,18 +7195,7 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        if crate::zk::is_trusted_setup_backend_label(backend)
-            || crate::zk::is_developer_only_backend_label(backend)
-        {
-            return false;
-        }
-        if crate::zk::is_stark_fri_v1_backend(backend) {
-            return tag == BackendTag::Stark;
-        }
-        if backend.starts_with("halo2/") {
-            return tag == BackendTag::Halo2IpaPasta;
-        }
-        true
+        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
     }
 
     struct ProofEventArgs<'a> {
@@ -8931,7 +9001,7 @@ pub mod isi {
                 ));
             }
             let Some(payload) =
-                iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
+                crate::bridge::decode_recorded_sccp_payload_bytes(&self.payload_bytes)
             else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -8975,6 +9045,9 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not active".into(),
             ));
+        }
+        if rec.backend.is_pending_production_backend() {
+            return Err(pending_production_verifying_key_backend_error());
         }
         if rec.gas_schedule_id.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -10428,10 +10501,27 @@ pub mod isi {
                 "ZK-ACE verifying key backend mismatch".into(),
             ));
         }
-        Ok(crate::state::ZkAssetVerifierBinding {
-            id: id.clone(),
-            commitment: record.commitment,
-        })
+        #[cfg(feature = "zk-stark")]
+        {
+            let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+                norito::decode_from_bytes(&key.bytes).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE verifying key payload is not a STARK/FRI verifier key".into(),
+                    )
+                })?;
+            crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload)
+                .map_err(|err| InstructionExecutionError::InvariantViolation(err.into()))?;
+            Ok(crate::state::ZkAssetVerifierBinding {
+                id: id.clone(),
+                commitment: record.commitment,
+            })
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE STARK verifier is not enabled".into(),
+            ))
+        }
     }
 
     fn ensure_zk_ace_record_active(
@@ -10474,6 +10564,8 @@ pub mod isi {
                     format!("{label} proof must use OpenVerifyEnvelope payload"),
                 ))
             })?;
+        env.validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
         if env.backend != BackendTag::Stark {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
@@ -10931,6 +11023,9 @@ pub mod isi {
                                 ),
                             )
                         })?;
+                    env.validate_for_admission().map_err(|err| {
+                        open_verify_envelope_validation_error("ZK-ACE authorization", err)
+                    })?;
                     env.public_inputs
                 })
                 .map_err(|_| {
@@ -10981,13 +11076,12 @@ pub mod isi {
                     iroha_logger::warn!(
                         backend = attachment.backend.as_str(),
                         proof_len = attachment.proof.bytes.len(),
-                        "replay accepted committed ZK-ACE authorization after local proof verifier rejection"
+                        "replay rejected committed ZK-ACE authorization after local proof verifier rejection"
                     );
-                } else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "invalid ZK-ACE authorization proof".into(),
-                    ));
                 }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid ZK-ACE authorization proof".into(),
+                ));
             }
             st.zk_ace_replay_nullifiers.insert(*self.replay_nullifier());
 
@@ -11439,13 +11533,12 @@ pub mod isi {
                     iroha_logger::warn!(
                         backend = attachment.backend.as_str(),
                         proof_len,
-                        "replay accepted committed ZK transfer result after local proof verifier rejection"
+                        "replay rejected committed ZK transfer result after local proof verifier rejection"
                     );
-                } else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "invalid transfer proof".into(),
-                    ));
                 }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid transfer proof".into(),
+                ));
             }
             for &nullifier in self.inputs() {
                 st.nullifiers.insert(nullifier);
@@ -11724,13 +11817,12 @@ pub mod isi {
                     iroha_logger::warn!(
                         backend = attachment.backend.as_str(),
                         proof_len = attachment.proof.bytes.len(),
-                        "replay accepted committed asset-hidden transfer result after local proof verifier rejection"
+                        "replay rejected committed asset-hidden transfer result after local proof verifier rejection"
                     );
-                } else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "invalid asset-hidden transfer proof".into(),
-                    ));
                 }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid asset-hidden transfer proof".into(),
+                ));
             }
 
             for &nullifier in self.inputs() {
@@ -15429,6 +15521,8 @@ pub mod isi {
         };
 
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+        #[cfg(feature = "zk-stark")]
+        use iroha_data_model::zk::{StarkFriOpenProofV1, ZkAcePublicInputsV1};
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
@@ -15470,7 +15564,7 @@ pub mod isi {
             isi::{SetParameter, bridge::RecordBridgeReceipt},
             parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
-            zk::{OpenVerifyEnvelope, StarkFriOpenProofV1, ZkAcePublicInputsV1},
+            zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
         };
 
         #[test]
@@ -17370,8 +17464,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:other-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata(
@@ -17389,8 +17483,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 bad_hash,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata(
@@ -17406,8 +17500,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 [0u8; 32],
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             let err = validate_open_verify_envelope_metadata(
                 "ballot",
@@ -17426,8 +17520,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             non_empty_aux.aux = b"ignored-hint".to_vec();
             assert!(
@@ -17444,12 +17538,96 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
             );
+
+            for backend_tag in [
+                BackendTag::Unsupported,
+                BackendTag::Halo2Bn254,
+                BackendTag::Groth16,
+                BackendTag::Stark,
+            ] {
+                let mut bad_backend_rec = vk_rec.clone();
+                bad_backend_rec.backend = backend_tag;
+                let err = validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &ok,
+                    &bad_backend_rec,
+                )
+                .expect_err("registered backend tag must match the admitted proof backend");
+                assert!(
+                    err.to_string().contains("verifying key backend mismatch"),
+                    "unexpected backend-tag rejection for {}: {err}",
+                    backend_tag.canonical_label()
+                );
+            }
+
+            for (label, envelope, expected) in [
+                (
+                    "empty_circuit",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "",
+                        commitment,
+                        b"schema:voting:v1".to_vec(),
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_public_inputs",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        Vec::new(),
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_proof_bytes",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        b"schema:voting:v1".to_vec(),
+                        Vec::new(),
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "oversized_public_inputs",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        vec![
+                            0xA5;
+                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1
+                        ],
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+            ] {
+                let err = validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &envelope,
+                    &vk_rec,
+                )
+                .expect_err("{label} must reject");
+                assert!(
+                    err.to_string().contains(expected),
+                    "unexpected {label} rejection: {err}"
+                );
+            }
         }
 
         #[test]
@@ -17475,7 +17653,7 @@ pub mod isi {
                 "halo2/ipa:test-circuit",
                 commitment,
                 schema.clone(),
-                Vec::new(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
@@ -17486,7 +17664,7 @@ pub mod isi {
                 "halo2/ipa:test-circuit",
                 commitment,
                 b"schema:voting:v2".to_vec(),
-                Vec::new(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec)
@@ -17590,7 +17768,23 @@ pub mod isi {
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+            for backend in [
+                " halo2/ipa",
+                "halo2/ipa ",
+                "halo2/ipa\n",
+                "halo2/ipa\0",
+                "../halo2/ipa",
+                "halo2/ipa/../tiny-add",
+                "halo2/ipa/orchard",
+                "halo2/unknown-native-v1",
+                "halo2/ipa: KZG",
+                "halo2/ipa:Mock-Proof",
+                " stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks ",
+                "stark/fri/sha256-goldilocks\0",
+                "../stark/fri",
+                "stark/fri/miden",
+            ] {
                 let proof_box = ProofBox::new(backend.into(), bytes.clone());
                 assert!(
                     decode_open_verify_envelope(&proof_box).is_none(),
@@ -17629,6 +17823,40 @@ pub mod isi {
                 "stark/fri/sha256-goldilocks",
                 BackendTag::Halo2IpaPasta
             ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/unknown-native-v1",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "unknown/privacy/backend",
+                BackendTag::Halo2IpaPasta
+            ));
+            for pending_backend in [
+                "halo2-ipa-orchard",
+                "groth16-bls12-377",
+                "fcmp-plus-plus-curve-tree",
+                "lattice-pcs-sis",
+                "miden-stark",
+                "aztec-plonkish-private-kernel",
+                "pq-masp-stark-fri",
+                "anonymous-pgc",
+                "verange",
+                "zkat",
+                "zk-ams",
+                "vega-existing-credential-zk",
+                "silent-threshold-anoncred",
+                "zk-x509",
+                "sis-with-hints",
+            ] {
+                assert!(
+                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Halo2IpaPasta),
+                    "{pending_backend} must stay fail-closed against Halo2 envelopes"
+                );
+                assert!(
+                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Stark),
+                    "{pending_backend} must stay fail-closed against STARK envelopes"
+                );
+            }
         }
 
         #[test]
@@ -17723,6 +17951,27 @@ pub mod isi {
             .expect_err("developer-only attachment backend must fail before envelope use");
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("developer-only"), "unexpected error: {msg}");
+            let unsupported_proof = ProofBox::new(
+                "halo2/unknown-native-v1".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let unsupported_attachment = ProofAttachment::new_ref(
+                "halo2/unknown-native-v1".into(),
+                unsupported_proof.clone(),
+                VerifyingKeyId::new("halo2/unknown-native-v1", "vk"),
+            );
+            let err = validate_proof_attachment(
+                &unsupported_attachment,
+                &unsupported_proof,
+                true,
+                Some(&envelope),
+            )
+            .expect_err("unsupported attachment backend must fail before envelope use");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("unsupported proof backends"),
+                "unexpected error: {msg}"
+            );
             assert!(!open_verify_backend_tag_matches(
                 "halo2/debug",
                 BackendTag::Halo2IpaPasta
@@ -18168,8 +18417,30 @@ pub mod isi {
             asset_def_id: AssetDefinitionId,
             receiver: AccountId,
             vk_id: VerifyingKeyId,
+            #[cfg(feature = "zk-stark")]
+            witness: ZkAceWitnessV1,
             identity_commitment: [u8; 32],
             policy_hash: [u8; 32],
+        }
+
+        #[cfg(feature = "zk-stark")]
+        const ZK_ACE_TEST_MAX_PROOF_BYTES: u32 =
+            crate::zk_stark::ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES;
+
+        fn zk_ace_test_witness(seed: u8) -> ZkAceWitnessV1 {
+            ZkAceWitnessV1 {
+                identity_root: [seed; 32],
+                identity_blinding: [seed.wrapping_add(1); 32],
+                replay_secret: [seed.wrapping_add(2); 32],
+            }
+        }
+
+        fn zk_ace_identity_commitment_for_test(witness: &ZkAceWitnessV1) -> [u8; 32] {
+            iroha_data_model::zk::derive_zk_ace_identity_commitment(
+                &witness.identity_root,
+                &witness.identity_blinding,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            )
         }
 
         fn zk_ace_transfer_fixture() -> ZkAceTransferFixture {
@@ -18198,6 +18469,8 @@ pub mod isi {
             let mut state = State::new(world, kura, query_handle);
             state.zk.stark.enabled = true;
             state.zk.halo2.enabled = false;
+            let witness = zk_ace_test_witness(0x11);
+            let identity_commitment = zk_ace_identity_commitment_for_test(&witness);
 
             ZkAceTransferFixture {
                 state,
@@ -18207,9 +18480,57 @@ pub mod isi {
                     iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
                     iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
                 ),
-                identity_commitment: [0x41; 32],
+                #[cfg(feature = "zk-stark")]
+                witness,
+                identity_commitment,
                 policy_hash: [0x42; 32],
             }
+        }
+
+        fn zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
+            #[cfg(feature = "zk-stark")]
+            {
+                let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+                        .to_owned(),
+                    n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
+                    blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+                };
+                VerifyingKeyBox::new(
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                    norito::to_bytes(&payload).expect("encode ZK-ACE STARK verifying key"),
+                )
+            }
+            #[cfg(not(feature = "zk-stark"))]
+            {
+                VerifyingKeyBox::new(
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                    vec![0xa5; 32],
+                )
+            }
+        }
+
+        #[cfg(feature = "zk-stark")]
+        fn weak_zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
+            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+                n_log2: 4,
+                blowup_log2: 1,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            VerifyingKeyBox::new(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                norito::to_bytes(&payload).expect("encode weak ZK-ACE STARK verifying key"),
+            )
         }
 
         fn install_zk_ace_verifier(
@@ -18218,10 +18539,7 @@ pub mod isi {
             status: ConfidentialStatus,
             max_proof_bytes: u32,
         ) -> [u8; 32] {
-            let vk_box = VerifyingKeyBox::new(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                vec![0xa5; 32],
-            );
+            let vk_box = zk_ace_verifying_key_box_for_test();
             let commitment = hash_vk(&vk_box);
             let mut record = VerifyingKeyRecord::new_with_owner(
                 1,
@@ -18243,6 +18561,7 @@ pub mod isi {
             commitment
         }
 
+        #[cfg(feature = "zk-stark")]
         #[allow(clippy::too_many_arguments)]
         fn zk_ace_proof_attachment(
             chain_id: iroha_data_model::ChainId,
@@ -18251,11 +18570,16 @@ pub mod isi {
             asset: AssetDefinitionId,
             amount: u128,
             identity_commitment: [u8; 32],
-            replay_nullifier: [u8; 32],
+            witness: &ZkAceWitnessV1,
             policy_hash: [u8; 32],
             vk_id: VerifyingKeyId,
             vk_commitment: [u8; 32],
-        ) -> (ProofAttachment, [u8; 32]) {
+        ) -> (ProofAttachment, [u8; 32], [u8; 32]) {
+            assert_eq!(
+                identity_commitment,
+                zk_ace_identity_commitment_for_test(witness),
+                "test witness must match the submitted identity commitment"
+            );
             let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
                 &from,
                 &to,
@@ -18264,6 +18588,13 @@ pub mod isi {
                 &chain_id,
                 iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
                 &policy_hash,
+            );
+            let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
+                &witness.replay_secret,
+                &tx_digest,
+                &chain_id,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
             );
             let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
                 identity_commitment,
@@ -18277,36 +18608,42 @@ pub mod isi {
                 amount,
                 vk_id.clone(),
             );
-            let public_word =
-                iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                    .expect("digest ZK-ACE public inputs");
-            let open = StarkFriOpenProofV1 {
-                version: 1,
-                public_inputs: vec![vec![public_word]],
-                envelope_bytes: vec![0x51, 0x52, 0x53],
-            };
-            let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Stark,
-                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_string(),
-                vk_hash: vk_commitment,
-                public_inputs: norito::to_bytes(&public_inputs)
-                    .expect("encode ZK-ACE public inputs"),
-                proof_bytes: norito::to_bytes(&open).expect("encode STARK wrapper"),
-                aux: Vec::new(),
-            };
-            let proof_box = ProofBox::new(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                norito::to_bytes(&envelope).expect("encode open verify envelope"),
+            let vk_box = zk_ace_verifying_key_box_for_test();
+            assert_eq!(
+                vk_commitment,
+                hash_vk(&vk_box),
+                "test VK commitment must match the canonical ZK-ACE VK"
             );
+            let proof_box = crate::zk::prove_stark_fri_zk_ace_open_verify_envelope(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                &vk_box,
+                &public_inputs,
+                witness,
+            )
+            .expect("build valid ZK-ACE STARK proof");
             let mut attachment = ProofAttachment::new_ref(
                 iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
                 proof_box,
                 vk_id,
             );
             attachment.vk_commitment = Some(vk_commitment);
-            (attachment, tx_digest)
+            (attachment, tx_digest, replay_nullifier)
         }
 
+        #[cfg(feature = "zk-stark")]
+        fn mutate_zk_ace_envelope(
+            mut proof: ProofAttachment,
+            mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+        ) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            mutate(&mut envelope);
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        #[cfg(feature = "zk-stark")]
         fn mutate_zk_ace_envelope_public_inputs(mut proof: ProofAttachment) -> ProofAttachment {
             let mut envelope: OpenVerifyEnvelope =
                 norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
@@ -18322,6 +18659,7 @@ pub mod isi {
             proof
         }
 
+        #[cfg(feature = "zk-stark")]
         fn mutate_zk_ace_stark_public_input(mut proof: ProofAttachment) -> ProofAttachment {
             let mut envelope: OpenVerifyEnvelope =
                 norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
@@ -18338,6 +18676,23 @@ pub mod isi {
             proof
         }
 
+        #[cfg(feature = "zk-stark")]
+        fn mutate_zk_ace_inner_stark_envelope_bytes(mut proof: ProofAttachment) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            let mut open: StarkFriOpenProofV1 =
+                norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
+            let byte = open
+                .envelope_bytes
+                .last_mut()
+                .expect("fixture carries an inner STARK envelope");
+            *byte ^= 0x01;
+            envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        #[cfg(feature = "zk-stark")]
         fn mutate_zk_ace_envelope_vk_hash(
             mut proof: ProofAttachment,
             vk_hash: [u8; 32],
@@ -18350,6 +18705,7 @@ pub mod isi {
         }
 
         #[allow(clippy::too_many_arguments)]
+        #[cfg(feature = "zk-stark")]
         fn zk_ace_transfer_instruction(
             from: AccountId,
             to: AccountId,
@@ -18388,19 +18744,24 @@ pub mod isi {
                 .map_or(0, |state| state.commitments.len())
         }
 
+        #[cfg(feature = "zk-stark")]
         fn seed_zk_ace_call_hash(stx: &mut StateTransaction<'_, '_>, byte: u8) {
             stx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_authorized_transfer_records_state_and_rejects_replay() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
             let register_identity = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
                 fixture.identity_commitment,
@@ -18415,15 +18776,14 @@ pub mod isi {
                 .expect("register ZK-ACE identity commitment");
 
             let amount = 7;
-            let replay_nullifier = [0x43; 32];
-            let (proof, tx_digest) = zk_ace_proof_attachment(
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
                 fixture.identity_commitment,
-                replay_nullifier,
+                &fixture.witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18444,7 +18804,7 @@ pub mod isi {
             transfer
                 .clone()
                 .execute(&ALICE_ID, &mut stx)
-                .expect("ZK-ACE authorized transfer succeeds under committed dev proof");
+                .expect("ZK-ACE authorized transfer succeeds with a valid STARK proof");
 
             let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
             let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
@@ -18469,15 +18829,19 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_identity_allowlist_is_canonical_and_enforced() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
 
             let canonical = super::canonical_zk_ace_allowed_accounts(
                 &stx,
@@ -18542,15 +18906,14 @@ pub mod isi {
             .execute(&ALICE_ID, &mut stx)
             .expect("register allowlisted ZK-ACE identity commitment");
 
-            let replay_nullifier = [0x5a; 32];
-            let (proof, tx_digest) = zk_ace_proof_attachment(
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 fixture.receiver.clone(),
                 ALICE_ID.clone(),
                 fixture.asset_def_id.clone(),
                 1,
                 fixture.identity_commitment,
-                replay_nullifier,
+                &fixture.witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18708,15 +19071,19 @@ pub mod isi {
             assert_eq!(record.status, crate::state::ZkAceIdentityStatus::Revoked);
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_rotation_and_revocation_enforce_identity_state() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
             iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
                 fixture.identity_commitment,
@@ -18729,7 +19096,8 @@ pub mod isi {
             .execute(&ALICE_ID, &mut stx)
             .expect("register initial ZK-ACE identity commitment");
 
-            let replacement_commitment = [0x49; 32];
+            let replacement_witness = zk_ace_test_witness(0x49);
+            let replacement_commitment = zk_ace_identity_commitment_for_test(&replacement_witness);
             iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
                 fixture.identity_commitment,
@@ -18743,15 +19111,14 @@ pub mod isi {
             .execute(&ALICE_ID, &mut stx)
             .expect("rotate ZK-ACE identity commitment");
 
-            let stale_nullifier = [0x4a; 32];
-            let (stale_proof, stale_digest) = zk_ace_proof_attachment(
+            let (stale_proof, stale_digest, stale_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 4,
                 fixture.identity_commitment,
-                stale_nullifier,
+                &fixture.witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18778,15 +19145,14 @@ pub mod isi {
                 "unexpected rotated identity error: {msg}"
             );
 
-            let active_nullifier = [0x4b; 32];
-            let (active_proof, active_digest) = zk_ace_proof_attachment(
+            let (active_proof, active_digest, active_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 4,
                 replacement_commitment,
-                active_nullifier,
+                &replacement_witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18822,15 +19188,14 @@ pub mod isi {
             .execute(&ALICE_ID, &mut stx)
             .expect("revoke replacement ZK-ACE identity commitment");
 
-            let revoked_nullifier = [0x4d; 32];
-            let (revoked_proof, revoked_digest) = zk_ace_proof_attachment(
+            let (revoked_proof, revoked_digest, revoked_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 2,
                 replacement_commitment,
-                revoked_nullifier,
+                &replacement_witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18858,15 +19223,140 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn zk_ace_authorized_transfer_rejects_noncanonical_envelope_shape() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                UnsupportedBackendTag,
+                EmptyCircuitId,
+                EmptyPublicInputs,
+                OversizedPublicInputs,
+                EmptyProofBytes,
+                AuxiliaryBytes,
+            }
+
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            for (index, (case, tamper, expected_msg)) in [
+                (
+                    "unsupported_backend",
+                    Tamper::UnsupportedBackendTag,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_circuit",
+                    Tamper::EmptyCircuitId,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_public_inputs",
+                    Tamper::EmptyPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "oversized_public_inputs",
+                    Tamper::OversizedPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_proof_bytes",
+                    Tamper::EmptyProofBytes,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "auxiliary",
+                    Tamper::AuxiliaryBytes,
+                    "envelope auxiliary bytes must be empty",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
+                    stx.chain_id.clone(),
+                    ALICE_ID.clone(),
+                    fixture.receiver.clone(),
+                    fixture.asset_def_id.clone(),
+                    5,
+                    fixture.identity_commitment,
+                    &fixture.witness,
+                    fixture.policy_hash,
+                    fixture.vk_id.clone(),
+                    vk_commitment,
+                );
+                let proof = mutate_zk_ace_envelope(proof, |envelope| match tamper {
+                    Tamper::UnsupportedBackendTag => envelope.backend = BackendTag::Unsupported,
+                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                    Tamper::OversizedPublicInputs => {
+                        envelope.public_inputs = vec![
+                            0xA5;
+                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                                + 1
+                        ];
+                    }
+                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
+                    Tamper::AuxiliaryBytes => envelope.aux = b"zk-ace-aux".to_vec(),
+                });
+                let transfer = zk_ace_transfer_instruction(
+                    ALICE_ID.clone(),
+                    fixture.receiver.clone(),
+                    fixture.asset_def_id.clone(),
+                    5,
+                    fixture.identity_commitment,
+                    tx_digest,
+                    stx.chain_id.clone(),
+                    replay_nullifier,
+                    fixture.policy_hash,
+                    proof,
+                );
+                seed_zk_ace_call_hash(&mut stx, 0x80u8.wrapping_add(index as u8));
+                let err = match transfer.execute(&ALICE_ID, &mut stx) {
+                    Ok(()) => panic!("{case} ZK-ACE proof must fail"),
+                    Err(err) => err,
+                };
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "expected {expected_msg:?}, got {msg:?} for {case}"
+                );
+            }
+        }
+
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_authorized_transfer_rejects_digest_and_public_input_mutations() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
 
             let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
@@ -18898,15 +19388,14 @@ pub mod isi {
             .expect("register ZK-ACE identity commitment");
 
             let amount = 6;
-            let replay_nullifier = [0x50; 32];
-            let (proof, tx_digest) = zk_ace_proof_attachment(
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
                 fixture.identity_commitment,
-                replay_nullifier,
+                &fixture.witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -18958,25 +19447,39 @@ pub mod isi {
                 "unexpected recipient-substitution error: {msg}"
             );
 
-            let public_input_nullifier = [0x51; 32];
-            let (public_input_proof, public_input_digest) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
+            let public_input_witness = zk_ace_test_witness(0x51);
+            let public_input_commitment =
+                zk_ace_identity_commitment_for_test(&public_input_witness);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                public_input_nullifier,
+                public_input_commitment,
                 fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
                 fixture.vk_id.clone(),
-                vk_commitment,
-            );
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register public-input mutation identity");
+            let (public_input_proof, public_input_digest, public_input_nullifier) =
+                zk_ace_proof_attachment(
+                    stx.chain_id.clone(),
+                    ALICE_ID.clone(),
+                    fixture.receiver.clone(),
+                    fixture.asset_def_id.clone(),
+                    amount,
+                    public_input_commitment,
+                    &public_input_witness,
+                    fixture.policy_hash,
+                    fixture.vk_id.clone(),
+                    vk_commitment,
+                );
             let public_input_transfer = zk_ace_transfer_instruction(
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
-                fixture.identity_commitment,
+                public_input_commitment,
                 public_input_digest,
                 stx.chain_id.clone(),
                 public_input_nullifier,
@@ -18993,15 +19496,27 @@ pub mod isi {
                 "unexpected public-input mutation error: {msg}"
             );
 
-            let stark_nullifier = [0x52; 32];
-            let (stark_proof, stark_digest) = zk_ace_proof_attachment(
+            let stark_witness = zk_ace_test_witness(0x52);
+            let stark_commitment = zk_ace_identity_commitment_for_test(&stark_witness);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                stark_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register STARK public-input mutation identity");
+            let (stark_proof, stark_digest, stark_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
-                fixture.identity_commitment,
-                stark_nullifier,
+                stark_commitment,
+                &stark_witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -19011,7 +19526,7 @@ pub mod isi {
                 fixture.receiver,
                 fixture.asset_def_id,
                 amount,
-                fixture.identity_commitment,
+                stark_commitment,
                 stark_digest,
                 stx.chain_id.clone(),
                 stark_nullifier,
@@ -19029,15 +19544,19 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_authorized_transfer_rejects_wrong_domain_chain_and_verifier() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
             iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
                 fixture.identity_commitment,
@@ -19051,15 +19570,14 @@ pub mod isi {
             .expect("register ZK-ACE identity commitment");
 
             let amount = 5;
-            let replay_nullifier = [0x44; 32];
-            let (proof, tx_digest) = zk_ace_proof_attachment(
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
                 fixture.identity_commitment,
-                replay_nullifier,
+                &fixture.witness,
                 fixture.policy_hash,
                 fixture.vk_id.clone(),
                 vk_commitment,
@@ -19138,14 +19656,27 @@ pub mod isi {
                 iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
                 "wrong_zk_ace_verifier",
             );
-            let (wrong_vk_proof, wrong_vk_digest) = zk_ace_proof_attachment(
+            let wrong_vk_witness = zk_ace_test_witness(0x46);
+            let wrong_vk_commitment = zk_ace_identity_commitment_for_test(&wrong_vk_witness);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                wrong_vk_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register wrong-VK mutation identity");
+            let (wrong_vk_proof, wrong_vk_digest, wrong_vk_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 fixture.receiver.clone(),
                 fixture.asset_def_id.clone(),
                 amount,
-                fixture.identity_commitment,
-                [0x46; 32],
+                wrong_vk_commitment,
+                &wrong_vk_witness,
                 fixture.policy_hash,
                 wrong_vk_id,
                 vk_commitment,
@@ -19155,10 +19686,10 @@ pub mod isi {
                 fixture.receiver,
                 fixture.asset_def_id,
                 amount,
-                fixture.identity_commitment,
+                wrong_vk_commitment,
                 wrong_vk_digest,
                 stx.chain_id.clone(),
-                [0x46; 32],
+                wrong_vk_nullifier,
                 fixture.policy_hash,
                 wrong_vk_proof,
             );
@@ -19169,6 +19700,85 @@ pub mod isi {
             assert!(
                 msg.contains("verifying key reference mismatch"),
                 "unexpected verifier error: {msg}"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn zk_ace_rejects_inner_stark_tamper_even_when_committed_result_trust_is_set() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 3;
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                &fixture.witness,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                mutate_zk_ace_inner_stark_envelope_bytes(proof),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x53);
+            let err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("committed-result trust must not bypass invalid ZK-ACE proof");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("invalid ZK-ACE authorization proof"),
+                "unexpected invalid-proof error: {msg}"
+            );
+
+            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
+            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(100, 0));
+            assert!(
+                stx.world.assets.get(&receiver_asset).is_none(),
+                "invalid proof must not create receiver asset"
+            );
+            assert!(
+                !stx.world
+                    .zk_assets
+                    .get(&fixture.asset_def_id)
+                    .expect("ZK-ACE state exists")
+                    .zk_ace_replay_nullifiers
+                    .contains(&replay_nullifier),
+                "invalid proof must not consume replay nullifier"
             );
         }
 
@@ -19203,6 +19813,58 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn zk_ace_rejects_downgraded_stark_verifier_parameters() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            let weak_vk = weak_zk_ace_verifying_key_box_for_test();
+            let weak_commitment = hash_vk(&weak_vk);
+            let weak_record = stx
+                .world
+                .verifying_keys
+                .get_mut(&fixture.vk_id)
+                .expect("ZK-ACE verifier is installed");
+            weak_record.commitment = weak_commitment;
+            weak_record.vk_len = u32::try_from(weak_vk.bytes.len()).expect("weak VK length fits");
+            weak_record.key = Some(weak_vk);
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id,
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("downgraded ZK-ACE STARK verifier must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("below production floor"),
+                "unexpected downgraded verifier error: {msg}"
+            );
+            assert!(
+                !stx.world
+                    .zk_assets
+                    .get(&fixture.asset_def_id)
+                    .is_some_and(|state| state
+                        .zk_ace_identities
+                        .contains_key(&fixture.identity_commitment)),
+                "downgraded verifier must not register ZK-ACE identity state"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_rejects_retired_verifier_and_oversized_authorization_proof() {
             let retired = zk_ace_transfer_fixture();
@@ -19236,7 +19898,6 @@ pub mod isi {
             let oversized = zk_ace_transfer_fixture();
             let block = new_dummy_block();
             let mut state_block = oversized.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
             let mut stx = state_block.transaction();
             let vk_commitment =
                 install_zk_ace_verifier(&mut stx, &oversized.vk_id, ConfidentialStatus::Active, 16);
@@ -19251,15 +19912,14 @@ pub mod isi {
             )
             .execute(&ALICE_ID, &mut stx)
             .expect("register ZK-ACE identity commitment");
-            let replay_nullifier = [0x47; 32];
-            let (proof, tx_digest) = zk_ace_proof_attachment(
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
                 stx.chain_id.clone(),
                 ALICE_ID.clone(),
                 oversized.receiver.clone(),
                 oversized.asset_def_id.clone(),
                 3,
                 oversized.identity_commitment,
-                replay_nullifier,
+                &oversized.witness,
                 oversized.policy_hash,
                 oversized.vk_id.clone(),
                 vk_commitment,
@@ -22175,6 +22835,228 @@ pub mod isi {
             }
         }
 
+        const PENDING_PRODUCTION_VERIFIER_LABELS: &[&str] = &[
+            "halo2/ipa/orchard",
+            "halo2/ipa:zcash-orchard",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "jindo",
+            "miden-stark",
+            "stark/fri/miden",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "stark/fri/pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "zk-ams",
+            "vega-existing-credential-zk",
+            "silent-threshold-anoncred",
+            "zk-x509",
+            "sis-with-hints",
+        ];
+
+        const PENDING_PRODUCTION_VERIFIER_TAGS: &[BackendTag] = &[
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ];
+
+        const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:production-certified",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ];
+
+        fn pending_label_generic_record_profile(
+            backend: &str,
+        ) -> (BackendTag, &'static str, &'static str) {
+            if backend.starts_with("stark/fri") {
+                (BackendTag::Stark, "goldilocks", "stark_default")
+            } else {
+                (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
+            }
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn pasta_scalar_word(value: u64) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            out[..8].copy_from_slice(&value.to_le_bytes());
+            out
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn tamper_open_verify_envelope_inner_proof_byte(proof: &mut ProofAttachment) {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode OpenVerifyEnvelope");
+            assert!(
+                envelope.proof_bytes.len() > 12,
+                "fixture proof must carry a non-empty ZK1 PROF payload"
+            );
+            assert_eq!(&envelope.proof_bytes[..4], b"ZK1\0");
+            assert_eq!(&envelope.proof_bytes[4..8], b"PROF");
+            let prof_len = u32::from_le_bytes(
+                envelope.proof_bytes[8..12]
+                    .try_into()
+                    .expect("PROF length bytes"),
+            );
+            assert!(prof_len > 0, "fixture PROF payload must not be empty");
+            envelope.proof_bytes[12] ^= 0x01;
+            proof.proof.bytes =
+                norito::to_bytes(&envelope).expect("re-encode tampered OpenVerifyEnvelope");
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn asset_hidden_transfer_trust_flag_rejects_tampered_ipa_proof() {
+            let domain_id =
+                DomainId::try_new("assethidden", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
+            let storage_asset =
+                AssetDefinitionId::new(domain_id, "pool".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(storage_asset.clone())
+                .with_name(storage_asset.name().to_string())
+                .build(&ALICE_ID);
+            let world = World::with_assets([domain], [account], [asset_definition], [], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            let mut zk = state.zk.clone();
+            zk.halo2.enabled = true;
+            zk.halo2.max_envelope_bytes = usize::MAX;
+            zk.halo2.max_proof_bytes = usize::MAX;
+            state.set_zk(zk);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+
+            let pool_id = "asset-hidden-trust-boundary".to_owned();
+            let asset_set_root = pasta_scalar_word(0x20);
+            let input_nullifier = pasta_scalar_word(0x30);
+            let output_commitment = pasta_scalar_word(0x40);
+            let root_hint = [0u8; 32];
+            let circuit_id = "halo2/pasta/asset-hidden-transfer-public-test";
+            let vk_id = VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "asset-hidden-vk");
+            let instance_words = [
+                crate::zk::confidential_v2::derive_asset_hidden_pool_id_tag_v1(&pool_id),
+                asset_set_root,
+                pasta_scalar_word(0x50),
+                [0u8; 32],
+                input_nullifier,
+                [0u8; 32],
+                output_commitment,
+                [0u8; 32],
+                root_hint,
+                crate::zk::confidential_v2::derive_confidential_chain_tag_v2(stx.chain_id.as_str()),
+            ];
+            let initial_fixture =
+                crate::zk::test_utils::halo2_asset_hidden_transfer_fixture_envelope(
+                    circuit_id,
+                    [0u8; 32],
+                    instance_words,
+                );
+            let vk_box = VerifyingKeyBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                initial_fixture.vk_bytes.expect("asset-hidden fixture VK"),
+            );
+            let vk_commitment = hash_vk(&vk_box);
+            let fixture = crate::zk::test_utils::halo2_asset_hidden_transfer_fixture_envelope(
+                circuit_id,
+                vk_commitment,
+                instance_words,
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                circuit_id.to_owned(),
+                None,
+                "asset-hidden",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                fixture.schema_hash,
+                vk_commitment,
+            );
+            record.vk_len = u32::try_from(vk_box.bytes.len()).expect("asset-hidden VK length fits");
+            record.max_proof_bytes = 1024 * 1024;
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("halo2_default".into());
+            stx.world
+                .verifying_keys
+                .insert(vk_id.clone(), record.clone());
+            stx.world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                pool_id.clone(),
+                storage_asset.clone(),
+                asset_set_root,
+                vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset-hidden pool");
+
+            let proof_box =
+                ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), fixture.proof_bytes);
+            let mut attachment =
+                ProofAttachment::new_ref(crate::zk::ZK_BACKEND_HALO2_IPA.into(), proof_box, vk_id);
+            attachment.vk_commitment = Some(vk_commitment);
+            attachment.envelope_hash = Some(Hash::new(&attachment.proof.bytes).into());
+            tamper_open_verify_envelope_inner_proof_byte(&mut attachment);
+            let transfer = iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+                pool_id,
+                vec![input_nullifier],
+                vec![output_commitment],
+                attachment,
+                Some(root_hint),
+            );
+
+            let err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("committed-result trust must not bypass invalid asset-hidden proof");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("invalid asset-hidden transfer proof"),
+                "unexpected asset-hidden proof error: {msg}"
+            );
+            let pool_state = stx
+                .world
+                .zk_assets
+                .get(&storage_asset)
+                .expect("asset-hidden pool state remains present");
+            assert!(
+                !pool_state.nullifiers.contains(&input_nullifier),
+                "invalid trusted replay must not consume asset-hidden nullifier"
+            );
+            assert!(
+                !pool_state.commitments.contains(&output_commitment),
+                "invalid trusted replay must not append asset-hidden output"
+            );
+        }
+
         #[test]
         fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
             #[derive(Clone, Copy)]
@@ -22182,6 +23064,10 @@ pub mod isi {
                 BackendTag,
                 CircuitId,
                 PublicInputsSchema,
+                EmptyCircuitId,
+                EmptyPublicInputs,
+                OversizedPublicInputs,
+                EmptyProofBytes,
                 AuxiliaryBytes,
                 ZeroVerifyingKeyHash,
                 VerifyingKeyHash,
@@ -22203,6 +23089,26 @@ pub mod isi {
                     "schema",
                     Tamper::PublicInputsSchema,
                     "public inputs schema mismatch",
+                ),
+                (
+                    "empty_circuit",
+                    Tamper::EmptyCircuitId,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_public_inputs",
+                    Tamper::EmptyPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "oversized_public_inputs",
+                    Tamper::OversizedPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_proof_bytes",
+                    Tamper::EmptyProofBytes,
+                    "invalid OpenVerifyEnvelope",
                 ),
                 (
                     "aux",
@@ -22287,6 +23193,16 @@ pub mod isi {
                     Tamper::PublicInputsSchema => {
                         envelope.public_inputs = b"not the confidential transfer schema".to_vec();
                     }
+                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                    Tamper::OversizedPublicInputs => {
+                        envelope.public_inputs = vec![
+                            0xA5;
+                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                                + 1
+                        ];
+                    }
+                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
                     Tamper::AuxiliaryBytes => envelope.aux = b"fee-binding".to_vec(),
                     Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
                     Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
@@ -22385,8 +23301,15 @@ pub mod isi {
             #[derive(Clone, Copy)]
             enum Tamper {
                 BackendTag,
+                CircuitId,
                 PublicInputsSchema,
+                EmptyCircuitId,
+                EmptyPublicInputs,
+                OversizedPublicInputs,
+                EmptyProofBytes,
                 AuxiliaryBytes,
+                ZeroVerifyingKeyHash,
+                VerifyingKeyHash,
                 MissingCircuitIndex,
             }
 
@@ -22411,14 +23334,49 @@ pub mod isi {
                         "unexpected OpenVerifyEnvelope backend tag",
                     ),
                     (
+                        "circuit",
+                        Tamper::CircuitId,
+                        "verifying key circuit mismatch",
+                    ),
+                    (
                         "schema",
                         Tamper::PublicInputsSchema,
                         "public inputs schema mismatch",
                     ),
                     (
+                        "empty_circuit_id",
+                        Tamper::EmptyCircuitId,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "empty_public_inputs",
+                        Tamper::EmptyPublicInputs,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "oversized_public_inputs",
+                        Tamper::OversizedPublicInputs,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "empty_proof_bytes",
+                        Tamper::EmptyProofBytes,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
                         "aux",
                         Tamper::AuxiliaryBytes,
                         "envelope auxiliary bytes must be empty",
+                    ),
+                    (
+                        "zero_vk_hash",
+                        Tamper::ZeroVerifyingKeyHash,
+                        "verifier-key hash must be non-zero",
+                    ),
+                    (
+                        "wrong_vk_hash",
+                        Tamper::VerifyingKeyHash,
+                        "verifying key commitment mismatch",
                     ),
                     (
                         "missing_circuit_index",
@@ -22485,11 +23443,26 @@ pub mod isi {
                     };
                     match tamper {
                         Tamper::BackendTag => envelope.backend = BackendTag::Stark,
+                        Tamper::CircuitId => {
+                            envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
+                        }
                         Tamper::PublicInputsSchema => {
                             envelope.public_inputs =
                                 b"not the confidential unshield schema".to_vec();
                         }
+                        Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                        Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                        Tamper::OversizedPublicInputs => {
+                            envelope.public_inputs = vec![
+                                0xA5;
+                                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                                    + 1
+                            ];
+                        }
+                        Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
                         Tamper::AuxiliaryBytes => envelope.aux = b"side-channel".to_vec(),
+                        Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
+                        Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
                         Tamper::MissingCircuitIndex => {}
                     }
                     let proof_box = ProofBox::new(
@@ -23389,6 +24362,187 @@ pub mod isi {
         }
 
         #[test]
+        fn register_vk_rejects_pending_production_record_tags() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_tag_{idx}"));
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("pending-tag-{idx}"),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    [0x6A; 32],
+                    [0x6B; 32],
+                );
+                rec.status = ConfidentialStatus::Active;
+                rec.gas_schedule_id = Some("halo2_default".into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("pending-production verifier tag must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{} must not be admitted to WSV",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_pending_production_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_pending_label_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let (record_backend, curve, schedule) =
+                    pending_label_generic_record_profile(backend);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:pending-production-circuit"),
+                    None,
+                    "test",
+                    record_backend,
+                    curve,
+                    [0x6C; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("pending-production verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{backend} must not be admitted to WSV"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_production_claim_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let (record_backend, curve, schedule) =
+                    pending_label_generic_record_profile(backend);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:claimed-production-circuit"),
+                    None,
+                    "test",
+                    record_backend,
+                    curve,
+                    [0x7B; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("production-claim verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("production-claim verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{backend} must not be admitted to WSV"
+                );
+            }
+        }
+
+        #[test]
         fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -23547,6 +24701,139 @@ pub mod isi {
                 let msg = smart_contract_error_message(err);
                 assert!(
                     msg.contains("developer-only verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_unsupported_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, (backend, tag, curve, schedule)) in [
+                (
+                    " halo2/ipa",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa ",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa\n",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa\0",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "../halo2/ipa",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa/../tiny-add",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa:unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "stark/unknown-native-v1",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    " stark/fri/sha256-goldilocks",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/sha256-goldilocks ",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/sha256-goldilocks\0",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "../stark/fri",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_unsupported_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:unsupported-circuit"),
+                    None,
+                    "test",
+                    tag,
+                    curve,
+                    [0x73; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("unsupported verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("unsupported verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }
@@ -25081,6 +26368,74 @@ pub mod isi {
         }
 
         #[test]
+        fn update_vk_rejects_pending_production_record_tags_from_legacy_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_update_tag_{idx}"));
+                let mut old_rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("pending-update-tag-{idx}"),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    [0x6D; 32],
+                    [0x6E; 32],
+                );
+                old_rec.status = ConfidentialStatus::Active;
+                old_rec.gas_schedule_id = Some("halo2_default".into());
+
+                let mut seed_stx = state_block.transaction();
+                seed_stx
+                    .world
+                    .verifying_keys
+                    .insert(id.clone(), old_rec.clone());
+                seed_stx
+                    .world
+                    .verifying_keys_by_circuit
+                    .insert((old_rec.circuit_id.clone(), old_rec.version), id.clone());
+                seed_stx.apply();
+
+                let mut new_rec = old_rec;
+                new_rec.version = 2;
+                new_rec.public_inputs_schema_hash = [0x6F; 32];
+                new_rec.commitment = [0x70; 32];
+                let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                    id: id.clone(),
+                    record: new_rec,
+                }
+                .into();
+                let mut stx = state_block.transaction();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                    .expect_err("pending-production verifier tag update must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
         fn update_vk_rejects_non_production_existing_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -25101,6 +26456,27 @@ pub mod isi {
 
             let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule, expected_msg)) in [
+                (
+                    "halo2/ipa/orchard",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "pending-production verifying key backends",
+                ),
+                (
+                    "stark/fri/miden",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "pending-production verifying key backends",
+                ),
+                (
+                    "anonymous-pgc",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "pending-production verifying key backends",
+                ),
                 (
                     "halo2/mock",
                     BackendTag::Halo2IpaPasta,
@@ -25123,6 +26499,20 @@ pub mod isi {
                     "developer-only verifying key backends",
                 ),
                 (
+                    "halo2/ipa:production-ready",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "production-claim verifying key backends",
+                ),
+                (
+                    "stark/fri/security-review-passed",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "production-claim verifying key backends",
+                ),
+                (
                     "halo2/kzg",
                     BackendTag::Halo2IpaPasta,
                     "pallas",
@@ -25135,6 +26525,20 @@ pub mod isi {
                     "goldilocks",
                     "stark_default",
                     "trusted-setup verifying key backends",
+                ),
+                (
+                    "halo2/unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "unsupported verifying key backends",
+                ),
+                (
+                    "stark/unknown-native-v1",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "unsupported verifying key backends",
                 ),
             ]
             .into_iter()
@@ -25539,6 +26943,293 @@ pub mod isi {
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert!(msg.contains("OpenVerifyEnvelope"), "unexpected msg: {msg}");
+        }
+
+        #[test]
+        fn verify_proof_rejects_pending_production_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.apply();
+
+                let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
+                let attachment = ProofAttachment::new_ref(
+                    backend.into(),
+                    proof_box,
+                    VerifyingKeyId::new(backend, format!("vk_pending_proof_label_{idx}")),
+                );
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "pending-production proof backend must reject before registry lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production proof backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.apply();
+
+                let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
+                let attachment = ProofAttachment::new_ref(
+                    backend.into(),
+                    proof_box,
+                    VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
+                );
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "production-claim proof backend must reject before registry lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("production-claim proof backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_pending_production_record_tags() {
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let vk_id =
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_pending_record_tag_{idx}"));
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
+                let vk_commitment = hash_vk(&vk_box);
+                let public_inputs = vec![1, 2, 3, idx as u8];
+                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+                let circuit_id = format!("circuit_pending_record_tag_{idx}");
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs,
+                    proof_bytes: vec![4, 5, 6, idx as u8],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+                stx.world
+                    .verifying_keys_by_circuit
+                    .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+                stx.apply();
+
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "pending-production verifier record must reject before preverify lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_non_admitted_record_tags() {
+            for (idx, backend_tag) in [
+                BackendTag::Unsupported,
+                BackendTag::Halo2Bn254,
+                BackendTag::Groth16,
+                BackendTag::Stark,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
+                let vk_commitment = hash_vk(&vk_box);
+                let public_inputs = vec![1, 2, 3, idx as u8];
+                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+                let circuit_id = format!("circuit_bad_record_tag_{idx}");
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    backend_tag,
+                    if backend_tag == BackendTag::Stark {
+                        "goldilocks"
+                    } else {
+                        "pallas"
+                    },
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs,
+                    proof_bytes: vec![4, 5, 6, idx as u8],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+                stx.world
+                    .verifying_keys_by_circuit
+                    .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+                stx.apply();
+
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "non-admitted verifier record tag must reject before preverify lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("verifying key backend mismatch"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
         }
 
         #[test]

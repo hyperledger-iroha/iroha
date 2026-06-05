@@ -509,6 +509,8 @@ enum NativeBridgeError: Error, Equatable {
     case secpParse
     case secpSign
     case secpVerify
+    case invalidPrivacyRequest
+    case invalidPrivacyOutput
     case unknown(Int32)
 
     static func fromStatus(_ status: Int32) -> NativeBridgeError? {
@@ -569,6 +571,102 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         if let error = NativeBridgeError.fromStatus(status) {
             throw error
         }
+    }
+
+    static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
+    private static let privacyNoritoHeaderBytes = 40
+    private static let privacyNoritoMaxHeaderPaddingBytes = 64
+    private static let privacyNoritoSupportedFlagsMask: UInt8 = 0x27
+    private static let privacyNoritoFieldBitsetFlag: UInt8 = 0x20
+    private static let privacyNoritoFieldBitsetRequiredFlags: UInt8 = 0x06
+    private static let privacyRequestSchemaByte: UInt8 = 0x52
+    private static let privacyCapabilitiesResultSchemaByte: UInt8 = 0x50
+    private static let privacyBuildProofResultSchemaByte: UInt8 = 0x42
+    private static let privacyVerifyProofResultSchemaByte: UInt8 = 0x56
+    private static let privacyCrc64ReflectedPoly: UInt64 = 0xC96C_5795_D787_0F42
+    private static let privacyNoritoMagic: [UInt8] = [0x4E, 0x52, 0x54, 0x30]
+
+    static func isValidPrivacyNoritoArchive(_ archive: Data) -> Bool {
+        guard archive.count >= privacyNoritoHeaderBytes,
+              archive.count <= privacyNativeArchiveMaxBytes else {
+            return false
+        }
+        let bytes = [UInt8](archive)
+        guard Array(bytes[0..<4]) == privacyNoritoMagic else {
+            return false
+        }
+        guard bytes[4] == 0, bytes[5] == 0, bytes[22] == 0 else {
+            return false
+        }
+        let flags = bytes[39]
+        guard (flags & ~privacyNoritoSupportedFlagsMask) == 0 else {
+            return false
+        }
+        if (flags & privacyNoritoFieldBitsetFlag) != 0,
+           (flags & privacyNoritoFieldBitsetRequiredFlags) != privacyNoritoFieldBitsetRequiredFlags {
+            return false
+        }
+        let payloadLength = readPrivacyUInt64LittleEndian(bytes, offset: 23)
+        guard payloadLength <= UInt64(Int.max - privacyNoritoHeaderBytes) else {
+            return false
+        }
+        let minimumLength = privacyNoritoHeaderBytes + Int(payloadLength)
+        guard bytes.count >= minimumLength else {
+            return false
+        }
+        let paddingLength = bytes.count - minimumLength
+        guard paddingLength <= privacyNoritoMaxHeaderPaddingBytes else {
+            return false
+        }
+        if paddingLength > 0 {
+            let paddingStart = privacyNoritoHeaderBytes
+            let paddingEnd = paddingStart + paddingLength
+            guard bytes[paddingStart..<paddingEnd].allSatisfy({ $0 == 0 }) else {
+                return false
+            }
+        }
+        let payloadStart = privacyNoritoHeaderBytes + paddingLength
+        let expectedCrc = readPrivacyUInt64LittleEndian(bytes, offset: 31)
+        return privacyCrc64(bytes[payloadStart..<bytes.count]) == expectedCrc
+    }
+
+    static func hasNonEmptyPrivacyNoritoPayload(_ archive: Data) -> Bool {
+        guard isValidPrivacyNoritoArchive(archive) else {
+            return false
+        }
+        let bytes = [UInt8](archive)
+        return readPrivacyUInt64LittleEndian(bytes, offset: 23) > 0
+    }
+
+    static func hasPrivacyNoritoSchema(_ archive: Data, expectedSchemaByte: UInt8?) -> Bool {
+        guard let expectedSchemaByte else {
+            return true
+        }
+        guard archive.count >= 22 else {
+            return false
+        }
+        return archive[6..<22].allSatisfy { $0 == expectedSchemaByte }
+    }
+
+    private static func readPrivacyUInt64LittleEndian(_ bytes: [UInt8], offset: Int) -> UInt64 {
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value |= UInt64(bytes[offset + index]) << (8 * index)
+        }
+        return value
+    }
+
+    private static func privacyCrc64(_ payload: ArraySlice<UInt8>) -> UInt64 {
+        var crc = UInt64.max
+        for byte in payload {
+            crc ^= UInt64(byte)
+            for _ in 0..<8 {
+                crc = (crc & 1) != 0
+                    ? (crc >> 1) ^ privacyCrc64ReflectedPoly
+                    : crc >> 1
+            }
+        }
+        return crc ^ UInt64.max
     }
 
     #if canImport(Darwin)
@@ -1611,6 +1709,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias PrivacyCapabilitiesFn = @convention(c) (
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias PrivacyProofArchiveFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaRecursiveSpendLineageWitnessFromInitResultFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1790,10 +1895,21 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn? = nil
     private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendTransitionProfileInitFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendTransitionProfileAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendLineageAppendBoundaryFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendLineageWitnessFromInitResultFn: KagemushaRecursiveSpendLineageWitnessFromInitResultFn? = nil
     private var kagemushaRecursiveSpendLineageWitnessAppendResultFn: KagemushaRecursiveSpendLineageWitnessAppendResultFn? = nil
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
+    private var privacyBuildProofFn: PrivacyProofArchiveFn? = nil
+    private var privacyVerifyProofFn: PrivacyProofArchiveFn? = nil
+    private var privacyFreeFn: FreeFn? = nil
+    private var privacyNativeProbeOk = false
+    private var kagemushaCompactPaymentTokenNativeProbeOk = false
+    private var kagemushaRecursiveAggregationNativeProbeOk = false
+    private var kagemushaRecursiveSpendNativeProbeOk = false
     private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeRedeemOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeAuditOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
@@ -1905,10 +2021,21 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
     private let kagemushaRecursiveSpendInitFn: Any? = nil
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
+    private let kagemushaRecursiveSpendTransitionProfileInitFn: Any? = nil
+    private let kagemushaRecursiveSpendTransitionProfileAppendFn: Any? = nil
+    private let kagemushaRecursiveSpendLineageAppendBoundaryFn: Any? = nil
     private let kagemushaRecursiveSpendLineageWitnessFromInitResultFn: Any? = nil
     private let kagemushaRecursiveSpendLineageWitnessAppendResultFn: Any? = nil
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
+    private let privacyCapabilitiesFn: Any? = nil
+    private let privacyBuildProofFn: Any? = nil
+    private let privacyVerifyProofFn: Any? = nil
+    private let privacyFreeFn: Any? = nil
+    private let privacyNativeProbeOk = false
+    private let kagemushaCompactPaymentTokenNativeProbeOk = false
+    private let kagemushaRecursiveAggregationNativeProbeOk = false
+    private let kagemushaRecursiveSpendNativeProbeOk = false
     private let encodeIssueOfflineNoteFn: Any? = nil
     private let encodeRedeemOfflineNoteFn: Any? = nil
     private let encodeAuditOfflineNoteFn: Any? = nil
@@ -1919,6 +2046,36 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 #endif
 
     #if canImport(Darwin)
+    private func loadPrivacySymbols(from handle: UnsafeMutableRawPointer?) {
+        guard let handle else {
+            self.privacyCapabilitiesFn = nil
+            self.privacyBuildProofFn = nil
+            self.privacyVerifyProofFn = nil
+            self.privacyFreeFn = nil
+            return
+        }
+        if let capabilitiesSymbol = dlsym(handle, "iroha_privacy_capabilities_v1") {
+            self.privacyCapabilitiesFn = unsafeBitCast(capabilitiesSymbol, to: PrivacyCapabilitiesFn.self)
+        } else {
+            self.privacyCapabilitiesFn = nil
+        }
+        if let buildProofSymbol = dlsym(handle, "iroha_privacy_build_proof_v1") {
+            self.privacyBuildProofFn = unsafeBitCast(buildProofSymbol, to: PrivacyProofArchiveFn.self)
+        } else {
+            self.privacyBuildProofFn = nil
+        }
+        if let verifyProofSymbol = dlsym(handle, "iroha_privacy_verify_proof_v1") {
+            self.privacyVerifyProofFn = unsafeBitCast(verifyProofSymbol, to: PrivacyProofArchiveFn.self)
+        } else {
+            self.privacyVerifyProofFn = nil
+        }
+        if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
+            self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
+        } else {
+            self.privacyFreeFn = nil
+        }
+    }
+
     private func installStaticallyLinkedBridgeIfAvailable() {
         #if IROHASWIFT_BRIDGE_PRESENT
         let abiVersion = connect_norito_bridge_abi_version()
@@ -1939,6 +2096,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeMintFn = connect_norito_encode_mint_signed_transaction
         self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        loadPrivacySymbols(from: staticHandle)
         if let issueNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_issue_offline_note_signed_transaction") }) {
             self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)
         }
@@ -1990,6 +2148,36 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.kagemushaRecursiveSpendAppendFn = nil
+        }
+        if let kagemushaRecursiveSpendTransitionProfileInitSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_transition_profile_init")
+        }) {
+            self.kagemushaRecursiveSpendTransitionProfileInitFn = unsafeBitCast(
+                kagemushaRecursiveSpendTransitionProfileInitSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
+        }
+        if let kagemushaRecursiveSpendTransitionProfileAppendSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_transition_profile_append")
+        }) {
+            self.kagemushaRecursiveSpendTransitionProfileAppendFn = unsafeBitCast(
+                kagemushaRecursiveSpendTransitionProfileAppendSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendTransitionProfileAppendFn = nil
+        }
+        if let kagemushaRecursiveSpendLineageAppendBoundarySymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_lineage_append_boundary")
+        }) {
+            self.kagemushaRecursiveSpendLineageAppendBoundaryFn = unsafeBitCast(
+                kagemushaRecursiveSpendLineageAppendBoundarySymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendLineageAppendBoundaryFn = nil
         }
         if let kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result")
@@ -2108,6 +2296,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
            let freeSymbol = dlsym(handle, "connect_norito_free") {
             self.encodeTransferFn = unsafeBitCast(encodeSymbol, to: EncodeTransferFn.self)
             self.freeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
+            loadPrivacySymbols(from: handle)
             if let encodeFeeSponsorSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor") {
                 self.encodeTransferWithFeeSponsorFn = unsafeBitCast(
                     encodeFeeSponsorSymbol,
@@ -2628,6 +2817,39 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaRecursiveSpendAppendFn = nil
             }
+            if let kagemushaRecursiveSpendTransitionProfileInitSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_transition_profile_init"
+            ) {
+                self.kagemushaRecursiveSpendTransitionProfileInitFn = unsafeBitCast(
+                    kagemushaRecursiveSpendTransitionProfileInitSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
+            }
+            if let kagemushaRecursiveSpendTransitionProfileAppendSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_transition_profile_append"
+            ) {
+                self.kagemushaRecursiveSpendTransitionProfileAppendFn = unsafeBitCast(
+                    kagemushaRecursiveSpendTransitionProfileAppendSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendTransitionProfileAppendFn = nil
+            }
+            if let kagemushaRecursiveSpendLineageAppendBoundarySymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_lineage_append_boundary"
+            ) {
+                self.kagemushaRecursiveSpendLineageAppendBoundaryFn = unsafeBitCast(
+                    kagemushaRecursiveSpendLineageAppendBoundarySymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendLineageAppendBoundaryFn = nil
+            }
             if let kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol = dlsym(
                 handle,
                 "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result"
@@ -2806,10 +3028,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
             self.kagemushaRecursiveSpendInitFn = nil
             self.kagemushaRecursiveSpendAppendFn = nil
+            self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
+            self.kagemushaRecursiveSpendTransitionProfileAppendFn = nil
+            self.kagemushaRecursiveSpendLineageAppendBoundaryFn = nil
             self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = nil
             self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
             self.kagemushaRecursiveSpendVerifyFn = nil
             self.kagemushaRecursiveSpendRedeemFn = nil
+            self.privacyCapabilitiesFn = nil
+            self.privacyBuildProofFn = nil
+            self.privacyVerifyProofFn = nil
+            self.privacyFreeFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
@@ -2862,6 +3091,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         if self.encodeTransferFn == nil || self.freeFn == nil {
             installStaticallyLinkedBridgeIfAvailable()
         }
+        probeKagemushaNativeAvailability()
+        probePrivacyNativeAvailability()
 
         if let setAccelerationConfigFn {
             var defaults = ConnectNoritoAccelerationConfig(
@@ -2894,6 +3125,277 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    #if canImport(Darwin)
+    static let expectedKagemushaProbeStatus: Int32 = -311
+    static let privacyNativeAvailabilityProbeArchive: Data = {
+        var archive = Data(repeating: 0, count: 40)
+        archive[0] = 0x4E
+        archive[1] = 0x52
+        archive[2] = 0x54
+        archive[3] = 0x30
+        for index in 6..<22 {
+            archive[index] = NoritoNativeBridge.privacyRequestSchemaByte
+        }
+        return archive
+    }()
+
+    static func isExpectedKagemushaMalformedProbeResult(
+        status: Int32,
+        outPtr: UnsafeMutablePointer<UInt8>?,
+        outLen: CUnsignedLong
+    ) -> Bool {
+        status == expectedKagemushaProbeStatus && outPtr == nil && outLen == 0
+    }
+
+    static func isValidPrivacyNativeProbeResult(
+        status: Int32,
+        outPtr: UnsafeMutablePointer<UInt8>?,
+        outLen: CUnsignedLong,
+        expectedSchemaByte: UInt8? = nil
+    ) -> Bool {
+        guard status == 0,
+              let outPtr,
+              outLen > 0,
+              outLen <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
+            return false
+        }
+        let archive = Data(bytes: outPtr, count: Int(outLen))
+        return Self.isValidPrivacyNoritoArchive(archive)
+            && Self.hasNonEmptyPrivacyNoritoPayload(archive)
+            && Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte)
+    }
+
+    private func probeKagemushaNativeAvailability() {
+        kagemushaCompactPaymentTokenNativeProbeOk =
+            probeKagemushaArchiveFunction(kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn)
+        kagemushaRecursiveAggregationNativeProbeOk =
+            probeKagemushaRecursiveAggregationFunction(
+                kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn
+            )
+
+        var recursiveSpendOk = true
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendInitFn) && recursiveSpendOk
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendAppendFn) && recursiveSpendOk
+        recursiveSpendOk =
+            probeKagemushaArchiveFunction(kagemushaRecursiveSpendTransitionProfileInitFn)
+            && recursiveSpendOk
+        recursiveSpendOk =
+            probeKagemushaArchiveFunction(kagemushaRecursiveSpendTransitionProfileAppendFn)
+            && recursiveSpendOk
+        recursiveSpendOk =
+            probeKagemushaArchiveFunction(kagemushaRecursiveSpendLineageAppendBoundaryFn)
+            && recursiveSpendOk
+        recursiveSpendOk =
+            probeKagemushaLineageWitnessFromInitResultFunction(
+                kagemushaRecursiveSpendLineageWitnessFromInitResultFn
+            ) && recursiveSpendOk
+        recursiveSpendOk =
+            probeKagemushaLineageWitnessAppendResultFunction(
+                kagemushaRecursiveSpendLineageWitnessAppendResultFn
+            ) && recursiveSpendOk
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendVerifyFn) && recursiveSpendOk
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendRedeemFn) && recursiveSpendOk
+        kagemushaRecursiveSpendNativeProbeOk = recursiveSpendOk
+    }
+
+    private func probeKagemushaArchiveFunction(_ function: KagemushaRecursiveSpendArchiveFn?) -> Bool {
+        guard let function, freeFn != nil else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { buffer -> Int32 in
+            let baseAddress = buffer.bindMemory(to: UInt8.self).baseAddress
+            return function(
+                baseAddress,
+                CUnsignedLong(buffer.count),
+                &outPtr,
+                &outLen
+            )
+        }
+        return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func probeKagemushaRecursiveAggregationFunction(
+        _ function: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn?
+    ) -> Bool {
+        guard let function, freeFn != nil else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { recordBuffer -> Int32 in
+            let recordBaseAddress = recordBuffer.bindMemory(to: UInt8.self).baseAddress
+            return probeArchive.withUnsafeBytes { envelopeBuffer -> Int32 in
+                let envelopeBaseAddress = envelopeBuffer.bindMemory(to: UInt8.self).baseAddress
+                return function(
+                    recordBaseAddress,
+                    CUnsignedLong(recordBuffer.count),
+                    envelopeBaseAddress,
+                    CUnsignedLong(envelopeBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func probeKagemushaLineageWitnessFromInitResultFunction(
+        _ function: KagemushaRecursiveSpendLineageWitnessFromInitResultFn?
+    ) -> Bool {
+        guard let function, freeFn != nil else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { requestBuffer -> Int32 in
+            let requestBaseAddress = requestBuffer.bindMemory(to: UInt8.self).baseAddress
+            return probeArchive.withUnsafeBytes { bundleBuffer -> Int32 in
+                let bundleBaseAddress = bundleBuffer.bindMemory(to: UInt8.self).baseAddress
+                return function(
+                    requestBaseAddress,
+                    CUnsignedLong(requestBuffer.count),
+                    bundleBaseAddress,
+                    CUnsignedLong(bundleBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func probeKagemushaLineageWitnessAppendResultFunction(
+        _ function: KagemushaRecursiveSpendLineageWitnessAppendResultFn?
+    ) -> Bool {
+        guard let function, freeFn != nil else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { witnessBuffer -> Int32 in
+            let witnessBaseAddress = witnessBuffer.bindMemory(to: UInt8.self).baseAddress
+            return probeArchive.withUnsafeBytes { requestBuffer -> Int32 in
+                let requestBaseAddress = requestBuffer.bindMemory(to: UInt8.self).baseAddress
+                return probeArchive.withUnsafeBytes { bundleBuffer -> Int32 in
+                    let bundleBaseAddress = bundleBuffer.bindMemory(to: UInt8.self).baseAddress
+                    return function(
+                        witnessBaseAddress,
+                        CUnsignedLong(witnessBuffer.count),
+                        requestBaseAddress,
+                        CUnsignedLong(requestBuffer.count),
+                        bundleBaseAddress,
+                        CUnsignedLong(bundleBuffer.count),
+                        &outPtr,
+                        &outLen
+                    )
+                }
+            }
+        }
+        return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func consumeKagemushaProbeResult(
+        status: Int32,
+        outPtr: UnsafeMutablePointer<UInt8>?,
+        outLen: CUnsignedLong
+    ) -> Bool {
+        let expected = Self.isExpectedKagemushaMalformedProbeResult(
+            status: status,
+            outPtr: outPtr,
+            outLen: outLen
+        )
+        if let outPtr {
+            freeFn?(outPtr)
+        }
+        return expected
+    }
+
+    private func probePrivacyNativeAvailability() {
+        var available = true
+        available = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn) && available
+        available = probePrivacyProofFunction(
+            privacyBuildProofFn,
+            expectedSchemaByte: Self.privacyBuildProofResultSchemaByte
+        ) && available
+        available = probePrivacyProofFunction(
+            privacyVerifyProofFn,
+            expectedSchemaByte: Self.privacyVerifyProofResultSchemaByte
+        ) && available
+        privacyNativeProbeOk = available
+    }
+
+    private func probePrivacyCapabilitiesFunction(_ function: PrivacyCapabilitiesFn?) -> Bool {
+        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = function(&outPtr, &outLen)
+        return consumePrivacyNativeProbeResult(
+            status: status,
+            outPtr: outPtr,
+            outLen: outLen,
+            expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte,
+            free: freePrivacyFn
+        )
+    }
+
+    private func probePrivacyProofFunction(
+        _ function: PrivacyProofArchiveFn?,
+        expectedSchemaByte: UInt8
+    ) -> Bool {
+        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Self.privacyNativeAvailabilityProbeArchive
+        let status = probeArchive.withUnsafeBytes { buffer -> Int32 in
+            guard let baseAddress = buffer.bindMemory(to: UInt8.self).baseAddress else {
+                return -1
+            }
+            return function(
+                baseAddress,
+                CUnsignedLong(buffer.count),
+                &outPtr,
+                &outLen
+            )
+        }
+        return consumePrivacyNativeProbeResult(
+            status: status,
+            outPtr: outPtr,
+            outLen: outLen,
+            expectedSchemaByte: expectedSchemaByte,
+            free: freePrivacyFn
+        )
+    }
+
+    private func consumePrivacyNativeProbeResult(
+        status: Int32,
+        outPtr: UnsafeMutablePointer<UInt8>?,
+        outLen: CUnsignedLong,
+        expectedSchemaByte: UInt8,
+        free: FreeFn
+    ) -> Bool {
+        let expected = Self.isValidPrivacyNativeProbeResult(
+            status: status,
+            outPtr: outPtr,
+            outLen: outLen,
+            expectedSchemaByte: expectedSchemaByte
+        )
+        if let outPtr {
+            free(outPtr)
+        }
+        return expected
+    }
+    #endif
+
     public var isAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -2906,7 +3408,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     public var isKagemushaCompactPaymentTokenProverAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
-        return kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn != nil && freeFn != nil
+        return kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn != nil
+            && freeFn != nil
+            && kagemushaCompactPaymentTokenNativeProbeOk
         #else
         return false
         #endif
@@ -2915,7 +3419,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     public var isKagemushaRecursiveAggregationProofBundleProverAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
-        return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn != nil && freeFn != nil
+        return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn != nil
+            && freeFn != nil
+            && kagemushaRecursiveAggregationNativeProbeOk
         #else
         return false
         #endif
@@ -2926,11 +3432,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard bridgeEnabledForRuntime else { return false }
         return kagemushaRecursiveSpendInitFn != nil
             && kagemushaRecursiveSpendAppendFn != nil
+            && kagemushaRecursiveSpendTransitionProfileInitFn != nil
+            && kagemushaRecursiveSpendTransitionProfileAppendFn != nil
+            && kagemushaRecursiveSpendLineageAppendBoundaryFn != nil
             && kagemushaRecursiveSpendLineageWitnessFromInitResultFn != nil
             && kagemushaRecursiveSpendLineageWitnessAppendResultFn != nil
             && kagemushaRecursiveSpendVerifyFn != nil
             && kagemushaRecursiveSpendRedeemFn != nil
             && freeFn != nil
+            && kagemushaRecursiveSpendNativeProbeOk
+        #else
+        return false
+        #endif
+    }
+
+    public var isPrivacyNativeAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return privacyCapabilitiesFn != nil
+            && privacyBuildProofFn != nil
+            && privacyVerifyProofFn != nil
+            && (privacyFreeFn != nil || freeFn != nil)
+            && privacyNativeProbeOk
         #else
         return false
         #endif
@@ -5939,6 +6462,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         )
     }
 
+    func kagemushaRecursiveSpendTransitionProfileInit(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendTransitionProfileInitFn
+        )
+    }
+
+    func kagemushaRecursiveSpendTransitionProfileAppend(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendTransitionProfileAppendFn
+        )
+    }
+
+    func kagemushaRecursiveSpendLineageAppendBoundary(profileArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: profileArchive,
+            function: kagemushaRecursiveSpendLineageAppendBoundaryFn
+        )
+    }
+
     func kagemushaRecursiveSpendLineageWitnessFromInitResult(
         requestArchive: Data,
         bundleArchive: Data
@@ -5975,6 +6519,156 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             requestArchive: requestArchive,
             function: kagemushaRecursiveSpendRedeemFn
         )
+    }
+
+    func privacyCapabilitiesV1() throws -> Data? {
+        #if canImport(Darwin)
+        guard let privacyCapabilitiesFn, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = privacyCapabilitiesFn(&outPtr, &outLen)
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freePrivacyFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        return try Self.readPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte
+        ) { pointer in
+            freePrivacyFn(pointer)
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    private func callPrivacyProof(
+        requestArchive: Data,
+        function: PrivacyProofArchiveFn?,
+        expectedSchemaByte: UInt8
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = try Self.withTemporaryPrivacyRequestArchive(requestArchive: requestArchive) { buffer -> Int32 in
+            let baseAddress = buffer.baseAddress
+            return function(
+                baseAddress,
+                CUnsignedLong(buffer.count),
+                &outPtr,
+                &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freePrivacyFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        return try Self.readPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            expectedSchemaByte: expectedSchemaByte
+        ) { pointer in
+            freePrivacyFn(pointer)
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    static func withTemporaryPrivacyRequestArchive<T>(
+        requestArchive: Data,
+        didClearForTesting: (([UInt8]) -> Void)? = nil,
+        _ body: (UnsafeBufferPointer<UInt8>) throws -> T
+    ) throws -> T {
+        guard !requestArchive.isEmpty, requestArchive.count <= Self.privacyNativeArchiveMaxBytes else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        guard Self.isValidPrivacyNoritoArchive(requestArchive) else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        guard Self.hasPrivacyNoritoSchema(
+            requestArchive,
+            expectedSchemaByte: Self.privacyRequestSchemaByte
+        ) else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        guard Self.hasNonEmptyPrivacyNoritoPayload(requestArchive) else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        var request = [UInt8](requestArchive)
+        defer {
+            Self.clearTemporaryPrivacyRequestArchive(&request)
+            didClearForTesting?(request)
+        }
+        return try request.withUnsafeBufferPointer { buffer in
+            try body(buffer)
+        }
+    }
+
+    static func clearTemporaryPrivacyRequestArchive(_ requestArchive: inout [UInt8]) {
+        for index in requestArchive.indices {
+            requestArchive[index] = 0
+        }
+    }
+
+    func privacyBuildProofV1(requestArchive: Data) throws -> Data? {
+        try callPrivacyProof(
+            requestArchive: requestArchive,
+            function: privacyBuildProofFn,
+            expectedSchemaByte: Self.privacyBuildProofResultSchemaByte
+        )
+    }
+
+    func privacyVerifyProofV1(requestArchive: Data) throws -> Data? {
+        try callPrivacyProof(
+            requestArchive: requestArchive,
+            function: privacyVerifyProofFn,
+            expectedSchemaByte: Self.privacyVerifyProofResultSchemaByte
+        )
+    }
+
+    static func readPrivacyNativeOutput(
+        pointer: UnsafeMutablePointer<UInt8>?,
+        length: CUnsignedLong,
+        expectedSchemaByte: UInt8? = nil,
+        free: (UnsafeMutablePointer<UInt8>?) -> Void
+    ) throws -> Data {
+        guard let pointer else {
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            free(pointer)
+        }
+        guard length > 0, length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        let archive = Data(bytes: pointer, count: Int(length))
+        guard Self.isValidPrivacyNoritoArchive(archive) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        guard Self.hasNonEmptyPrivacyNoritoPayload(archive) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        guard Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return archive
     }
 
     var canUseConnectCrypto: Bool {
@@ -6752,18 +7446,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard signature.count > 0 else { return nil }
         guard let freeFn else { return nil }
+        let normalizedAlgorithm: String?
+        if let algorithm {
+            guard let normalized = ConnectWalletSignatureAlgorithm.normalize(algorithm) else { return nil }
+            normalizedAlgorithm = normalized
+        } else {
+            normalizedAlgorithm = nil
+        }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: UInt = 0
         let status: Int32
-        if let algorithm,
+        if let normalizedAlgorithm,
            let encodeEnvelopeSignResultOkWithAlgFn {
-            status = algorithm.withCString { algPtr in
+            status = normalizedAlgorithm.withCString { algPtr in
                 signature.withUnsafeBytes { sigBuffer -> Int32 in
                     guard let sigBase = sigBuffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
                     return encodeEnvelopeSignResultOkWithAlgFn(
                         sequence,
                         algPtr,
-                        UInt(algorithm.utf8.count),
+                        UInt(normalizedAlgorithm.utf8.count),
                         sigBase,
                         UInt(signature.count),
                         &outPtr,
@@ -7172,6 +7873,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let permissionsData = ConnectCodec.encodePermissionsJSON(approve.permissions)
         let proofData = ConnectCodec.encodeProofJSON(approve.proof)
         let signature = approve.walletSignature.signature
+        let normalizedAlgorithm = ConnectWalletSignatureAlgorithm.normalize(approve.walletSignature.algorithm)
         guard !signature.isEmpty else { return nil }
 
         var result: Data?
@@ -7183,7 +7885,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 return signature.withUnsafeBytes { sigBuffer -> Int32 in
                     guard let sigBase = sigBuffer.bindMemory(to: UInt8.self).baseAddress else { return -3 }
                     if let encodeControlApproveWithAlgFn,
-                       let algorithmData = approve.walletSignature.algorithm.data(using: .utf8) {
+                       let normalizedAlgorithm,
+                       let algorithmData = normalizedAlgorithm.data(using: .utf8) {
                         let status = withOptionalBytes(permissionsData) { permsRaw, permsLen in
                             withOptionalBytes(proofData) { proofRaw, proofLen in
                                 algorithmData.withUnsafeBytes { algBuffer -> Int32 in
@@ -7224,7 +7927,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                         return status
                     } else {
                         guard let encodeControlApproveFn,
-                              approve.walletSignature.algorithm.lowercased() == "ed25519",
+                              normalizedAlgorithm == "ed25519",
                               signature.count == 64 else { return -4 }
                         let status = withOptionalBytes(permissionsData) { permsPtr, permsLen in
                             withOptionalBytes(proofData) { proofPtr, proofLen in

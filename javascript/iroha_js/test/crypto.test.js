@@ -28,6 +28,9 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
+import {
+  normalizeCryptoAlgorithm as normalizeDistCryptoAlgorithm,
+} from "../dist/crypto.js";
 import { hasSm2Binding, makeNativeTest, sm2RequiredMethods } from "./helpers/native.js";
 
 const SM2_DISTID = SM2_DEFAULT_DISTINGUISHED_ID;
@@ -145,6 +148,29 @@ test("crypto algorithm labels cover Rust signing algorithms", () => {
     "gost3410-2012-512-paramset-b",
   );
   assert.equal(normalizeCryptoAlgorithm("bls-small"), "bls_small");
+});
+
+test("crypto algorithm labels reject unsupported and Unicode-confusable aliases", () => {
+  for (const [label, normalize] of [
+    ["src", normalizeCryptoAlgorithm],
+    ["dist", normalizeDistCryptoAlgorithm],
+  ]) {
+    assert.equal(normalize("ed-25519"), "ed25519", `${label} keeps ASCII aliases`);
+    for (const algorithm of [
+      "unknown",
+      "ed\t25519",
+      "ed\u200B25519",
+      "\u0435d25519",
+      "ml\uFF0Ddsa",
+      "gost3410-2012-512-paramset-\u0432",
+    ]) {
+      assert.throws(
+        () => normalize(algorithm),
+        /unsupported crypto algorithm/,
+        `${label} must reject ${algorithm}`,
+      );
+    }
+  }
 });
 
 test("generic crypto helpers delegate non-Ed25519 algorithms to native binding", () => {

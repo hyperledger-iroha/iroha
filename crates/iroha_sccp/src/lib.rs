@@ -7115,6 +7115,7 @@ pub fn sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
     )
 }
 
+#[allow(clippy::similar_names)]
 fn sccp_route_allowlist_matches_domain_profile(
     domain: u32,
     allowlist: &SccpRouteAllowlistReadinessV1,
@@ -13145,6 +13146,7 @@ pub fn sccp_source_chain_proof_adapter_verifier_commitment(
     Some(env.vk_hash)
 }
 
+#[allow(clippy::suspicious_operation_groupings)]
 pub fn sccp_source_chain_proof_matches_adapter_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
@@ -18287,13 +18289,7 @@ fn sccp_message_transparent_public_input_columns(
 }
 
 fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
-    match backend {
-        BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
-        BackendTag::Halo2Bn254 => "halo2-bn254",
-        BackendTag::Groth16 => "groth16",
-        BackendTag::Stark => "stark",
-        BackendTag::Unsupported => "unsupported",
-    }
+    backend.canonical_label()
 }
 
 fn saturating_u32(value: usize) -> u32 {
@@ -18640,7 +18636,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
         payload_hash: bundle.commitment.payload_hash,
         target_domain: SCCP_DOMAIN_SORA,
         commitment_root: bundle.commitment_root,
-        finality_height: transfer.nonce.max(1),
+        finality_height: transfer.nonce.saturating_add(1),
         finality_block_hash,
     })
 }
@@ -20188,6 +20184,27 @@ pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
     out
 }
 
+pub fn decode_canonical_transfer_payload_bytes(payload_bytes: &[u8]) -> Option<TransferPayloadV1> {
+    let mut cursor = PayloadCursor::new(payload_bytes);
+    let payload = TransferPayloadV1 {
+        version: cursor.take_u8()?,
+        source_domain: cursor.take_u32()?,
+        dest_domain: cursor.take_u32()?,
+        nonce: cursor.take_u64()?,
+        asset_home_domain: cursor.take_u32()?,
+        asset_id_codec: cursor.take_u8()?,
+        asset_id: cursor.take_vec()?,
+        amount: cursor.take_u128()?,
+        sender_codec: cursor.take_u8()?,
+        sender: cursor.take_vec()?,
+        recipient_codec: cursor.take_u8()?,
+        recipient: cursor.take_vec()?,
+        route_id_codec: cursor.take_u8()?,
+        route_id: cursor.take_vec()?,
+    };
+    cursor.is_finished().then_some(payload)
+}
+
 struct PayloadCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -20264,22 +20281,11 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
                 route_id: cursor.take_vec()?,
             })
         }
-        SccpPayloadV1::TRANSFER_DISCRIMINANT => SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: cursor.take_u8()?,
-            source_domain: cursor.take_u32()?,
-            dest_domain: cursor.take_u32()?,
-            nonce: cursor.take_u64()?,
-            asset_home_domain: cursor.take_u32()?,
-            asset_id_codec: cursor.take_u8()?,
-            asset_id: cursor.take_vec()?,
-            amount: cursor.take_u128()?,
-            sender_codec: cursor.take_u8()?,
-            sender: cursor.take_vec()?,
-            recipient_codec: cursor.take_u8()?,
-            recipient: cursor.take_vec()?,
-            route_id_codec: cursor.take_u8()?,
-            route_id: cursor.take_vec()?,
-        }),
+        SccpPayloadV1::TRANSFER_DISCRIMINANT => {
+            let payload = decode_canonical_transfer_payload_bytes(&cursor.bytes[cursor.offset..])?;
+            cursor.offset = cursor.bytes.len();
+            SccpPayloadV1::Transfer(payload)
+        }
         SccpPayloadV1::TOKEN_ADD_DISCRIMINANT => SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
             version: cursor.take_u8()?,
             target_domain: cursor.take_u32()?,
@@ -34321,6 +34327,7 @@ fn verify_sccp_source_adapter_verification_proof(
     fastpq_prover::verify(&batch, &raw_proof).is_ok()
 }
 
+#[allow(clippy::suspicious_operation_groupings)]
 fn verify_sccp_source_adapter_proof_binding(
     adapter: &SccpSourceAdapterProofV1,
     proof: &SccpSourceChainProofEnvelopeV1,
@@ -35327,7 +35334,38 @@ mod tests {
         assert_eq!(public_inputs.payload_hash, bundle.commitment.payload_hash);
         assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
         assert_eq!(public_inputs.commitment_root, bundle.commitment_root);
-        assert_eq!(public_inputs.finality_height, 42);
+        assert_eq!(public_inputs.finality_height, 43);
+
+        let zero_nonce_bundle = {
+            let mut bundle = bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 0;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let one_nonce_bundle = {
+            let mut bundle = zero_nonce_bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 1;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let zero_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&zero_nonce_bundle)
+                .expect("zero-nonce diagnostic public inputs");
+        let one_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&one_nonce_bundle)
+                .expect("one-nonce diagnostic public inputs");
+        assert_eq!(zero_nonce_inputs.finality_height, 1);
+        assert_eq!(one_nonce_inputs.finality_height, 2);
 
         let artifact = build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
             .expect("diagnostic artifact");
@@ -35538,17 +35576,17 @@ mod tests {
             extra.push(u8::try_from(addresses.len()).expect("sample validator count fits u8"));
             for (idx, address) in addresses.iter().enumerate() {
                 extra.extend_from_slice(address);
-                extra.extend(
-                    std::iter::repeat(u8::try_from(idx + 1).expect("sample BLS fill byte fits u8"))
-                        .take(SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES),
-                );
+                extra.extend(std::iter::repeat_n(
+                    u8::try_from(idx + 1).expect("sample BLS fill byte fits u8"),
+                    SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES,
+                ));
             }
         } else {
             for address in &addresses {
                 extra.extend_from_slice(address);
             }
         }
-        extra.extend(std::iter::repeat(0x99).take(SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES));
+        extra.extend(std::iter::repeat_n(0x99, SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES));
         extra
     }
 
@@ -36545,7 +36583,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
             .expect("ETH aggregate sync committee signature");
@@ -36969,7 +37007,7 @@ mod tests {
                     .expect("valid TRON test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 let public_key =
-                    EcdsaSecp256k1Sha256::parse_public_key(&bytes).expect("secp256k1 public key");
+                    EcdsaSecp256k1Sha256::parse_public_key(bytes).expect("secp256k1 public key");
                 sccp_tron_address_from_evm_address(EcdsaSecp256k1Sha256::evm_address(&public_key))
                     .to_vec()
             })
@@ -37610,19 +37648,22 @@ mod tests {
         sample_solana_validator_public_keys()
             .into_iter()
             .enumerate()
-            .map(|(index, authorized_voter)| SccpSolanaVoteAccountDataV1 {
-                node_pubkey: vec![0x51 + index as u8; 32],
-                authorized_voter,
-                authorized_withdrawer: vec![0x61 + index as u8; 32],
-                inflation_rewards_collector: vote_account_addresses[index].clone(),
-                block_revenue_collector: vec![0x51 + index as u8; 32],
-                inflation_rewards_commission_bps: u16::try_from(index * 100)
-                    .expect("sample index fits u16"),
-                block_revenue_commission_bps: SCCP_SOLANA_COMMISSION_BPS_MAX,
-                pending_delegator_rewards: 0,
-                bls_pubkey_compressed: Vec::new(),
-                root_slot: rooted_slot,
-                tower_vote_slots: tower_vote_slots.clone(),
+            .map(|(index, authorized_voter)| {
+                let index_byte = u8::try_from(index).expect("sample index fits u8");
+                SccpSolanaVoteAccountDataV1 {
+                    node_pubkey: vec![0x51 + index_byte; 32],
+                    authorized_voter,
+                    authorized_withdrawer: vec![0x61 + index_byte; 32],
+                    inflation_rewards_collector: vote_account_addresses[index].clone(),
+                    block_revenue_collector: vec![0x51 + index_byte; 32],
+                    inflation_rewards_commission_bps: u16::try_from(index * 100)
+                        .expect("sample index fits u16"),
+                    block_revenue_commission_bps: SCCP_SOLANA_COMMISSION_BPS_MAX,
+                    pending_delegator_rewards: 0,
+                    bls_pubkey_compressed: Vec::new(),
+                    root_slot: rooted_slot,
+                    tower_vote_slots: tower_vote_slots.clone(),
+                }
             })
             .collect()
     }
@@ -37678,16 +37719,19 @@ mod tests {
         vote_accounts
             .into_iter()
             .enumerate()
-            .map(|(index, voter_pubkey)| SccpSolanaStakeAccountDataV1 {
-                staker: vec![0x91 + index as u8; 32],
-                withdrawer: vec![0xA1 + index as u8; 32],
-                voter_pubkey,
-                delegated_stake: delegated_stakes[index],
-                activation_epoch: activation_epochs[index],
-                deactivation_epoch: deactivation_epochs[index],
-                warmup_cooldown_rate_bytes: warmup_cooldown_rate_bytes.to_vec(),
-                credits_observed: 10 + u64::try_from(index).expect("sample index fits u64"),
-                stake_flags: 1,
+            .map(|(index, voter_pubkey)| {
+                let index_byte = u8::try_from(index).expect("sample index fits u8");
+                SccpSolanaStakeAccountDataV1 {
+                    staker: vec![0x91 + index_byte; 32],
+                    withdrawer: vec![0xA1 + index_byte; 32],
+                    voter_pubkey,
+                    delegated_stake: delegated_stakes[index],
+                    activation_epoch: activation_epochs[index],
+                    deactivation_epoch: deactivation_epochs[index],
+                    warmup_cooldown_rate_bytes: warmup_cooldown_rate_bytes.to_vec(),
+                    credits_observed: 10 + u64::try_from(index).expect("sample index fits u64"),
+                    stake_flags: 1,
+                }
             })
             .collect()
     }
@@ -39486,7 +39530,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         commit_qc.bls_aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
@@ -39963,10 +40007,10 @@ mod tests {
                     transaction_count,
                     transaction_bytes,
                     transaction_merkle_branch,
-                ) = tron_transaction_source_proof
-                    .clone()
-                    .map(|(_, index, count, bytes, branch)| (index, count, bytes, branch))
-                    .unwrap_or((0, 0, Vec::new(), Vec::new()));
+                ) = tron_transaction_source_proof.clone().map_or(
+                    (0, 0, Vec::new(), Vec::new()),
+                    |(_, index, count, bytes, branch)| (index, count, bytes, branch),
+                );
                 let receipt_trie_proof_nodes = tron_receipt_mpt_proof
                     .clone()
                     .map(|(_, proof_nodes)| proof_nodes)
@@ -45302,7 +45346,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         insufficient_weight.sync_committee_proof.aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
@@ -51924,9 +51968,13 @@ mod tests {
         ));
 
         let mut oversized_transition_payload = adapter;
-        let mut transition = SccpTronWitnessScheduleTransitionProofV1::default();
-        transition.next_witness_schedule_payload =
-            vec![0xAA; SCCP_TRON_MAX_WITNESS_SCHEDULE_PAYLOAD_BYTES + 1];
+        let transition = SccpTronWitnessScheduleTransitionProofV1 {
+            next_witness_schedule_payload: vec![
+                0xAA;
+                SCCP_TRON_MAX_WITNESS_SCHEDULE_PAYLOAD_BYTES + 1
+            ],
+            ..Default::default()
+        };
         oversized_transition_payload.witness_schedule_transition_proofs = vec![transition];
         assert!(!sccp_source_adapter_proof_shape_is_bounded(
             &SccpSourceAdapterProofV1::TronDposReceipt(oversized_transition_payload),
@@ -52528,8 +52576,10 @@ mod tests {
         ));
 
         let mut too_many_tower_votes = adapter.clone();
+        let tower_vote_stack_depth =
+            sccp_solana_tower_vote_stack_depth_usize().expect("tower vote stack depth fits usize");
         too_many_tower_votes.finality_context.tower_vote_slots =
-            vec![1; SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize + 1];
+            vec![1; tower_vote_stack_depth + 1];
         assert!(!sccp_source_adapter_proof_shape_is_bounded(
             &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(too_many_tower_votes),
         ));
@@ -53313,8 +53363,11 @@ mod tests {
             address
         };
         assert!(
-            canonical_sccp_tron_witness_schedule_bytes(&[zero_tron_witness_address.clone()], &[1],)
-                .is_none()
+            canonical_sccp_tron_witness_schedule_bytes(
+                std::slice::from_ref(&zero_tron_witness_address),
+                &[1],
+            )
+            .is_none()
         );
         let mut zero_address_payload = Vec::new();
         push_u8(&mut zero_address_payload, 1);
@@ -63731,6 +63784,33 @@ mod tests {
         let decoded = decode_canonical_sccp_payload_bytes(&encoded).expect("decode payload");
         assert_eq!(decoded, payload);
         assert!(verify_sccp_payload_structure(&decoded));
+    }
+
+    #[test]
+    fn canonical_transfer_payload_roundtrips_without_message_discriminant() {
+        let payload = TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TRON,
+            nonce: 11,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor".to_vec(),
+            amount: 1,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:alice".to_vec(),
+            recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"taira_tron_xor".to_vec(),
+        };
+        let encoded = canonical_transfer_payload_bytes(&payload);
+        let decoded =
+            decode_canonical_transfer_payload_bytes(&encoded).expect("decode transfer payload");
+        assert_eq!(decoded, payload);
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::Transfer(
+            decoded
+        )));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -64,6 +64,9 @@ pub struct Iso20022BridgeRuntime {
     default_profile_id: String,
     profiles: Arc<HashMap<String, TradfiRailProfile>>,
     store_dir: Option<PathBuf>,
+    store_retention: Duration,
+    store_max_records: usize,
+    audit_export_dir: Option<PathBuf>,
     dedupe_ttl: Duration,
     records: DashMap<String, IsoMessageRecord>,
     tx_hash_index: DashMap<String, String>,
@@ -89,6 +92,17 @@ pub struct IsoMessageContext {
     settlement_movement_type: Option<String>,
     settlement_payment_type: Option<String>,
     security_instrument_id: Option<String>,
+    collateral_obligation_id: Option<String>,
+    collateral_original_amount: Option<String>,
+    collateral_original_currency: Option<String>,
+    collateral_original_instrument_id: Option<String>,
+    collateral_substitute_amount: Option<String>,
+    collateral_substitute_currency: Option<String>,
+    collateral_substitute_instrument_id: Option<String>,
+    collateral_effective_date: Option<String>,
+    collateral_substitution_type: Option<String>,
+    collateral_haircut: Option<String>,
+    collateral_reason_code: Option<String>,
     plan_execution_order: Option<String>,
     plan_atomicity: Option<String>,
     source_address_observation: AddressParseObservation,
@@ -164,6 +178,61 @@ impl IsoMessageContext {
     /// Financial instrument identifier carried by a securities settlement instruction.
     pub fn security_instrument_id(&self) -> Option<&str> {
         self.security_instrument_id.as_deref()
+    }
+
+    /// Repo or collateral obligation identifier carried by a collateral message.
+    pub fn collateral_obligation_id(&self) -> Option<&str> {
+        self.collateral_obligation_id.as_deref()
+    }
+
+    /// Original collateral amount carried by a substitution message.
+    pub fn collateral_original_amount(&self) -> Option<&str> {
+        self.collateral_original_amount.as_deref()
+    }
+
+    /// Original collateral currency carried by a substitution message.
+    pub fn collateral_original_currency(&self) -> Option<&str> {
+        self.collateral_original_currency.as_deref()
+    }
+
+    /// Original collateral instrument identifier carried by a substitution message.
+    pub fn collateral_original_instrument_id(&self) -> Option<&str> {
+        self.collateral_original_instrument_id.as_deref()
+    }
+
+    /// Substitute collateral amount carried by a substitution message.
+    pub fn collateral_substitute_amount(&self) -> Option<&str> {
+        self.collateral_substitute_amount.as_deref()
+    }
+
+    /// Substitute collateral currency carried by a substitution message.
+    pub fn collateral_substitute_currency(&self) -> Option<&str> {
+        self.collateral_substitute_currency.as_deref()
+    }
+
+    /// Substitute collateral instrument identifier carried by a substitution message.
+    pub fn collateral_substitute_instrument_id(&self) -> Option<&str> {
+        self.collateral_substitute_instrument_id.as_deref()
+    }
+
+    /// Effective date carried by a collateral substitution message.
+    pub fn collateral_effective_date(&self) -> Option<&str> {
+        self.collateral_effective_date.as_deref()
+    }
+
+    /// Substitution type carried by a collateral substitution message.
+    pub fn collateral_substitution_type(&self) -> Option<&str> {
+        self.collateral_substitution_type.as_deref()
+    }
+
+    /// Haircut value carried by a collateral substitution message.
+    pub fn collateral_haircut(&self) -> Option<&str> {
+        self.collateral_haircut.as_deref()
+    }
+
+    /// Reason code carried by a collateral substitution message.
+    pub fn collateral_reason_code(&self) -> Option<&str> {
+        self.collateral_reason_code.as_deref()
     }
 
     /// Durable execution-order plan captured from supplementary settlement data.
@@ -483,6 +552,50 @@ impl IsoMessageStatus {
         self.context.security_instrument_id.as_deref()
     }
 
+    pub fn collateral_obligation_id(&self) -> Option<&str> {
+        self.context.collateral_obligation_id.as_deref()
+    }
+
+    pub fn collateral_original_amount(&self) -> Option<&str> {
+        self.context.collateral_original_amount.as_deref()
+    }
+
+    pub fn collateral_original_currency(&self) -> Option<&str> {
+        self.context.collateral_original_currency.as_deref()
+    }
+
+    pub fn collateral_original_instrument_id(&self) -> Option<&str> {
+        self.context.collateral_original_instrument_id.as_deref()
+    }
+
+    pub fn collateral_substitute_amount(&self) -> Option<&str> {
+        self.context.collateral_substitute_amount.as_deref()
+    }
+
+    pub fn collateral_substitute_currency(&self) -> Option<&str> {
+        self.context.collateral_substitute_currency.as_deref()
+    }
+
+    pub fn collateral_substitute_instrument_id(&self) -> Option<&str> {
+        self.context.collateral_substitute_instrument_id.as_deref()
+    }
+
+    pub fn collateral_effective_date(&self) -> Option<&str> {
+        self.context.collateral_effective_date.as_deref()
+    }
+
+    pub fn collateral_substitution_type(&self) -> Option<&str> {
+        self.context.collateral_substitution_type.as_deref()
+    }
+
+    pub fn collateral_haircut(&self) -> Option<&str> {
+        self.context.collateral_haircut.as_deref()
+    }
+
+    pub fn collateral_reason_code(&self) -> Option<&str> {
+        self.context.collateral_reason_code.as_deref()
+    }
+
     pub fn plan_execution_order(&self) -> Option<&str> {
         self.context.plan_execution_order.as_deref()
     }
@@ -738,6 +851,16 @@ impl IsoMessageRecord {
 
 const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
+const ISO_PERSISTED_RECORD_VERSION: u64 = 1;
+const ISO_PERSISTED_RECORD_DIGEST_FIELD: &str = "record_sha256";
+const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
+const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
+const ISO_PERSISTED_AUDIT_INDEX_FILE: &str = "messages.index.json";
+const ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD: &str = "index_sha256";
+const ISO_AUDIT_EXPORT_ANCHOR_VERSION: u64 = 1;
+const ISO_AUDIT_EXPORT_ANCHOR_DIR: &str = "anchors";
+const ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE: &str = "latest.notary.json";
+const ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD: &str = "anchor_sha256";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
@@ -1151,6 +1274,9 @@ impl Iso20022BridgeRuntime {
             default_profile_id: config.default_profile.trim().to_owned(),
             profiles: Arc::new(profiles),
             store_dir: config.store_dir.clone(),
+            store_retention: Duration::from_secs(config.store_retention_secs),
+            store_max_records: usize::try_from(config.store_max_records).unwrap_or(usize::MAX),
+            audit_export_dir: config.audit_export_dir.clone(),
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             records: DashMap::new(),
             tx_hash_index: DashMap::new(),
@@ -1196,6 +1322,17 @@ impl Iso20022BridgeRuntime {
     /// Access the cached ISO reference datasets.
     pub fn reference_data(&self) -> &ReferenceDataSnapshots {
         &self.reference_data
+    }
+
+    /// Return the deterministic audit manifest for durable ISO message records.
+    pub fn audit_index(&self) -> JsonValue {
+        let mut records = self
+            .records
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+        persisted_audit_index_value(&records)
     }
 
     /// Return the configured default rail profile.
@@ -1262,9 +1399,19 @@ impl Iso20022BridgeRuntime {
         if message_profile.require_uetr && uetr.is_none() {
             return Err(MsgError::MissingField("UETR"));
         }
+        if let Some(value) = uetr.as_deref()
+            && !is_valid_uetr(value)
+        {
+            return Err(MsgError::InvalidValue {
+                field: "UETR".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
+        }
         self.validate_amount_minor_units(message_profile, parsed)?;
         self.validate_supplementary_data_limit(message_profile, parsed)?;
         self.validate_structured_address_mode(message_profile, parsed)?;
+        self.validate_message_reference_data(message_type, parsed)?;
+        self.validate_securities_ledger_mapping(profile, message_type, parsed)?;
         let embedded_signature_detected =
             has_embedded_signature_marker(parsed) || payload_has_embedded_signature(payload);
         match profile.embedded_signature_policy {
@@ -1690,18 +1837,36 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<String, MsgError> {
-        let id = business_message_id(parsed)
-            .or_else(|| parsed.field_text("Assgnmt/Id"))
-            .or_else(|| parsed.field_text("TxId"))
-            .or_else(|| lifecycle_referenced_message_id(message_type, parsed))
-            .ok_or(MsgError::MissingField("MsgId"))?;
+        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?;
+        let securities_tx_id = if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
+            unique_field_text_by_suffix(parsed, &["TxId"], "TxId")?
+        } else {
+            None
+        };
+        let id = if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
+            securities_tx_id
+                .or_else(|| business_message_id(parsed))
+                .or(referenced_message_id)
+        } else {
+            business_message_id(parsed)
+                .or_else(|| parsed.field_text("Assgnmt/Id"))
+                .or(referenced_message_id)
+        }
+        .ok_or(MsgError::MissingField("MsgId"))?;
         let id = id.trim();
         if id.is_empty() {
             return Err(MsgError::MissingField("MsgId"));
         }
-        if matches!(message_type, "sese.023" | "sese.024" | "sese.025")
-            && business_message_id(parsed).is_none()
-        {
+        if matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
             Ok(format!("{message_type}:{id}"))
         } else {
             Ok(id.to_owned())
@@ -1715,7 +1880,7 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<IsoLifecycleOutcome, MsgError> {
-        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)
+        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?
             .map(ToOwned::to_owned)
             .map(|id| {
                 if matches!(message_type, "sese.024" | "sese.025") {
@@ -2234,6 +2399,10 @@ impl Iso20022BridgeRuntime {
     }
 
     fn prune_expired(&self, now: Instant) {
+        if self.store_dir.is_some() {
+            self.compact_persisted_records();
+            return;
+        }
         let ttl = self.dedupe_ttl;
         let expired = self
             .records
@@ -2315,29 +2484,29 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let messages_dir = store_dir.join("messages");
-        let Ok(entries) = fs::read_dir(&messages_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
-                continue;
-            };
-            if let Some((message_id, record)) = persisted_record_from_value(&value) {
-                self.insert_metadata_indexes(&message_id, &record.metadata);
-                if let Some(tx_hash) = record.transaction_hash.as_deref() {
-                    self.tx_hash_index
-                        .insert(tx_hash.to_owned(), message_id.clone());
+        if let Ok(entries) = fs::read_dir(&messages_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
                 }
-                self.records.insert(message_id, record);
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
+                    continue;
+                };
+                if let Some((message_id, record)) = persisted_record_from_value(&value) {
+                    self.insert_metadata_indexes(&message_id, &record.metadata);
+                    if let Some(tx_hash) = record.transaction_hash.as_deref() {
+                        self.tx_hash_index
+                            .insert(tx_hash.to_owned(), message_id.clone());
+                    }
+                    self.records.insert(message_id, record);
+                }
             }
         }
+        self.compact_persisted_records();
     }
 
     fn persist_message(&self, message_id: &str) {
@@ -2356,13 +2525,122 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let path = messages_dir.join(message_filename(message_id));
-        let _ = fs::write(path, json);
+        if fs::write(path, json).is_ok() {
+            self.compact_persisted_records();
+        }
     }
 
     fn remove_persisted_message(&self, message_id: &str) {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return;
         };
+        let path = store_dir
+            .join("messages")
+            .join(message_filename(message_id));
+        let _ = fs::remove_file(path);
+        self.persist_audit_index();
+    }
+
+    fn persist_audit_index(&self) {
+        let payload = self.audit_index();
+        let Ok(json) = norito::json::to_string_pretty(&payload) else {
+            return;
+        };
+        if let Some(store_dir) = self.store_dir.as_deref() {
+            let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
+            if fs::create_dir_all(&audit_dir).is_ok() {
+                let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+                let _ = fs::write(path, &json);
+            }
+        }
+        self.persist_external_audit_export(&payload, &json);
+    }
+
+    fn persist_external_audit_export(&self, payload: &JsonValue, json: &str) {
+        let Some(export_dir) = self.audit_export_dir.as_deref() else {
+            return;
+        };
+        if fs::create_dir_all(export_dir).is_err() {
+            return;
+        }
+        let _ = fs::write(export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), json);
+
+        let Some(index_sha256) = audit_index_digest(payload) else {
+            return;
+        };
+        let anchor = audit_export_anchor_value(payload, self.store_dir.as_deref());
+        let Ok(anchor_json) = norito::json::to_string_pretty(&anchor) else {
+            return;
+        };
+        let _ = fs::write(
+            export_dir.join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE),
+            &anchor_json,
+        );
+        let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
+        if fs::create_dir_all(&anchor_dir).is_err() {
+            return;
+        }
+        let _ = fs::write(
+            anchor_dir.join(format!("{index_sha256}.notary.json")),
+            anchor_json,
+        );
+    }
+
+    fn compact_persisted_records(&self) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            return;
+        };
+        let message_ids = self.retention_prune_message_ids(SystemTime::now());
+        if message_ids.is_empty() {
+            self.persist_audit_index();
+            return;
+        }
+        for message_id in message_ids {
+            self.remove_record_for_retention(&message_id, store_dir);
+        }
+        self.persist_audit_index();
+    }
+
+    fn retention_prune_message_ids(&self, now: SystemTime) -> Vec<String> {
+        let mut prune = HashSet::new();
+        let mut records = self
+            .records
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().updated_at))
+            .collect::<Vec<_>>();
+
+        if !self.store_retention.is_zero() {
+            for (message_id, updated_at) in &records {
+                if now
+                    .duration_since(*updated_at)
+                    .is_ok_and(|age| age > self.store_retention)
+                {
+                    prune.insert(message_id.clone());
+                }
+            }
+        }
+
+        if self.store_max_records > 0 && records.len() > self.store_max_records {
+            records.sort_by(|left, right| {
+                system_time_to_ms(left.1)
+                    .cmp(&system_time_to_ms(right.1))
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            let overflow = records.len() - self.store_max_records;
+            for (message_id, _) in records.into_iter().take(overflow) {
+                prune.insert(message_id);
+            }
+        }
+
+        let mut prune = prune.into_iter().collect::<Vec<_>>();
+        prune.sort();
+        prune
+    }
+
+    fn remove_record_for_retention(&self, message_id: &str, store_dir: &Path) {
+        if let Some((_, record)) = self.records.remove(message_id) {
+            self.remove_record_indexes(message_id, &record);
+        }
         let path = store_dir
             .join("messages")
             .join(message_filename(message_id));
@@ -2440,11 +2718,192 @@ impl Iso20022BridgeRuntime {
         Ok(())
     }
 
+    fn validate_message_reference_data(
+        &self,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        if !matches!(
+            message_type,
+            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+        ) {
+            return Ok(());
+        }
+        for (field, value) in parsed.iter() {
+            let value = core::str::from_utf8(value).map_err(|_| MsgError::InvalidValue {
+                field: field.to_owned(),
+                kind: InvalidValueKind::Utf8,
+            })?;
+            if is_instrument_reference_field(field) {
+                self.require_instrument_crosswalk(field, value)?;
+            }
+            if is_settlement_venue_field(field) {
+                self.require_mic(field, value)?;
+            }
+            if is_settlement_party_bic_field(field) {
+                self.require_bic(field, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_securities_ledger_mapping(
+        &self,
+        profile: &TradfiRailProfile,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<(), MsgError> {
+        if profile.rail != TradfiRail::SecuritiesCsd || message_type != "sese.023" {
+            return Ok(());
+        }
+
+        let instrument = parsed
+            .field_text("SctiesLeg/FinInstrmId")
+            .ok_or(MsgError::MissingField("SctiesLeg/FinInstrmId"))?;
+        self.require_instrument_ledger_mapping("SctiesLeg/FinInstrmId", instrument)?;
+
+        let venue_mic = parsed
+            .field_text("PlcOfSttlm/MktId")
+            .ok_or(MsgError::MissingField("PlcOfSttlm/MktId"))?;
+        self.require_csd_venue_mapping("PlcOfSttlm/MktId", venue_mic)?;
+
+        let delivering_bic = parsed
+            .field_text("DlvrgSttlmPties/Pty/Bic")
+            .ok_or(MsgError::MissingField("DlvrgSttlmPties/Pty/Bic"))?;
+        let delivering_account = parsed
+            .field_text("DlvrgSttlmPties/Acct")
+            .ok_or(MsgError::MissingField("DlvrgSttlmPties/Acct"))?;
+        self.require_securities_account_mapping(
+            "DlvrgSttlmPties/Acct",
+            delivering_account,
+            Some(delivering_bic),
+        )?;
+
+        let receiving_bic = parsed
+            .field_text("RcvgSttlmPties/Pty/Bic")
+            .ok_or(MsgError::MissingField("RcvgSttlmPties/Pty/Bic"))?;
+        let receiving_account = parsed
+            .field_text("RcvgSttlmPties/Acct")
+            .ok_or(MsgError::MissingField("RcvgSttlmPties/Acct"))?;
+        self.require_securities_account_mapping(
+            "RcvgSttlmPties/Acct",
+            receiving_account,
+            Some(receiving_bic),
+        )?;
+
+        let currency = parsed
+            .field_text("CashLeg/Ccy")
+            .ok_or(MsgError::MissingField("CashLeg/Ccy"))?;
+        let payment_type = parsed.field_text("SttlmTpAndAddtlParams/Pmt");
+        self.require_cash_leg_mapping("CashLeg/Ccy", currency, payment_type)?;
+
+        Ok(())
+    }
+
+    fn require_instrument_crosswalk(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let isin = normalise_identifier(IdentifierKind::Isin, value);
+        if ivm::iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
+            return match self.reference_data.validate_isin(&isin) {
+                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+            };
+        }
+        let cusip = normalise_identifier(IdentifierKind::Cusip, value);
+        if ivm::iso20022::validate_identifier(IdentifierKind::Cusip, &cusip) {
+            return match self.reference_data.validate_cusip(&cusip) {
+                Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+                Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Cusip, err)),
+            };
+        }
+        Err(MsgError::InvalidIdentifier {
+            field: field.to_owned(),
+            kind: IdentifierKind::Isin,
+        })
+    }
+
+    fn require_instrument_ledger_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        match self
+            .reference_data
+            .validate_instrument_ledger_mapping(value)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Isin, err)),
+        }
+    }
+
+    fn require_mic(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let mic = require_identifier(field, IdentifierKind::Mic, value)?;
+        match self.reference_data.validate_mic(&mic) {
+            Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+        }
+    }
+
+    fn require_csd_venue_mapping(&self, field: &str, value: &str) -> Result<(), MsgError> {
+        let mic = require_identifier(field, IdentifierKind::Mic, value)?;
+        match self.reference_data.validate_csd_venue(&mic) {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Mic, err)),
+        }
+    }
+
+    fn require_securities_account_mapping(
+        &self,
+        field: &str,
+        account: &str,
+        bic: Option<&str>,
+    ) -> Result<(), MsgError> {
+        let account = account.trim();
+        if account.is_empty() {
+            return Err(MsgError::MissingField("SecuritiesAccount"));
+        }
+        match self
+            .reference_data
+            .validate_securities_account(account, bic)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped)
+            | Err(ReferenceDataError::MissingLedgerMapping { .. }) => {
+                Err(MsgError::ValidationFailed)
+            }
+            Err(ReferenceDataError::DatasetFailed { .. }) => Err(MsgError::ValidationFailed),
+            Err(ReferenceDataError::NotFound { .. } | ReferenceDataError::MicInactive { .. }) => {
+                Err(MsgError::InvalidValue {
+                    field: field.to_owned(),
+                    kind: InvalidValueKind::Enum,
+                })
+            }
+        }
+    }
+
     fn require_bic(&self, field: &str, value: &str) -> Result<(), MsgError> {
         let bic = require_identifier(field, IdentifierKind::Bic, value)?;
         match self.reference_data.validate_bic(&bic) {
             Ok(ValidationOutcome::Enforced | ValidationOutcome::Skipped) => Ok(()),
             Err(err) => Err(Self::map_reference_error(field, IdentifierKind::Bic, err)),
+        }
+    }
+
+    fn require_cash_leg_mapping(
+        &self,
+        field: &str,
+        currency: &str,
+        payment_type: Option<&str>,
+    ) -> Result<(), MsgError> {
+        let currency = require_identifier(field, IdentifierKind::Currency, currency)?;
+        match self
+            .reference_data
+            .validate_cash_leg(&currency, payment_type)
+        {
+            Ok(ValidationOutcome::Enforced) => Ok(()),
+            Ok(ValidationOutcome::Skipped) => Err(MsgError::ValidationFailed),
+            Err(err) => Err(Self::map_reference_error(
+                field,
+                IdentifierKind::Currency,
+                err,
+            )),
         }
     }
 
@@ -2459,12 +2918,27 @@ impl Iso20022BridgeRuntime {
                 field: field.to_owned(),
                 kind: IdentifierKind::Mic,
             },
+            ReferenceDataError::MissingLedgerMapping { .. } => MsgError::ValidationFailed,
         }
     }
 }
 
 fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+    let mut root = persisted_record_body_value(message_id, record);
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> norito::json::Map {
     let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_RECORD_VERSION),
+    );
     root.insert("message_id".to_owned(), JsonValue::from(message_id));
     root.insert("state".to_owned(), JsonValue::from(record.state.label()));
     root.insert(
@@ -2520,11 +2994,42 @@ fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonVa
                 .collect::<Vec<_>>(),
         ),
     );
-    JsonValue::Object(root)
+    root
+}
+
+fn persisted_record_digest(value: &JsonValue) -> String {
+    let json = norito::json::to_string(value).expect("ISO persisted record JSON must serialize");
+    sha256_hex(json.as_bytes())
+}
+
+fn persisted_json_digest_matches(obj: &norito::json::Map, digest_field: &str) -> bool {
+    let Some(expected) = obj.get(digest_field).and_then(JsonValue::as_str) else {
+        return false;
+    };
+    if expected.len() != 64
+        || !expected
+            .chars()
+            .all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+    {
+        return false;
+    }
+    let mut body = obj.clone();
+    body.remove(digest_field);
+    persisted_record_digest(&JsonValue::Object(body)) == expected
+}
+
+fn persisted_record_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_PERSISTED_RECORD_DIGEST_FIELD)
 }
 
 fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecord)> {
     let obj = value.as_object()?;
+    if obj.get("version").and_then(JsonValue::as_u64)? != ISO_PERSISTED_RECORD_VERSION {
+        return None;
+    }
+    if !persisted_record_digest_matches(obj) {
+        return None;
+    }
     let message_id = obj.get("message_id")?.as_str()?.to_owned();
     let state = state_from_label(obj.get("state")?.as_str()?)?;
     let updated_at = obj
@@ -2600,6 +3105,142 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     Some((message_id, record))
 }
 
+fn persisted_audit_index_value(records: &[(String, IsoMessageRecord)]) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_PERSISTED_AUDIT_INDEX_VERSION),
+    );
+    root.insert(
+        "record_count".to_owned(),
+        JsonValue::from(u64::try_from(records.len()).unwrap_or(u64::MAX)),
+    );
+    root.insert(
+        "records".to_owned(),
+        JsonValue::Array(
+            records
+                .iter()
+                .map(|(message_id, record)| persisted_audit_index_entry_value(message_id, record))
+                .collect(),
+        ),
+    );
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn persisted_audit_index_entry_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+    let persisted_record = persisted_record_value(message_id, record);
+    let record_sha256 = persisted_record
+        .as_object()
+        .and_then(|obj| obj.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
+        .and_then(JsonValue::as_str)
+        .expect("persisted ISO record digest is always present");
+    let mut entry = norito::json::Map::new();
+    entry.insert("message_id".to_owned(), JsonValue::from(message_id));
+    entry.insert(
+        "filename".to_owned(),
+        JsonValue::from(message_filename(message_id).as_str()),
+    );
+    entry.insert(
+        ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+        JsonValue::from(record_sha256),
+    );
+    entry.insert("state".to_owned(), JsonValue::from(record.state.label()));
+    entry.insert(
+        "pacs002_code".to_owned(),
+        JsonValue::from(record.derived_status().code()),
+    );
+    entry.insert(
+        "updated_at_ms".to_owned(),
+        JsonValue::from(system_time_to_ms(record.updated_at)),
+    );
+    entry.insert(
+        "settled_at_ms".to_owned(),
+        record
+            .settled_at
+            .map(system_time_to_ms)
+            .map_or(JsonValue::Null, JsonValue::from),
+    );
+    entry.insert(
+        "transaction_hash".to_owned(),
+        string_or_null(record.transaction_hash.as_deref()),
+    );
+    entry.insert(
+        "profile_id".to_owned(),
+        string_or_null(record.metadata.profile_id()),
+    );
+    entry.insert(
+        "message_type".to_owned(),
+        string_or_null(record.metadata.message_type()),
+    );
+    entry.insert(
+        "business_message_id".to_owned(),
+        string_or_null(record.metadata.business_message_id()),
+    );
+    entry.insert("uetr".to_owned(), string_or_null(record.metadata.uetr()));
+    entry.insert(
+        "payload_hash".to_owned(),
+        string_or_null(record.metadata.payload_hash()),
+    );
+    entry.insert(
+        "reference_snapshot_id".to_owned(),
+        string_or_null(record.metadata.reference_snapshot_id()),
+    );
+    JsonValue::Object(entry)
+}
+
+fn persisted_audit_index_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
+}
+
+fn audit_index_digest(index: &JsonValue) -> Option<&str> {
+    index
+        .as_object()
+        .and_then(|obj| obj.get(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD))
+        .and_then(JsonValue::as_str)
+}
+
+fn audit_export_anchor_value(index: &JsonValue, store_dir: Option<&Path>) -> JsonValue {
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "version".to_owned(),
+        JsonValue::from(ISO_AUDIT_EXPORT_ANCHOR_VERSION),
+    );
+    root.insert(
+        "index_sha256".to_owned(),
+        audit_index_digest(index).map_or(JsonValue::Null, JsonValue::from),
+    );
+    root.insert(
+        "record_count".to_owned(),
+        index
+            .as_object()
+            .and_then(|obj| obj.get("record_count"))
+            .and_then(JsonValue::as_u64)
+            .map_or(JsonValue::Null, JsonValue::from),
+    );
+    root.insert(
+        "store_dir".to_owned(),
+        store_dir.map_or(JsonValue::Null, |path| {
+            JsonValue::from(path.display().to_string().as_str())
+        }),
+    );
+    root.insert("audit_index".to_owned(), index.clone());
+    let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
+    root.insert(
+        ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD.to_owned(),
+        JsonValue::from(digest.as_str()),
+    );
+    JsonValue::Object(root)
+}
+
+fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
+    persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
+}
+
 fn context_value(context: &IsoMessageContext) -> JsonValue {
     let mut map = norito::json::Map::new();
     map.insert(
@@ -2659,6 +3300,50 @@ fn context_value(context: &IsoMessageContext) -> JsonValue {
         string_or_null(context.security_instrument_id.as_deref()),
     );
     map.insert(
+        "collateral_obligation_id".to_owned(),
+        string_or_null(context.collateral_obligation_id.as_deref()),
+    );
+    map.insert(
+        "collateral_original_amount".to_owned(),
+        string_or_null(context.collateral_original_amount.as_deref()),
+    );
+    map.insert(
+        "collateral_original_currency".to_owned(),
+        string_or_null(context.collateral_original_currency.as_deref()),
+    );
+    map.insert(
+        "collateral_original_instrument_id".to_owned(),
+        string_or_null(context.collateral_original_instrument_id.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_amount".to_owned(),
+        string_or_null(context.collateral_substitute_amount.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_currency".to_owned(),
+        string_or_null(context.collateral_substitute_currency.as_deref()),
+    );
+    map.insert(
+        "collateral_substitute_instrument_id".to_owned(),
+        string_or_null(context.collateral_substitute_instrument_id.as_deref()),
+    );
+    map.insert(
+        "collateral_effective_date".to_owned(),
+        string_or_null(context.collateral_effective_date.as_deref()),
+    );
+    map.insert(
+        "collateral_substitution_type".to_owned(),
+        string_or_null(context.collateral_substitution_type.as_deref()),
+    );
+    map.insert(
+        "collateral_haircut".to_owned(),
+        string_or_null(context.collateral_haircut.as_deref()),
+    );
+    map.insert(
+        "collateral_reason_code".to_owned(),
+        string_or_null(context.collateral_reason_code.as_deref()),
+    );
+    map.insert(
         "plan_execution_order".to_owned(),
         string_or_null(context.plan_execution_order.as_deref()),
     );
@@ -2686,6 +3371,23 @@ fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
         settlement_movement_type: optional_string(obj, "settlement_movement_type"),
         settlement_payment_type: optional_string(obj, "settlement_payment_type"),
         security_instrument_id: optional_string(obj, "security_instrument_id"),
+        collateral_obligation_id: optional_string(obj, "collateral_obligation_id"),
+        collateral_original_amount: optional_string(obj, "collateral_original_amount"),
+        collateral_original_currency: optional_string(obj, "collateral_original_currency"),
+        collateral_original_instrument_id: optional_string(
+            obj,
+            "collateral_original_instrument_id",
+        ),
+        collateral_substitute_amount: optional_string(obj, "collateral_substitute_amount"),
+        collateral_substitute_currency: optional_string(obj, "collateral_substitute_currency"),
+        collateral_substitute_instrument_id: optional_string(
+            obj,
+            "collateral_substitute_instrument_id",
+        ),
+        collateral_effective_date: optional_string(obj, "collateral_effective_date"),
+        collateral_substitution_type: optional_string(obj, "collateral_substitution_type"),
+        collateral_haircut: optional_string(obj, "collateral_haircut"),
+        collateral_reason_code: optional_string(obj, "collateral_reason_code"),
         plan_execution_order: optional_string(obj, "plan_execution_order"),
         plan_atomicity: optional_string(obj, "plan_atomicity"),
         source_address_observation: AddressParseObservation::default(),
@@ -2858,16 +3560,17 @@ fn uetr(parsed: &ParsedMessage) -> Option<&str> {
 fn lifecycle_referenced_message_id<'a>(
     message_type: &str,
     parsed: &'a ParsedMessage,
-) -> Option<&'a str> {
+) -> Result<Option<&'a str>, MsgError> {
     match message_type {
-        "pacs.002" => parsed.field_text("OrgnlMsgId"),
-        "pacs.004" => parsed.field_text("OrgnlGrpInf/OrgnlMsgId"),
-        "camt.056" => parsed.field_text("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId"),
-        "sese.024" | "sese.025" => parsed.field_text("TxId"),
-        "sese.023" => None,
-        _ => None,
+        "pacs.002" => unique_field_text_by_suffix(parsed, &["OrgnlMsgId"], "OrgnlMsgId"),
+        "pacs.004" | "camt.056" => {
+            unique_field_text_by_suffix(parsed, &["OrgnlGrpInf/OrgnlMsgId"], "OrgnlMsgId")
+        }
+        "sese.024" | "sese.025" => unique_field_text_by_suffix(parsed, &["TxId"], "TxId"),
+        "sese.023" => Ok(None),
+        "colr.007" | "colr.012" => Ok(None),
+        _ => Ok(None),
     }
-    .filter(|value| !value.trim().is_empty())
 }
 
 fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> Option<&'a str> {
@@ -2886,6 +3589,7 @@ fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> O
         ),
         "sese.025" => parsed.field_text("ConfSts"),
         "sese.023" => Some("ACTC"),
+        "colr.007" | "colr.012" => Some("ACSC"),
         _ => None,
     }
     .filter(|value| !value.trim().is_empty())
@@ -2902,6 +3606,7 @@ fn lifecycle_reason_code(parsed: &ParsedMessage) -> Option<&str> {
             "CxlRsnInf/Rsn/Prtry",
             "StsRsnInf/Rsn/Cd",
             "StsRsnInf/Rsn/Prtry",
+            "Substitution/ReasonCd",
         ],
     )
     .filter(|value| !value.trim().is_empty())
@@ -2935,6 +3640,7 @@ fn lifecycle_update_matches_original(lifecycle_type: &str, original_type: Option
             is_iso_family(original_type, "pacs.008") || is_iso_family(original_type, "pacs.009")
         }
         "sese.024" | "sese.025" => is_iso_family(original_type, "sese.023"),
+        "colr.007" | "colr.012" => false,
         _ => false,
     }
 }
@@ -2974,6 +3680,23 @@ fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMe
             context.plan_execution_order = parsed_text(parsed, "Plan/ExecutionOrder");
             context.plan_atomicity = parsed_text(parsed, "Plan/Atomicity");
         }
+        "colr.007" | "colr.012" => {
+            context.collateral_obligation_id = parsed_text(parsed, "OblgtnId");
+            context.collateral_original_amount = parsed_text(parsed, "Substitution/OriginalAmt");
+            context.collateral_original_currency = parsed_text(parsed, "Substitution/OriginalCcy");
+            context.collateral_original_instrument_id =
+                parsed_text(parsed, "Substitution/OriginalFinInstrmId");
+            context.collateral_substitute_amount =
+                parsed_text(parsed, "Substitution/SubstituteAmt");
+            context.collateral_substitute_currency =
+                parsed_text(parsed, "Substitution/SubstituteCcy");
+            context.collateral_substitute_instrument_id =
+                parsed_text(parsed, "Substitution/SubstituteFinInstrmId");
+            context.collateral_effective_date = parsed_text(parsed, "Substitution/EffectiveDt");
+            context.collateral_substitution_type = parsed_text(parsed, "Substitution/Type");
+            context.collateral_haircut = parsed_text(parsed, "Substitution/Haircut");
+            context.collateral_reason_code = parsed_text(parsed, "Substitution/ReasonCd");
+        }
         _ => return None,
     }
 
@@ -2985,6 +3708,17 @@ fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMe
         context.security_instrument_id.as_deref(),
         context.settlement_amount.as_deref(),
         context.settlement_currency.as_deref(),
+        context.collateral_obligation_id.as_deref(),
+        context.collateral_original_amount.as_deref(),
+        context.collateral_original_currency.as_deref(),
+        context.collateral_original_instrument_id.as_deref(),
+        context.collateral_substitute_amount.as_deref(),
+        context.collateral_substitute_currency.as_deref(),
+        context.collateral_substitute_instrument_id.as_deref(),
+        context.collateral_effective_date.as_deref(),
+        context.collateral_substitution_type.as_deref(),
+        context.collateral_haircut.as_deref(),
+        context.collateral_reason_code.as_deref(),
         context.plan_execution_order.as_deref(),
         context.plan_atomicity.as_deref(),
     ]
@@ -3001,6 +3735,27 @@ fn parsed_text(parsed: &ParsedMessage, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn is_instrument_reference_field(field: &str) -> bool {
+    matches!(
+        field,
+        "SctiesLeg/FinInstrmId"
+            | "Substitution/OriginalFinInstrmId"
+            | "Substitution/SubstituteFinInstrmId"
+    ) || field.ends_with("/SctiesLeg/FinInstrmId")
+        || field.ends_with("/Substitution/OriginalFinInstrmId")
+        || field.ends_with("/Substitution/SubstituteFinInstrmId")
+}
+
+fn is_settlement_venue_field(field: &str) -> bool {
+    field == "PlcOfSttlm/MktId" || field.ends_with("/PlcOfSttlm/MktId")
+}
+
+fn is_settlement_party_bic_field(field: &str) -> bool {
+    matches!(field, "DlvrgSttlmPties/Pty/Bic" | "RcvgSttlmPties/Pty/Bic")
+        || field.ends_with("/DlvrgSttlmPties/Pty/Bic")
+        || field.ends_with("/RcvgSttlmPties/Pty/Bic")
+}
+
 fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Option<&'a str> {
     suffixes.iter().find_map(|suffix| {
         parsed.field_text(suffix).or_else(|| {
@@ -3011,6 +3766,38 @@ fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Opt
             })
         })
     })
+}
+
+fn unique_field_text_by_suffix<'a>(
+    parsed: &'a ParsedMessage,
+    suffixes: &[&str],
+    field_name: &str,
+) -> Result<Option<&'a str>, MsgError> {
+    let mut selected = None;
+    for (field, value) in parsed.iter() {
+        if !suffixes
+            .iter()
+            .any(|suffix| field_matches_suffix(field, suffix))
+        {
+            continue;
+        }
+        let text = core::str::from_utf8(value).map_err(|_| MsgError::InvalidValue {
+            field: field_name.to_owned(),
+            kind: InvalidValueKind::Utf8,
+        })?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if let Some(previous) = selected {
+            if previous != text {
+                return Err(MsgError::ValidationFailed);
+            }
+        } else {
+            selected = Some(text);
+        }
+    }
+    Ok(selected)
 }
 
 fn field_matches_suffix(field: &str, suffix: &str) -> bool {
@@ -4606,6 +5393,7 @@ fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Res
         let [certificate, issuer] = chain_pair else {
             continue;
         };
+        validate_x509_authority_issuer_and_serial(certificate, issuer)?;
         let Some(authority_key_identifier) =
             x509_certificate_authority_key_identifier(certificate)?
         else {
@@ -4615,6 +5403,59 @@ fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Res
             continue;
         };
         if authority_key_identifier != subject_key_identifier {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn validate_x509_authority_issuer_and_serial(
+    certificate: &X509Certificate<'_>,
+    issuer: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    let mut authority_key_identifier_count = 0usize;
+    for extension in certificate.extensions() {
+        let ParsedExtension::AuthorityKeyIdentifier(authority_key) = extension.parsed_extension()
+        else {
+            continue;
+        };
+        authority_key_identifier_count += 1;
+        if authority_key_identifier_count > 1 {
+            return Err(MsgError::ValidationFailed);
+        }
+        let has_issuer = authority_key.authority_cert_issuer.is_some();
+        let has_serial = authority_key.authority_cert_serial.is_some();
+        if has_issuer != has_serial {
+            return Err(MsgError::ValidationFailed);
+        }
+        let Some(authority_cert_issuer) = &authority_key.authority_cert_issuer else {
+            continue;
+        };
+        let Some(authority_cert_serial) = authority_key.authority_cert_serial else {
+            return Err(MsgError::ValidationFailed);
+        };
+        if authority_cert_serial != issuer.raw_serial() {
+            return Err(MsgError::ValidationFailed);
+        }
+        let mut matched_directory_name = false;
+        for issuer_name in authority_cert_issuer {
+            match issuer_name {
+                GeneralName::DirectoryName(name) if name == issuer.subject() => {
+                    matched_directory_name = true;
+                }
+                GeneralName::DirectoryName(_) => {}
+                GeneralName::Invalid(_, _)
+                | GeneralName::DNSName(_)
+                | GeneralName::EDIPartyName(_)
+                | GeneralName::IPAddress(_)
+                | GeneralName::OtherName(_, _)
+                | GeneralName::RFC822Name(_)
+                | GeneralName::RegisteredID(_)
+                | GeneralName::URI(_)
+                | GeneralName::X400Address(_) => return Err(MsgError::ValidationFailed),
+            }
+        }
+        if !matched_directory_name {
             return Err(MsgError::ValidationFailed);
         }
     }
@@ -4699,6 +5540,9 @@ fn validate_x509_name_constraints(certificate_chain: &[Vec<u8>]) -> Result<(), M
         else {
             continue;
         };
+        if !name_constraints.critical {
+            return Err(MsgError::ValidationFailed);
+        }
         validate_x509_name_constraint_bases(name_constraints.value)?;
         for certificate in &parsed_chain[..issuer_index] {
             validate_x509_certificate_against_name_constraints(
@@ -5414,6 +6258,9 @@ fn x509_certificate_allows_ocsp_signing(
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(eku.value.ocsp_signing && key_usage.value.digital_signature())
 }
 
@@ -5850,6 +6697,9 @@ fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Msg
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(key_usage.value.key_cert_sign())
 }
 
@@ -5884,6 +6734,9 @@ fn x509_certificate_allows_digital_signature(
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(key_usage.value.digital_signature())
 }
 
@@ -7670,6 +8523,21 @@ fn normalise_uetr(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+fn is_valid_uetr(value: &str) -> bool {
+    if value.len() != 36 {
+        return false;
+    }
+    for (idx, byte) in value.bytes().enumerate() {
+        match idx {
+            8 | 13 | 18 | 23 if byte == b'-' => {}
+            8 | 13 | 18 | 23 => return false,
+            _ if byte.is_ascii_hexdigit() => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 fn normalise_business_message_id(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
@@ -7815,6 +8683,26 @@ mod tests {
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.008.001.08.xsd");
     const OFFICIAL_XSD_PACS009_001_08: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.009.001.08.xsd");
+    const OFFICIAL_XSD_PACS002_001_10: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.002.001.10.xsd");
+    const OFFICIAL_XSD_PACS004_001_10: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.004.001.10.xsd");
+    const OFFICIAL_XSD_CAMT056_001_08: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/camt.056.001.08.xsd");
+    const PACS002_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
+    const PACS004_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/pacs004_fixture.xml");
+    const CAMT056_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/camt056_fixture.xml");
+    const SESE023_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese023_fixture.xml");
+    const SESE024_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese024_fixture.xml");
+    const SESE025_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
+    const COLR012_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/colr012_fixture.xml");
     const TEST_X509_CERTIFICATE_DER_B64: &str = "MIIBlTCCATugAwIBAgIUXiaSrYGsJgKt3u4x6BKKksfNLiAwCgYIKoZIzj0EAwIwIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMB4XDTI2MDYwMTExMjgyOVoXDTM2MDUyOTExMjgyOVowIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAWqzmlOSaGzSgxorUv+ewSw3Fy3Sde/6hMOgKLkgt21a791Jequ1zTyts6rrpZoBLozZBqHl0A7E8vTW587o9KNTMFEwHQYDVR0OBBYEFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMB8GA1UdIwQYMBaAFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgZQdqU2vQe1kA3tnVW3/Md+A0CvjHC4VwaRGw1GTVsQwCIQD7mrXnQAnnVmnriWX35eVtmDSz2uGA5Xztav0D1Gd0PA==";
     const TEST_X509_CHAIN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgUryIDQvn/6N9fG2pQEVTQEP9UqzRspBrkNdwndN+s+WhRANCAARTR4/Y7uTA2FBawlygx0Q7obN3BTEoh3AKjHTqZl+nMYfoiY+9bGJ7YHVDy6Ca/xWf2Yd0y64/7P1Ti9rJqPM6";
     const TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBnzCCAUagAwIBAgIUUOi8MD0vRAq9AAbDmuxRfRDZdeQwCgYIKoZIzj0EAwIwHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgUm9vdDAgFw0yNjA2MDExMjAwMzhaGA8yMTI2MDUwODEyMDAzOFowHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABFNHj9ju5MDYUFrCXKDHRDuhs3cFMSiHcAqMdOpmX6cxh+iJj71sYntgdUPLoJr/FZ/Zh3TLrj/s/VOL2smo8zqjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBS7L2CAjWtk6fBcYscT8f7Cjpv4vDAfBgNVHSMEGDAWgBRD+yqEVN85+okIsrT2tOc86jK3HzAKBggqhkjOPQQDAgNHADBEAiAled9C2Mpk2BdR84/evD5DyQ+Kt9TZuNrZMkkrjx6tiwIgLHYNDEXdEZMgKj838ELQ/9vtz5f2WSNaUN5ehURQBjY=";
@@ -7831,16 +8719,29 @@ mod tests {
     const TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvzCCAWSgAwIBAgICVAEwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNJADBGAiEA80XbzD+kQkvxz0lVKw6hxMshLFrBLljrn/Eie/aOLLECIQDH9cIjJ+0q6GT8hxjy2Zrinp0hEWWFcrDSYqR+16dI8A==";
     const TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvjCCAWSgAwIBAgICVAIwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNIADBFAiEArCveMHtRjAb9O9tQIggTSieFTBjtKfDJwFY/DxUV0isCIFBmhdw3hBukzDnT7UCa4M0T8q+5InkGViRB1hJsWJUf";
     const TEST_X509_EKU_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqjCCAVCgAwIBAgICVAAwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASbO+iaWs5QpwhZg7deT9kyxeYA0y9fU2CsQbypJ/b094JPiNSXpOBaGQxJ8J2I3bcUppbb1LZKSvLWfD676ViXo2YwZDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU6twLdUdUoog+yakyyLjve6HtK1MwCgYIKoZIzj0EAwIDSAAwRQIgQ4wWk9FJqPGbhxcgqsKj1qrdAPH0I8dcnYpDxWp3dfQCIQDniAMtw8kFXoKfNSwpMzRGrFKQOxQhfhecnQqz5ByaDQ==";
+    const TEST_X509_SIGNER_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5UFXQIVYvipD5b/bJIJwUlvT/wtHRLPRQAHR7/Xo3zihRANCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+";
+    const TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1zCCAX2gAwIBAgIDAPIyMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+o3gwdjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUKgvg9C1cI4oB4tNiE3OvyEDlolMwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwCgYIKoZIzj0EAwIDSAAwRQIhAKNuC/zhQzy8NDIKmTCakHj65AvJ627JJCHKGUkc1cYDAiBzkgMAhhSadW5bgEgST7YirOGaizOeiYIo4nCQVw5BjA==";
+    const TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1TCCAXqgAwIBAgIDAPIzMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+o3UwczAMBgNVHRMBAf8EAjAAMAsGA1UdDwQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUKgvg9C1cI4oB4tNiE3OvyEDlolMwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwCgYIKoZIzj0EAwIDSQAwRgIhAJYUdJGsThOe7M0v5IdaJoP62D8HiOxXIjKWDuo1UzHdAiEA1as/FoNbk6nBOy52nSluR91TzEn9Nbyf+2hVGbqUVug=";
+    const TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64: &str = "MIIBwzCCAWmgAwIBAgIDAPIxMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNTEzMDEGA1UEAwwqSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELYvhBCgswQnmjIP212n/Sg8aaHIc88jWhsxFBCUYk25HvvTQ3w0PbF48hwDedzXYNthUQKTwOKYR1D9o+IzvWaNmMGQwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFJ2/bryLmq6Ehguic5b95VokRCSHMAoGCCqGSM49BAMCA0gAMEUCIBQMQk64nXDmfx+cc9ch4DdqTg9ePtJxe1zgCW3hx7GfAiEAihlUpuQvkUteb0Pc6DRT7lynuKOCSj+ugEZH22mK49k=";
     const TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIbpvFmbT9cRto3u2cGl0aEN1ILgj53hfqWISj9Z4FrGhRANCAASnJEA0zYlAtBJ/99IdK9PRjgqQr2lzoheFLeIr4GiVDrmOZ7ClB83w0EC6v9qxOLKv8Z4R7F9R73piCmHj4zMO";
     const TEST_X509_AKI_GOOD_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP0wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBSP6E0gWMamRvzD9eCdgBSKIg7EUzAKBggqhkjOPQQDAgNIADBFAiBQawuxq3WkxOm5+BbWUYKBRtQ+2ccg3x5qFYdYfMBfKwIhAOCaEu01UZlm4A0T3nwZ+EhWI2cyY+oJPjDqRJ3Eu0f1";
     const TEST_X509_AKI_MISMATCH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP4wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBQAAQIDBAUGBwgJCgsMDQ4PEBESEzAKBggqhkjOPQQDAgNIADBFAiAmC8Z1kxOihFzhRVv22y7nOXsP+yQzeMZwygHqNT66pgIhAPg6FMjnmIGR0uRpi2z+LgBC1J2dVRWqV9aAeIZ8ftAB";
     const TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqTCCAVCgAwIBAgICCPwwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQ/Em5Yl6PMhJyD6wpfJCIbiCQDxhHCVgsGNwVrTbohBzwpTEeb0KJ53DXKOaMcYVzYa9Muu8Lx8LwEmr3ekrqzo2YwZDASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUj+hNIFjGpkb8w/XgnYAUiiIOxFMwHwYDVR0jBBgwFoAUj+hNIFjGpkb8w/XgnYAUiiIOxFMwCgYIKoZIzj0EAwIDRwAwRAIgMnybkgg5FuPiE8HIN0IoeqVkSfSZHT7hDlC/5T879hkCIHpO6mfD7jpwaax5m16w0nDd8Qvr/nqfpXqVG3pydKSo";
+    const TEST_X509_AKI_ISSUER_SERIAL_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgadw0P0NjhFAt1IoFHZN+KmZH3Z++vhUfAPD2Hfkn6fyhRANCAAR1H4jN1hpS2sQzNWGkX3PHXxZKvPxxAoPt7V54udCkdrgH6DlN78HLyzpdEjBWWlphAFNbe2Rf6NH3nKBXbCqS";
+    const TEST_X509_AKI_ISSUER_SERIAL_LEAF_CERTIFICATE_DER_B64: &str = "MIICBjCCAaugAwIBAgICIyswCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDkxNzA1BgNVBAMMLklyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR1H4jN1hpS2sQzNWGkX3PHXxZKvPxxAoPt7V54udCkdrgH6DlN78HLyzpdEjBWWlphAFNbe2Rf6NH3nKBXbCqSo4GiMIGfMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQk1h1DP1hOcxG9lUgkQNoS/uxlazBgBgNVHSMEWTBXgBQ/2M1nxfK7G5VTWEpafgeI4hWf4aE7pDkwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3SCAiMpMAoGCCqGSM49BAMCA0kAMEYCIQCO/fvBr4aXwORfYiCTQGXVm2/s3M1c0nw8l2oMQI0s7QIhAO6y/eycfH+ovxRb4csV7cBMuxrv4X1cxYTMXHAFjsJY";
+    const TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBxzCCAWygAwIBAgICIykwCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDcxNTAzBgNVBAMMLElyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdV+jyYom08qQk3WgYHpDHVdCoLky92PaF629ZAMWF8g4i7kAj1mZpFOmNEq6f7Jx087luHb/gpzrKyMe5glC56NmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFD/YzWfF8rsblVNYSlp+B4jiFZ/hMB8GA1UdIwQYMBaAFD/YzWfF8rsblVNYSlp+B4jiFZ/hMAoGCCqGSM49BAMCA0kAMEYCIQDY3Xt+sDyM5L+lIKpmbAcRrqz9HFZMnvi6sWgsGIn96wIhALxwxBgI3Gq8Rfih2QZebzIi6aoeJrlucWy582djkjG2";
+    const TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWygAwIBAgICIyowCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDcxNTAzBgNVBAMMLElyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdV+jyYom08qQk3WgYHpDHVdCoLky92PaF629ZAMWF8g4i7kAj1mZpFOmNEq6f7Jx087luHb/gpzrKyMe5glC56NmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFD/YzWfF8rsblVNYSlp+B4jiFZ/hMB8GA1UdIwQYMBaAFD/YzWfF8rsblVNYSlp+B4jiFZ/hMAoGCCqGSM49BAMCA0cAMEQCIFoI8pga25X94V7BSKMltbYdD7b6SZvRT+2HmZ0jtx3wAiBjnGaVjkHECAaWCsVQJS0t/20osfvx0OaYAa5wF6+z6g==";
     const TEST_X509_NONCRITICAL_CA_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgljE4ysq6tQwL/RKH82ieLq02OCKb6Ltyh7GCeNTtMWuhRANCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqA";
     const TEST_X509_NONCRITICAL_CA_LEAF_BY_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvDCCAWKgAwIBAgICCWMwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqAo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUFaJ/rKuYGvi+PxRB22ZXDKoO8dAwHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIgSDBYGXhu1fppKim3f8h2Fsz3GKTaGmu9+KzoI/xZUCUCIQDnsqPyZNGf7ry6MQQ/cpJzRhNpMu1DPIUOWEROUGuEWw==";
     const TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvTCCAWOgAwIBAgICCWEwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNjMGEwDwYDVR0TBAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0gAMEUCIQDIsSzxKS8PptJ5tPca0zcACNmCKJnlS2Se6vh0o5AXyAIgVrtXd95gcxc3D6dP9TQSFRi5Eg2AQXmv7GxSpnN72aw=";
     const TEST_X509_NONCRITICAL_CA_LEAF_BY_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWqgAwIBAgICCWQwCgYIKoZIzj0EAwIwPDE6MDgGA1UEAwwxSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IEludGVybWVkaWF0ZTAgFw0yNjA2MDExODA5NDhaGA8yMTI2MDYwMjE4MDk0OFowNjE0MDIGA1UEAwwrSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABERz8+kus9RhrLXw0KkN8V/MY+kPKZssroEXd7fPAA50X/yf8eZAulusGhnVjka86MynQ8v7OoUz1VEZel1mKoCjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQVon+sq5ga+L4/FEHbZlcMqg7x0DAfBgNVHSMEGDAWgBTSIdk47R3IN2fGfAV07ZazvkDLWjAKBggqhkjOPQQDAgNJADBGAiEAz4j9lvrlPCLAlVujRAtnOjK35uagY1u4LffNUIPkN0oCIQCXFTK6kiRvRna8zAmm9RecoI3SeotyEik8HgVB/bT5Iw==";
     const TEST_X509_NONCRITICAL_CA_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWugAwIBAgICCWIwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBJbnRlcm1lZGlhdGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATdcxl1DWMRs1xo2bZnc+vc4MyBIaNE9QqmsLN6LlbVRDdjWGph4USBr94mpc39y4CjGlJ/6z7jLyQGUQkEDs0To2MwYTAPBgNVHRMECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU0iHZOO0dyDdnxnwFdO2Ws75Ay1owHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIhAKxXs6GWdsoSz9BWHryxZBLh6t3W93WCe/B84WbsjXijAiBeRrksPygF9mjsz7MyqxoJLWeVar+NU2LLePykEDjxfQ==";
     const TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBwTCCAWagAwIBAgICCWAwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0kAMEYCIQDo0n5RsdheNjfgo0b7s5SCQXzeFx+jIZ14u+oW+5QbVQIhAOpmgh7CZGXY99bYe++unYsNUbUyQzZErBvAs2YKGeci";
+    const TEST_X509_CA_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcTm6qQhUWbfK0khVuanbH6jjfCcRB/wBNnNv+yaNBJWhRANCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7f";
+    const TEST_X509_CA_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIByDCCAW6gAwIBAgICI48wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7fo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUrs5CXPcBQpieUJfsEc0R8TuGUpgwHwYDVR0jBBgwFoAUWvA7KGvHX76rYZGGkoJ+QtqXuhcwCgYIKoZIzj0EAwIDSAAwRQIgNFkSQH3feKGte7E9fqOSIHX1Dlx7kT5GsZbLBYE5sXwCIQDcipB1PKEiA3w4W67qgG2ceNQAd78y1AONK8p23ewr5Q==";
+    const TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBzTCCAXKgAwIBAgICI40wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDoxODA2BgNVBAMML0lyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVCQi7pbbUpRHqYKcczOEPFnwakWILra833q8o0LknN2Nu3qS6F5ePaXDiaVdbyvOOX/fAAzSs7wGj10xWjpgXqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFFrwOyhrx1++q2GRhpKCfkLal7oXMB8GA1UdIwQYMBaAFFrwOyhrx1++q2GRhpKCfkLal7oXMAoGCCqGSM49BAMCA0kAMEYCIQCcJ5ewzDdqQvrzdCChLnjT5i8NAE8B2oh+J9AkMi2nggIhAKkFHS8GiDLmgrrKZgQ8pnI3/FIklDz2VXsM0kd/n7bX";
+    const TEST_X509_CA_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIByTCCAW6gAwIBAgICI5AwCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7fo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUrs5CXPcBQpieUJfsEc0R8TuGUpgwHwYDVR0jBBgwFoAUWvA7KGvHX76rYZGGkoJ+QtqXuhcwCgYIKoZIzj0EAwIDSQAwRgIhAKr7u0tz0BgJQqzVqrIRuHMo93fDrPHrmV+2rI1lWfwYAiEAuzGvAiSxT9+py//QyqyuLJNq0Qtlw6BGYjkUimFLZI8=";
+    const TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIByjCCAW+gAwIBAgICI44wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDoxODA2BgNVBAMML0lyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVCQi7pbbUpRHqYKcczOEPFnwakWILra833q8o0LknN2Nu3qS6F5ePaXDiaVdbyvOOX/fAAzSs7wGj10xWjpgXqNjMGEwEgYDVR0TAQH/BAgwBgEB/wIBATALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFFrwOyhrx1++q2GRhpKCfkLal7oXMB8GA1UdIwQYMBaAFFrwOyhrx1++q2GRhpKCfkLal7oXMAoGCCqGSM49BAMCA0kAMEYCIQCAE7EZKVPDwnnRq70x4fix/PqxtCnPDMOqX3FU7gAyigIhANQPn5V8k0RY36nI5ZtlXAcQxpzMyWlaq4aZRof6ezzO";
     const TEST_X509_PATHLEN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3nuXdJt4HKvYmPHNQhHghYBH5m2rJhLM6X2mb3ZEAiWhRANCAAQSY1wJcCoKdL3Jofs44Th6YP3PrDlitaq8jMZY10IlqxoRWJCt4cQNbFs9MOjiDirdTGH/1LtNso+pt4/7A9nW";
     const TEST_X509_PATHLEN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBuDCCAV6gAwIBAgIUAroD5KgdplQBUFMVASJFffMavp8wCgYIKoZIzj0EAwIwLjEsMCoGA1UEAwwjSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBJbnRlcm1lZGlhdGUwIBcNMjYwNjAxMTUxOTMxWhgPMjEyNjA1MDgxNTE5MzFaMCYxJDAiBgNVBAMMG0lyb2hhIElTTyBQYXRoTGVuIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBJjXAlwKgp0vcmh+zjhOHpg/c+sOWK1qryMxljXQiWrGhFYkK3hxA1sWz0w6OIOKt1MYf/Uu02yj6m3j/sD2dajYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBRd71CtjCd8i1OrveZVj7PhbftdozAfBgNVHSMEGDAWgBQ+9z6697KLGLz8FsX7pXkDmF0y0jAKBggqhkjOPQQDAgNIADBFAiEAqH2FNcRnBYe2euURS2b4HiWwDsDBLaYKvJUqcaGSF8kCIAr+D9sGxQyezdmBSLqdtK6Vf05V3CoDSQHAGcnhJgDU";
     const TEST_X509_PATHLEN_ROOT0_CERTIFICATE_DER_B64: &str = "MIIBtzCCAVygAwIBAgIUQdOUC+LffkVAc60QoHHaziSBgJMwCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBSb290MCAXDTI2MDYwMTE1MTkzMVoYDzIxMjYwNTA4MTUxOTMxWjAmMSQwIgYDVQQDDBtJcm9oYSBJU08gUGF0aExlbiBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATHfMRmNRjSg2Q0EEqdYcGAJVEKCCTOnpjDZKgeUb/AwXgu42NfeTHsq7t3wFPd/pbCIqhBp/vJqw4btetClty+o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQULFjuLrmZd/w+EKb109b4f6d0C7gwHwYDVR0jBBgwFoAULFjuLrmZd/w+EKb109b4f6d0C7gwCgYIKoZIzj0EAwIDSQAwRgIhAIBI5KM6i2Abfp7Qn2AKIht2AMV1LAdLDDOK3+sLNPsKAiEA6eEOPnEEFLK47Xw8h+Gho0BzPRwtUBPYrTDadszwWRI=";
@@ -7867,6 +8768,11 @@ mod tests {
     const TEST_X509_NAME_CONSTRAINTS_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgbOLWcsasQZL6fbjY5AJAEf4V54T/tVnjaA21ui71Q1+hRANCAAQFuA9elo/hc8MHsTJv/iLY/uJQ23YVh0wQM4s++iXnmrEfkHpNV3w2tGUoDbztQC6AxpM0V6ZNGgdDII+cFl88";
     const TEST_X509_NAME_CONSTRAINTS_ALLOWED_LEAF_CERTIFICATE_DER_B64: &str = "MIIBwzCCAWmgAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDfwwCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjfTB7MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBTdZE7Rq40abeZVmD8GVvGmUSyeEzAfBgNVHSMEGDAWgBT9eipz/v6UBltMJtYpHCUGdBPJrjAbBgNVHREEFDASghBzaWduZXIuYmFuay50ZXN0MAoGCCqGSM49BAMCA0gAMEUCIQCKJidOlBwkTttdoh4Xl7Q2Xf3Av6dSTpn2VTcxEFc/QAIgShrDnNKILYLcMSLtjNjLci6jWDzcYGqNWiiM6THC59U=";
     const TEST_X509_NAME_CONSTRAINTS_ROOT_CERTIFICATE_DER_B64: &str = "MIIB5TCCAYqgAwIBAgIUPqN14bWcN646xRoOnH66kHDQXTMwCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMy3R6Uv13TYux3PLQDyOyNbTSwCt4q2ti20XJELV5v+y9Pu3clkQM9YyuYJYdtubTIx5tYde8tuQp6gL2ygSECjgZ0wgZowEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFP16KnP+/pQGW0wm1ikcJQZ0E8muMB8GA1UdIwQYMBaAFP16KnP+/pQGW0wm1ikcJQZ0E8muMDQGA1UdHgEB/wQqMCigDjAMggouYmFuay50ZXN0oRYwFIISLmJsb2NrZWQuYmFuay50ZXN0MAoGCCqGSM49BAMCA0kAMEYCIQD6JqC+JihQ7z7DK3Xv5rj++4ZKO2NTDMPfac0ITWR36QIhAOVHAJPEcxcsl4aiMEIr7x65CwEi74PIPHRZskv23hiO";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgWeTNiFpo3kDTiIYnTvahYiFKp/NvCfKh8/knb9Y1CHOhRANCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_CERTIFICATE_DER_B64: &str = "MIIB2jCCAX+gAwIBAgICI/MwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0o30wezAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUlzGp40AiB8VzCkdMfFNanDMzNJowHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwGwYDVR0RBBQwEoIQc2lnbmVyLmJhbmsudGVzdDAKBggqhkjOPQQDAgNJADBGAiEAph3RldFpGvIgak5HbFh0gl8xngTQpCwDy1m7isROqW4CIQDhWqQGAO2SnTeVwjUoeqIMyTY2693pUFZeNMmkDvIVzA==";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64: &str = "MIIB9zCCAZ6gAwIBAgICI/EwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZX458qvJqq1A/b+XBftsbudDl3By+j24QmLUslW7rdJPHQ0zdb9sF2tIC9hcsV/00xc6TOjy6uO7grXF9Q90saOBnTCBmjASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU+dijqo29klh4tMimqT7YPXvrQIgwHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwNAYDVR0eAQH/BCowKKAOMAyCCi5iYW5rLnRlc3ShFjAUghIuYmxvY2tlZC5iYW5rLnRlc3QwCgYIKoZIzj0EAwIDRwAwRAIgH4Koa7Xv+iDi/cET0L0iP2X/62xIP9UwTRpOHbEKm78CIE4/8r8CyAR4yM+Jrkw+GXxZnKNyxKGsJTeXzCzb3mtw";
+    const TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB2TCCAX+gAwIBAgICI/QwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0o30wezAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUlzGp40AiB8VzCkdMfFNanDMzNJowHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwGwYDVR0RBBQwEoIQc2lnbmVyLmJhbmsudGVzdDAKBggqhkjOPQQDAgNIADBFAiBfvSwqkFueSZejkC/Aw8wUIXgYJPJZ5YKDyRXPuMtdHwIhAL8wIvlGu0dhBjyMJrrMYKIyZZC5TMwN8eD6Q/2OZ9Lh";
+    const TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIB9jCCAZugAwIBAgICI/IwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZX458qvJqq1A/b+XBftsbudDl3By+j24QmLUslW7rdJPHQ0zdb9sF2tIC9hcsV/00xc6TOjy6uO7grXF9Q90saOBmjCBlzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU+dijqo29klh4tMimqT7YPXvrQIgwHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwMQYDVR0eBCowKKAOMAyCCi5iYW5rLnRlc3ShFjAUghIuYmxvY2tlZC5iYW5rLnRlc3QwCgYIKoZIzj0EAwIDSQAwRgIhALvzfIOlIuXO8/7dyWKDlqJtKoB15w2dvLBtsP6uNUgKAiEAxWHRMqOrrM57gNk5Toh9lVM4H6Ygd0MXA+OkuHXIFKw=";
     const TEST_X509_NAME_CONSTRAINTS_OUTSIDE_LEAF_CERTIFICATE_DER_B64: &str = "MIIBxjCCAW2gAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDf0wCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjgYAwfjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQU3WRO0auNGm3mVZg/BlbxplEsnhMwHwYDVR0jBBgwFoAU/Xoqc/7+lAZbTCbWKRwlBnQTya4wHgYDVR0RBBcwFYITc2lnbmVyLmV4YW1wbGUudGVzdDAKBggqhkjOPQQDAgNHADBEAiAjNtnk4lfeqsqjExCVTfrtqlu0RlU/Dn0LDqqoOSh/ogIgcPprmjBwegQXpjksGPVCP/TLkNi3esvozSmkH/pAzvo=";
     const TEST_X509_NAME_CONSTRAINTS_EXCLUDED_LEAF_CERTIFICATE_DER_B64: &str = "MIIBzDCCAXKgAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDf4wCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjgYUwgYIwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFN1kTtGrjRpt5lWYPwZW8aZRLJ4TMB8GA1UdIwQYMBaAFP16KnP+/pQGW0wm1ikcJQZ0E8muMCIGA1UdEQQbMBmCF3BheWVlLmJsb2NrZWQuYmFuay50ZXN0MAoGCCqGSM49BAMCA0gAMEUCIQCk5NPOJkXsvdwWCQ9NIYaS37JlivB/8dTHjv/HUA4fUQIgb65DjzIAyQdveqDve8AT0AW+iZwY8dcqyExZVfZx5bQ=";
     const TEST_X509_OCSP_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgOzTGZkOgS1T9pB1fWVC+0w+Prc/yFCID0klpj9gC5wyhRANCAAShay14G5YTdNi3gcQ1HU57Tqq/djk9NjZUUB188pQKBl28Re1rPtOGcqnp/cQ/fXJ4wCZL+VZIZLBXPnWI+ycM";
@@ -7879,6 +8785,11 @@ mod tests {
     const TEST_X509_OCSP_DELEGATED_ROOT_CERTIFICATE_DER_B64: &str = "MIIBuzCCAWCgAwIBAgIUUMvPwuhsVdnJyn9ENoMZSLHctPEwCgYIKoZIzj0EAwIwKDEmMCQGA1UEAwwdSXJvaGEgSVNPIE9DU1AgRGVsZWdhdGVkIFJvb3QwIBcNMjYwNjAxMTQzNjI3WhgPMjEyNjA1MDgxNDM2MjdaMCgxJjAkBgNVBAMMHUlyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvftG/vk1C8ioQjTeL0Nr5fDqrQs4DyBB7JVVEf7RoTjgEJojUCOT1TXV42KDPF4Ou6t/m3GHJb7FnbqE8LGxwqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAYYwHQYDVR0OBBYEFETROUIW9SV+wTWLmyaMBQCdIe5eMB8GA1UdIwQYMBaAFETROUIW9SV+wTWLmyaMBQCdIe5eMAoGCCqGSM49BAMCA0kAMEYCIQDIkyHlFpZC6XaESe0K+84GJb0k+I4LRpWxfmCV0cjfdAIhALPdEDSnKxJOXugAqWzj7LXBm63ISwzFQkZm3Olpc+zN";
     const TEST_X509_OCSP_DELEGATED_GOOD_RESPONSE_DER_B64: &str = "MIIDUwoBAKCCA0wwggNIBgkrBgEFBQcwAQEEggM5MIIDNTCB/qEvMC0xKzApBgNVBAMMIklyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSZXNwb25kZXIYDzIwMjYwNjAxMTQzNjI3WjCBlDCBkTBpMA0GCWCGSAFlAwQCAQUABCCdvQl6x4ExlidXQVvJaOO18NCxQamAPKLpdT3RYW2aZwQgOR36gtHUOgMjPcOprp5f1+pmvdtIaCE5GBV0FmFzSU8CFC7Dci4NhmbybLsbtGeBNfq44P8FgAAYDzIwMjYwNjAxMTQzNjI3WqARGA8yMTI2MDUwODE0MzYyN1qhIzAhMB8GCSsGAQUFBzABAgQSBBC7tDgAD3HvEmvGnxZumAhBMAoGCCqGSM49BAMCA0gAMEUCIFUNO3cufftkA53FMOw9jL55Pn9DYhk2sY/3ZqHxByVwAiEA7ppZRWYFtpqWGsd26/alBWQrvJNNXhIiL2TDb+Z5C7CgggHaMIIB1jCCAdIwggF3oAMCAQICFC7Dci4NhmbybLsbtGeBNfq44P8GMAoGCCqGSM49BAMCMCgxJjAkBgNVBAMMHUlyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSb290MCAXDTI2MDYwMTE0MzYyN1oYDzIxMjYwNTA4MTQzNjI3WjAtMSswKQYDVQQDDCJJcm9oYSBJU08gT0NTUCBEZWxlZ2F0ZWQgUmVzcG9uZGVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGTD2ooQHAbEE/MDCFGMkyP49kdn13dUG9OqfuQJT5WGUaElh+XRiebSgzrsJT4UZJ5CROd4RjJ5L35cspDr5KqN4MHYwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwkwHQYDVR0OBBYEFCV3N7muRz5ulCe3ltUOfKcWwsRDMB8GA1UdIwQYMBaAFETROUIW9SV+wTWLmyaMBQCdIe5eMAoGCCqGSM49BAMCA0kAMEYCIQCzL+5oyJ5K2V2JvwqqOzT0OLFM5bpcfQzcE+4IMb+DZwIhAMmwczkcst9vLrwTjqZFAoNu0+GSnwnRWwpGJRSENSFq";
     const TEST_X509_OCSP_DELEGATED_GOOD_NO_CERTS_RESPONSE_DER_B64: &str = "MIIBdQoBAKCCAW4wggFqBgkrBgEFBQcwAQEEggFbMIIBVzCB/qEvMC0xKzApBgNVBAMMIklyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSZXNwb25kZXIYDzIwMjYwNjAxMTQzNjI3WjCBlDCBkTBpMA0GCWCGSAFlAwQCAQUABCCdvQl6x4ExlidXQVvJaOO18NCxQamAPKLpdT3RYW2aZwQgOR36gtHUOgMjPcOprp5f1+pmvdtIaCE5GBV0FmFzSU8CFC7Dci4NhmbybLsbtGeBNfq44P8FgAAYDzIwMjYwNjAxMTQzNjI3WqARGA8yMTI2MDUwODE0MzYyN1qhIzAhMB8GCSsGAQUFBzABAgQSBBC7tDgAD3HvEmvGnxZumAhBMAoGCCqGSM49BAMCA0gAMEUCIC3xUMoiVdy4ENrVP6PHecQfp4PsrBxPercEvmEcpV0rAiEAjIe5JEkGyBNjY+VhKHCAdPvnKeLGbt6KKnLNJ3wChuQ=";
+    const TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgw4Xm6RUcszzflriWs7j3OF/YHWF0DRlPsY33QYzwjcuhRANCAARBQtgnBzqZIqXWZLKKNauig7jbYWPcsR+1LCYoARYirRp/Zyg6JhpCwbXeqGDktDMAb48jG9yQ6gmdBRSWVNF2";
+    const TEST_X509_OCSP_KEY_USAGE_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1jCCAXygAwIBAgIDAPYaMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIExlYWYwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARBQtgnBzqZIqXWZLKKNauig7jbYWPcsR+1LCYoARYirRp/Zyg6JhpCwbXeqGDktDMAb48jG9yQ6gmdBRSWVNF2o4GUMIGRMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBSdGpB4C5PvGSTHU6bDG8MZP5M/czAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzAxBggrBgEFBQcBAQQlMCMwIQYIKwYBBQUHMAGGFWh0dHA6Ly9vY3NwLmJhbmsudGVzdDAKBggqhkjOPQQDAgNIADBFAiBLnF8ndqSQhil2PBceSx1GOkyFCnNPCzWo9cQ6P1w6mgIhALA6XbShIm0jKHUZOlkhM/np7Vb9zBzRNFYaFykEz8ML";
+    const TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64: &str = "MIIBpzCCAU2gAwIBAgIDAPYZMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS+Qyb8g1S6UQ47777rHKDGGfCH3ypVZBXTh/n/QQqEChbGrCDqT/Ibx+Ym/PUeH1YRqU6nrFdavLAfBpbhnwTXo2YwZDAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUMbnVOxs0+KntDBiujWpp1m4lLCMwCgYIKoZIzj0EAwIDSAAwRQIhAMz+B00Y8dPfuc2ZgxMCtRfDrhpfqiDEaZmicJw2MSHgAiB5AzGkp9HosLCcSdXaX6dCxzaFUCs0ao+k5ujBaTIOAQ==";
+    const TEST_X509_OCSP_KEY_USAGE_CRITICAL_GOOD_RESPONSE_DER_B64: &str = "MIIDKwoBAKCCAyQwggMgBgkrBgEFBQcwAQEEggMRMIIDDTCB7KEuMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlchgPMjAyNjA2MDExOTQ4MzBaMIGDMIGAMFgwDQYJYIZIAWUDBAIBBQAEIECKTV6OtpBmfUfcGIXn5ROeB4F9gkGvkles+bHnrE0vBCBCO4wtLt9bo0SxNoKEr5hKfy2HKamLGdfUrX9S4+TczgIDAPYagAAYDzIwMjYwNjAxMTk0ODMwWqARGA8yMTI2MDUwODE5NDgzMFqhIzAhMB8GCSsGAQUFBzABAgQSBBAB1YsJIGXWUvPyGk6lbNQ3MAoGCCqGSM49BAMCA0cAMEQCICi5uAklXyhULJYp071XCqd5DfPjMWrl8W8CGVASyrAeAiACDZJX2C1Pb0Oc9ae6RJ9QbqDMvPh4c7o6k+SQcpu5BqCCAcUwggHBMIIBvTCCAWSgAwIBAgIDAPYbMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABEWA8wb4XTQCrnqxYXm6iJ6/47d3hDZy6F3C9sYNeHOp/AFkAq70sEknuVjb7/ovNfiIHigSvV1PgSA66r8T5ISjeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMJMB0GA1UdDgQWBBRDZ9PDUab0DvC+v6fnYp6fI7p4sjAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzAKBggqhkjOPQQDAgNHADBEAiBodtskV8Uu1r0zqrG3a7Zfb6VxZks80LBo2Uo3ILjImgIgc1GLmUgvDnYjoP6fUZUAivHAOsga0P1hN3Pe+hnaMcM=";
+    const TEST_X509_OCSP_KEY_USAGE_NONCRITICAL_GOOD_RESPONSE_DER_B64: &str = "MIIDKwoBAKCCAyQwggMgBgkrBgEFBQcwAQEEggMRMIIDDTCB7KEuMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlchgPMjAyNjA2MDExOTQ4MzBaMIGDMIGAMFgwDQYJYIZIAWUDBAIBBQAEIECKTV6OtpBmfUfcGIXn5ROeB4F9gkGvkles+bHnrE0vBCBCO4wtLt9bo0SxNoKEr5hKfy2HKamLGdfUrX9S4+TczgIDAPYagAAYDzIwMjYwNjAxMTk0ODMwWqARGA8yMTI2MDUwODE5NDgzMFqhIzAhMB8GCSsGAQUFBzABAgQSBBCBX5ZXbbP2Ahkm3qHJGRQZMAoGCCqGSM49BAMCA0gAMEUCIDxBU1VVYacjInqi3K5IXpZhU540l3iALNNO4C7FvFaqAiEAnwTZ0BHkmIoAEeIuqqmM4w89+HRw0gjcy/s5cdKA5ACgggHEMIIBwDCCAbwwggFhoAMCAQICAwD2HDAKBggqhkjOPQQDAjAnMSUwIwYDVQQDDBxJcm9oYSBJU08gT0NTUCBLZXlVc2FnZSBSb290MCAXDTI2MDYwMTE5NDgwOFoYDzIxMjYwNTA4MTk0ODA4WjAsMSowKAYDVQQDDCFJcm9oYSBJU08gT0NTUCBLZXlVc2FnZSBSZXNwb25kZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARFgPMG+F00Aq56sWF5uoiev+O3d4Q2cuhdwvbGDXhzqfwBZAKu9LBJJ7lY2+/6LzX4iB4oEr1dT4EgOuq/E+SEo3UwczAMBgNVHRMBAf8EAjAAMAsGA1UdDwQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDCTAdBgNVHQ4EFgQUQ2fTw1Gm9A7wvr+n52KenyO6eLIwHwYDVR0jBBgwFoAUMbnVOxs0+KntDBiujWpp1m4lLCMwCgYIKoZIzj0EAwIDSQAwRgIhANKeOqXIx6jqHWvRCTSMvIXSTJfzXgiJJ6XswtK+MMpjAiEAzGcYAnSK4R6UF6diRLBbxIJfCxzU1zniE8ux0kC2yi4=";
 
     fn assert_outbox_error_contains(err: crate::Error, expected: &str) {
         match err {
@@ -7917,6 +8828,11 @@ mod tests {
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
             store_dir: None,
+            store_retention_secs:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+            store_max_records:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+            audit_export_dir: None,
             embedded_signature_policy: None,
             signer: Some(actual::IsoBridgeSigner {
                 account_id: account_literal.clone(),
@@ -7970,6 +8886,46 @@ mod tests {
                 supplementary_data_max_bytes: 4096,
                 amount_minor_units: Vec::new(),
             }],
+        }
+    }
+
+    fn live_securities_lifecycle_profile() -> actual::IsoBridgeProfile {
+        let message_profile = |message_type: &str, version: &str| actual::IsoMessageProfile {
+            message_type: message_type.to_owned(),
+            direction: "inbound".to_owned(),
+            versions: vec![version.to_owned()],
+            business_services: vec!["securities.csd.cash".to_owned()],
+            require_app_header: true,
+            require_business_service: true,
+            require_uetr: false,
+            structured_address_mode: "permissive".to_owned(),
+            supplementary_data_max_bytes: 4096,
+            amount_minor_units: Vec::new(),
+        };
+        actual::IsoBridgeProfile {
+            id: "securities-csd-lifecycle-fixtures".to_owned(),
+            rail: "securities-csd".to_owned(),
+            embedded_signature_policy: None,
+            signature_public_key_sha256_pins: Vec::new(),
+            x509_trust_anchor_sha256_pins: Vec::new(),
+            x509_required_certificate_policy_oids: Vec::new(),
+            x509_require_crl_revocation_check: false,
+            x509_crl_der_base64: Vec::new(),
+            x509_require_ocsp_revocation_check: false,
+            x509_ocsp_response_der_base64: Vec::new(),
+            trusted_public_key_sha256: Vec::new(),
+            trusted_certificate_sha256: Vec::new(),
+            revoked_certificate_sha256: Vec::new(),
+            required_reference_datasets: vec![
+                "bic-lei".to_owned(),
+                "isin-cusip".to_owned(),
+                "mic-directory".to_owned(),
+            ],
+            message_profiles: vec![
+                message_profile("sese.023", "sese.023.001.11"),
+                message_profile("sese.024", "sese.024.001.10"),
+                message_profile("sese.025", "sese.025.001.11"),
+            ],
         }
     }
 
@@ -8237,6 +9193,31 @@ mod tests {
         sha256_hex(&certificate)
     }
 
+    fn test_x509_signer_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("signer KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("signer KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_signer_key_usage_leaf_public_key_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64)
+            .expect("critical signer KeyUsage leaf X.509 fixture must decode");
+        let (_, certificate) = X509Certificate::from_der(&certificate)
+            .expect("critical signer KeyUsage leaf X.509 fixture must parse");
+        let public_key = certificate.public_key().subject_public_key.data.to_vec();
+        sha256_hex(&public_key)
+    }
+
+    fn test_x509_signer_key_usage_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64)
+            .expect("signer KeyUsage root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
     fn test_x509_aki_leaf_signing_key() -> P256SigningKey {
         let pkcs8 = BASE64_STANDARD
             .decode(TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64)
@@ -8248,6 +9229,28 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64)
             .expect("AKI root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_aki_issuer_serial_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("AKI issuer/serial leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("AKI issuer/serial leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_aki_issuer_serial_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("AKI issuer/serial root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_aki_issuer_serial_mismatch_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64)
+            .expect("AKI issuer/serial mismatch root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -8270,6 +9273,35 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64)
             .expect("critical CA root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_ca_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("CA KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8).expect("CA KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_ocsp_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_ca_key_usage_critical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("critical CA KeyUsage root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_ca_key_usage_noncritical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("non-critical CA KeyUsage root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -8365,6 +9397,28 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_NAME_CONSTRAINTS_ROOT_CERTIFICATE_DER_B64)
             .expect("name-constrained root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_name_constraints_criticality_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("name-constraints criticality leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("name-constraints criticality leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_name_constraints_criticality_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64)
+            .expect("critical NameConstraints root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_name_constraints_noncritical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("non-critical NameConstraints root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -8761,6 +9815,33 @@ mod tests {
         )
     }
 
+    fn signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+        leaf_certificate: &str,
+        include_root: bool,
+    ) -> String {
+        let signing_key = test_x509_signer_key_usage_leaf_signing_key();
+        let root_xml = if include_root {
+            format!(
+                "<X509Certificate>{TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64}</X509Certificate>"
+            )
+        } else {
+            String::new()
+        };
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "{root_xml}",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf_certificate,
+                root_xml = root_xml
+            ),
+        )
+    }
+
     fn signed_pacs008_xml_with_aki_x509_certificate_chain(leaf_certificate: &str) -> String {
         let signing_key = test_x509_aki_leaf_signing_key();
         signed_pacs008_xml_with_key_info(
@@ -8774,6 +9855,79 @@ mod tests {
                 ),
                 leaf = leaf_certificate,
                 root = TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(root: &str) -> String {
+        let signing_key = test_x509_aki_issuer_serial_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_AKI_ISSUER_SERIAL_LEAF_CERTIFICATE_DER_B64,
+                root = root
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_noncritical_ca_root_x509_certificate_chain() -> String {
+        let signing_key = test_x509_noncritical_ca_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_NONCRITICAL_CA_LEAF_BY_ROOT_CERTIFICATE_DER_B64,
+                root = TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_noncritical_ca_intermediate_x509_certificate_chain() -> String {
+        let signing_key = test_x509_noncritical_ca_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{intermediate}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_NONCRITICAL_CA_LEAF_BY_INTERMEDIATE_CERTIFICATE_DER_B64,
+                intermediate = TEST_X509_NONCRITICAL_CA_INTERMEDIATE_CERTIFICATE_DER_B64,
+                root = TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
+        leaf: &str,
+        root: &str,
+    ) -> String {
+        let signing_key = test_x509_ca_key_usage_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf,
+                root = root
             ),
         )
     }
@@ -8901,6 +10055,26 @@ mod tests {
         )
     }
 
+    fn signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
+        leaf: &str,
+        root: &str,
+    ) -> String {
+        let signing_key = test_x509_name_constraints_criticality_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf,
+                root = root
+            ),
+        )
+    }
+
     fn signed_pacs008_xml_with_ocsp_x509_certificate_chain(embedded_ocsp: Option<&str>) -> String {
         signed_pacs008_xml_with_ocsp_x509_certificate_chain_at(
             embedded_ocsp,
@@ -8947,6 +10121,23 @@ mod tests {
                 ),
                 leaf = TEST_X509_OCSP_DELEGATED_LEAF_CERTIFICATE_DER_B64,
                 root = TEST_X509_OCSP_DELEGATED_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain() -> String {
+        let signing_key = test_x509_ocsp_key_usage_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_OCSP_KEY_USAGE_LEAF_CERTIFICATE_DER_B64,
+                root = TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64
             ),
         )
     }
@@ -9231,6 +10422,179 @@ mod tests {
                 leaf_digest = leaf_digest
             ),
             leaf_digest,
+        )
+    }
+
+    fn test_xades_signed_properties_xml() -> String {
+        signed_properties_xml("signed-props-001")
+    }
+
+    fn test_xades_signed_properties_xml_for_certificate(certificate_der_b64: &str) -> String {
+        let certificate_der = BASE64_STANDARD
+            .decode(certificate_der_b64)
+            .expect("XAdES certificate fixture must decode");
+        signed_properties_xml_with_signing_certificate_v2("signed-props-001", &certificate_der).0
+    }
+
+    fn test_xades_signing_certificate_v2_xml(certificate_der_b64: &str) -> String {
+        test_xades_signing_certificate_v2_xml_with_cert_extra(certificate_der_b64, "")
+    }
+
+    fn test_xades_signing_certificate_v2_xml_with_cert_extra(
+        certificate_der_b64: &str,
+        cert_extra: &str,
+    ) -> String {
+        let certificate_der = BASE64_STANDARD
+            .decode(certificate_der_b64)
+            .expect("XAdES certificate fixture must decode");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(&certificate_der));
+        format!(
+            concat!(
+                "<SigningCertificateV2><Cert><CertDigest>",
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                "<DigestValue>{digest}</DigestValue>",
+                "</CertDigest>{cert_extra}</Cert></SigningCertificateV2>"
+            ),
+            sha256 = XMLDSIG_SHA256,
+            digest = digest,
+            cert_extra = cert_extra
+        )
+    }
+
+    fn test_xades_signed_properties_xml_with_extra(extra: &str) -> String {
+        format!(
+            concat!(
+                r#"<SignedProperties Id="signed-props-001"><SignedSignatureProperties>"#,
+                "<SigningTime>{signing_time}</SigningTime>",
+                "{extra}",
+                "</SignedSignatureProperties></SignedProperties>"
+            ),
+            signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+            extra = extra
+        )
+    }
+
+    fn signed_properties_id_from_xml(signed_properties_xml: &str) -> &str {
+        let start = signed_properties_xml
+            .find(r#"Id=""#)
+            .map(|index| index + r#"Id=""#.len())
+            .expect("SignedProperties Id attribute");
+        let end = signed_properties_xml[start..]
+            .find('"')
+            .map(|index| start + index)
+            .expect("SignedProperties Id closing quote");
+        &signed_properties_xml[start..end]
+    }
+
+    fn test_xades_signed_properties_reference_for_xml(signed_properties_xml: &str) -> String {
+        let signed_properties_id = signed_properties_id_from_xml(signed_properties_xml);
+        let canonical_signed_properties =
+            canonicalize_supported_xml(signed_properties_xml).expect("canonical SignedProperties");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+        format!(
+            concat!(
+                r##"<Reference URI="#{signed_properties_id}" Type="{signed_properties_type}">"##,
+                r#"<Transforms><Transform Algorithm="{exclusive_c14n}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod>"#,
+                "<DigestValue>{digest}</DigestValue></Reference>"
+            ),
+            signed_properties_id = signed_properties_id,
+            signed_properties_type = XADES_SIGNED_PROPERTIES_TYPE,
+            exclusive_c14n = XML_EXCLUSIVE_C14N_1_0,
+            sha256 = XMLDSIG_SHA256,
+            digest = digest
+        )
+    }
+
+    fn test_xades_object_xml(signed_properties_xml: &str) -> String {
+        format!(
+            r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties_xml}</QualifyingProperties></Object>"##
+        )
+    }
+
+    fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        format!(
+            concat!(
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="{named_curve}"></NamedCurve>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>"
+            ),
+            named_curve = XMLDSIG_P256_NAMED_CURVE,
+            public_key = public_key
+        )
+    }
+
+    fn signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+        signed_properties_xml: &str,
+    ) -> String {
+        let signed_properties_reference =
+            test_xades_signed_properties_reference_for_xml(signed_properties_xml);
+        let xades_object = test_xades_object_xml(signed_properties_xml);
+        let key_info = format!(
+            concat!(
+                "<KeyInfo><X509Data>",
+                "<X509Certificate>{leaf}</X509Certificate>",
+                "<X509Certificate>{root}</X509Certificate>",
+                "</X509Data></KeyInfo>"
+            ),
+            leaf = TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+            root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64
+        );
+        signed_pacs008_xml_with_key_info_and_xades_parts(
+            &test_x509_chain_leaf_signing_key(),
+            &key_info,
+            &signed_properties_reference,
+            &xades_object,
+        )
+    }
+
+    fn signed_pacs008_xml_with_key_info_and_xades_parts(
+        signing_key: &P256SigningKey,
+        key_info: &str,
+        signed_properties_reference_xml: &str,
+        xades_object_xml: &str,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_info = format!(
+            concat!(
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{c14n}"></CanonicalizationMethod>"#,
+                r#"<SignatureMethod Algorithm="{ecdsa_sha256}"></SignatureMethod>"#,
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{enveloped_signature}"></Transform></Transforms>"#,
+                r#"<DigestMethod Algorithm="{sha256}"></DigestMethod><DigestValue>{payload_digest}</DigestValue></Reference>"#,
+                "{signed_properties_reference_xml}",
+                "</SignedInfo>"
+            ),
+            c14n = XML_C14N_1_0,
+            ecdsa_sha256 = XMLDSIG_ECDSA_SHA256,
+            enveloped_signature = XMLDSIG_ENVELOPED_SIGNATURE,
+            sha256 = XMLDSIG_SHA256,
+            payload_digest = payload_digest,
+            signed_properties_reference_xml = signed_properties_reference_xml
+        );
+        let canonical_signed_info =
+            canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
+        let signature = low_s_p256_signature(signing_key.sign(canonical_signed_info.as_bytes()));
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let signature_xml = format!(
+            r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>{key_info}{xades_object_xml}</Signature>"#
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
         )
     }
 
@@ -10770,6 +12134,115 @@ mod tests {
         )
     }
 
+    fn live_pacs002_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtStsRpt>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:01:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInfAndSts>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+        <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+        <GrpSts>ACSP</GrpSts>
+      </OrgnlGrpInfAndSts>
+      <TxInfAndSts>
+        <StsId>{business_message_id}-tx</StsId>
+        <TxSts>ACSP</TxSts>
+        <AddtlInf>live profile status fixture</AddtlInf>
+      </TxInfAndSts>
+    </FIToFIPmtStsRpt>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn live_pacs004_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <PmtRtr>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:02:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInf>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+      </OrgnlGrpInf>
+      <TxInf>
+        <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+        <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
+        <ChrgBr>SHAR</ChrgBr>
+        <RtrRsnInf><Rsn><Cd>AC01</Cd></Rsn></RtrRsnInf>
+      </TxInf>
+    </PmtRtr>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn live_camt056_xml(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtCxlReq>
+      <Assgnmt>
+        <Id>{business_message_id}-assignment</Id>
+        <CreDtTm>2025-01-01T12:03:00Z</CreDtTm>
+      </Assgnmt>
+      <Undrlyg>
+        <TxInf>
+          <OrgnlGrpInf>
+            <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+            <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+          </OrgnlGrpInf>
+          <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+          <OrgnlEndToEndId>{business_message_id}-e2e</OrgnlEndToEndId>
+          <OrgnlTxId>{business_message_id}-tx</OrgnlTxId>
+          <CxlRsnInf>
+            <Rsn><Cd>DUPL</Cd></Rsn>
+            <AddtlInf>live profile cancellation fixture</AddtlInf>
+          </CxlRsnInf>
+        </TxInf>
+      </Undrlyg>
+    </FIToFIPmtCxlReq>
+  </Document>
+</DataPDU>"#
+        )
+    }
+
     fn xsd_tag_with_attr<'a>(
         xsd: &'a str,
         tag_name: &str,
@@ -10844,7 +12317,27 @@ mod tests {
         )
     }
 
+    fn data_pdu_with_app_header(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+        document: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+{document}
+</DataPDU>"#
+        )
+    }
+
     fn sample_config_with_live_reference_data() -> (actual::IsoBridge, Vec<NamedTempFile>) {
+        let asset_definition_id = sample_asset_definition_literal();
         let bic_lei = write_snapshot(
             r#"{
                 "version":"2024-05-01",
@@ -10855,13 +12348,17 @@ mod tests {
                 ]
             }"#,
         );
-        let isin_crosswalk = write_snapshot(
-            r#"{
+        let isin_crosswalk = write_snapshot(&format!(
+            r#"{{
                 "version":"2024-05-01",
                 "source":"ANNA DSB sample",
-                "entries":[{"isin":"US0378331005","cusip":"037833100"}]
-            }"#,
-        );
+                "entries":[{{
+                    "isin":"US0378331005",
+                    "cusip":"037833100",
+                    "asset_definition_id":"{asset_definition_id}"
+                }}]
+            }}"#
+        ));
         let mic_directory = write_snapshot(
             r#"{
                 "version":"2024-05-01",
@@ -10869,11 +12366,63 @@ mod tests {
                 "entries":[{"mic":"XNAS","status":"ACTIVE"}]
             }"#,
         );
+        let csd_venue = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD sample",
+                "entries":[{"mic":"XNAS","csd_id":"DTC","ledger_domain_id":"securities"}]
+            }"#,
+        );
+        let securities_account = write_snapshot(&format!(
+            r#"{{
+                "version":"2024-05-01",
+                "source":"CSD account sample",
+                "entries":[
+                    {{
+                        "settlement_account":"DLVRY-ACC",
+                        "bic":"DEUTDEFF",
+                        "account_id":"{}"
+                    }},
+                    {{
+                        "settlement_account":"RCVG-ACC",
+                        "bic":"MARKDEFF",
+                        "account_id":"{}"
+                    }}
+                ]
+            }}"#,
+            sample_account_bundle().1,
+            sample_account_bundle().1
+        ));
+        let cash_leg = write_snapshot(&format!(
+            r#"{{
+                "version":"2024-05-01",
+                "source":"CSD cash-leg sample",
+                "entries":[{{
+                    "currency":"USD",
+                    "payment_type":"APMT",
+                    "asset_definition_id":"{asset_definition_id}"
+                }}]
+            }}"#
+        ));
         let mut config = sample_config();
         config.reference_data.bic_lei_path = Some(bic_lei.path().to_path_buf());
         config.reference_data.isin_crosswalk_path = Some(isin_crosswalk.path().to_path_buf());
         config.reference_data.mic_directory_path = Some(mic_directory.path().to_path_buf());
-        (config, vec![bic_lei, isin_crosswalk, mic_directory])
+        config.reference_data.csd_venue_path = Some(csd_venue.path().to_path_buf());
+        config.reference_data.securities_account_path =
+            Some(securities_account.path().to_path_buf());
+        config.reference_data.cash_leg_path = Some(cash_leg.path().to_path_buf());
+        (
+            config,
+            vec![
+                bic_lei,
+                isin_crosswalk,
+                mic_directory,
+                csd_venue,
+                securities_account,
+                cash_leg,
+            ],
+        )
     }
 
     fn inbound_metadata(message_id: &str, message_type: &str) -> IsoMessageMetadata {
@@ -13881,6 +15430,339 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_rejects_x509_xades_missing_signing_certificate_v2() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("X.509 XAdES signatures must identify the signing certificate");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_digest() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64,
+        );
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("XAdES SigningCertificateV2 digest must match the signer leaf");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_algorithm() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+        )
+        .replace(XMLDSIG_SHA256, "urn:unsupported:sha1");
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("XAdES SigningCertificateV2 must use SHA-256 cert digests");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_duplicate_signing_certificate_v2() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signing_certificate =
+            test_xades_signing_certificate_v2_xml(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64);
+        let signed_properties_xml = test_xades_signed_properties_xml_with_extra(&format!(
+            "{signing_certificate}{signing_certificate}"
+        ));
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("duplicate XAdES SigningCertificateV2 entries must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_issuer_serial_metadata() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+        let cases = [
+            "<IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerial>",
+            "<IssuerSerialV2><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerialV2>",
+            "<xades:IssuerSerialV2><ds:X509IssuerName>CN=Wrong Root</ds:X509IssuerName><ds:X509SerialNumber>999</ds:X509SerialNumber></xades:IssuerSerialV2>",
+            "<X509IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></X509IssuerSerial>",
+        ];
+
+        for issuer_serial in cases {
+            let signing_certificate = test_xades_signing_certificate_v2_xml_with_cert_extra(
+                TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+                issuer_serial,
+            );
+            let signed_properties_xml =
+                test_xades_signed_properties_xml_with_extra(&signing_certificate);
+            let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+                &signed_properties_xml,
+            );
+            let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+
+            let err = runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .expect_err("unsupported SigningCertificateV2 issuer/serial metadata must fail");
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "unexpected error for issuer/serial {issuer_serial:?}: {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_v2_outside_signature_properties()
+     {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signing_certificate =
+            test_xades_signing_certificate_v2_xml(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64);
+        let signed_properties_xml = format!(
+            concat!(
+                r#"<SignedProperties Id="xades-signed-props-001">"#,
+                "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
+                "<SignedDataObjectProperties>{signing_certificate}</SignedDataObjectProperties>",
+                "</SignedProperties>"
+            ),
+            signing_certificate = signing_certificate
+        );
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SigningCertificateV2 outside SignedSignatureProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_xades_signing_certificate_v2() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+        );
+        let signed_properties_reference_xml =
+            test_xades_signed_properties_reference_for_xml(&signed_properties_xml);
+        let xades_object_xml = test_xades_object_xml(&signed_properties_xml);
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &signed_properties_reference_xml,
+            &xades_object_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SigningCertificateV2 cannot authorize raw public-key KeyInfo");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_directly_pinned_x509_critical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins =
+            vec![test_x509_signer_key_usage_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("directly pinned signer leaf with critical digitalSignature should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_directly_pinned_x509_noncritical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins =
+            vec![test_x509_signer_key_usage_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("direct public-key pins must not bypass non-critical signer KeyUsage");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_trust_anchor_x509_critical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_signer_key_usage_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("trust-anchor signer leaf with critical digitalSignature should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_trust_anchor_x509_noncritical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_signer_key_usage_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("trust-anchor chains must not bypass non-critical signer KeyUsage");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_rejects_directly_pinned_x509_unknown_critical_leaf() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -15738,6 +17620,45 @@ mod tests {
                 ),
             ),
             (
+                "swift-cbpr-plus",
+                "pacs.002",
+                "pacs.002.001.10",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "SWIFT-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "pacs.004",
+                "pacs.004.001.10",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SWIFT-PACS004-MDR-XSD-1",
+                    "pacs.004.001.10",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "camt.056",
+                "camt.056.001.08",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SWIFT-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
                 "fedwire-funds",
                 "pacs.008",
                 "pacs.008.001.08",
@@ -15751,6 +17672,32 @@ mod tests {
                     "USD",
                     "10.00",
                     "123e4567-e89b-12d3-a456-426614174401",
+                ),
+            ),
+            (
+                "fedwire-funds",
+                "pacs.002",
+                "pacs.002.001.10",
+                "fedwire.funds.01",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "FEDWIRE-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "fedwire.funds.01",
+                ),
+            ),
+            (
+                "fedwire-funds",
+                "camt.056",
+                "camt.056.001.08",
+                "fedwire.funds.01",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "FEDWIRE-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
+                    "fedwire.funds.01",
                 ),
             ),
             (
@@ -15770,6 +17717,33 @@ mod tests {
                 ),
             ),
             (
+                "sepa-sct-inst",
+                "pacs.002",
+                "pacs.002.001.10",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml("SEPA-PACS002-MDR-XSD-1", "pacs.002.001.10", "sepa.sct.inst"),
+            ),
+            (
+                "sepa-sct-inst",
+                "pacs.004",
+                "pacs.004.001.10",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml("SEPA-PACS004-MDR-XSD-1", "pacs.004.001.10", "sepa.sct.inst"),
+            ),
+            (
+                "sepa-sct-inst",
+                "camt.056",
+                "camt.056.001.08",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml("SEPA-CAMT056-MDR-XSD-1", "camt.056.001.08", "sepa.sct.inst"),
+            ),
+            (
                 "securities-csd",
                 "pacs.009",
                 "pacs.009.001.08",
@@ -15779,6 +17753,45 @@ mod tests {
                 live_pacs009_xml(
                     "SECURITIES-MDR-XSD-1",
                     "pacs.009.001.08",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.002",
+                "pacs.002.001.10",
+                "securities.csd.cash",
+                OFFICIAL_XSD_PACS002_001_10,
+                "FIToFIPmtStsRpt",
+                live_pacs002_xml(
+                    "SECURITIES-PACS002-MDR-XSD-1",
+                    "pacs.002.001.10",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.004",
+                "pacs.004.001.10",
+                "securities.csd.cash",
+                OFFICIAL_XSD_PACS004_001_10,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SECURITIES-PACS004-MDR-XSD-1",
+                    "pacs.004.001.10",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "camt.056",
+                "camt.056.001.08",
+                "securities.csd.cash",
+                OFFICIAL_XSD_CAMT056_001_08,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SECURITIES-CAMT056-MDR-XSD-1",
+                    "camt.056.001.08",
                     "securities.csd.cash",
                 ),
             ),
@@ -15830,6 +17843,543 @@ mod tests {
             .expect_err("pacs.008 must reject a pacs.009 XSD document root");
 
         assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
+    fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let instruction_payload = data_pdu_with_app_header(
+            "SEC-INSTR-BAH-1",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            SESE023_FIXTURE_XML,
+        );
+        let instruction =
+            parse_message("sese.023", instruction_payload.as_bytes()).expect("sese.023 fixture");
+        let instruction_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.023",
+                &instruction,
+                instruction_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.023 fixture validates through Torii profile");
+        let instruction_id = Iso20022BridgeRuntime::lifecycle_message_id("sese.023", &instruction)
+            .expect("sese.023 durable id");
+        assert_eq!(instruction_id, "sese.023:DVP-FIXTURE-1");
+        assert_eq!(
+            instruction_metadata.business_message_id(),
+            Some("SEC-INSTR-BAH-1")
+        );
+        assert!(runtime.check_and_record_inbound(&instruction_id, instruction_metadata));
+        let instruction_outcome = runtime
+            .apply_inbound_lifecycle_message(&instruction_id, "sese.023", &instruction)
+            .expect("record BAH-wrapped sese.023 fixture");
+        assert_eq!(instruction_outcome.action(), "recorded");
+        let instruction_status = runtime
+            .message_status(&instruction_id)
+            .expect("instruction status");
+        assert_eq!(instruction_status.status_label(), "Accepted");
+        assert_eq!(instruction_status.settlement_quantity(), Some("500"));
+        assert_eq!(
+            instruction_status.security_instrument_id(),
+            Some("US0378331005")
+        );
+        assert_eq!(
+            instruction_status.plan_execution_order(),
+            Some("DELIVERY_THEN_PAYMENT")
+        );
+
+        let status_advice_payload = data_pdu_with_app_header(
+            "SEC-STADV-BAH-1",
+            "sese.024.001.10",
+            "securities.csd.cash",
+            SESE024_FIXTURE_XML,
+        );
+        let status_advice =
+            parse_message("sese.024", status_advice_payload.as_bytes()).expect("sese.024 fixture");
+        let status_advice_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.024",
+                &status_advice,
+                status_advice_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.024 fixture validates through Torii profile");
+        let status_advice_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &status_advice)
+                .expect("sese.024 durable id");
+        assert_eq!(status_advice_id, "sese.024:DVP-FIXTURE-1");
+        assert_eq!(
+            status_advice_metadata.business_message_id(),
+            Some("SEC-STADV-BAH-1")
+        );
+        assert!(runtime.check_and_record_inbound(&status_advice_id, status_advice_metadata));
+        let status_advice_outcome = runtime
+            .apply_inbound_lifecycle_message(&status_advice_id, "sese.024", &status_advice)
+            .expect("apply BAH-wrapped sese.024 fixture");
+        assert_eq!(
+            status_advice_outcome.referenced_message_id(),
+            Some("sese.023:DVP-FIXTURE-1")
+        );
+        assert_eq!(status_advice_outcome.lifecycle_status_code(), Some("PEND"));
+        assert_eq!(status_advice_outcome.lifecycle_reason_code(), Some("NORE"));
+        assert_eq!(status_advice_outcome.action(), "marked_pending");
+        let pending_instruction = runtime
+            .message_status(&instruction_id)
+            .expect("pending instruction status");
+        assert_eq!(pending_instruction.status_label(), "Pending");
+        assert_eq!(pending_instruction.pacs002_code(), "PDNG");
+        assert_eq!(pending_instruction.hold_reason_code(), Some("NORE"));
+        let status_advice_record = runtime
+            .message_status(&status_advice_id)
+            .expect("status-advice lifecycle status");
+        assert_eq!(status_advice_record.status_label(), "Accepted");
+        assert_eq!(
+            status_advice_record.detail(),
+            Some("recorded inbound ISO 20022 sese.024 lifecycle message")
+        );
+
+        let confirmation_payload = data_pdu_with_app_header(
+            "SEC-CONF-BAH-1",
+            "sese.025.001.11",
+            "securities.csd.cash",
+            SESE025_FIXTURE_XML,
+        );
+        let confirmation =
+            parse_message("sese.025", confirmation_payload.as_bytes()).expect("sese.025 fixture");
+        let confirmation_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.025",
+                &confirmation,
+                confirmation_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.025 fixture validates through Torii profile");
+        let confirmation_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &confirmation)
+                .expect("sese.025 durable id");
+        assert_eq!(confirmation_id, "sese.025:PVP-FIXTURE-1");
+        assert_eq!(
+            confirmation_metadata.business_message_id(),
+            Some("SEC-CONF-BAH-1")
+        );
+
+        record_original(&runtime, "sese.023:PVP-FIXTURE-1", "sese.023");
+        assert!(runtime.check_and_record_inbound(&confirmation_id, confirmation_metadata));
+        let confirmation_outcome = runtime
+            .apply_inbound_lifecycle_message(&confirmation_id, "sese.025", &confirmation)
+            .expect("apply BAH-wrapped sese.025 fixture");
+        assert_eq!(
+            confirmation_outcome.referenced_message_id(),
+            Some("sese.023:PVP-FIXTURE-1")
+        );
+        assert_eq!(confirmation_outcome.action(), "marked_settled");
+        let settled = runtime
+            .message_status("sese.023:PVP-FIXTURE-1")
+            .expect("referenced settlement status");
+        assert_eq!(settled.pacs002_code(), "ACSC");
+        let confirmation_status = runtime
+            .message_status(&confirmation_id)
+            .expect("confirmation status");
+        assert_eq!(confirmation_status.settlement_quantity(), Some("250000"));
+        assert_eq!(
+            confirmation_status.plan_atomicity(),
+            Some("COMMIT_SECOND_LEG")
+        );
+    }
+
+    #[test]
+    fn securities_profile_rejects_unknown_reference_crosswalk_values() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let cases = [
+            (
+                "unknown instrument",
+                SESE023_FIXTURE_XML.replace("US0378331005", "US5949181045"),
+                "SctiesLeg/FinInstrmId",
+                IdentifierKind::Isin,
+            ),
+            (
+                "unknown venue MIC",
+                SESE023_FIXTURE_XML.replace("XNAS", "XNYS"),
+                "PlcOfSttlm/MktId",
+                IdentifierKind::Mic,
+            ),
+            (
+                "unknown settlement-party BIC",
+                SESE023_FIXTURE_XML.replacen("DEUTDEFF", "TESTUS33", 1),
+                "DlvrgSttlmPties/Pty/Bic",
+                IdentifierKind::Bic,
+            ),
+        ];
+
+        for (label, document, expected_field, expected_kind) in cases {
+            let business_id = format!("SEC-INSTR-{}", label.replace(' ', "-"));
+            let payload = data_pdu_with_app_header(
+                &business_id,
+                "sese.023.001.11",
+                "securities.csd.cash",
+                &document,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse before lookup: {err:?}"));
+            let err = match runtime.validate_profile_submission(
+                profile,
+                "sese.023",
+                &parsed,
+                payload.as_bytes(),
+            ) {
+                Ok(_) => panic!("{label} must fail reference-data validation"),
+                Err(err) => err,
+            };
+            match err {
+                MsgError::InvalidIdentifier { field, kind } => {
+                    assert_eq!(field, expected_field, "{label} field");
+                    assert_eq!(kind, expected_kind, "{label} kind");
+                }
+                other => panic!("{label} produced unexpected error: {other:?}"),
+            }
+        }
+
+        assert!(
+            runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+            "rejected reference-data drift must not create a settlement record"
+        );
+    }
+
+    #[test]
+    fn securities_profile_requires_sese023_ledger_crosswalk_snapshots() {
+        let missing_cases = ["csd_venue_path", "securities_account_path", "cash_leg_path"];
+
+        for missing in missing_cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            match missing {
+                "csd_venue_path" => config.reference_data.csd_venue_path = None,
+                "securities_account_path" => config.reference_data.securities_account_path = None,
+                "cash_leg_path" => config.reference_data.cash_leg_path = None,
+                _ => unreachable!(),
+            }
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-MISSING-{missing}"),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                SESE023_FIXTURE_XML,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .expect("sese.023 fixture parses before ledger gate");
+
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "{missing} should fail closed, got {err:?}"
+            );
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "missing {missing} must not create a settlement record"
+            );
+        }
+    }
+
+    #[test]
+    fn securities_profile_rejects_incomplete_sese023_ledger_crosswalk_rows() {
+        let cases = [
+            (
+                "instrument asset mapping",
+                "isin_crosswalk_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"ANNA DSB sample",
+                    "entries":[{"isin":"US0378331005","cusip":"037833100"}]
+                }"#,
+            ),
+            (
+                "CSD ledger domain",
+                "csd_venue_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD sample",
+                    "entries":[{"mic":"XNAS","csd_id":"DTC"}]
+                }"#,
+            ),
+            (
+                "settlement account",
+                "securities_account_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD account sample",
+                    "entries":[
+                        {"settlement_account":"DLVRY-ACC","bic":"DEUTDEFF"},
+                        {"settlement_account":"RCVG-ACC","bic":"MARKDEFF","account_id":"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"}
+                    ]
+                }"#,
+            ),
+            (
+                "cash-leg asset",
+                "cash_leg_path",
+                r#"{
+                    "version":"2024-05-01",
+                    "source":"CSD cash-leg sample",
+                    "entries":[{"currency":"USD","payment_type":"APMT"}]
+                }"#,
+            ),
+        ];
+
+        for (label, path_name, snapshot) in cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            let replacement = write_snapshot(snapshot);
+            match path_name {
+                "isin_crosswalk_path" => {
+                    config.reference_data.isin_crosswalk_path =
+                        Some(replacement.path().to_path_buf());
+                }
+                "csd_venue_path" => {
+                    config.reference_data.csd_venue_path = Some(replacement.path().to_path_buf());
+                }
+                "securities_account_path" => {
+                    config.reference_data.securities_account_path =
+                        Some(replacement.path().to_path_buf());
+                }
+                "cash_leg_path" => {
+                    config.reference_data.cash_leg_path = Some(replacement.path().to_path_buf());
+                }
+                _ => unreachable!(),
+            }
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-INCOMPLETE-{}", label.replace(' ', "-")),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                SESE023_FIXTURE_XML,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse: {err:?}"));
+
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "{label} should fail closed, got {err:?}"
+            );
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "incomplete {label} mapping must not create a settlement record"
+            );
+        }
+    }
+
+    #[test]
+    fn securities_profile_rejects_sese023_ledger_crosswalk_value_mismatches() {
+        let cases = [
+            (
+                "unknown delivery account",
+                SESE023_FIXTURE_XML.replace("DLVRY-ACC", "UNKNOWN-ACC"),
+                "DlvrgSttlmPties/Acct",
+                InvalidValueKind::Enum,
+            ),
+            (
+                "wrong party for account",
+                SESE023_FIXTURE_XML.replace("DEUTDEFF", "MARKDEFF"),
+                "DlvrgSttlmPties/Acct",
+                InvalidValueKind::Enum,
+            ),
+        ];
+
+        for (label, document, expected_field, expected_kind) in cases {
+            let (mut config, _reference_files) = sample_config_with_live_reference_data();
+            config.profiles.push(live_securities_lifecycle_profile());
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            let profile = runtime
+                .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+                .expect("securities lifecycle profile");
+            let payload = data_pdu_with_app_header(
+                &format!("SEC-INSTR-MISMATCH-{}", label.replace(' ', "-")),
+                "sese.023.001.11",
+                "securities.csd.cash",
+                &document,
+            );
+            let parsed = parse_message("sese.023", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("{label} fixture must parse: {err:?}"));
+            let err = runtime
+                .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            match err {
+                MsgError::InvalidValue { field, kind } => {
+                    assert_eq!(field, expected_field, "{label} field");
+                    assert_eq!(kind, expected_kind, "{label} kind");
+                }
+                other => panic!("{label} produced unexpected error: {other:?}"),
+            }
+            assert!(
+                runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+                "mismatched {label} must not create a settlement record"
+            );
+        }
+
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+        let payload = data_pdu_with_app_header(
+            "SEC-INSTR-MISMATCH-CURRENCY",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("Ccy=\"USD\"", "Ccy=\"EUR\""),
+        );
+        let parsed = parse_message("sese.023", payload.as_bytes())
+            .expect("cash-leg mismatch fixture must parse");
+        let err = runtime
+            .validate_profile_submission(profile, "sese.023", &parsed, payload.as_bytes())
+            .unwrap_err();
+        match err {
+            MsgError::InvalidIdentifier { field, kind } => {
+                assert_eq!(field, "CashLeg/Ccy");
+                assert_eq!(kind, IdentifierKind::Currency);
+            }
+            other => panic!("cash-leg mismatch produced unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn checked_in_securities_fixtures_reject_profile_version_and_root_drift() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let wrong_version_payload = data_pdu_with_app_header(
+            "SEC-INSTR-BAD-VERSION",
+            "sese.023.999.99",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("sese.023.001.11", "sese.023.999.99"),
+        );
+        let wrong_version = parse_message("sese.023", wrong_version_payload.as_bytes())
+            .expect("version-drift fixture parses before profile validation");
+        let err = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.023",
+                &wrong_version,
+                wrong_version_payload.as_bytes(),
+            )
+            .expect_err("securities profile must reject unsupported sese.023 version drift");
+        assert!(matches!(err, MsgError::UnknownMessageType));
+
+        let root_drift_payload = data_pdu_with_app_header(
+            "SEC-INSTR-ROOT-DRIFT",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("SctiesSttlmTxInstr", "SctiesSttlmTxConf"),
+        );
+        let err = parse_message("sese.023", root_drift_payload.as_bytes())
+            .expect_err("sese.023 parser must reject a sese.025-style document root");
+        assert!(matches!(err, MsgError::UnknownMessageType));
+
+        assert!(
+            runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+            "negative fixture drift must not create a securities settlement record"
+        );
+    }
+
+    #[test]
+    fn checked_in_colr012_fixture_records_collateral_context() {
+        let config = sample_config();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime.default_profile();
+        let parsed =
+            parse_message("colr.012", COLR012_FIXTURE_XML.as_bytes()).expect("colr.012 fixture");
+        let metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "colr.012",
+                &parsed,
+                COLR012_FIXTURE_XML.as_bytes(),
+            )
+            .expect("generic profile accepts colr.012 fixture");
+        assert_eq!(metadata.profile_id(), Some("generic-iso20022"));
+        assert_eq!(metadata.message_type(), Some("colr.012"));
+        assert_eq!(metadata.business_message_id(), None);
+
+        let message_id = Iso20022BridgeRuntime::lifecycle_message_id("colr.012", &parsed)
+            .expect("colr.012 durable id");
+        assert_eq!(message_id, "colr.012:COLR-FIXTURE-1");
+        assert!(runtime.check_and_record_inbound(&message_id, metadata));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&message_id, "colr.012", &parsed)
+            .expect("record colr.012 lifecycle");
+        assert_eq!(outcome.action(), "recorded");
+        assert_eq!(outcome.lifecycle_status_code(), Some("ACSC"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("MARGIN"));
+        assert_eq!(outcome.referenced_message_id(), None);
+
+        let status = runtime
+            .message_status(&message_id)
+            .expect("colr.012 durable status");
+        assert_eq!(status.status_label(), "Accepted");
+        assert_eq!(status.pacs002_code(), "ACSP");
+        assert_eq!(status.collateral_obligation_id(), Some("REPO-123"));
+        assert_eq!(status.collateral_original_amount(), Some("1000000"));
+        assert_eq!(status.collateral_original_currency(), Some("USD"));
+        assert_eq!(
+            status.collateral_original_instrument_id(),
+            Some("US0378331005")
+        );
+        assert_eq!(status.collateral_substitute_amount(), Some("1002000"));
+        assert_eq!(status.collateral_substitute_currency(), Some("USD"));
+        assert_eq!(
+            status.collateral_substitute_instrument_id(),
+            Some("US5949181045")
+        );
+        assert_eq!(status.collateral_effective_date(), Some("2024-04-05"));
+        assert_eq!(status.collateral_substitution_type(), Some("PARTIAL"));
+        assert_eq!(status.collateral_haircut(), Some("50"));
+        assert_eq!(status.collateral_reason_code(), Some("MARGIN"));
     }
 
     #[test]
@@ -16021,6 +18571,176 @@ mod tests {
                 kind: InvalidValueKind::Amount
             } if field == "IntrBkSttlmAmt"
         ));
+    }
+
+    #[test]
+    fn live_rail_profile_rejects_malformed_uetr_values() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let cases = [
+            "123e4567e89b12d3a456426614174000",
+            "123e4567-e89b-12d3-a456-42661417400",
+            "123e4567-e89b-12d3-a456-4266141740000",
+            "123e4567_e89b_12d3_a456_426614174000",
+            "123e4567-e89b-12d3-a456-42661417400g",
+        ];
+
+        for (idx, bad_uetr) in cases.into_iter().enumerate() {
+            let payload = live_pacs008_xml(
+                &format!("SWIFT-BAD-UETR-{idx}"),
+                "pacs.008.001.08",
+                "swift.cbprplus.02",
+                "USD",
+                "10.00",
+                bad_uetr,
+            );
+            let parsed = parse_message("pacs.008", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("bad UETR fixture {idx} parses: {err:?}"));
+            let err = runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(matches!(
+                err,
+                MsgError::InvalidValue {
+                    field,
+                    kind: InvalidValueKind::Enum
+                } if field == "UETR"
+            ));
+        }
+    }
+
+    #[test]
+    fn live_rail_profile_rejects_missing_required_uetr() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let payload = live_pacs008_xml(
+            "SWIFT-MISSING-UETR",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174510",
+        )
+        .replace(
+            "<PmtId><UETR>123e4567-e89b-12d3-a456-426614174510</UETR></PmtId>",
+            "<PmtId/>",
+        );
+        let parsed =
+            parse_message("pacs.008", payload.as_bytes()).expect("missing-UETR XML parses");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("live pacs.008 profiles require UETR");
+
+        assert!(matches!(err, MsgError::MissingField("UETR")));
+    }
+
+    #[test]
+    fn uetr_validator_rejects_malformed_and_padded_values() {
+        assert!(is_valid_uetr("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(is_valid_uetr("123E4567-E89B-12D3-A456-426614174000"));
+        for bad_uetr in [
+            "123e4567e89b12d3a456426614174000",
+            "123e4567-e89b-12d3-a456-42661417400",
+            "123e4567-e89b-12d3-a456-4266141740000",
+            "123e4567_e89b_12d3_a456_426614174000",
+            "123e4567-e89b-12d3-a456-42661417400g",
+            " 123e4567-e89b-12d3-a456-426614174000",
+            "123e4567-e89b-12d3-a456-426614174000 ",
+        ] {
+            assert!(!is_valid_uetr(bad_uetr), "{bad_uetr} must be invalid");
+        }
+    }
+
+    #[test]
+    fn live_profile_idempotency_rejects_validated_business_message_id_and_uetr_replays() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+
+        let first_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-1",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174500",
+        );
+        let first = parse_message("pacs.008", first_payload.as_bytes())
+            .expect("first replay fixture parses");
+        let first_metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &first, first_payload.as_bytes())
+            .expect("first live-profile message validates");
+        assert!(runtime.check_and_record_inbound("rail-msg-1", first_metadata));
+
+        let uetr_replay_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-2",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123E4567-E89B-12D3-A456-426614174500",
+        );
+        let uetr_replay = parse_message("pacs.008", uetr_replay_payload.as_bytes())
+            .expect("UETR replay fixture parses");
+        let uetr_replay_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "pacs.008",
+                &uetr_replay,
+                uetr_replay_payload.as_bytes(),
+            )
+            .expect("case-drifted UETR replay still validates before idempotency");
+        assert!(!runtime.check_and_record_inbound("rail-msg-2", uetr_replay_metadata));
+
+        let biz_replay_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-1",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174501",
+        );
+        let biz_replay = parse_message("pacs.008", biz_replay_payload.as_bytes())
+            .expect("BizMsgIdr replay fixture parses");
+        let biz_replay_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "pacs.008",
+                &biz_replay,
+                biz_replay_payload.as_bytes(),
+            )
+            .expect("business-message replay still validates before idempotency");
+        assert!(!runtime.check_and_record_inbound("rail-msg-3", biz_replay_metadata));
+        assert_eq!(
+            runtime
+                .uetr_index
+                .get(&normalise_uetr("123e4567-e89b-12d3-a456-426614174500"))
+                .map(|entry| entry.clone()),
+            Some("rail-msg-1".to_owned())
+        );
+        assert_eq!(
+            runtime
+                .business_message_id_index
+                .get("SWIFT-REPLAY-1")
+                .map(|entry| entry.value().clone()),
+            Some("rail-msg-1".to_owned())
+        );
     }
 
     #[test]
@@ -16312,6 +19032,21 @@ mod tests {
         assert_eq!(status.settlement_amount(), Some("99.50"));
         assert_eq!(status.settlement_currency(), Some("USD"));
         assert!(!status.status_history().is_empty());
+        let persisted_path = store
+            .path()
+            .join("messages")
+            .join(message_filename("persisted-msg"));
+        let persisted = fs::read_to_string(persisted_path).expect("persisted JSON");
+        let persisted_value =
+            norito::json::from_json::<JsonValue>(&persisted).expect("persisted JSON parses");
+        assert!(persisted_record_from_value(&persisted_value).is_some());
+        assert!(
+            persisted_value
+                .as_object()
+                .and_then(|obj| obj.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
+                .and_then(JsonValue::as_str)
+                .is_some_and(|digest| digest.len() == 64)
+        );
         let replay = IsoMessageMetadata::inbound(
             "generic-iso20022",
             "pacs.008",
@@ -16323,6 +19058,636 @@ mod tests {
             false,
         );
         assert!(!reloaded.check_and_record_inbound("persisted-replay", replay));
+    }
+
+    fn read_audit_index(store: &TempDir) -> JsonValue {
+        let index_path = store
+            .path()
+            .join(ISO_PERSISTED_AUDIT_DIR)
+            .join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        let index = fs::read_to_string(index_path).expect("audit index JSON");
+        norito::json::from_json::<JsonValue>(&index).expect("audit index parses")
+    }
+
+    fn read_external_audit_index(export: &TempDir) -> JsonValue {
+        let index_path = export.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE);
+        let index = fs::read_to_string(index_path).expect("external audit index JSON");
+        norito::json::from_json::<JsonValue>(&index).expect("external audit index parses")
+    }
+
+    fn read_latest_audit_anchor(export: &TempDir) -> JsonValue {
+        let anchor_path = export.path().join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE);
+        let anchor = fs::read_to_string(anchor_path).expect("external audit anchor JSON");
+        norito::json::from_json::<JsonValue>(&anchor).expect("external audit anchor parses")
+    }
+
+    #[test]
+    fn durable_store_retention_is_independent_from_dedupe_ttl() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.dedupe_ttl_secs = 0;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "ttl-kept-a",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("ttl-kept-a-biz".to_owned()),
+                None,
+                "ttl-kept-a-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("ttl-kept-a", "tx-ttl-kept-a");
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(runtime.check_and_record_inbound(
+            "ttl-kept-b",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("ttl-kept-b-biz".to_owned()),
+                None,
+                "ttl-kept-b-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(runtime.message_status("ttl-kept-a").is_some());
+        assert!(runtime.message_status("ttl-kept-b").is_some());
+        let index_value = read_audit_index(&store);
+        assert_eq!(
+            index_value
+                .as_object()
+                .and_then(|obj| obj.get("record_count"))
+                .and_then(JsonValue::as_u64),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.store_max_records = 1;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "compact-old",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("compact-old-biz".to_owned()),
+                None,
+                "compact-old-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("compact-old", "tx-compact-old");
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(runtime.check_and_record_inbound(
+            "compact-new",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("compact-new-biz".to_owned()),
+                None,
+                "compact-new-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(runtime.message_status("compact-old").is_none());
+        assert!(runtime.message_status("compact-new").is_some());
+        assert!(
+            runtime
+                .business_message_id_index
+                .get(&normalise_business_message_id("compact-old-biz").expect("business id"))
+                .is_none()
+        );
+        assert!(
+            !store
+                .path()
+                .join("messages")
+                .join(message_filename("compact-old"))
+                .exists()
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            index_obj
+                .get("records")
+                .and_then(JsonValue::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(JsonValue::as_object)
+                .and_then(|entry| entry.get("message_id"))
+                .and_then(JsonValue::as_str),
+            Some("compact-new")
+        );
+    }
+
+    #[test]
+    fn durable_store_compacts_records_older_than_retention_window() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.store_retention_secs = 1;
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "age-expired",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("age-expired-biz".to_owned()),
+                None,
+                "age-expired-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("age-expired", "tx-age-expired");
+        {
+            let mut record = runtime.records.get_mut("age-expired").expect("record");
+            record.updated_at = SystemTime::UNIX_EPOCH;
+        }
+        runtime.persist_message("age-expired");
+
+        assert!(runtime.message_status("age-expired").is_none());
+        assert!(
+            !store
+                .path()
+                .join("messages")
+                .join(message_filename("age-expired"))
+                .exists()
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn durable_store_writes_tamper_evident_audit_index() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        for (message_id, business_id, payload_hash, tx_hash) in [
+            ("audit-b", "audit-biz-b", "audit-hash-b", "tx-b"),
+            ("audit-a", "audit-biz-a", "audit-hash-a", "tx-a"),
+        ] {
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(business_id.to_owned()),
+                    None,
+                    payload_hash.to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted(message_id, tx_hash);
+        }
+
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert_eq!(
+            index_obj.get("version").and_then(JsonValue::as_u64),
+            Some(ISO_PERSISTED_AUDIT_INDEX_VERSION)
+        );
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(2)
+        );
+        assert!(
+            index_obj
+                .get(ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD)
+                .and_then(JsonValue::as_str)
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        let entries = index_obj
+            .get("records")
+            .and_then(JsonValue::as_array)
+            .expect("audit records");
+        let message_ids = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|obj| obj.get("message_id"))
+                    .and_then(JsonValue::as_str)
+                    .expect("message_id")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(message_ids, vec!["audit-a", "audit-b"]);
+
+        for entry in entries {
+            let entry = entry.as_object().expect("audit entry object");
+            let filename = entry
+                .get("filename")
+                .and_then(JsonValue::as_str)
+                .expect("record filename");
+            let entry_digest = entry
+                .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+                .and_then(JsonValue::as_str)
+                .expect("record digest");
+            let record_path = store.path().join("messages").join(filename);
+            let record = fs::read_to_string(record_path).expect("record JSON");
+            let record_value =
+                norito::json::from_json::<JsonValue>(&record).expect("record JSON parses");
+            let record_obj = record_value.as_object().expect("record object");
+            assert!(persisted_record_digest_matches(record_obj));
+            assert_eq!(
+                record_obj
+                    .get(ISO_PERSISTED_RECORD_DIGEST_FIELD)
+                    .and_then(JsonValue::as_str),
+                Some(entry_digest)
+            );
+        }
+
+        let mut tampered_index = index_value.clone();
+        tampered_index
+            .as_object_mut()
+            .expect("audit index object")
+            .insert("record_count".to_owned(), JsonValue::from(3_u64));
+        assert!(!persisted_audit_index_digest_matches(
+            tampered_index.as_object().expect("audit index object")
+        ));
+    }
+
+    #[test]
+    fn durable_store_exports_external_audit_notary_spool() {
+        let store = TempDir::new().expect("store tempdir");
+        let export = TempDir::new().expect("export tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.audit_export_dir = Some(export.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "external-audit-msg",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("external-audit-biz".to_owned()),
+                None,
+                "external-audit-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("external-audit-msg", "tx-external-audit");
+
+        let local = read_audit_index(&store);
+        let external = read_external_audit_index(&export);
+        assert_eq!(external, local);
+        let index_digest = audit_index_digest(&external).expect("index digest");
+        let anchor = read_latest_audit_anchor(&export);
+        let anchor_obj = anchor.as_object().expect("anchor object");
+        assert!(audit_export_anchor_digest_matches(anchor_obj));
+        assert_eq!(
+            anchor_obj.get("index_sha256").and_then(JsonValue::as_str),
+            Some(index_digest)
+        );
+        assert_eq!(
+            anchor_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            anchor_obj.get("audit_index").and_then(JsonValue::as_object),
+            external.as_object()
+        );
+        assert!(
+            export
+                .path()
+                .join(ISO_AUDIT_EXPORT_ANCHOR_DIR)
+                .join(format!("{index_digest}.notary.json"))
+                .exists(),
+            "digest-addressed notary preimage missing"
+        );
+
+        let mut tampered = anchor.clone();
+        tampered
+            .as_object_mut()
+            .expect("tampered anchor object")
+            .insert("record_count".to_owned(), JsonValue::from(2_u64));
+        assert!(!audit_export_anchor_digest_matches(
+            tampered.as_object().expect("tampered anchor")
+        ));
+    }
+
+    #[test]
+    fn durable_store_exports_audit_index_matching_persisted_manifest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "audit-export",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-export-biz".to_owned()),
+                None,
+                "audit-export-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        runtime.mark_accepted("audit-export", "tx-export");
+
+        let exported = runtime.audit_index();
+        let persisted = read_audit_index(&store);
+        assert_eq!(exported, persisted);
+        let exported_obj = exported.as_object().expect("exported audit index object");
+        assert!(persisted_audit_index_digest_matches(exported_obj));
+
+        let mut tampered = exported.clone();
+        tampered
+            .as_object_mut()
+            .expect("tampered audit index object")
+            .insert("record_count".to_owned(), JsonValue::from(2_u64));
+        assert!(!persisted_audit_index_digest_matches(
+            tampered.as_object().expect("tampered audit index object")
+        ));
+    }
+
+    #[test]
+    fn durable_store_audit_index_excludes_tampered_record_on_reload() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            for (message_id, business_id, payload_hash, tx_hash) in [
+                (
+                    "audit-clean",
+                    "audit-clean-biz",
+                    "audit-clean-hash",
+                    "tx-clean",
+                ),
+                (
+                    "audit-tampered",
+                    "audit-tampered-biz",
+                    "audit-tampered-hash",
+                    "tx-tampered",
+                ),
+            ] {
+                assert!(runtime.check_and_record_inbound(
+                    message_id,
+                    IsoMessageMetadata::inbound(
+                        "generic-iso20022",
+                        "pacs.008",
+                        None,
+                        Some(business_id.to_owned()),
+                        None,
+                        payload_hash.to_owned(),
+                        "snapshot".to_owned(),
+                        false,
+                    ),
+                ));
+                runtime.mark_accepted(message_id, tx_hash);
+            }
+        }
+        let tampered_path = store
+            .path()
+            .join("messages")
+            .join(message_filename("audit-tampered"));
+        let original = fs::read_to_string(&tampered_path).expect("persisted JSON");
+        assert!(original.contains("tx-tampered"));
+        fs::write(&tampered_path, original.replace("tx-tampered", "tx-forged"))
+            .expect("tamper record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("audit-clean").is_some());
+        assert!(reloaded.message_status("audit-tampered").is_none());
+
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        let entries = index_obj
+            .get("records")
+            .and_then(JsonValue::as_array)
+            .expect("audit records");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]
+                .as_object()
+                .and_then(|obj| obj.get("message_id"))
+                .and_then(JsonValue::as_str),
+            Some("audit-clean")
+        );
+        assert!(reloaded.check_and_record_inbound(
+            "audit-replacement",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("audit-tampered-biz".to_owned()),
+                None,
+                "audit-replacement-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+
+    #[test]
+    fn durable_store_rejects_tampered_record_body() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "tamper-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("tamper-biz".to_owned()),
+                    None,
+                    "tamper-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted("tamper-msg", "tx-original");
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("tamper-msg"));
+        let original = fs::read_to_string(&path).expect("persisted JSON");
+        assert!(original.contains("tx-original"));
+        fs::write(&path, original.replace("tx-original", "tx-forged")).expect("tamper record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("tamper-msg").is_none(),
+            "tampered persisted records must not rebuild durable status"
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+        assert!(reloaded.check_and_record_inbound(
+            "fresh-msg",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("tamper-biz".to_owned()),
+                None,
+                "fresh-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+    }
+
+    #[test]
+    fn durable_store_rejects_missing_record_digest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "missing-digest-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("missing-digest-biz".to_owned()),
+                    None,
+                    "missing-digest-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("missing-digest-msg"));
+        let text = fs::read_to_string(&path).expect("persisted JSON");
+        let mut value = norito::json::from_json::<JsonValue>(&text).expect("persisted JSON parses");
+        let obj = value.as_object_mut().expect("persisted object");
+        assert!(obj.remove(ISO_PERSISTED_RECORD_DIGEST_FIELD).is_some());
+        fs::write(
+            &path,
+            norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
+        )
+        .expect("write tampered JSON");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("missing-digest-msg").is_none(),
+            "legacy or stripped records without a digest must fail closed"
+        );
+    }
+
+    #[test]
+    fn durable_store_rejects_malformed_record_digest() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "bad-digest-msg",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("bad-digest-biz".to_owned()),
+                    None,
+                    "bad-digest-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("bad-digest-msg"));
+        let text = fs::read_to_string(&path).expect("persisted JSON");
+        let mut value = norito::json::from_json::<JsonValue>(&text).expect("persisted JSON parses");
+        let obj = value.as_object_mut().expect("persisted object");
+        obj.insert(
+            ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+            JsonValue::from("not-a-canonical-sha256"),
+        );
+        fs::write(
+            &path,
+            norito::json::to_string_pretty(&value).expect("serialize tampered JSON"),
+        )
+        .expect("write tampered JSON");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status("bad-digest-msg").is_none(),
+            "malformed record digests must not be accepted"
+        );
     }
 
     #[test]
@@ -17182,6 +20547,107 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_pacs002_fixture_settles_known_original() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "STATUS-ORIG-1", "pacs.008");
+        runtime.mark_accepted("STATUS-ORIG-1", "tx-status-orig-1");
+        let parsed =
+            parse_message("pacs.002", PACS002_FIXTURE_XML.as_bytes()).expect("pacs.002 fixture");
+        let metadata = runtime
+            .validate_profile_submission(
+                runtime.default_profile(),
+                "pacs.002",
+                &parsed,
+                PACS002_FIXTURE_XML.as_bytes(),
+            )
+            .expect("profile accepts pacs.002 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "STATUS-FIXTURE-1");
+        assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("STATUS-ORIG-1"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("ACSC"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("STATUS-ORIG-1")
+                .expect("original status")
+                .pacs002_code(),
+            "ACSC"
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_pacs002_uses_group_header_msgid_not_transaction_status_id() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "orig-status-shadow", "pacs.008");
+        runtime.mark_accepted("orig-status-shadow", "tx-status-shadow");
+        let payload = br#"
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <pacs:FIToFIPmtStsRpt>
+    <pacs:GrpHdr>
+      <pacs:MsgId>status-group-id</pacs:MsgId>
+      <pacs:CreDtTm>2025-01-01T00:10:00Z</pacs:CreDtTm>
+    </pacs:GrpHdr>
+    <pacs:OrgnlGrpInfAndSts>
+      <pacs:OrgnlMsgId>orig-status-shadow</pacs:OrgnlMsgId>
+      <pacs:OrgnlMsgNmId>pacs.008.001.08</pacs:OrgnlMsgNmId>
+    </pacs:OrgnlGrpInfAndSts>
+    <pacs:TxInfAndSts>
+      <pacs:StsId>status-transaction-shadow</pacs:StsId>
+      <pacs:TxSts>ACSC</pacs:TxSts>
+    </pacs:TxInfAndSts>
+  </pacs:FIToFIPmtStsRpt>
+</pacs:Document>
+"#;
+        let parsed = parse_message("pacs.002", payload).expect("pacs.002 parsed");
+        let metadata = runtime
+            .validate_profile_submission(runtime.default_profile(), "pacs.002", &parsed, payload)
+            .expect("profile accepts pacs.002");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
+
+        assert_eq!(metadata.business_message_id(), Some("status-group-id"));
+        assert_eq!(
+            parsed.field_text("StsId"),
+            Some("status-transaction-shadow")
+        );
+        assert_eq!(lifecycle_id, "status-group-id");
+        assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+        assert!(!runtime.check_and_record_message("status-group-id"));
+        assert!(runtime.check_and_record_message("status-transaction-shadow"));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("orig-status-shadow"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("orig-status-shadow")
+                .expect("original status")
+                .pacs002_code(),
+            "ACSC"
+        );
+    }
+
+    #[test]
     fn lifecycle_pacs002_ignores_non_payment_original() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -17258,6 +20724,47 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_pacs004_fixture_marks_original_returned() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "ORIGINAL-008", "pacs.008");
+        runtime.mark_accepted("ORIGINAL-008", "tx-original-008");
+        let parsed =
+            parse_message("pacs.004", PACS004_FIXTURE_XML.as_bytes()).expect("pacs.004 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "RETURN-FIXTURE-1");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("ORIGINAL-008"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("RJCT"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("AC01"));
+        assert_eq!(outcome.action(), "marked_returned");
+        let original = runtime
+            .message_status("ORIGINAL-008")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Rejected");
+        assert_eq!(original.pacs002_code(), "RJCT");
+        assert_eq!(original.rejection_reason_code(), Some("AC01"));
+        assert_eq!(
+            original.detail(),
+            Some("payment returned by inbound pacs.004")
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
     fn lifecycle_camt056_marks_known_original_pending_cancellation() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -17307,6 +20814,51 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_camt056_fixture_marks_original_pending_cancellation() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "CANCEL-ORIG-1", "pacs.008");
+        runtime.mark_accepted("CANCEL-ORIG-1", "tx-cancel-orig-1");
+        let parsed =
+            parse_message("camt.056", CAMT056_FIXTURE_XML.as_bytes()).expect("camt.056 fixture");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "CANCEL-FIXTURE-1");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("CANCEL-ORIG-1"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("PDNG"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("CUST"));
+        assert_eq!(outcome.action(), "marked_cancellation_requested");
+        let original = runtime
+            .message_status("CANCEL-ORIG-1")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Pending");
+        assert_eq!(original.pacs002_code(), "PDNG");
+        assert_eq!(original.hold_reason_code(), Some("CUST"));
+        assert!(
+            original
+                .change_reason_codes()
+                .iter()
+                .any(|code| code == "CANCELLATION_REQUESTED"),
+            "expected cancellation reason to be recorded: {:?}",
+            original.change_reason_codes()
+        );
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
     fn lifecycle_pacs004_ignores_non_payment_original() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -17337,6 +20889,38 @@ mod tests {
         assert_eq!(original.status_label(), "Accepted");
         assert_eq!(original.pacs002_code(), "ACSP");
         assert_eq!(original.rejection_reason_code(), None);
+    }
+
+    #[test]
+    fn lifecycle_pacs004_rejects_conflicting_original_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["orig-return-a", "orig-return-b"] {
+            record_original(&runtime, original_id, "pacs.008");
+            runtime.mark_accepted(original_id, &format!("tx-{original_id}"));
+        }
+        let parsed = parse_message(
+            "pacs.004",
+            b"MsgId=return-conflict\nCreDtTm=2025-01-01T00:00:00Z\nOrgnlGrpInf/OrgnlMsgId=orig-return-a\nTxInf[0]/OrgnlGrpInf/OrgnlMsgId=orig-return-b\nTxInf[0]/OrgnlInstrId=instr-1\nTxInf[0]/RtrdInstdAmt=10.00\nTxInf[0]/RtrdInstdAmtCcy=USD\nTxInf[0]/RtrdRsn/Cd=AC01",
+        )
+        .expect("conflicting pacs.004 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed)
+            .expect_err("conflicting pacs.004 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("return-conflict", "pacs.004", &parsed)
+            .expect_err("conflicting pacs.004 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["orig-return-a", "orig-return-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate original remains recorded");
+            assert_eq!(status.status_label(), "Accepted");
+            assert_eq!(status.pacs002_code(), "ACSP");
+            assert_eq!(status.rejection_reason_code(), None);
+        }
     }
 
     #[test]
@@ -17403,6 +20987,179 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_camt056_rejects_conflicting_original_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["orig-cancel-a", "orig-cancel-b"] {
+            record_original(&runtime, original_id, "pacs.008");
+            runtime.mark_accepted(original_id, &format!("tx-{original_id}"));
+        }
+        let parsed = parse_message(
+            "camt.056",
+            b"Assgnmt/Id=cancel-conflict\nAssgnmt/CreDtTm=2025-01-01T00:00:00Z\nUndrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId=orig-cancel-a\nUndrlyg/TxInf[1]/OrgnlGrpInf/OrgnlMsgId=orig-cancel-b\nUndrlyg/TxInf/CxlRsnInf/Rsn/Cd=CUST",
+        )
+        .expect("conflicting camt.056 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed)
+            .expect_err("conflicting camt.056 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("cancel-conflict", "camt.056", &parsed)
+            .expect_err("conflicting camt.056 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["orig-cancel-a", "orig-cancel-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate original remains recorded");
+            assert_eq!(status.status_label(), "Accepted");
+            assert_eq!(status.pacs002_code(), "ACSP");
+            assert_eq!(status.hold_reason_code(), None);
+            assert!(status.change_reason_codes().is_empty());
+        }
+    }
+
+    #[test]
+    fn lifecycle_sese024_marks_prefixed_settlement_instruction_pending() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "sese.023:settle-status", "sese.023");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status\nSttlmDt=2025-01-02\nSttlmSts=PEND\nRsnCd=NORE\nAddtlInf=awaiting matching",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "sese.024:settle-status");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:settle-status")
+        );
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("PEND"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("NORE"));
+        assert_eq!(outcome.action(), "marked_pending");
+        let original = runtime
+            .message_status("sese.023:settle-status")
+            .expect("settlement instruction status");
+        assert_eq!(original.status_label(), "Pending");
+        assert_eq!(original.pacs002_code(), "PDNG");
+        assert_eq!(original.hold_reason_code(), Some("NORE"));
+        let lifecycle = runtime
+            .message_status(&lifecycle_id)
+            .expect("lifecycle status");
+        assert_eq!(lifecycle.status_label(), "Accepted");
+        assert_eq!(
+            lifecycle.detail(),
+            Some("recorded inbound ISO 20022 sese.024 lifecycle message")
+        );
+    }
+
+    #[test]
+    fn lifecycle_sese024_records_unknown_original_without_creating_it() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=missing-status\nSttlmSts=PART\nRsnCd=NARR",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "sese.024:missing-status");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:missing-status")
+        );
+        assert!(!outcome.referenced_message_known());
+        assert_eq!(outcome.action(), "recorded");
+        assert!(runtime.message_status("sese.023:missing-status").is_none());
+        assert_eq!(
+            runtime
+                .message_status(&lifecycle_id)
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_sese024_ignores_non_settlement_original() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        record_original(&runtime, "sese.023:settle-status-wrong-family", "pacs.008");
+        runtime.mark_accepted("sese.023:settle-status-wrong-family", "tx-wrong-family");
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status-wrong-family\nSttlmSts=PEND\nRsnCd=NORE",
+        )
+        .expect("sese.024 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed).expect("lifecycle id");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.024", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(
+            outcome.referenced_message_id(),
+            Some("sese.023:settle-status-wrong-family")
+        );
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.action(), "ignored_profile_mismatch");
+        let original = runtime
+            .message_status("sese.023:settle-status-wrong-family")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Accepted");
+        assert_eq!(original.pacs002_code(), "ACSP");
+        assert_eq!(original.hold_reason_code(), None);
+    }
+
+    #[test]
+    fn lifecycle_sese024_rejects_conflicting_settlement_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["sese.023:settle-status-a", "sese.023:settle-status-b"] {
+            record_original(&runtime, original_id, "sese.023");
+        }
+        let parsed = parse_message(
+            "sese.024",
+            b"TxId=settle-status-a\nSttlmTx/TxId=settle-status-b\nSttlmSts=PEND\nRsnCd=NORE",
+        )
+        .expect("conflicting sese.024 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("sese.024", &parsed)
+            .expect_err("conflicting sese.024 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("sese.024:settle-status-a", "sese.024", &parsed)
+            .expect_err("conflicting sese.024 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["sese.023:settle-status-a", "sese.023:settle-status-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate settlement remains recorded");
+            assert_eq!(status.pacs002_code(), "ACTC");
+            assert_eq!(status.hold_reason_code(), None);
+        }
+    }
+
+    #[test]
     fn lifecycle_sese025_confirms_prefixed_settlement_instruction() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -17464,6 +21221,38 @@ mod tests {
                 .pacs002_code(),
             "ACSP"
         );
+    }
+
+    #[test]
+    fn lifecycle_sese025_rejects_conflicting_settlement_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["sese.023:settle-a", "sese.023:settle-b"] {
+            record_original(&runtime, original_id, "sese.023");
+        }
+        let parsed = parse_message(
+            "sese.025",
+            b"TxId=settle-a\nSttlmTx/TxId=settle-b\nSttlmDt=2025-01-02\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nConfSts=ACCP\nSttlmQty=100\nSttlmAmt=25.00\nSttlmCcy=USD\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING",
+        )
+        .expect("conflicting sese.025 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &parsed)
+            .expect_err("conflicting sese.025 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("sese.025:settle-a", "sese.025", &parsed)
+            .expect_err("conflicting sese.025 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["sese.023:settle-a", "sese.023:settle-b"] {
+            assert_eq!(
+                runtime
+                    .message_status(original_id)
+                    .expect("candidate settlement remains recorded")
+                    .pacs002_code(),
+                "ACTC"
+            );
+        }
     }
 
     #[test]

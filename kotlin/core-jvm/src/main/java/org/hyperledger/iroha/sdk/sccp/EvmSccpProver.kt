@@ -1578,6 +1578,8 @@ private data class EthereumBeaconRestBlockId(
 )
 
 private data class EthereumBeaconRestFinalityUpdateSummary(
+    val finalizedHeaderRoot: String,
+    val beaconSlot: BigInteger,
     val finalityBranch: List<String>,
     val syncCommitteeBits: String,
     val syncCommitteeSignature: String,
@@ -2946,17 +2948,18 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
                 "Ethereum mainnet Beacon REST light-client finality update",
             ),
             finalizedHeader.slot,
+            finalizedHeader.root,
         )
         return mapOf(
             "executionBlockNumber" to normalizeEthereumBeaconRestUnsigned(blockNumber, "block.number").toString(),
             "executionBlockHash" to blockHash,
             "executionReceiptsRoot" to receiptsRoot,
-            "finalizedHeaderRoot" to targetHeader.root,
+            "finalizedHeaderRoot" to finalityUpdate.finalizedHeaderRoot,
             "syncCommitteeRoot" to resolveEthereumBeaconRestSyncCommitteeRoot(
                 syncCommitteeRoot,
                 syncCommitteePayload,
             ),
-            "beaconSlot" to targetHeader.slot.toString(),
+            "beaconSlot" to finalityUpdate.beaconSlot.toString(),
             "finalityBranch" to finalityUpdate.finalityBranch,
             "syncCommitteeBits" to finalityUpdate.syncCommitteeBits,
             "syncCommitteeSignature" to finalityUpdate.syncCommitteeSignature,
@@ -3112,6 +3115,7 @@ private fun ethereumBeaconRestHeaderSummary(
 private fun ethereumBeaconRestFinalityUpdateSummary(
     payload: Map<String, Any?>,
     expectedFinalizedSlot: BigInteger,
+    expectedFinalizedRoot: String,
 ): EthereumBeaconRestFinalityUpdateSummary {
     val label = "Ethereum mainnet Beacon REST light-client finality update"
     rejectUnsafeBeaconRestPayload(payload, label)
@@ -3133,6 +3137,31 @@ private fun ethereumBeaconRestFinalityUpdateSummary(
     )
     require(finalizedSlot == expectedFinalizedSlot) {
         "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot"
+    }
+    val finalizedHeaderRoot = SccpSourceProofs.ethBeaconBlockHeaderRoot(
+        beaconSlot = finalizedSlot.toString(),
+        beaconProposerIndex = normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "proposer_index"),
+            "$label.data.finalized_header.beacon.proposer_index",
+        ).toString(),
+        beaconParentRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "parent_root"),
+            "$label.data.finalized_header.beacon.parent_root",
+            32,
+        ),
+        beaconStateRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "state_root"),
+            "$label.data.finalized_header.beacon.state_root",
+            32,
+        ),
+        beaconBodyRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "body_root"),
+            "$label.data.finalized_header.beacon.body_root",
+            32,
+        ),
+    )
+    require(finalizedHeaderRoot == expectedFinalizedRoot) {
+        "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root"
     }
     val syncSignatureSlot = normalizeEthereumBeaconRestSlot(
         requireBeaconRestField(data, "$label.data", "signature_slot"),
@@ -3159,6 +3188,8 @@ private fun ethereumBeaconRestFinalityUpdateSummary(
         96,
     )
     return EthereumBeaconRestFinalityUpdateSummary(
+        finalizedHeaderRoot = finalizedHeaderRoot,
+        beaconSlot = finalizedSlot,
         finalityBranch = finalityBranch,
         syncCommitteeBits = syncCommitteeBits,
         syncCommitteeSignature = syncCommitteeSignature,
@@ -4004,8 +4035,49 @@ class EthereumMainnetSccp(
         }
     }
 
-    fun buildEthereumCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission =
-        SccpEthereumMainnet.buildSubmission(input)
+    private fun requireVerifiedNativeProverArtifacts(
+        artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts?,
+        proofResult: EvmSccpProofResult,
+    ) {
+        require(artifacts != null) {
+            "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts"
+        }
+        require(artifacts.nativeProverBundle.destinationBindingHash == proofResult.destinationBindingHash) {
+            "nativeProverArtifacts destinationBindingHash must match proofResult"
+        }
+        require(
+            artifacts.proofArtifactHash == proofResult.proofArtifactHash &&
+                artifacts.provingKeyHash == proofResult.provingKeyHash,
+        ) {
+            "nativeProverArtifacts artifact hashes must match proofResult"
+        }
+        require(artifacts.verifierKeyHash == artifacts.nativeProverBundle.verifierKeyHash) {
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
+        }
+        val sdk = artifacts.sdk
+        val implementation = artifacts.implementation
+        val implementationHash = artifacts.implementationHash
+        require(!sdk.isNullOrEmpty() && !implementation.isNullOrEmpty() && !implementationHash.isNullOrEmpty()) {
+            "nativeProverArtifacts must bind sdk implementation and implementationHash"
+        }
+        val artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.firstOrNull { it.sdk == sdk }
+            ?: throw IllegalArgumentException("nativeProverBundle has no artifact row for sdk: $sdk")
+        require(implementation == artifact.implementation && implementationHash == artifact.implementationHash) {
+            "nativeProverArtifacts implementation binding must match nativeProverBundle"
+        }
+    }
+
+    fun buildEthereumCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission {
+        val submission = SccpEthereumMainnet.buildSubmission(input)
+        requireVerifiedNativeProverArtifacts(
+            nativeProverArtifacts,
+            input.proofResult
+                ?: throw IllegalArgumentException(
+                    "Ethereum mainnet submissions require a wrapped proofResult with destinationBinding",
+                ),
+        )
+        return submission
+    }
 
     fun submitOutboundToEthereum(input: EvmSccpSubmissionInput): Any? {
         val submitter = outboundSubmitter
@@ -4688,15 +4760,15 @@ class EthereumMainnetSccp(
                 syncCommitteeSignature?.let {
                     "syncCommitteeSignature" to normalizeEthereumBeaconRestHex(
                         it,
-                        "beaconFinality.syncCommitteeSignature",
-                        96,
-                    )
-                },
-                normalizedSyncSignatureSlot?.let { "syncSignatureSlot" to it.toString() },
-                normalizedSyncCommitteeParticipation?.let {
-                    "syncCommitteeParticipation" to it.toString()
-                },
-            ).toMap()
+                    "beaconFinality.syncCommitteeSignature",
+                    96,
+                )
+            },
+            normalizedSyncSignatureSlot?.let { "syncSignatureSlot" to it.toString() },
+            normalizedSyncCommitteeParticipation?.let {
+                "syncCommitteeParticipation" to it.toString()
+            },
+        ).toMap()
     }
 }
 

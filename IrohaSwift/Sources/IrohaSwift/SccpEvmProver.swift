@@ -2840,6 +2840,8 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
     }
 
     private struct BeaconRestFinalityUpdateSummary {
+        let finalizedHeaderRoot: String
+        let beaconSlot: UInt64
         let finalityBranch: [String]
         let syncCommitteeBits: String
         let syncCommitteeSignature: String
@@ -3113,7 +3115,8 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         )
         let finalityUpdate = try Self.beaconRestFinalityUpdateSummary(
             finalityUpdateResponse,
-            expectedFinalizedSlot: finalizedHeader.slot
+            expectedFinalizedSlot: finalizedHeader.slot,
+            expectedFinalizedRoot: finalizedHeader.root
         )
         return [
             "executionBlockNumber": String(
@@ -3121,9 +3124,9 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             ),
             "executionBlockHash": blockHash,
             "executionReceiptsRoot": receiptsRoot,
-            "finalizedHeaderRoot": targetHeader.root,
+            "finalizedHeaderRoot": finalityUpdate.finalizedHeaderRoot,
             "syncCommitteeRoot": try resolvedSyncCommitteeRoot(),
-            "beaconSlot": String(targetHeader.slot),
+            "beaconSlot": String(finalityUpdate.beaconSlot),
             "finalityBranch": finalityUpdate.finalityBranch,
             "syncCommitteeBits": finalityUpdate.syncCommitteeBits,
             "syncCommitteeSignature": finalityUpdate.syncCommitteeSignature,
@@ -3293,7 +3296,8 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
 
     private static func beaconRestFinalityUpdateSummary(
         _ payload: [String: Any],
-        expectedFinalizedSlot: UInt64
+        expectedFinalizedSlot: UInt64,
+        expectedFinalizedRoot: String
     ) throws -> BeaconRestFinalityUpdateSummary {
         try rejectUnsafeBeaconRestPayload(payload, label: "Ethereum mainnet Beacon REST light-client finality update")
         let data = try expectObject(
@@ -3330,6 +3334,48 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         )
         guard finalizedSlot == expectedFinalizedSlot else {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalityUpdate.finalizedSlot")
+        }
+        let proposerIndex = try normalizeUnsignedInteger(
+            requireField(
+                finalizedBeacon,
+                label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon",
+                field: "proposer_index"
+            ),
+            label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon.proposer_index"
+        )
+        let finalizedHeaderRoot = try ethBeaconBlockHeaderRoot(
+            beaconSlot: finalizedSlot,
+            beaconProposerIndex: proposerIndex,
+            beaconParentRoot: normalizeRpcHex(
+                requireField(
+                    finalizedBeacon,
+                    label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon",
+                    field: "parent_root"
+                ),
+                label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon.parent_root",
+                byteLength: 32
+            ),
+            beaconStateRoot: normalizeRpcHex(
+                requireField(
+                    finalizedBeacon,
+                    label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon",
+                    field: "state_root"
+                ),
+                label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon.state_root",
+                byteLength: 32
+            ),
+            beaconBodyRoot: normalizeRpcHex(
+                requireField(
+                    finalizedBeacon,
+                    label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon",
+                    field: "body_root"
+                ),
+                label: "Ethereum mainnet Beacon REST light-client finality update.data.finalized_header.beacon.body_root",
+                byteLength: 32
+            )
+        )
+        guard finalizedHeaderRoot == expectedFinalizedRoot else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalityUpdate.finalizedRoot")
         }
         let syncSignatureSlot = try normalizeBeaconSlot(
             requireField(
@@ -3376,6 +3422,8 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             byteLength: 96
         )
         return BeaconRestFinalityUpdateSummary(
+            finalizedHeaderRoot: finalizedHeaderRoot,
+            beaconSlot: finalizedSlot,
             finalityBranch: finalityBranch,
             syncCommitteeBits: syncCommitteeBits,
             syncCommitteeSignature: syncCommitteeSignature,
@@ -4499,6 +4547,35 @@ public final class EthereumMainnetSccp {
         }
     }
 
+    private static func requireVerifiedNativeProverArtifacts(
+        _ artifacts: EthereumMainnetNativeEvmProverArtifacts?,
+        proofResult: EvmSccpProofResult
+    ) throws {
+        guard let artifacts else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts")
+        }
+        guard artifacts.nativeProverBundle.destinationBindingHash == proofResult.destinationBindingHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.destinationBindingHash")
+        }
+        guard artifacts.proofArtifactHash == proofResult.proofArtifactHash,
+              artifacts.provingKeyHash == proofResult.provingKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.proofArtifactHash")
+        }
+        guard artifacts.verifierKeyHash == artifacts.nativeProverBundle.verifierKeyHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.verifierKeyHash")
+        }
+        guard let sdk = artifacts.sdk,
+              !sdk.isEmpty,
+              let implementation = artifacts.implementation,
+              !implementation.isEmpty,
+              let implementationHash = artifacts.implementationHash,
+              let artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.first(where: { $0.sdk == sdk }),
+              artifact.implementation == implementation,
+              artifact.implementationHash == implementationHash else {
+            throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.implementationHash")
+        }
+    }
+
     public func buildEthereumCalldata(_ input: EvmSccpSubmissionInput) throws -> EvmSccpSubmission {
         let submission = try buildEvmSccpSubmission(input)
         guard submission.targetDomain == sccpDomainEthereum else {
@@ -4512,6 +4589,7 @@ public final class EthereumMainnetSccp {
               destinationBinding.hash == proofResult.destinationBindingHash else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
         }
+        try Self.requireVerifiedNativeProverArtifacts(nativeProverArtifacts, proofResult: proofResult)
         return submission
     }
 

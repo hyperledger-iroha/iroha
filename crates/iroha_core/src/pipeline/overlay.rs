@@ -51,7 +51,8 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
     zk::{
-        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1,
+        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
+        OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
 use iroha_primitives::json::Json;
@@ -489,7 +490,7 @@ fn decode_taira_tron_xor_record(
         return Ok(None);
     };
 
-    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)
+    let payload = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
         .ok_or_else(|| sccp_admission_error("record payload bytes could not be decoded"))?;
     if !iroha_sccp::verify_sccp_payload_structure(&payload) {
         return Err(sccp_admission_error(
@@ -2497,7 +2498,7 @@ mod tests {
         .into()
     }
 
-    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
+    fn taira_tron_xor_record_payload(sender: &AccountId, amount: u128) -> Vec<u8> {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -2514,8 +2515,22 @@ mod tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID.to_vec(),
         });
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
+            unreachable!("TAIRA XOR test payload is always a transfer");
+        };
+        iroha_sccp::canonical_transfer_payload_bytes(&transfer)
+    }
+
+    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
+        iroha_data_model::isi::bridge::RecordSccpMessage::new(taira_tron_xor_record_payload(
+            sender, amount,
+        ))
+        .into()
+    }
+
+    fn taira_tron_xor_hex_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
         iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            hex::encode(taira_tron_xor_record_payload(sender, amount)).into_bytes(),
         )
         .into()
     }
@@ -2675,6 +2690,22 @@ mod tests {
 
         validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
             .expect("matching XOR burn must satisfy TAIRA -> TRON record");
+    }
+
+    #[test]
+    fn taira_tron_xor_record_accepts_hex_encoded_payload_bytes() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_hex_record_instruction(&authority, 10),
+        ];
+
+        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect("hex-encoded XOR record payload must satisfy TAIRA -> TRON record");
     }
 
     #[test]
@@ -3082,6 +3113,126 @@ mod tests {
     }
 
     #[test]
+    fn overlay_rejects_ivm_proved_backend_tag_mismatches_before_verify() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
+            transaction::{Executable, IvmProved},
+            zk::BackendTag,
+        };
+
+        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let bytecode = IvmBytecode::from_compiled(program);
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = ivm_cache
+            .summarize_program(bytecode.as_ref())
+            .expect("summarize IVM program");
+        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
+        let overlay_hash = {
+            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
+            Hash::new(&bytes)
+        };
+        let events_commitment = Hash::new(b"events");
+        let gas_policy_commitment = Hash::new(b"gas-policy");
+        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+            code_hash,
+            overlay_hash,
+            events_commitment,
+            gas_policy_commitment,
+        );
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture provides vk bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture provides vk hash");
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.status = ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+        vk_record.key = Some(vk_box);
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(kp.public_key().clone());
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
+        let account = build_wonderland_account(&authority);
+        let mut world = crate::state::World::with([domain], [account], []);
+        world
+            .verifying_keys
+            .insert(vk_id.clone(), vk_record.clone());
+        world.verifying_keys_by_circuit.insert(
+            (vk_record.circuit_id.clone(), vk_record.version),
+            vk_id.clone(),
+        );
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
+        state.zk.verify_timeout = std::time::Duration::ZERO;
+        state.pipeline.ivm_proved.enabled = true;
+        state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        let chain_id = state.chain_id.clone();
+        let build_tx = |vk_ref: VerifyingKeyId| {
+            let attachment = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                fixture.proof_box("halo2/ipa"),
+                vk_ref,
+            );
+            TransactionBuilder::new(chain_id.clone(), authority.clone())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment,
+                    gas_policy_commitment,
+                }))
+                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .sign(kp.private_key())
+        };
+
+        let wrong_ref_tx = build_tx(VerifyingKeyId::new("stark/fri", "ivm_execution"));
+        let err = build_overlay_for_transaction(&wrong_ref_tx, &state.view())
+            .expect_err("mismatched attachment verifier-key backend must reject before lookup");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("proof attachment verifier-key backend mismatch")
+        ));
+
+        let mut bad_record = vk_record;
+        bad_record.backend = BackendTag::Stark;
+        state.world.verifying_keys.insert(vk_id.clone(), bad_record);
+        let bad_record_tx = build_tx(vk_id.clone());
+        let err = build_overlay_for_transaction(&bad_record_tx, &state.view())
+            .expect_err("mismatched verifier record backend tag must reject before verify");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg) if msg.contains("verifying key backend tag mismatch")
+        ));
+    }
+
+    #[test]
     #[cfg(feature = "zk-stark")]
     fn overlay_accepts_stark_ivm_proved_binding_air_proof() {
         use std::sync::Arc;
@@ -3486,6 +3637,11 @@ mod tests {
             replay.trace_hash,
         );
 
+        // Let oversized public-input metadata reach the shared envelope validator instead of
+        // the existing outer proof-size guard.
+        state.zk.halo2.max_envelope_bytes = usize::MAX;
+        state.zk.halo2.max_proof_bytes = usize::MAX;
+
         let build_tx =
             |events_commitment: Hash,
              gas_policy_commitment: Hash,
@@ -3515,37 +3671,69 @@ mod tests {
                     .sign(kp.private_key())
             };
 
-        let zero_vk_hash_tx = build_tx(
-            expected_events_commitment,
-            expected_gas_policy_commitment,
-            Some(|env| env.vk_hash = [0u8; 32]),
-        );
-        let err = build_overlay_for_transaction(&zero_vk_hash_tx, &state.view())
-            .expect_err("zero verifier-key hash must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg.contains("verifying key commitment mismatch")
+        let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 7] = [
+            (
+                "unsupported backend",
+                |env| env.backend = BackendTag::Unsupported,
+                "backend is unsupported",
             ),
-            "unexpected error: {err:?}"
-        );
-
-        let aux_tx = build_tx(
-            expected_events_commitment,
-            expected_gas_policy_commitment,
-            Some(|env| env.aux = b"ignored-hint".to_vec()),
-        );
-        let err = build_overlay_for_transaction(&aux_tx, &state.view())
-            .expect_err("auxiliary bytes must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg.contains("proof envelope auxiliary bytes must be empty")
+            (
+                "empty circuit id",
+                |env| env.circuit_id.clear(),
+                "circuit id is empty",
             ),
-            "unexpected error: {err:?}"
-        );
+            (
+                "zero verifier-key hash",
+                |env| env.vk_hash = [0u8; 32],
+                "verifier-key hash is zero",
+            ),
+            (
+                "empty public inputs",
+                |env| env.public_inputs.clear(),
+                "public inputs are empty",
+            ),
+            (
+                "oversized public inputs",
+                |env| {
+                    env.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                },
+                "public inputs length",
+            ),
+            (
+                "empty proof bytes",
+                |env| env.proof_bytes.clear(),
+                "proof bytes are empty",
+            ),
+            (
+                "auxiliary bytes",
+                |env| env.aux = b"ignored-hint".to_vec(),
+                "auxiliary bytes must be empty",
+            ),
+        ];
+        for (label, mutate, expected_msg) in invalid_envelope_cases {
+            let tx = build_tx(
+                expected_events_commitment,
+                expected_gas_policy_commitment,
+                Some(mutate),
+            );
+            let err = match build_overlay_for_transaction(&tx, &state.view()) {
+                Ok(_) => panic!("{label} must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(
+                    &err,
+                    OverlayBuildError::ZkProof(msg)
+                        if msg.contains("invalid OpenVerifyEnvelope")
+                            && msg.contains(expected_msg)
+                ),
+                "unexpected {label} error: {err:?}"
+            );
+        }
 
         let bad_events_tx = build_tx(
             Hash::new(b"bad-events"),
@@ -4180,6 +4368,92 @@ mod tests {
         assert_eq!(
             proved.gas_policy_commitment, expected_gas_policy_commitment,
             "gas policy commitment should match deterministic replay"
+        );
+    }
+
+    #[test]
+    fn derive_ivm_proved_payload_dispatches_contract_entrypoint_metadata() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::VerifyingKeyRecord,
+            transaction::Executable,
+            zk::BackendTag,
+        };
+
+        let compiler =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                force_zk: true,
+                max_cycles: 10_000,
+                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            });
+        let (program, _manifest) = compiler
+            .compile_source_with_manifest(
+                r#"
+seiyaku DeriveDispatch {
+  kotoage fn main() -> int {
+    assert(false);
+    return 0;
+  }
+
+  kotoage fn open(amount: int) -> int {
+    assert(amount == 7);
+    return 0;
+  }
+}
+"#,
+            )
+            .expect("compile ZK-mode contract artifact");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(kp.public_key().clone());
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
+        let account = build_wonderland_account(&authority);
+        let world = crate::state::World::with([domain], [account], []);
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new("open"),
+        );
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new(norito::json!({ "amount": 7 })),
+        );
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(bytecode))
+            .sign(kp.private_key());
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            [0u8; 32],
+        );
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
+            .expect("derive proved payload using contract entrypoint metadata");
+
+        assert!(
+            proved.overlay.is_empty(),
+            "test entrypoint should execute without queuing instructions"
         );
     }
 
@@ -5733,6 +6007,11 @@ where
             "proof attachment backend mismatch".to_owned(),
         ));
     }
+    if attachment.backend != attachment.vk_ref.backend {
+        return Err(OverlayBuildError::ZkProof(
+            "proof attachment verifier-key backend mismatch".to_owned(),
+        ));
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum IvmProvedBackendKind {
         Halo2Ipa,
@@ -5796,6 +6075,18 @@ where
             "verifying key is not Active".to_owned(),
         ));
     }
+    let expected_record_backend =
+        crate::zk::production_verify_backend_tag(attachment.backend.as_str()).ok_or_else(|| {
+            OverlayBuildError::ZkProof(
+                "proof attachment backend is not admitted by the production verifier registry"
+                    .to_owned(),
+            )
+        })?;
+    if vk_record.backend != expected_record_backend {
+        return Err(OverlayBuildError::ZkProof(
+            "verifying key backend tag mismatch".to_owned(),
+        ));
+    }
     let gas_schedule_id = vk_record.gas_schedule_id.as_deref().ok_or_else(|| {
         OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
     })?;
@@ -5855,6 +6146,21 @@ where
     // Decode and sanity-check the OpenVerifyEnvelope carried in the proof box.
     let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
         .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))?;
+    let max_envelope_proof_bytes = match backend_kind {
+        IvmProvedBackendKind::Halo2Ipa => zk_cfg.halo2.max_proof_bytes,
+        IvmProvedBackendKind::StarkFriV1 => zk_cfg.stark.max_proof_bytes,
+    };
+    let max_envelope_proof_bytes = if vk_record.max_proof_bytes > 0 {
+        max_envelope_proof_bytes
+            .min(usize::try_from(vk_record.max_proof_bytes).unwrap_or(usize::MAX))
+    } else {
+        max_envelope_proof_bytes
+    };
+    env.validate_with_bounds(ZkOpenVerifyEnvelopeBounds {
+        max_proof_bytes: max_envelope_proof_bytes,
+        ..ZkOpenVerifyEnvelopeBounds::default()
+    })
+    .map_err(|err| OverlayBuildError::ZkProof(format!("invalid OpenVerifyEnvelope: {err}")))?;
     match backend_kind {
         IvmProvedBackendKind::Halo2Ipa => {
             if env.backend != ZkBackendTag::Halo2IpaPasta {
@@ -5886,11 +6192,6 @@ where
         return Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required"
                 .to_owned(),
-        ));
-    }
-    if !env.aux.is_empty() {
-        return Err(OverlayBuildError::ZkProof(
-            "proof envelope auxiliary bytes must be empty".to_owned(),
         ));
     }
     let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
@@ -6079,13 +6380,23 @@ where
         .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_zk_trace_enabled(true);
+    let contract_call_context =
+        parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
 
     let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-        tx.authority().clone(),
-        Arc::clone(&accounts),
-    );
+    let mut host = if let Some(context) = contract_call_context.as_ref() {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            tx.authority().clone(),
+            Arc::clone(&accounts),
+            context.args.clone(),
+        )
+    } else {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+            tx.authority().clone(),
+            Arc::clone(&accounts),
+        )
+    };
     let amx_analysis =
         ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
             ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
@@ -6113,6 +6424,7 @@ where
 
     vm.set_gas_limit(gas_limit);
     vm.set_zk_trace_enabled(true);
+    apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
     run_vm_with_host(&mut vm, &mut host)?;
 
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());

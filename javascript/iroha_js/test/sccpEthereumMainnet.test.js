@@ -49,6 +49,8 @@ const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
 const LOW_SYNC_COMMITTEE_BITS = `0x01${"00".repeat(63)}`;
 const SAMPLE_SYNC_COMMITTEE_BITS = `0x${"ff".repeat(42)}3f${"00".repeat(21)}`;
 const SAMPLE_SYNC_COMMITTEE_PARTICIPATION = "342";
+const BEACON_HEADER_ROOT_SLOT_64 = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c";
+const BEACON_HEADER_ROOT_SLOT_96 = "0x503f2cd5b3926e0006f8ff49419e63d9588e13b792ef085b3639258112fa7ec2";
 const SAMPLE_SYNC_COMMITTEE_SIGNATURE = `0x${"34".repeat(96)}`;
 const SAMPLE_FINALITY_BRANCH = Array.from({ length: 6 }, (_, index) =>
   hex32((0x50 + index).toString(16).padStart(2, "0")),
@@ -64,7 +66,7 @@ const sampleReceiptProof = {
   sourceDomain: SCCP_DOMAIN_ETH,
   sourceEventDigest: SOURCE_EVENT_DIGEST,
   beaconSlot: "64",
-          finalityBranch: SAMPLE_FINALITY_BRANCH,
+  finalityBranch: SAMPLE_FINALITY_BRANCH,
   executionBlockNumber: "4660",
   executionBlockHash: BLOCK_HASH,
   executionReceiptsRoot: hex32("cc"),
@@ -862,7 +864,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              root: hex32("dd"),
+              root: BEACON_HEADER_ROOT_SLOT_64,
               canonical: true,
               header: {
                 message: {
@@ -887,7 +889,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              root: hex32("dd"),
+              root: BEACON_HEADER_ROOT_SLOT_64,
               canonical: true,
               header: {
                 message: {
@@ -911,7 +913,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
           return {
             execution_optimistic: false,
             finalized: true,
-            data: { root: hex32("dd") },
+            data: { root: BEACON_HEADER_ROOT_SLOT_64 },
           };
         },
       };
@@ -947,7 +949,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              finalized: { root: hex32("dd"), epoch: "2" },
+              finalized: { root: BEACON_HEADER_ROOT_SLOT_64, epoch: "2" },
             },
           };
         },
@@ -1018,7 +1020,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   assert.equal(evidence.beaconFinality.executionBlockNumber, "4660");
   assert.equal(evidence.beaconFinality.executionBlockHash, BLOCK_HASH);
   assert.equal(evidence.beaconFinality.executionReceiptsRoot, hex32("cc"));
-  assert.equal(evidence.beaconFinality.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(evidence.beaconFinality.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
   assert.equal(evidence.beaconFinality.syncCommitteeRoot, hex32("ee"));
   assert.equal(evidence.beaconFinality.beaconSlot, "64");
   assert.deepEqual(evidence.beaconFinality.finalityBranch, SAMPLE_FINALITY_BRANCH);
@@ -1050,13 +1052,12 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     number: "0x1234",
     receiptsRoot: hex32("cc"),
     beaconSlot: "64",
-          finalityBranch: SAMPLE_FINALITY_BRANCH,
   };
   const validHeader = () => ({
     execution_optimistic: false,
     finalized: true,
     data: {
-      root: hex32("dd"),
+      root: BEACON_HEADER_ROOT_SLOT_64,
       canonical: true,
       header: {
         message: {
@@ -1073,12 +1074,12 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
   const validCheckpoint = () => ({
     execution_optimistic: false,
     finalized: true,
-    data: { finalized: { root: hex32("dd"), epoch: "2" } },
+    data: { finalized: { root: BEACON_HEADER_ROOT_SLOT_64, epoch: "2" } },
   });
   const validBlockRoot = () => ({
     execution_optimistic: false,
     finalized: true,
-    data: { root: hex32("dd") },
+    data: { root: BEACON_HEADER_ROOT_SLOT_64 },
   });
   const validBlock = () => ({
     execution_optimistic: false,
@@ -1200,7 +1201,7 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       }),
     },
   ).collectFinalityEvidence({ block }, { verifyFinalityCheckpoint: false });
-  assert.equal(unchecked.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(unchecked.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   await assert.rejects(
     () =>
@@ -1321,13 +1322,13 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     { ok: true, text: async () => JSON.stringify(validHeader()) },
     { ok: true, text: async () => JSON.stringify(validCheckpoint()) },
   ).collectFinalityEvidence({ block });
-  assert.equal(textEvidence.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(textEvidence.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   const streamEvidence = await providerFor(
     streamResponse([Buffer.from(JSON.stringify(validHeader()))]),
     streamResponse([Buffer.from(JSON.stringify(validCheckpoint()))]),
   ).collectFinalityEvidence({ block });
-  assert.equal(streamEvidence.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(streamEvidence.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   await assert.rejects(
     () =>
@@ -3326,13 +3327,19 @@ test("EthereumMainnetSccp requires linked local prover functions", async () => {
 });
 
 test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof result", () => {
-  const sdk = new EthereumMainnetSccp();
-  const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
+  const { destinationBinding, nativeProverArtifacts } = sampleVerifiedNativeEvmProverFixture();
+  const input = { ...sampleOutboundInput(), destinationBinding };
+  const sdk = new EthereumMainnetSccp({ nativeProverArtifacts });
+  const request = sdk.buildOutboundProofRequest(input);
   const proofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
   const submission = sdk.buildEthereumCalldata({ proofResult });
 
   assert.equal(submission.targetDomain, SCCP_DOMAIN_ETH);
   assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+  assert.throws(
+    () => new EthereumMainnetSccp().buildEthereumCalldata({ proofResult }),
+    /verified native EVM prover artifacts/u,
+  );
 
   assert.throws(
     () =>
@@ -3911,8 +3918,12 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
       throw new Error(`unexpected RPC method ${method}`);
     },
   };
-  const sdk = new EthereumMainnetSccp({ executionProvider: provider });
-  const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
+  const { destinationBinding, nativeProverArtifacts } = sampleVerifiedNativeEvmProverFixture();
+  const sdk = new EthereumMainnetSccp({ executionProvider: provider, nativeProverArtifacts });
+  const request = sdk.buildOutboundProofRequest({
+    ...sampleOutboundInput(),
+    destinationBinding,
+  });
   const proofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
 
   assert.equal(await sdk.submitOutboundToEthereum({ proofResult }), "0xeth1");
@@ -3920,13 +3931,13 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
   assert.equal(submittedTxs[0].data, sdk.buildEthereumCalldata({ proofResult }).callDataHex);
   assert.equal(submittedTxs[0].chainId, "0x1");
 
-  const { destinationBinding, ...proofResultWithoutBinding } = proofResult;
-  const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = destinationBinding;
+  const { destinationBinding: proofResultBinding, ...proofResultWithoutBinding } = proofResult;
+  const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = proofResultBinding;
   const snakeProofResult = {
     ...proofResultWithoutBinding,
     destination_binding: {
       ...bindingWithoutBridge,
-      bridge_address: destinationBinding.bridgeAddress,
+      bridge_address: proofResultBinding.bridgeAddress,
     },
   };
   assert.equal(await sdk.submitOutboundToEthereum({ proof_result: snakeProofResult }), "0xeth2");
@@ -3967,6 +3978,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
 
   let guardedSubmitterCalled = false;
   const guardedSdk = new EthereumMainnetSccp({
+    nativeProverArtifacts,
     executionProvider: {
       async request({ method }) {
         assert.equal(method, "eth_chainId");

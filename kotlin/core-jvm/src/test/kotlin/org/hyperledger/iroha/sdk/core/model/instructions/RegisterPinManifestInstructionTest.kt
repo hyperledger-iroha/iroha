@@ -7,6 +7,52 @@ import kotlin.test.assertFailsWith
 class RegisterPinManifestInstructionTest {
 
     @Test
+    fun `builder rejects malformed digest hex`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setDigestHex("zz")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setDigestHex("a0".repeat(31))
+        }
+    }
+
+    @Test
+    fun `builder rejects malformed chunk digest hex`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("not-hex")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("b0".repeat(33))
+        }
+    }
+
+    @Test
+    fun `builder rejects malformed successor hex`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setSuccessorOfHex("01")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.builder().setSuccessorOfHex("gg".repeat(32))
+        }
+    }
+
+    @Test
+    fun `alias binding rejects malformed proof hex`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.AliasBinding.builder()
+                .setName("docs")
+                .setNamespace("sora")
+                .setProofHex("proof")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.AliasBinding.builder()
+                .setName("docs")
+                .setNamespace("sora")
+                .setProofHex("a")
+        }
+    }
+
+    @Test
     fun `builder requires content length`() {
         assertFailsWith<IllegalStateException> {
             baseBuilder().build()
@@ -31,6 +77,49 @@ class RegisterPinManifestInstructionTest {
     fun `pin policy rejects negative replicas`() {
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(-1)
+        }
+    }
+
+    @Test
+    fun `pin policy canonicalizes storage class`() {
+        val instruction = baseBuilder()
+            .setContentLength(4096)
+            .setPinPolicy(
+                RegisterPinManifestInstruction.PinPolicy.builder()
+                    .setMinReplicas(1)
+                    .setStorageClass("hot")
+                    .setRetentionEpoch(10)
+                    .build(),
+            )
+            .build()
+
+        assertEquals("Hot", instruction.pinPolicy.storageClass)
+        assertEquals("Hot", instruction.arguments["policy.storage_class"])
+    }
+
+    @Test
+    fun `pin policy rejects unsupported storage class`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.PinPolicy.builder()
+                .setMinReplicas(1)
+                .setStorageClass("lava")
+        }
+    }
+
+    @Test
+    fun `chunker profile rejects nonpositive profile id`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(-1)
+        }
+    }
+
+    @Test
+    fun `chunker profile rejects negative multihash code`() {
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.ChunkerProfile.builder().setMultihashCode(-1)
         }
     }
 
@@ -132,6 +221,46 @@ class RegisterPinManifestInstructionTest {
     }
 
     @Test
+    fun `from arguments rejects unsupported storage class`() {
+        val arguments = baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
+        arguments["policy.storage_class"] = "lava"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects nonpositive chunker profile id`() {
+        val arguments = baseArguments()
+        arguments["chunker.profile_id"] = "0"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+
+        arguments["chunker.profile_id"] = "-1"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects negative chunker multihash code`() {
+        val arguments = baseArguments()
+        arguments["chunker.multihash_code"] = "-1"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
     fun `from arguments rejects partial alias binding`() {
         val arguments = baseBuilder()
             .setContentLength(4096)
@@ -139,6 +268,48 @@ class RegisterPinManifestInstructionTest {
             .arguments
             .toMutableMap()
         arguments["alias.name"] = "docs"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects malformed digest hex`() {
+        val arguments = baseArguments()
+        arguments["digest_hex"] = "zz"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects malformed chunk digest hex`() {
+        val arguments = baseArguments()
+        arguments["chunk_digest_sha3_256_hex"] = "b0".repeat(31)
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects malformed successor hex`() {
+        val arguments = baseArguments()
+        arguments["successor_of_hex"] = "not-hex"
+
+        assertFailsWith<IllegalArgumentException> {
+            RegisterPinManifestInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun `from arguments rejects malformed alias proof hex`() {
+        val arguments = baseArguments()
+        arguments["alias.name"] = "docs"
+        arguments["alias.namespace"] = "sora"
+        arguments["alias.proof_hex"] = "abc"
 
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.fromArguments(arguments)
@@ -180,4 +351,11 @@ class RegisterPinManifestInstructionTest {
                     .setMultihashCode(0)
                     .build(),
             )
+
+    private fun baseArguments(): MutableMap<String, String> =
+        baseBuilder()
+            .setContentLength(4096)
+            .build()
+            .arguments
+            .toMutableMap()
 }

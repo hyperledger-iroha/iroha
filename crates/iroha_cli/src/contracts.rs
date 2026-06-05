@@ -1984,7 +1984,10 @@ fn resolve_deploy_contract_alias(
     domain: Option<&str>,
     dataspace: Option<&str>,
 ) -> Result<iroha::data_model::smart_contract::ContractAlias> {
-    if let Some(contract_alias) = contract_alias.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(contract_alias) = contract_alias
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         if alias.is_some() || domain.is_some() || dataspace.is_some() {
             return Err(eyre!(
                 "use either --contract-alias or the explicit --alias/--domain/--dataspace fields"
@@ -3975,22 +3978,16 @@ mod tests {
 
     #[test]
     fn resolve_deploy_contract_alias_trims_explicit_fields_and_blank_domain() {
-        let alias =
-            resolve_deploy_contract_alias(None, Some(" router "), Some("  "), Some(" is "))
-                .expect("trimmed explicit alias");
+        let alias = resolve_deploy_contract_alias(None, Some(" router "), Some("  "), Some(" is "))
+            .expect("trimmed explicit alias");
 
         assert_eq!(alias.to_string(), "router::is");
     }
 
     #[test]
     fn resolve_deploy_contract_alias_preserves_legacy_contract_alias() {
-        let alias = resolve_deploy_contract_alias(
-            Some("router::finance.alpha"),
-            None,
-            None,
-            None,
-        )
-        .expect("legacy alias");
+        let alias = resolve_deploy_contract_alias(Some("router::finance.alpha"), None, None, None)
+            .expect("legacy alias");
 
         assert_eq!(alias.to_string(), "router::finance.alpha");
     }
@@ -4005,13 +4002,14 @@ mod tests {
         )
         .expect_err("legacy and explicit fields conflict");
         assert!(
-            ambiguous.to_string().contains("use either --contract-alias"),
+            ambiguous
+                .to_string()
+                .contains("use either --contract-alias"),
             "unexpected error: {ambiguous}"
         );
 
-        let missing_dataspace =
-            resolve_deploy_contract_alias(None, Some("router"), None, None)
-                .expect_err("dataspace is required with alias");
+        let missing_dataspace = resolve_deploy_contract_alias(None, Some("router"), None, None)
+            .expect_err("dataspace is required with alias");
         assert!(
             missing_dataspace
                 .to_string()

@@ -213,7 +213,10 @@ def _resolve_signing_public_key(authority: str, explicit: Optional[BytesLike]) -
 
 def _normalize_algorithm(algorithm: Any) -> str:
     normalized = "ed25519" if algorithm is None else str(algorithm).lower()
-    if normalized not in {"ed25519", "0"}:
+    if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized) or normalized not in {
+        "ed25519",
+        "0",
+    }:
         raise NexusAppError(
             "unsupported_signature_algorithm",
             f"unsupported signature algorithm {algorithm}",
@@ -461,11 +464,13 @@ class DefaultNexusConnectTransport:
             if not isinstance(frame.control, ConnectControlApprove):
                 continue
             approval = frame.control
-            if approval.algorithm.lower() not in {"ed25519", "0"}:
+            try:
+                _normalize_algorithm(approval.algorithm)
+            except NexusAppError as exc:
                 raise NexusAppError(
                     "unsupported_signature_algorithm",
                     f"unsupported Connect approval signature algorithm {approval.algorithm}",
-                )
+                ) from exc
             signing_public_key = config.signing_public_key or _account_ed25519_public_key(
                 approval.account_id
             )

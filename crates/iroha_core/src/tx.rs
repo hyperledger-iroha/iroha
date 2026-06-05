@@ -1261,6 +1261,29 @@ fn enforce_nts_health_for_time_sensitive(
     enforce_time_sensitive_with_nts(tx, status, mode)
 }
 
+fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), AcceptTransactionFail> {
+    let Some(attachments) = tx.attachments() else {
+        return Ok(());
+    };
+    if attachments.0.is_empty() {
+        return Err(AcceptTransactionFail::TransactionLimit(
+            TransactionLimitError {
+                reason: "Proof attachment list must not be empty".into(),
+            },
+        ));
+    }
+    for (index, attachment) in attachments.0.iter().enumerate() {
+        if let Some((field, message)) = attachment.structural_error() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!("Proof attachment {index} `{field}` {message}"),
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Returns `true` if the transaction is a Sumeragi heartbeat (marker, empty instructions, no attachments).
 pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
     let marker = matches!(heartbeat_marker_value(tx).ok().flatten(), Some(true));
@@ -2462,6 +2485,8 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
+
+        validate_proof_attachment_shapes(tx)?;
 
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
             attachments.0.iter().fold(0usize, |acc, attachment| {
@@ -9820,6 +9845,117 @@ pub mod tests {
                 );
             }
             other => panic!("expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_proof_attachments_rejected_at_transaction_admission() {
+        use std::time::Duration;
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+
+        let mut zero_vk_commitment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_admission"),
+        );
+        zero_vk_commitment.vk_commitment = Some([0u8; 32]);
+
+        let mut zero_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_admission"),
+        );
+        zero_envelope_hash.envelope_hash = Some([0u8; 32]);
+
+        let mut forged_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_admission"),
+        );
+        let mut forged_hash: [u8; 32] =
+            iroha_crypto::Hash::new(&forged_envelope_hash.proof.bytes).into();
+        forged_hash[0] ^= 0x80;
+        forged_envelope_hash.envelope_hash = Some(forged_hash);
+
+        let cases = [
+            (
+                "empty-list",
+                ProofAttachmentList(Vec::new()),
+                "must not be empty",
+            ),
+            (
+                "proof-backend-mismatch",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "vk_admission"),
+                )]),
+                "proof.backend",
+            ),
+            (
+                "nonportable-vk-ref-name",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "VkAdmission"),
+                )]),
+                "vk_ref",
+            ),
+            (
+                "empty-proof-bytes",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), Vec::new()),
+                    VerifyingKeyId::new("halo2/ipa", "vk_admission"),
+                )]),
+                "proof.bytes",
+            ),
+            (
+                "zero-vk-commitment",
+                ProofAttachmentList(vec![zero_vk_commitment]),
+                "vk_commitment",
+            ),
+            (
+                "zero-envelope-hash",
+                ProofAttachmentList(vec![zero_envelope_hash]),
+                "envelope_hash",
+            ),
+            (
+                "forged-envelope-hash",
+                ProofAttachmentList(vec![forged_envelope_hash]),
+                "envelope_hash",
+            ),
+        ];
+
+        for (label, attachments, expected_reason) in cases {
+            let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+                .with_instructions([Log::new(Level::INFO, format!("proof-{label}"))])
+                .with_attachments(attachments)
+                .sign(kp.private_key());
+
+            let err = AcceptedTransaction::validate(
+                &tx,
+                &chain,
+                Duration::from_secs(0),
+                limits,
+                &crypto_cfg,
+            )
+            .expect_err("malformed proof attachment must be rejected at admission");
+
+            match err {
+                AcceptTransactionFail::TransactionLimit(limit) => {
+                    assert!(
+                        limit.reason.contains(expected_reason),
+                        "case {label}: expected reason to contain {expected_reason}, got {}",
+                        limit.reason
+                    );
+                }
+                other => panic!("case {label}: expected TransactionLimit failure, got {other:?}"),
+            }
         }
     }
 

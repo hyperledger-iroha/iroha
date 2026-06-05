@@ -1,3 +1,5 @@
+import { isPrivacyNativeAvailable } from "./crypto.js";
+
 const PRIVACY_CRITERIA = Object.freeze([
   "hide_amount",
   "hide_sender",
@@ -5,6 +7,70 @@ const PRIVACY_CRITERIA = Object.freeze([
   "hide_asset_type",
   "post_quantum",
 ]);
+const PRIVACY_CRITERIA_SET = new Set(PRIVACY_CRITERIA);
+
+const ALLOWED_CATEGORIES = new Set([
+  "payment",
+  "authorization",
+  "credential",
+  "admission",
+  "identity",
+  "proof_backend",
+]);
+
+const ALLOWED_MATURITIES = new Set([
+  "peer_reviewed",
+  "accepted_conference",
+  "technical_report",
+  "arxiv_preprint",
+  "specification",
+]);
+
+const DERIVED_COMPATIBILITY_FIELDS = Object.freeze([
+  "hiddenFeatures",
+  "hidden_features",
+  "requirements",
+  "limitations",
+  "status",
+  "unavailableReason",
+  "unavailable_reason",
+  "verifierKeyMetadata",
+  "verifier_key_metadata",
+  "backendFamily",
+  "backend_family",
+  "productionReady",
+  "production_ready",
+  "productionGate",
+  "production_gate",
+]);
+const PRIVACY_DESCRIPTOR_FIELDS = new Set([
+  "id",
+  "name",
+  "shortName",
+  "summary",
+  "category",
+  "maturity",
+  "coveredCriteria",
+  "proofFamily",
+  "publicInputsSchema",
+  "verifierKeyId",
+  "pqLayers",
+  "implementationStage",
+  "recommendedFor",
+  "sourceReferences",
+  "securityNotes",
+  "requiredState",
+  "failureModes",
+  "setupSteps",
+  "executionSteps",
+  "sdkEntrypoints",
+  "plannedSdkEntrypoints",
+  "chainRequirements",
+]);
+const SOURCE_REFERENCE_FIELDS = new Set(["label", "url"]);
+const PQ_LAYER_FIELDS = new Set(["proof", "authorization", "noteEncryption"]);
+const SOURCE_REFERENCE_LABEL_MAX_LENGTH = 160;
+const SOURCE_REFERENCE_URL_DECODE_MAX_DEPTH = 8;
 
 const PQ_LAYER_NONE = Object.freeze({
   proof: false,
@@ -14,13 +80,1909 @@ const PQ_LAYER_NONE = Object.freeze({
 
 const RESEARCH_STAGE_MAY_2026 = "research-target-as-of-2026-05";
 const CATALOG_STAGE_MAY_2026 = "catalog-as-of-2026-05";
+const ALLOWED_IMPLEMENTATION_STAGES = new Set([
+  "validator-scaffold-as-of-2026-05",
+  "chain-executable",
+  "sdk-builder",
+  "component",
+  RESEARCH_STAGE_MAY_2026,
+  CATALOG_STAGE_MAY_2026,
+  "production-hardened",
+]);
+const SOURCE_REFERENCED_IMPLEMENTATION_STAGES = new Set([
+  "chain-executable",
+  "sdk-builder",
+  "component",
+  RESEARCH_STAGE_MAY_2026,
+  "production-hardened",
+]);
+const PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES = new Set([
+  "chain-executable",
+  "sdk-builder",
+  "component",
+  RESEARCH_STAGE_MAY_2026,
+]);
+const SOURCE_REFERENCED_REQUIRED_LIST_FIELDS = Object.freeze([
+  "recommendedFor",
+  "chainRequirements",
+  "securityNotes",
+  "requiredState",
+  "failureModes",
+  "setupSteps",
+  "executionSteps",
+]);
+const SOURCE_REFERENCED_REQUIRED_VERIFIER_FIELDS = Object.freeze([
+  "publicInputsSchema",
+  "verifierKeyId",
+]);
+const SOURCE_REFERENCED_FORBIDDEN_PROOF_FAMILIES = new Set(["none"]);
+const SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES = new Set(["none"]);
+const SOURCE_REFERENCED_SDK_ENTRYPOINT_FIELDS = Object.freeze([
+  "sdkEntrypoints",
+  "plannedSdkEntrypoints",
+]);
+const POST_QUANTUM_REQUIRED_SOURCE_URLS = Object.freeze([
+  "https://csrc.nist.gov/pubs/fips/203/final",
+  "https://csrc.nist.gov/pubs/fips/204/final",
+  "https://csrc.nist.gov/pubs/fips/205/final",
+]);
+const POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS = Object.freeze([
+  "MlDsa",
+  "MlKem",
+]);
+const POST_QUANTUM_REQUIRED_SECURITY_NOTE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
+const POST_QUANTUM_REQUIRED_FAILURE_MODE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
+const POST_QUANTUM_REQUIRED_STATE_TOKENS = Object.freeze(["ML-KEM"]);
+const RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID = Object.freeze({
+  "orchard-halo2-actions-v1": Object.freeze(["https://zips.z.cash/zip-0224"]),
+  "penumbra-masp-v1": Object.freeze([
+    "https://protocol.penumbra.zone/main/shielded_pool.html",
+  ]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([
+    "https://web.getmonero.org/2024/04/27/fcmps.html",
+  ]),
+  "miden-stark-note-v1": Object.freeze([
+    "https://docs.miden.xyz/core-concepts/miden-base/transaction/",
+    "https://docs.miden.xyz/core-concepts/miden-base/note/",
+  ]),
+  "aztec-private-rollup-v1": Object.freeze([
+    "https://docs.aztec.network/developers/nightly/docs/foundational-topics/advanced/circuits/private_kernel",
+  ]),
+  "pq-masp-stark-v0": POST_QUANTUM_REQUIRED_SOURCE_URLS,
+});
+const LEDGER_MUTATION_PROTECTION_METADATA_TOKENS = Object.freeze([
+  "nullifier",
+  "replay",
+  "revocation",
+  "link-tag",
+  "link tag",
+]);
+const TYPED_CHAIN_ADMISSION_METADATA_FIELDS = Object.freeze([
+  "chainRequirements",
+  "setupSteps",
+  "executionSteps",
+]);
+const TYPED_CHAIN_ADMISSION_TYPE_TOKENS = Object.freeze(["typed", "zk::"]);
+const TYPED_CHAIN_ADMISSION_MUTATION_TOKENS = Object.freeze([
+  "instruction",
+  "transaction",
+  "isi",
+  "zk::",
+]);
+const STATEFUL_LEDGER_STATE_TOKENS = Object.freeze([
+  "nullifier",
+  "commitment",
+  "accumulator",
+  "root",
+  "revocation",
+  "replay",
+  "link-tag",
+  "link tag",
+  "tree",
+]);
+const STATEFUL_LEDGER_PERSISTENCE_METADATA_FIELDS = Object.freeze([
+  "securityNotes",
+  "failureModes",
+  "setupSteps",
+  "executionSteps",
+  "chainRequirements",
+]);
+const STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["persist", "persistence", "restart", "recovery"]),
+  Object.freeze(["replay", "nullifier", "revocation", "link-tag", "link tag"]),
+]);
+const WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES = new Set([
+  "chain-executable",
+  "sdk-builder",
+  RESEARCH_STAGE_MAY_2026,
+  "production-hardened",
+]);
+const WALLET_STATE_REQUIRED_EXCLUDED_CATEGORIES = new Set(["proof_backend"]);
+const WALLET_STATE_METADATA_TOKENS = Object.freeze(["wallet", "witness"]);
+const CREDENTIAL_STATE_REQUIRED_CATEGORIES = new Set([
+  "admission",
+  "credential",
+  "identity",
+]);
+const CREDENTIAL_STATE_METADATA_TOKENS = Object.freeze(["commitment", "accumulator"]);
+const VERIFIER_KEY_RECORD_METADATA_FIELDS = Object.freeze([
+  "requiredState",
+  "chainRequirements",
+  "setupSteps",
+]);
+const VERIFIER_KEY_RECORD_METADATA_TOKENS = Object.freeze(["verifier key", "verifier-key"]);
+const CHAIN_DOMAIN_BINDING_METADATA_FIELDS = Object.freeze([
+  "publicInputsSchema",
+  "securityNotes",
+  "failureModes",
+  "setupSteps",
+  "executionSteps",
+]);
+const CHAIN_DOMAIN_BINDING_METADATA_TOKENS = Object.freeze([
+  "domain_separator",
+  "domain-separat",
+  "domain separat",
+  "chain_id",
+  "chain_tag",
+  "tx_digest",
+  "transaction",
+  "reference_block",
+  "reference block",
+  "rollup_state",
+  "rollup state",
+  "anchor",
+  "epoch",
+]);
+const SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["audit", "audited", "review"]),
+  Object.freeze(["fuzz", "fuzzing"]),
+  Object.freeze(["performance", "benchmark", "latency"]),
+]);
+const WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["wallet", "witness", "private input", "private inputs", "plaintext", "secret"]),
+  Object.freeze([
+    "local",
+    "not exposed",
+    "not be exposed",
+    "not leak",
+    "must not expose",
+    "must not leak",
+    "never leave",
+  ]),
+]);
+const VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["malformed proof", "invalid proof", "proof parse", "proof rejected"]),
+  Object.freeze([
+    "wrong verifier key",
+    "verifier key mismatch",
+    "verifier-key mismatch",
+    "unknown verifier key",
+  ]),
+  Object.freeze(["public input mismatch", "wrong public input", "public-input mismatch"]),
+]);
+const PUBLIC_INPUT_SCHEMA_FORBIDDEN_PAYLOAD_TOKEN_SEGMENTS = Object.freeze([
+  "proof",
+  "proofs",
+  "witness",
+  "witnesses",
+]);
+const RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS = Object.freeze(["production"]);
+const RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS = Object.freeze([
+  "audit",
+  "audited",
+  "review",
+]);
+const SOURCE_REFERENCE_AUDIT_CLAIM_LABEL_PHRASES = Object.freeze([
+  "security review",
+  "external review",
+  "production review",
+  "assurance report",
+  "attestation report",
+]);
+const SOURCE_REFERENCE_AUDIT_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
+  "securityreview",
+  "externalreview",
+  "productionreview",
+  "assurancereport",
+  "attestationreport",
+]);
+const SECURITY_NOTE_COMPLETED_AUDIT_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
+  "auditcomplete",
+  "auditcompleted",
+  "auditpassed",
+  "auditapproved",
+  "auditcleared",
+  "auditsignoff",
+  "externalauditcomplete",
+  "externalauditcompleted",
+  "externalauditpassed",
+  "externalauditapproved",
+  "securityreviewcomplete",
+  "securityreviewcompleted",
+  "securityreviewpassed",
+  "securityreviewapproved",
+  "signoffreceived",
+  "signoffcomplete",
+  "auditedby",
+  "productionclaim",
+  "claimedproduction",
+  "mainnetclaim",
+  "claimedmainnet",
+  "auditclaim",
+  "claimedaudit",
+]);
+const DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
+  "productionready",
+  "productionhardened",
+  "productionenabled",
+  "productionapproved",
+  "productioncertified",
+  "mainnetready",
+  "mainnetcomplete",
+  "auditedproduction",
+  "externallyaudited",
+  "auditpassed",
+  "auditapproved",
+  "auditsignoff",
+  "securityreviewpassed",
+  "productionclaim",
+  "claimedproduction",
+  "productionverified",
+  "productiongatepassed",
+  "productiongatecomplete",
+  "productiongateapproved",
+  "mainnetclaim",
+  "claimedmainnet",
+  "mainnetenabled",
+  "mainnetapproved",
+  "auditcomplete",
+  "auditcompleted",
+  "auditclaim",
+  "claimedaudit",
+  "externalauditcomplete",
+  "externalauditcompleted",
+  "externalauditpassed",
+  "externalauditapproved",
+  "securityreviewcomplete",
+  "securityreviewcompleted",
+  "securityreviewapproved",
+]);
+const CATALOG_LABEL_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
+  ...DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS,
+]);
+const PLACEHOLDER_SOURCE_REFERENCE_HOSTS = new Set([
+  "127.0.0.1",
+  "example.com",
+  "example.net",
+  "example.org",
+  "localhost",
+]);
+const PLACEHOLDER_SOURCE_REFERENCE_SUFFIXES = Object.freeze([
+  ".example",
+  ".invalid",
+  ".test",
+]);
+const LOCAL_SOURCE_REFERENCE_SUFFIXES = Object.freeze([
+  ".internal",
+  ".lan",
+  ".local",
+  ".localhost",
+]);
+const REBINDING_SOURCE_REFERENCE_HOSTS = new Set([
+  "localtest.me",
+  "lvh.me",
+  "nip.io",
+  "sslip.io",
+]);
+const REBINDING_SOURCE_REFERENCE_SUFFIXES = Object.freeze([
+  ".localtest.me",
+  ".nip.io",
+  ".sslip.io",
+]);
+const PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
+const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
+  Object.freeze(["real_proving", "real proving engine is not registered"]),
+  Object.freeze(["real_verification", "real verifier is not registered"]),
+  Object.freeze(["chain_admission", "chain admission path is not enabled"]),
+  Object.freeze(["sdk_parity", "cross-SDK parity is incomplete"]),
+  Object.freeze(["wallet_state", "wallet/state support is incomplete"]),
+  Object.freeze(["deterministic_tests", "deterministic tests are incomplete"]),
+  Object.freeze(["fuzzing", "fuzzing gate is incomplete"]),
+  Object.freeze(["performance_gates", "performance gate is incomplete"]),
+  Object.freeze(["external_audit", "external audit signoff is missing"]),
+]);
+const PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE =
+  "implementation stage is not production-hardened";
+const PRODUCTION_GATE_MISSING_PLANNED_SDK = "planned SDK entrypoints remain";
+const PRODUCTION_GATE_MISSING_DEV_FIXTURE =
+  "dev fixture entrypoints are not production entrypoints";
+const PRODUCTION_GATE_MISSING_ALLOWLIST =
+  "Iroha production allowlist is not enabled for this audited row";
+const PRODUCTION_GATE_SUPPLEMENTAL_MISSING_REASONS = Object.freeze([
+  PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE,
+  PRODUCTION_GATE_MISSING_PLANNED_SDK,
+  PRODUCTION_GATE_MISSING_DEV_FIXTURE,
+  PRODUCTION_GATE_MISSING_ALLOWLIST,
+]);
+const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
+  "transparent-transfer": "none",
+  shield: "commitment-only",
+  "confidential-transfer-v2": "halo2-ipa-pasta",
+  unshield: "halo2-ipa-pasta",
+  "asset-hidden-confidential-transfer-v1": "halo2-ipa-pasta",
+  "zk-ace-pq-authorization-v0": "stark-fri",
+  "anonymous-pgc-k-out-of-n-v1": "anonymous-pgc",
+  "verange-transparent-range-v1": "verange",
+  "zkat-policy-private-auth-v1": "zkat",
+  "zk-ams-recursive-admission-v0": "recursive-anonymous-admission",
+  "vega-existing-credential-zk-v0": "vega-existing-credential-zk",
+  "silent-threshold-anoncred-v0": "silent-threshold-anoncred",
+  "zk-x509-onchain-identity-v0": "zk-x509",
+  "jindo-lattice-pcs-zk-v0": "lattice-pcs-sis",
+  "sis-hints-anoncred-pq-v0": "sis-with-hints",
+  "orchard-halo2-actions-v1": "halo2-ipa-orchard",
+  "penumbra-masp-v1": "groth16-bls12-377",
+  "monero-fcmp-plus-plus-v1": "fcmp-plus-plus-curve-tree",
+  "miden-stark-note-v1": "miden-stark",
+  "aztec-private-rollup-v1": "aztec-plonkish-private-kernel",
+  "pq-masp-stark-v0": "pq-masp-stark-fri",
+});
+const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
+  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),
+  Object.freeze(["verange-transparent-range-v1", "component", "verange"]),
+  Object.freeze(["zkat-policy-private-auth-v1", "sdk-builder", "zkat"]),
+  Object.freeze([
+    "zk-ams-recursive-admission-v0",
+    "sdk-builder",
+    "recursive-anonymous-admission",
+  ]),
+  Object.freeze([
+    "vega-existing-credential-zk-v0",
+    "sdk-builder",
+    "vega-existing-credential-zk",
+  ]),
+  Object.freeze([
+    "silent-threshold-anoncred-v0",
+    "sdk-builder",
+    "silent-threshold-anoncred",
+  ]),
+  Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
+  Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
+  Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
+  Object.freeze([
+    "orchard-halo2-actions-v1",
+    "research-target-as-of-2026-05",
+    "halo2-ipa-orchard",
+  ]),
+  Object.freeze([
+    "penumbra-masp-v1",
+    "research-target-as-of-2026-05",
+    "groth16-bls12-377",
+  ]),
+  Object.freeze([
+    "monero-fcmp-plus-plus-v1",
+    "research-target-as-of-2026-05",
+    "fcmp-plus-plus-curve-tree",
+  ]),
+  Object.freeze([
+    "miden-stark-note-v1",
+    "research-target-as-of-2026-05",
+    "miden-stark",
+  ]),
+  Object.freeze([
+    "aztec-private-rollup-v1",
+    "research-target-as-of-2026-05",
+    "aztec-plonkish-private-kernel",
+  ]),
+  Object.freeze(["pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"]),
+]);
 
-const PRIVACY_ALGORITHMS = Object.freeze([
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertNonEmptyString(value, context) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function assertCleanNonEmptyString(value, context) {
+  assertNonEmptyString(value, context);
+  if (!isCleanCatalogString(value)) {
+    throw new Error(`${context} must be clean and already trimmed`);
+  }
+}
+
+function isCleanCatalogString(value) {
+  return value === value.trim() && !/\p{C}/u.test(value);
+}
+
+function isCleanStringListItem(value) {
+  return isCleanCatalogString(value);
+}
+
+function assertStringList(value, context, { required = false } = {}) {
+  if (value === undefined && !required) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array`);
+  }
+  const seen = new Set();
+  value.forEach((item, index) => {
+    if (typeof item !== "string") {
+      throw new Error(`${context}[${index}] must be a string`);
+    }
+    if (item.trim() === "") {
+      throw new Error(`${context}[${index}] must be a non-empty string`);
+    }
+    if (!isCleanStringListItem(item)) {
+      throw new Error(`${context}[${index}] must be clean and already trimmed`);
+    }
+    if (seen.has(item)) {
+      throw new Error(`${context}[${index}] duplicates ${item}`);
+    }
+    seen.add(item);
+  });
+  return value;
+}
+
+function isLowercaseHyphenatedIdentifier(value) {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(value) &&
+    !value.includes("--")
+  );
+}
+
+function isSdkEntrypointName(value) {
+  return /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/.test(value);
+}
+
+function isPublicInputSchemaToken(value) {
+  return /^[a-z](?:[a-z0-9_]*[a-z0-9])?$/.test(value) && !value.includes("__");
+}
+
+function publicInputSchemaTokenHasPayloadMetadata(value) {
+  return value
+    .split("_")
+    .some((segment) => PUBLIC_INPUT_SCHEMA_FORBIDDEN_PAYLOAD_TOKEN_SEGMENTS.includes(segment));
+}
+
+function isProofFamilyName(value) {
+  return /^[a-z0-9]+(?:[-/][a-z0-9]+)*$/.test(value);
+}
+
+function isBackendFamilyName(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value) && !value.includes("--");
+}
+
+function isVerifierKeyName(value) {
+  return /^[a-z](?:[a-z0-9_]*[a-z0-9])?$/.test(value) && !value.includes("__");
+}
+
+function isVerifierKeySuffix(value) {
+  return /^[A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?$/.test(value) && !value.includes("__");
+}
+
+function isVerifierKeyId(value) {
+  const parts = value.split("::");
+  if (parts.length === 1) {
+    return isVerifierKeyName(parts[0]);
+  }
+  return parts.length === 2 && isVerifierKeyName(parts[0]) && isVerifierKeySuffix(parts[1]);
+}
+
+function validatePublicInputsSchema(value, index) {
+  const tokens = value.split(",");
+  const seen = new Set();
+  tokens.forEach((token, tokenIndex) => {
+    if (token === "") {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} must be a non-empty public input name`,
+      );
+    }
+    if (token !== token.trim()) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} must be clean and already trimmed`,
+      );
+    }
+    if (!isPublicInputSchemaToken(token)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} must be a lowercase public input name`,
+      );
+    }
+    if (publicInputSchemaTokenHasPayloadMetadata(token)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} must not include proof or witness payload metadata; proof and witness bytes are carried separately`,
+      );
+    }
+    if (catalogLabelClaimsProductionReadiness(token)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} must not claim production/mainnet/audit readiness before production gates pass`,
+      );
+    }
+    if (seen.has(token)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema token ${tokenIndex} duplicates ${token}`,
+      );
+    }
+    seen.add(token);
+  });
+}
+
+function isSafeHttpsSourceUrl(value) {
+  if (
+    value !== value.trim() ||
+    value.includes("\\") ||
+    /[^\u0021-\u007e]/.test(value) ||
+    !value.startsWith("https://") ||
+    /%(?![0-9a-fA-F]{2})/.test(value) ||
+    sourceReferenceUrlAuthority(value).includes("%")
+  ) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      !sourceReferenceHostnameUsesIdna(parsed.hostname) &&
+      parsed.username === "" &&
+      parsed.password === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sourceReferenceHostnameUsesIdna(hostname) {
+  return hostname
+    .toLowerCase()
+    .split(".")
+    .some((label) => label.startsWith("xn--"));
+}
+
+function isCanonicalSourceReferenceUrl(value) {
+  const parsed = new URL(value);
+  return parsed.href === value && parsed.port === "" && !parsed.hostname.endsWith(".");
+}
+
+function sourceReferenceUrlAuthority(value) {
+  const rest = value.slice("https://".length);
+  const end = rest.search(/[/?#]/);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+function isSafeSourceReferenceLabel(value) {
+  return (
+    value !== "" &&
+    value === value.trim() &&
+    value.length <= SOURCE_REFERENCE_LABEL_MAX_LENGTH &&
+    !/[^\u0020-\u007e]/.test(value)
+  );
+}
+
+const PRODUCTION_CLAIM_CONFUSABLES = Object.freeze(new Map([
+  ["\u0430", "a"],
+  ["\u0435", "e"],
+  ["\u0456", "i"],
+  ["\u043E", "o"],
+  ["\u0440", "p"],
+  ["\u0441", "c"],
+  ["\u0443", "y"],
+  ["\u03B1", "a"],
+  ["\u03B5", "e"],
+  ["\u03BF", "o"],
+  ["\u03C1", "p"],
+]));
+
+function foldProductionClaimText(value) {
+  return Array.from(value.normalize("NFKC").toLowerCase(), (char) =>
+    PRODUCTION_CLAIM_CONFUSABLES.get(char) ?? char
+  ).join("");
+}
+
+function compactProductionClaimText(value) {
+  return foldProductionClaimText(value).replace(/[^a-z0-9]/g, "");
+}
+
+function sourceReferenceLabelClaimsAudit(value) {
+  const folded = foldProductionClaimText(value);
+  const normalized = folded.replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const compact = compactProductionClaimText(value);
+  return (
+    compact.includes("audit") ||
+    compact.includes("signoff") ||
+    compact.includes("securityreview") ||
+    SOURCE_REFERENCE_AUDIT_CLAIM_COMPACT_FRAGMENTS.some((fragment) =>
+      compact.includes(fragment)
+    ) ||
+    SOURCE_REFERENCE_AUDIT_CLAIM_LABEL_PHRASES.some((phrase) =>
+      normalized.includes(phrase)
+    )
+  );
+}
+
+function sourceReferenceUrlClaimsAuditOrReadiness(value) {
+  const candidates = [];
+  const seen = new Set();
+  let current = value;
+  for (let depth = 0; depth < SOURCE_REFERENCE_URL_DECODE_MAX_DEPTH; depth += 1) {
+    if (!seen.has(current)) {
+      seen.add(current);
+      candidates.push(current);
+    }
+    if (!current.includes("%")) {
+      break;
+    }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(current);
+    } catch {
+      return true;
+    }
+    if (decoded === current) {
+      break;
+    }
+    current = decoded;
+  }
+  if (current.includes("%")) {
+    try {
+      if (decodeURIComponent(current) !== current) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return candidates.some(
+    (candidate) =>
+      sourceReferenceLabelClaimsAudit(candidate) ||
+      catalogLabelClaimsProductionReadiness(candidate) ||
+      catalogTextClaimsCompletedAuditOrSignoff(candidate),
+  );
+}
+
+function catalogTextClaimsCompletedAuditOrSignoff(value) {
+  const compact = compactProductionClaimText(value);
+  return SECURITY_NOTE_COMPLETED_AUDIT_CLAIM_COMPACT_FRAGMENTS.some((fragment) =>
+    compact.includes(fragment)
+  );
+}
+
+function displayTextClaimsProductionReadiness(value) {
+  const compact = compactProductionClaimText(value);
+  return DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS.some((fragment) =>
+    compact.includes(fragment)
+  );
+}
+
+function catalogLabelClaimsProductionReadiness(value) {
+  const compact = compactProductionClaimText(value);
+  return CATALOG_LABEL_PRODUCTION_CLAIM_COMPACT_FRAGMENTS.some((fragment) =>
+    compact.includes(fragment)
+  );
+}
+
+function isPlaceholderSourceReferenceUrl(value) {
+  const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    PLACEHOLDER_SOURCE_REFERENCE_HOSTS.has(hostname) ||
+    PLACEHOLDER_SOURCE_REFERENCE_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+  );
+}
+
+function isNonGlobalIpv4Address(hostname) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    return false;
+  }
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  return ipv4OctetsAreNonGlobal(parts);
+}
+
+function ipv4OctetsAreNonGlobal(parts) {
+  if (parts.some((part) => part < 0 || part > 255)) {
+    return true;
+  }
+  const [a, b, c] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 0 && c === 2) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113)
+  );
+}
+
+function parseIpv6Hextet(value) {
+  if (!/^[0-9a-f]{1,4}$/.test(value)) {
+    return null;
+  }
+  return Number.parseInt(value, 16);
+}
+
+function ipv4OctetsFromTwoIpv6Hextets(first, second) {
+  return [
+    (first >> 8) & 0xff,
+    first & 0xff,
+    (second >> 8) & 0xff,
+    second & 0xff,
+  ];
+}
+
+function ipv6EmbedsNonGlobalIpv4Address(normalized) {
+  if (normalized.startsWith("::ffff:")) {
+    const suffix = normalized.slice("::ffff:".length);
+    const mappedHextets = suffix.split(":");
+    if (mappedHextets.length !== 2) {
+      return false;
+    }
+    const first = parseIpv6Hextet(mappedHextets[0]);
+    const second = parseIpv6Hextet(mappedHextets[1]);
+    return (
+      first !== null &&
+      second !== null &&
+      ipv4OctetsAreNonGlobal(ipv4OctetsFromTwoIpv6Hextets(first, second))
+    );
+  }
+  if (normalized.startsWith("2002:")) {
+    const hextets = normalized.split(":");
+    const first = parseIpv6Hextet(hextets[1] ?? "");
+    const second = parseIpv6Hextet(hextets[2] ?? "");
+    return (
+      first !== null &&
+      second !== null &&
+      ipv4OctetsAreNonGlobal(ipv4OctetsFromTwoIpv6Hextets(first, second))
+    );
+  }
+  return false;
+}
+
+function expandIpv6AddressHextets(normalized) {
+  const address = normalized.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  const doubleColonParts = address.split("::");
+  if (doubleColonParts.length > 2) {
+    return null;
+  }
+  const parseHextets = (side) => {
+    if (side === "") {
+      return [];
+    }
+    const parsed = [];
+    for (const part of side.split(":")) {
+      const hextet = parseIpv6Hextet(part);
+      if (hextet === null) {
+        return null;
+      }
+      parsed.push(hextet);
+    }
+    return parsed;
+  };
+
+  if (doubleColonParts.length === 1) {
+    const hextets = parseHextets(address);
+    return hextets !== null && hextets.length === 8 ? hextets : null;
+  }
+
+  const left = parseHextets(doubleColonParts[0]);
+  const right = parseHextets(doubleColonParts[1]);
+  if (left === null || right === null) {
+    return null;
+  }
+  const zeroFill = 8 - left.length - right.length;
+  if (zeroFill < 1) {
+    return null;
+  }
+  return [...left, ...Array(zeroFill).fill(0), ...right];
+}
+
+function ipv6PrefixMatches(hextets, prefixHextets, prefixBits) {
+  let remainingBits = prefixBits;
+  for (let index = 0; index < prefixHextets.length && remainingBits > 0; index += 1) {
+    const bits = Math.min(16, remainingBits);
+    const mask = bits === 16 ? 0xffff : (0xffff << (16 - bits)) & 0xffff;
+    if ((hextets[index] & mask) !== (prefixHextets[index] & mask)) {
+      return false;
+    }
+    remainingBits -= bits;
+  }
+  return true;
+}
+
+function expandedIpv6AddressIsNonGlobal(hextets) {
+  if (hextets === null) {
+    return false;
+  }
+
+  const embeddedIpv4 = ipv4OctetsFromTwoIpv6Hextets(hextets[6], hextets[7]);
+  const firstSixZero = hextets.slice(0, 6).every((hextet) => hextet === 0);
+  const mappedIpv4 = hextets.slice(0, 5).every((hextet) => hextet === 0) && hextets[5] === 0xffff;
+  const nat64WellKnown =
+    hextets[0] === 0x0064 &&
+    hextets[1] === 0xff9b &&
+    hextets.slice(2, 6).every((hextet) => hextet === 0);
+  if (
+    (firstSixZero || mappedIpv4 || nat64WellKnown) &&
+    ipv4OctetsAreNonGlobal(embeddedIpv4)
+  ) {
+    return true;
+  }
+
+  if (
+    ipv6PrefixMatches(hextets, [0x0100, 0, 0, 0], 64) ||
+    ipv6PrefixMatches(hextets, [0x2001, 0x0000], 32) ||
+    ipv6PrefixMatches(hextets, [0x2001, 0x0010], 28) ||
+    ipv6PrefixMatches(hextets, [0x2001, 0x0020], 28) ||
+    ipv6PrefixMatches(hextets, [0x2001, 0x0002, 0], 48) ||
+    ipv6PrefixMatches(hextets, [0x2001, 0x0db8], 32)
+  ) {
+    return true;
+  }
+
+  if (
+    hextets[0] === 0x2002 &&
+    ipv4OctetsAreNonGlobal(ipv4OctetsFromTwoIpv6Hextets(hextets[1], hextets[2]))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isNonGlobalIpv6Address(hostname) {
+  const normalized = hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (!normalized.includes(":")) {
+    return false;
+  }
+  return (
+    normalized === "::" ||
+    normalized === "::1" ||
+    /^fe[89a-f]/.test(normalized) ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("ff") ||
+    normalized.startsWith("2001:db8:") ||
+    normalized.startsWith("2001:10:") ||
+    normalized.startsWith("2001:2:") ||
+    ipv6EmbedsNonGlobalIpv4Address(normalized) ||
+    expandedIpv6AddressIsNonGlobal(expandIpv6AddressHextets(normalized))
+  );
+}
+
+function isPrivateOrLocalSourceReferenceUrl(value) {
+  const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    LOCAL_SOURCE_REFERENCE_SUFFIXES.some((suffix) => hostname.endsWith(suffix)) ||
+    REBINDING_SOURCE_REFERENCE_HOSTS.has(hostname) ||
+    REBINDING_SOURCE_REFERENCE_SUFFIXES.some((suffix) => hostname.endsWith(suffix)) ||
+    isNonGlobalIpv4Address(hostname) ||
+    isNonGlobalIpv6Address(hostname)
+  );
+}
+
+function entrypointIsDevFixture(entrypoint) {
+  const normalized = entrypoint.replaceAll("-", "_").toLowerCase();
+  const compact = entrypoint.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (
+    normalized.includes("devfixture") ||
+    normalized.includes("dev_fixture") ||
+    normalized.includes("devprooffixture") ||
+    normalized.includes("dev_proof_fixture") ||
+    normalized.includes("fixture") ||
+    normalized.includes("mock") ||
+    compact.includes("devfixture") ||
+    compact.includes("devprooffixture") ||
+    compact.includes("fixture") ||
+    compact.includes("mock")
+  );
+}
+
+function entrypointIsExplicitDevFixture(entrypoint) {
+  const normalized = entrypoint.replaceAll("-", "_").toLowerCase();
+  const compact = entrypoint.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (
+    normalized.includes("devfixture") ||
+    normalized.includes("dev_fixture") ||
+    normalized.includes("devprooffixture") ||
+    normalized.includes("dev_proof_fixture") ||
+    compact.includes("devfixture") ||
+    compact.includes("devprooffixture")
+  );
+}
+
+function entrypointIsLocalVerifier(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  const lower = name.toLowerCase();
+  return (
+    lower.startsWith("verify") &&
+    (lower.endsWith("locally") ||
+      lower.endsWith("local") ||
+      lower.includes("localverifier") ||
+      lower.includes("localonly"))
+  );
+}
+
+function entrypointIsInstructionBuilder(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return name.endsWith("Instruction");
+}
+
+function entrypointIsPlannedLedgerMutation(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return (
+    name.endsWith("Instruction") ||
+    name.endsWith("Transaction") ||
+    name.includes("Submit")
+  );
+}
+
+function entrypointIsProofHelper(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return (
+    name.includes("ProofEnvelope") ||
+    name.includes("ProofWitness") ||
+    name.includes("ProofPublicInputs") ||
+    name.includes("ProofRequest") ||
+    name.includes("ProofCommitment")
+  );
+}
+
+function entrypointIsProductionProofBuilder(entrypoint) {
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
+  return (
+    name.startsWith("build") &&
+    name.includes("Proof") &&
+    !entrypointIsInstructionBuilder(entrypoint) &&
+    !entrypointIsPlannedLedgerMutation(entrypoint) &&
+    !entrypointIsProofHelper(entrypoint) &&
+    !entrypointIsDevFixture(entrypoint)
+  );
+}
+
+function hasDevFixtureNonProductionWarning(notes) {
+  return notes.some((note) => {
+    const normalized = note.toLowerCase();
+    return (
+      normalized.includes("dev fixture") &&
+      normalized.includes("production") &&
+      normalized.includes("unavailable")
+    );
+  });
+}
+
+function dedupeStrings(items) {
+  const deduped = [];
+  for (const item of items) {
+    if (!deduped.includes(item)) {
+      deduped.push(item);
+    }
+  }
+  return deduped;
+}
+
+function deepFreeze(value) {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value);
+}
+
+function productionGateForDescriptor(descriptor) {
+  const gates = Object.fromEntries(
+    PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
+  );
+  const missing = PRODUCTION_GATE_REQUIREMENTS.map(([_key, label]) => label);
+  if (descriptor.implementationStage !== "production-hardened") {
+    missing.push(PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE);
+  }
+  if ((descriptor.plannedSdkEntrypoints ?? []).length > 0) {
+    missing.push(PRODUCTION_GATE_MISSING_PLANNED_SDK);
+  }
+  if ((descriptor.sdkEntrypoints ?? []).some(entrypointIsDevFixture)) {
+    missing.push(PRODUCTION_GATE_MISSING_DEV_FIXTURE);
+  }
+  missing.push(PRODUCTION_GATE_MISSING_ALLOWLIST);
+  return {
+    version: PRODUCTION_GATE_VERSION,
+    ready: false,
+    gates,
+    missing: dedupeStrings(missing),
+    auditReferences: [],
+  };
+}
+
+function backendFamilyForDescriptor(descriptor) {
+  const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+  if (typeof backendFamily !== "string") {
+    throw new Error(
+      `privacy algorithm descriptor ${descriptor.id} is missing backend family metadata`,
+    );
+  }
+  if (!isBackendFamilyName(backendFamily)) {
+    throw new Error(
+      `privacy algorithm descriptor ${descriptor.id} backendFamily metadata must be non-empty and use request-portable verifier-key backend characters`,
+    );
+  }
+  if (catalogLabelClaimsProductionReadiness(backendFamily)) {
+    throw new Error(
+      `privacy algorithm descriptor ${descriptor.id} backendFamily metadata must not claim production/mainnet/audit readiness before production gates pass`,
+    );
+  }
+  return backendFamily;
+}
+
+function validateRequiredPrivacyPlanRows(descriptors) {
+  const descriptorById = new Map(
+    descriptors.map((descriptor) => [descriptor.id, descriptor]),
+  );
+  for (const [algorithmId, implementationStage, backendFamily] of REQUIRED_PRIVACY_PLAN_ROWS) {
+    const descriptor = descriptorById.get(algorithmId);
+    if (descriptor == null) {
+      throw new Error(
+        `privacy algorithm catalog missing required production privacy plan row ${algorithmId}`,
+      );
+    }
+    if (descriptor.implementationStage !== implementationStage) {
+      throw new Error(
+        `privacy algorithm catalog required production privacy plan row ${algorithmId} must keep implementationStage ${implementationStage} until the production inventory is deliberately updated`,
+      );
+    }
+    if (BACKEND_FAMILY_BY_ALGORITHM_ID[algorithmId] !== backendFamily) {
+      throw new Error(
+        `privacy algorithm catalog required production privacy plan row ${algorithmId} must keep backend family ${backendFamily} until the production inventory is deliberately updated`,
+      );
+    }
+    if (
+      !(descriptor.plannedSdkEntrypoints ?? []).some(
+        entrypointIsProductionProofBuilder,
+      )
+    ) {
+      throw new Error(
+        `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain a planned production proof builder until production gates pass`,
+      );
+    }
+  }
+}
+
+function validateResearchTargetSdkEntrypoints(descriptors) {
+  for (const descriptor of descriptors) {
+    if (descriptor.implementationStage !== RESEARCH_STAGE_MAY_2026) {
+      continue;
+    }
+    if ((descriptor.sdkEntrypoints ?? []).length > 0) {
+      throw new Error(
+        `privacy algorithm catalog research target ${descriptor.id} cannot advertise executable SDK entrypoints; keep them in plannedSdkEntrypoints until the production stage advances`,
+      );
+    }
+  }
+}
+
+export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
+  if (!isPlainObject(descriptor)) {
+    throw new Error(`privacy algorithm descriptor ${index} must be an object`);
+  }
+  for (const field of DERIVED_COMPATIBILITY_FIELDS) {
+    if (Object.hasOwn(descriptor, field)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} field ${field} is derived and must not be supplied`,
+      );
+    }
+  }
+  for (const field of Object.keys(descriptor)) {
+    if (!PRIVACY_DESCRIPTOR_FIELDS.has(field)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} field ${field} is not a supported privacy catalog field`,
+      );
+    }
+  }
+  for (const field of ["id", "name", "shortName", "summary", "category", "maturity", "proofFamily"]) {
+    assertCleanNonEmptyString(descriptor[field], `privacy algorithm descriptor ${index}.${field}`);
+  }
+  if (!isProofFamilyName(descriptor.proofFamily)) {
+    throw new Error(`privacy algorithm descriptor ${index}.proofFamily must be a proof family name`);
+  }
+  if (catalogLabelClaimsProductionReadiness(descriptor.proofFamily)) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.proofFamily must not claim production/mainnet/audit readiness before production gates pass`,
+    );
+  }
+  if (!/^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(descriptor.id)) {
+    throw new Error(`privacy algorithm descriptor ${index}.id must be lowercase and URL-safe`);
+  }
+  if (catalogLabelClaimsProductionReadiness(descriptor.id)) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.id must not claim production/mainnet/audit readiness before production gates pass`,
+    );
+  }
+  if (!ALLOWED_CATEGORIES.has(descriptor.category)) {
+    throw new Error(`privacy algorithm descriptor ${index}.category must be a known category`);
+  }
+  if (!ALLOWED_MATURITIES.has(descriptor.maturity)) {
+    throw new Error(`privacy algorithm descriptor ${index}.maturity must be a known maturity`);
+  }
+  if (
+    descriptor.implementationStage !== undefined &&
+    descriptor.implementationStage !== null &&
+    !isLowercaseHyphenatedIdentifier(descriptor.implementationStage)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.implementationStage must be a lowercase hyphenated identifier`,
+    );
+  }
+  if (
+    descriptor.implementationStage !== undefined &&
+    descriptor.implementationStage !== null &&
+    !ALLOWED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.implementationStage must be a known implementation stage`,
+    );
+  }
+
+  const criteria = assertStringList(
+    descriptor.coveredCriteria,
+    `privacy algorithm descriptor ${index}.coveredCriteria`,
+    { required: true },
+  );
+  const seenCriteria = new Set();
+  criteria.forEach((criterion, criterionIndex) => {
+    if (!PRIVACY_CRITERIA_SET.has(criterion)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.coveredCriteria[${criterionIndex}] must be a known privacy criterion`,
+      );
+    }
+    if (seenCriteria.has(criterion)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.coveredCriteria[${criterionIndex}] duplicates ${criterion}`,
+      );
+    }
+    seenCriteria.add(criterion);
+  });
+
+  if (
+    descriptor.publicInputsSchema !== null &&
+    descriptor.publicInputsSchema !== undefined &&
+    (typeof descriptor.publicInputsSchema !== "string" ||
+      descriptor.publicInputsSchema.trim() === "")
+  ) {
+    throw new Error(`privacy algorithm descriptor ${index}.publicInputsSchema must be a non-empty string or null`);
+  }
+  if (
+    typeof descriptor.publicInputsSchema === "string" &&
+    !isCleanCatalogString(descriptor.publicInputsSchema)
+  ) {
+    throw new Error(`privacy algorithm descriptor ${index}.publicInputsSchema must be clean and already trimmed`);
+  }
+  if (typeof descriptor.publicInputsSchema === "string") {
+    validatePublicInputsSchema(descriptor.publicInputsSchema, index);
+  }
+  if (
+    descriptor.verifierKeyId !== null &&
+    descriptor.verifierKeyId !== undefined &&
+    (typeof descriptor.verifierKeyId !== "string" || descriptor.verifierKeyId.trim() === "")
+  ) {
+    throw new Error(`privacy algorithm descriptor ${index}.verifierKeyId must be a non-empty string or null`);
+  }
+  if (
+    typeof descriptor.verifierKeyId === "string" &&
+    !isCleanCatalogString(descriptor.verifierKeyId)
+  ) {
+    throw new Error(`privacy algorithm descriptor ${index}.verifierKeyId must be clean and already trimmed`);
+  }
+  if ((descriptor.publicInputsSchema == null) !== (descriptor.verifierKeyId == null)) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.publicInputsSchema and verifierKeyId must be supplied together`,
+    );
+  }
+  if (typeof descriptor.verifierKeyId === "string" && !isVerifierKeyId(descriptor.verifierKeyId)) {
+    throw new Error(`privacy algorithm descriptor ${index}.verifierKeyId must be a verifier key id`);
+  }
+  if (
+    typeof descriptor.verifierKeyId === "string" &&
+    catalogLabelClaimsProductionReadiness(descriptor.verifierKeyId)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.verifierKeyId must not claim production/mainnet/audit readiness before production gates pass`,
+    );
+  }
+  if (!isPlainObject(descriptor.pqLayers)) {
+    throw new Error(`privacy algorithm descriptor ${index}.pqLayers must be an object`);
+  }
+  for (const field of Object.keys(descriptor.pqLayers)) {
+    if (!PQ_LAYER_FIELDS.has(field)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.pqLayers field ${field} is not supported`,
+      );
+    }
+  }
+  for (const key of ["proof", "authorization", "noteEncryption"]) {
+    if (typeof descriptor.pqLayers[key] !== "boolean") {
+      throw new Error(`privacy algorithm descriptor ${index}.pqLayers.${key} must be a boolean`);
+    }
+  }
+  const allPqLayers = ["proof", "authorization", "noteEncryption"].every(
+    (key) => descriptor.pqLayers[key] === true,
+  );
+  if (
+    criteria.includes("post_quantum") &&
+    !allPqLayers
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.coveredCriteria post_quantum requires all pqLayers to be true`,
+    );
+  }
+  if (allPqLayers && !criteria.includes("post_quantum")) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.pqLayers with all layers true requires coveredCriteria post_quantum`,
+    );
+  }
+
+  const sdkEntrypoints = assertStringList(
+    descriptor.sdkEntrypoints,
+    `privacy algorithm descriptor ${index}.sdkEntrypoints`,
+    { required: true },
+  );
+  const plannedSdkEntrypoints = assertStringList(
+    descriptor.plannedSdkEntrypoints,
+    `privacy algorithm descriptor ${index}.plannedSdkEntrypoints`,
+  );
+  assertStringList(
+    descriptor.chainRequirements,
+    `privacy algorithm descriptor ${index}.chainRequirements`,
+    { required: true },
+  );
+  for (const listName of [
+    "recommendedFor",
+    "securityNotes",
+    "requiredState",
+    "failureModes",
+    "setupSteps",
+    "executionSteps",
+  ]) {
+    assertStringList(descriptor[listName], `privacy algorithm descriptor ${index}.${listName}`);
+  }
+  (descriptor.securityNotes ?? []).forEach((note, noteIndex) => {
+    if (catalogTextClaimsCompletedAuditOrSignoff(note)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.securityNotes[${noteIndex}] must describe missing audit/review gates, not completed audit or signoff claims`,
+      );
+    }
+  });
+  (descriptor.failureModes ?? []).forEach((failureMode, failureModeIndex) => {
+    if (catalogTextClaimsCompletedAuditOrSignoff(failureMode)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.failureModes[${failureModeIndex}] must describe concrete failure modes, not completed audit or signoff claims`,
+      );
+    }
+  });
+  for (const [fieldName, values] of [
+    ["name", [descriptor.name]],
+    ["shortName", [descriptor.shortName]],
+    ["summary", [descriptor.summary]],
+    ["recommendedFor", descriptor.recommendedFor ?? []],
+  ]) {
+    values.forEach((value, valueIndex) => {
+      if (displayTextClaimsProductionReadiness(value)) {
+        const suffix = fieldName === "recommendedFor" ? `[${valueIndex}]` : "";
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${fieldName}${suffix} must not claim production/mainnet/audit readiness before production gates pass`,
+        );
+      }
+    });
+  }
+  for (const fieldName of ["chainRequirements", "requiredState", "setupSteps", "executionSteps"]) {
+    (descriptor[fieldName] ?? []).forEach((value, valueIndex) => {
+      if (displayTextClaimsProductionReadiness(value)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${fieldName}[${valueIndex}] must not claim production/mainnet/audit readiness before production gates pass`,
+        );
+      }
+    });
+  }
+  for (const entrypoint of plannedSdkEntrypoints) {
+    if (entrypointIsDevFixture(entrypoint)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints entry ${entrypoint} is a fixture/mock entrypoint, not a production entrypoint`,
+      );
+    }
+    if (entrypointIsLocalVerifier(entrypoint)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints entry ${entrypoint} is a local-only verifier entrypoint, not a production entrypoint`,
+      );
+    }
+  }
+  for (const [listName, values] of [
+    ["sdkEntrypoints", sdkEntrypoints],
+    ["plannedSdkEntrypoints", plannedSdkEntrypoints],
+  ]) {
+    const seen = new Set();
+    values.forEach((entrypoint, entrypointIndex) => {
+      if (!isSdkEntrypointName(entrypoint)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${listName}[${entrypointIndex}] must be an SDK entrypoint name`,
+        );
+      }
+      if (catalogLabelClaimsProductionReadiness(entrypoint)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${listName}[${entrypointIndex}] must not claim production/mainnet/audit readiness before production gates pass`,
+        );
+      }
+      if (seen.has(entrypoint)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${listName}[${entrypointIndex}] duplicates ${entrypoint}`,
+        );
+      }
+      seen.add(entrypoint);
+    });
+  }
+  for (const entrypoint of plannedSdkEntrypoints) {
+    if (sdkEntrypoints.includes(entrypoint)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints entry ${entrypoint} is already executable`,
+      );
+    }
+  }
+  if (descriptor.implementationStage === "component") {
+    for (const [listName, values] of [
+      ["sdkEntrypoints", sdkEntrypoints],
+      ["plannedSdkEntrypoints", plannedSdkEntrypoints],
+    ]) {
+      for (const entrypoint of values) {
+        if (entrypointIsInstructionBuilder(entrypoint)) {
+          throw new Error(
+            `privacy algorithm descriptor ${index} component targets cannot advertise instruction SDK entrypoint ${entrypoint} in ${listName}`,
+          );
+        }
+      }
+    }
+  }
+  if (
+    descriptor.implementationStage === RESEARCH_STAGE_MAY_2026 &&
+    sdkEntrypoints.some(entrypointIsDevFixture)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} research targets cannot advertise fixture/mock SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === RESEARCH_STAGE_MAY_2026 &&
+    sdkEntrypoints.some(entrypointIsLocalVerifier)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} research targets cannot advertise local-only verifier SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === RESEARCH_STAGE_MAY_2026 &&
+    sdkEntrypoints.length > 0
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} research targets cannot advertise executable SDK entrypoints; keep them in plannedSdkEntrypoints until the production stage advances`,
+    );
+  }
+  if (
+    descriptor.implementationStage === "chain-executable" &&
+    sdkEntrypoints.some(entrypointIsDevFixture)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} chain-executable targets cannot advertise fixture/mock SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === "chain-executable" &&
+    sdkEntrypoints.some(entrypointIsLocalVerifier)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} chain-executable targets cannot advertise local-only verifier SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === "production-hardened" &&
+    sdkEntrypoints.some(entrypointIsDevFixture)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} production-hardened targets cannot advertise fixture/mock SDK entrypoints`,
+    );
+  }
+  if (
+    descriptor.implementationStage === "production-hardened" &&
+    sdkEntrypoints.some(entrypointIsLocalVerifier)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} production-hardened targets cannot advertise local-only verifier SDK entrypoints`,
+    );
+  }
+  sdkEntrypoints.forEach((entrypoint, entrypointIndex) => {
+    if (
+      entrypointIsDevFixture(entrypoint) &&
+      !entrypointIsExplicitDevFixture(entrypoint)
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.sdkEntrypoints[${entrypointIndex}] fixture/mock SDK entrypoints must use explicit DevFixture names`,
+      );
+    }
+  });
+  if (
+    sdkEntrypoints.some(entrypointIsLocalVerifier) &&
+    !sdkEntrypoints.some(entrypointIsExplicitDevFixture)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} executable local-only verifier SDK entrypoints must be paired with an explicit DevFixture entrypoint`,
+    );
+  }
+  if (
+    sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    !sdkEntrypoints.some(entrypointIsLocalVerifier)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must be paired with a local verifier entrypoint`,
+    );
+  }
+  if (
+    sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    !hasDevFixtureNonProductionWarning(descriptor.securityNotes ?? [])
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production and unavailable for production use`,
+    );
+  }
+  if (
+    sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    plannedSdkEntrypoints.length === 0
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain planned production SDK entrypoints until production gates pass`,
+    );
+  }
+  if (
+    sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    !plannedSdkEntrypoints.some(entrypointIsProductionProofBuilder)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass`,
+    );
+  }
+  if (descriptor.implementationStage === CATALOG_STAGE_MAY_2026 && sdkEntrypoints.length > 0) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} catalog-only targets cannot advertise SDK entrypoints`,
+    );
+  }
+  if (descriptor.implementationStage === "production-hardened" && plannedSdkEntrypoints.length > 0) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} production-hardened targets cannot retain planned SDK entrypoints`,
+    );
+  }
+  const plannedLedgerMutations = plannedSdkEntrypoints.filter(entrypointIsPlannedLedgerMutation);
+  if (plannedLedgerMutations.length > 0) {
+    const protectionValues = [
+      ...(descriptor.requiredState ?? []),
+      ...(descriptor.failureModes ?? []),
+      ...(descriptor.chainRequirements ?? []),
+    ].map((value) => value.toLowerCase());
+    const hasProtectionMetadata = LEDGER_MUTATION_PROTECTION_METADATA_TOKENS.some((token) =>
+      protectionValues.some((value) => value.includes(token)),
+    );
+    if (!hasProtectionMetadata) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints ledger-mutating entries require replay, nullifier, revocation, or link-tag protection metadata; missing protection metadata for ${plannedLedgerMutations.join(", ")}`,
+      );
+    }
+    const typedAdmissionText = TYPED_CHAIN_ADMISSION_METADATA_FIELDS.flatMap(
+      (field) => descriptor[field] ?? [],
+    ).join(" ").toLowerCase();
+    const hasTypedAdmissionMetadata =
+      TYPED_CHAIN_ADMISSION_TYPE_TOKENS.some((token) => typedAdmissionText.includes(token)) &&
+      TYPED_CHAIN_ADMISSION_MUTATION_TOKENS.some((token) => typedAdmissionText.includes(token));
+    if (!hasTypedAdmissionMetadata) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints ledger-mutating entries require explicit typed chain admission metadata; missing typed admission metadata for ${plannedLedgerMutations.join(", ")}`,
+      );
+    }
+    const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
+    const hasStatefulLedgerState = STATEFUL_LEDGER_STATE_TOKENS.some((token) =>
+      requiredStateText.includes(token),
+    );
+    if (hasStatefulLedgerState) {
+      const persistenceText = STATEFUL_LEDGER_PERSISTENCE_METADATA_FIELDS.flatMap(
+        (field) => descriptor[field] ?? [],
+      ).join(" ").toLowerCase();
+      const missingPersistenceGroups = STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS.filter(
+        (tokens) => !tokens.some((token) => persistenceText.includes(token)),
+      );
+      if (missingPersistenceGroups.length > 0) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.plannedSdkEntrypoints ledger-mutating entries require restart/persistence metadata for root, nullifier, revocation, or replay state; missing persistence metadata for ${plannedLedgerMutations.join(", ")}`,
+        );
+      }
+    }
+  }
+
+  if (descriptor.sourceReferences !== undefined) {
+    if (!Array.isArray(descriptor.sourceReferences)) {
+      throw new Error(`privacy algorithm descriptor ${index}.sourceReferences must be an array`);
+    }
+    const seenSourceReferenceLabels = new Set();
+    const seenSourceReferenceUrls = new Set();
+    descriptor.sourceReferences.forEach((reference, referenceIndex) => {
+      if (!isPlainObject(reference)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] must be an object`,
+        );
+      }
+      for (const field of Object.keys(reference)) {
+        if (!SOURCE_REFERENCE_FIELDS.has(field)) {
+          throw new Error(
+            `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] field ${field} is not supported`,
+          );
+        }
+      }
+      assertNonEmptyString(
+        reference.label,
+        `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].label`,
+      );
+      assertNonEmptyString(
+        reference.url,
+        `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url`,
+      );
+      if (!isSafeSourceReferenceLabel(reference.label)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].label must be clean and bounded`,
+        );
+      }
+      if (sourceReferenceLabelClaimsAudit(reference.label)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].label must describe protocol source material, not audit/signoff evidence`,
+        );
+      }
+      if (catalogLabelClaimsProductionReadiness(reference.label)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].label must not claim production/mainnet/audit readiness before production gates pass`,
+        );
+      }
+      if (!isSafeHttpsSourceUrl(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must use https`,
+        );
+      }
+      if (
+        isPlaceholderSourceReferenceUrl(reference.url) ||
+        isPrivateOrLocalSourceReferenceUrl(reference.url)
+      ) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must not be a placeholder, local, or private-network URL`,
+        );
+      }
+      if (!isCanonicalSourceReferenceUrl(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must be canonical`,
+        );
+      }
+      if (sourceReferenceUrlClaimsAuditOrReadiness(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must describe protocol source material, not audit/signoff or readiness evidence`,
+        );
+      }
+      if (seenSourceReferenceLabels.has(reference.label)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] duplicates label ${reference.label}`,
+        );
+      }
+      if (seenSourceReferenceUrls.has(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] duplicates url ${reference.url}`,
+        );
+      }
+      seenSourceReferenceLabels.add(reference.label);
+      seenSourceReferenceUrls.add(reference.url);
+    });
+  }
+  if (descriptor.coveredCriteria.includes("post_quantum")) {
+    const sourceReferenceUrls = new Set(
+      (descriptor.sourceReferences ?? []).map((reference) => reference.url),
+    );
+    const missingSourceUrls = POST_QUANTUM_REQUIRED_SOURCE_URLS.filter(
+      (url) => !sourceReferenceUrls.has(url),
+    );
+    if (missingSourceUrls.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.sourceReferences must include NIST FIPS 203, FIPS 204, and FIPS 205 URLs for post_quantum coverage; missing ${missingSourceUrls.join(", ")}`,
+      );
+    }
+    const plannedEntrypointNames = plannedSdkEntrypoints.map((entrypoint) => {
+      const segments = entrypoint.split(".");
+      return segments[segments.length - 1];
+    });
+    const missingPlannedEntrypointFragments =
+      POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS.filter(
+        (fragment) => !plannedEntrypointNames.some((name) => name.includes(fragment)),
+      );
+    if (missingPlannedEntrypointFragments.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must include planned ML-DSA authorization and ML-KEM note-encryption SDK entrypoints for post_quantum coverage; missing ${missingPlannedEntrypointFragments.join(", ")}`,
+      );
+    }
+    for (const [fieldName, values, requiredTokens, label] of [
+      [
+        "securityNotes",
+        descriptor.securityNotes ?? [],
+        POST_QUANTUM_REQUIRED_SECURITY_NOTE_TOKENS,
+        "post-quantum primitive risk notes",
+      ],
+      [
+        "failureModes",
+        descriptor.failureModes ?? [],
+        POST_QUANTUM_REQUIRED_FAILURE_MODE_TOKENS,
+        "post-quantum primitive failure modes",
+      ],
+      [
+        "requiredState",
+        descriptor.requiredState ?? [],
+        POST_QUANTUM_REQUIRED_STATE_TOKENS,
+        "post-quantum note-encryption state",
+      ],
+    ]) {
+      const missingTokens = requiredTokens.filter(
+        (token) => !values.some((value) => value.includes(token)),
+      );
+      if (missingTokens.length > 0) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${fieldName} must include ${label} for post_quantum coverage; missing ${missingTokens.join(", ")}`,
+        );
+      }
+    }
+  }
+  const requiredResearchSourceUrls = RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID[descriptor.id];
+  if (
+    descriptor.implementationStage === RESEARCH_STAGE_MAY_2026 &&
+    requiredResearchSourceUrls !== undefined
+  ) {
+    const sourceReferenceUrls = new Set(
+      (descriptor.sourceReferences ?? []).map((reference) => reference.url),
+    );
+    const missingResearchSourceUrls = requiredResearchSourceUrls.filter(
+      (url) => !sourceReferenceUrls.has(url),
+    );
+    if (missingResearchSourceUrls.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.sourceReferences must include exact research target source URLs; missing ${missingResearchSourceUrls.join(", ")}`,
+      );
+    }
+  }
+  if (
+    SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+    (descriptor.sourceReferences ?? []).length === 0
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index}.sourceReferences is required for source-referenced implementation stages`,
+    );
+  }
+  if (SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage)) {
+    descriptor.sourceReferences.forEach((reference, referenceIndex) => {
+      if (isPlaceholderSourceReferenceUrl(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] must not use placeholder or test URLs for source-referenced implementation stages`,
+        );
+      }
+      if (isPrivateOrLocalSourceReferenceUrl(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}] must not use private, local, or non-global URLs for source-referenced implementation stages`,
+        );
+      }
+    });
+    for (const field of SOURCE_REFERENCED_REQUIRED_LIST_FIELDS) {
+      if ((descriptor[field] ?? []).length === 0) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${field} must be non-empty for source-referenced implementation stages`,
+        );
+      }
+    }
+    for (const field of SOURCE_REFERENCED_REQUIRED_VERIFIER_FIELDS) {
+      if (descriptor[field] == null || descriptor[field] === "") {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.${field} must be non-empty for source-referenced implementation stages`,
+        );
+      }
+    }
+    if (SOURCE_REFERENCED_FORBIDDEN_PROOF_FAMILIES.has(descriptor.proofFamily)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.proofFamily must be a concrete proof family for source-referenced implementation stages`,
+      );
+    }
+    const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+    if (
+      backendFamily == null ||
+      SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES.has(backendFamily)
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} must have a registered non-none backend family for source-referenced implementation stages`,
+      );
+    }
+    if (
+      PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+      (descriptor.plannedSdkEntrypoints ?? []).length === 0
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages`,
+      );
+    }
+    if (
+      !SOURCE_REFERENCED_SDK_ENTRYPOINT_FIELDS.some(
+        (field) => (descriptor[field] ?? []).length > 0,
+      )
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} source-referenced implementation stages must expose at least one executable or planned SDK entrypoint`,
+      );
+    }
+  }
+  if (
+    WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+    !WALLET_STATE_REQUIRED_EXCLUDED_CATEGORIES.has(descriptor.category)
+  ) {
+    const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
+    if (!WALLET_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token))) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.requiredState must include wallet or witness state metadata for source-referenced privacy flows`,
+      );
+    }
+    const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
+    const missingWitnessPrivacyGroups = WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS.filter(
+      (tokens) => !tokens.some((token) => securityNotesText.includes(token)),
+    );
+    if (missingWitnessPrivacyGroups.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.securityNotes must include wallet/witness privacy notes for source-referenced privacy flows`,
+      );
+    }
+  }
+  if (
+    SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+    CREDENTIAL_STATE_REQUIRED_CATEGORIES.has(descriptor.category)
+  ) {
+    const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
+    if (!CREDENTIAL_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token))) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.requiredState must include credential, identity, or admission commitment/accumulator state metadata`,
+      );
+    }
+  }
+  if (
+    SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+    descriptor.verifierKeyId !== undefined &&
+    descriptor.verifierKeyId !== null
+  ) {
+    const failureModesText = (descriptor.failureModes ?? []).join(" ").toLowerCase();
+    const missingNegativeFailureModeGroups = VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS.filter(
+      (tokens) => !tokens.some((token) => failureModesText.includes(token)),
+    );
+    if (missingNegativeFailureModeGroups.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.failureModes must include malformed-proof, wrong-verifier-key, and wrong-public-input rejection for source-referenced verifier entries`,
+      );
+    }
+    const verifierKeyRecordText = VERIFIER_KEY_RECORD_METADATA_FIELDS.flatMap(
+      (field) => descriptor[field] ?? [],
+    ).join(" ").toLowerCase();
+    if (
+      !VERIFIER_KEY_RECORD_METADATA_TOKENS.some((token) =>
+        verifierKeyRecordText.includes(token),
+      )
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} must include verifier-key record metadata for source-referenced verifier entries`,
+      );
+    }
+  }
+  if (
+    SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
+    descriptor.verifierKeyId !== undefined &&
+    descriptor.verifierKeyId !== null
+  ) {
+    const chainDomainBindingText = CHAIN_DOMAIN_BINDING_METADATA_FIELDS.flatMap((field) => {
+      const value = descriptor[field];
+      return Array.isArray(value) ? value : [value];
+    }).join(" ").toLowerCase();
+    if (
+      !CHAIN_DOMAIN_BINDING_METADATA_TOKENS.some((token) =>
+        chainDomainBindingText.includes(token),
+      )
+    ) {
+      throw new Error(
+        `privacy algorithm descriptor ${index} must include chain/domain binding metadata for source-referenced verifier entries`,
+      );
+    }
+  }
+  if (SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage)) {
+    const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
+    const missingHardeningGroups = SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS.filter(
+      (tokens) => !tokens.some((token) => securityNotesText.includes(token)),
+    );
+    if (missingHardeningGroups.length > 0) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.securityNotes must include audit/review, fuzzing, and performance hardening gates for source-referenced entries`,
+      );
+    }
+  }
+  if (descriptor.implementationStage === RESEARCH_STAGE_MAY_2026) {
+    const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
+    const hasReadinessMarker = RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS.every((token) =>
+      securityNotesText.includes(token),
+    );
+    const hasEvidenceMarker = RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS.some((token) =>
+      securityNotesText.includes(token),
+    );
+    if (!hasReadinessMarker || !hasEvidenceMarker) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.securityNotes must include production readiness audit or review gating for research targets`,
+      );
+    }
+  }
+  return cloneDescriptor(descriptor);
+}
+
+function validatePrivacyAlgorithmCatalog(descriptors) {
+  if (!Array.isArray(descriptors)) {
+    throw new Error("privacy algorithm catalog must be an array");
+  }
+  const ids = new Set();
+  const verifierKeyIds = new Set();
+  const entries = descriptors.map((descriptor, index) => {
+    validatePrivacyAlgorithmDescriptor(descriptor, index);
+    if (ids.has(descriptor.id)) {
+      throw new Error(`privacy algorithm catalog contains duplicate id ${descriptor.id}`);
+    }
+    ids.add(descriptor.id);
+    if (descriptor.verifierKeyId != null) {
+      if (verifierKeyIds.has(descriptor.verifierKeyId)) {
+        throw new Error(
+          `privacy algorithm catalog contains duplicate verifierKeyId ${descriptor.verifierKeyId}`,
+        );
+      }
+      verifierKeyIds.add(descriptor.verifierKeyId);
+    }
+    return descriptor;
+  });
+  const backendIds = Object.keys(BACKEND_FAMILY_BY_ALGORITHM_ID);
+  const catalogIds = entries.map((descriptor) => descriptor.id);
+  if (
+    backendIds.length !== catalogIds.length ||
+    backendIds.some((id, index) => id !== catalogIds[index])
+  ) {
+    throw new Error("privacy algorithm backend-family registration must exactly match catalog ids");
+  }
+  validateRequiredPrivacyPlanRows(entries);
+  validateResearchTargetSdkEntrypoints(entries);
+  return entries;
+}
+
+const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
   Object.freeze({
     id: "transparent-transfer",
     name: "Transparent asset transfer",
     shortName: "Transparent",
     summary: "Public Iroha asset transfer used as the size and latency baseline.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze([]),
     proofFamily: "none",
     publicInputsSchema: null,
@@ -39,6 +2001,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Shield",
     summary:
       "Debits public balance and appends an encrypted receiver note commitment.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_receiver"]),
     proofFamily: "commitment-only",
     publicInputsSchema: "asset,from,amount,note_commitment",
@@ -57,6 +2021,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Confidential v2",
     summary:
       "Halo2/Pasta note-to-note transfer that hides amount, sender note, and receiver note while publishing the asset id.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
     proofFamily: "halo2-ipa-pasta",
     publicInputsSchema:
@@ -79,6 +2045,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Unshield",
     summary:
       "Spends a private note into a public receiver balance; the private source note remains hidden.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_sender"]),
     proofFamily: "halo2-ipa-pasta",
     publicInputsSchema:
@@ -101,6 +2069,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "MASP v1",
     summary:
       "Target multi-asset shielded-pool transfer that hides amount, sender note, receiver note, and exact asset inside a pool.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze([
       "hide_amount",
       "hide_sender",
@@ -162,6 +2132,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Replay nullifiers must be chain-domain separated and irreversible after acceptance.",
       "A dev verifier must never be accepted under a production verifier key id.",
       "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "active identity commitment registry",
@@ -175,6 +2148,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "replayed nullifier",
       "revoked identity commitment",
       "policy hash mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register a ZK-ACE identity commitment, source-account allowlist, and verifier key.",
@@ -194,6 +2170,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "buildZkAceAuthorizationProofV1",
     ]),
     plannedSdkEntrypoints: Object.freeze([
+      "buildShieldedZkAceAuthorizationProofV1",
       "buildShieldedZkAceAuthorizedTransferInstruction",
     ]),
     chainRequirements: Object.freeze([
@@ -236,6 +2213,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Amount privacy depends on the range-proof component and commitment binding.",
       "Receiver ciphertext commitments must bind to the same transaction digest as the proof.",
       "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "anonymous account commitment set",
@@ -250,6 +2229,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "receiver-set substitution",
       "range commitment mismatch",
       "authorization envelope mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register anonymous account commitments and anonymity-set accumulator state.",
@@ -276,6 +2258,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "spent link-tag set",
       "Anonymous PGC verifier",
       "range-proof component verifier",
+      "typed zk::RegisterAnonymousPgcAccountCommitment instruction",
+      "typed zk::SubmitAnonymousPgcTransfer instruction",
     ]),
   }),
   Object.freeze({
@@ -309,9 +2293,11 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Range parameters must be bound to the transaction payload and verifier key.",
       "Aggregated proof limits must be enforced by validators.",
       "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "range-proof verifier parameters",
+      "VeRange verifier key registry",
       "range commitment domain separators",
       "maximum aggregation policy",
     ]),
@@ -320,6 +2306,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "commitment substitution",
       "verifier-parameter mismatch",
       "oversized aggregation",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register VeRange verifier parameters and allowed bit lengths.",
@@ -373,20 +2362,29 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     ]),
     securityNotes: Object.freeze([
       "Hides authorization policy, not payment fields.",
-      "Policy commitments require explicit epoch and rotation semantics.",
+      "Policy commitments require explicit epoch, replay, and rotation semantics.",
       "Combining with ZK-ACE requires both proofs to bind the same transaction digest.",
       "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "policy commitment registry",
       "policy epoch state",
+      "authorization replay guard",
       "authorization verifier registry",
+      "wallet policy witness store",
     ]),
     failureModes: Object.freeze([
       "policy-root substitution",
       "stale policy epoch",
       "unauthorized signer witness",
       "transaction digest mismatch",
+      "authorization replay",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register a hidden policy commitment and verifier key.",
@@ -411,6 +2409,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "zkAt policy commitment registry",
       "zkAt verifier",
       "account policy epoch state",
+      "account policy replay protection",
+      "typed zk::RegisterZkAtPolicyCommitment instruction",
+      "typed zk::SubmitZkAtAuthorizedTransaction admission",
     ]),
   }),
   Object.freeze({
@@ -424,7 +2425,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     coveredCriteria: Object.freeze([]),
     proofFamily: "recursive-anonymous-admission",
     publicInputsSchema:
-      "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest,domain_separator",
+      "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
     verifierKeyId: "zk_ams_recursive_admission_v0",
     pqLayers: PQ_LAYER_NONE,
     implementationStage: "sdk-builder",
@@ -444,18 +2445,26 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Duplicate admission prevention depends on issuer-scoped nullifiers.",
       "Recursive batching must bind every admitted account commitment.",
       "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "issuer root registry",
       "admission nullifier set",
       "anonymous account commitment registry",
       "recursive verifier parameters",
+      "recursive admission verifier key registry",
+      "wallet admission witness store",
     ]),
     failureModes: Object.freeze([
       "duplicate credential admission",
       "wrong issuer root",
       "batch omission or account commitment substitution",
       "recursive proof parameter mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register credential issuer roots and recursive verifier parameters.",
@@ -480,6 +2489,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "issuer root registry",
       "admission nullifier set",
       "recursive admission verifier",
+      "typed ZK-AMS admission batch instruction",
     ]),
   }),
   Object.freeze({
@@ -513,18 +2523,27 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Proofs must bind to wallet or identity commitments to prevent credential replay.",
       "Issuer trust and revocation semantics remain external policy inputs.",
       "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "credential issuer registry",
       "supported credential schema registry",
       "predicate registry",
       "revocation or expiration policy",
+      "wallet credential predicate witness store",
+      "credential predicate commitment registry",
+      "credential predicate verifier key registry",
     ]),
     failureModes: Object.freeze([
       "expired credential",
       "wrong issuer",
       "predicate mismatch",
       "wallet-binding replay",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register supported credential schemas, issuers, and predicates.",
@@ -549,6 +2568,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "credential schema registry",
       "issuer registry",
       "credential predicate verifier",
+      "typed Vega credential proof instruction",
     ]),
   }),
   Object.freeze({
@@ -582,18 +2602,27 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Issuer-set commitments need rotation and downgrade protections.",
       "This is a credential layer, not a private payment protocol.",
       "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "threshold issuer registry",
       "credential parameter registry",
       "verifier policy registry",
       "credential showing nullifier policy",
+      "wallet credential showing witness store",
+      "credential showing commitment registry",
+      "anonymous credential verifier key registry",
     ]),
     failureModes: Object.freeze([
       "insufficient issuer threshold",
       "issuer-set substitution",
       "credential showing replay",
       "verifier-policy mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register issuer sets, threshold policies, and credential parameters.",
@@ -617,6 +2646,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "threshold issuer registry",
       "anonymous credential verifier",
       "credential showing replay policy",
+      "typed silent-threshold credential proof instruction",
     ]),
   }),
   Object.freeze({
@@ -650,12 +2680,18 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Revocation root freshness must be explicit in the public inputs.",
       "Address binding must prevent proof replay across wallets and chains.",
       "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "trusted CA root registry",
       "certificate policy registry",
       "revocation root registry",
       "identity proof verifier",
+      "wallet certificate witness store",
+      "certificate subject commitment registry",
+      "ZK-X.509 verifier key registry",
     ]),
     failureModes: Object.freeze([
       "expired certificate",
@@ -663,6 +2699,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "unknown CA root",
       "wrong wallet address binding",
       "stale revocation root",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Register trusted CA roots, certificate policies, and revocation-root feeds.",
@@ -686,6 +2725,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "trusted CA root registry",
       "revocation root registry",
       "ZK-X.509 verifier",
+      "typed ZK-X.509 identity proof instruction",
     ]),
   }),
   Object.freeze({
@@ -723,10 +2763,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "PQ proof coverage alone does not imply PQ authorization or note encryption.",
       "Parameter selection and implementation security require independent review.",
       "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "lattice PCS parameter registry",
       "backend verifier implementation",
+      "lattice PCS verifier key registry",
       "benchmark fixtures",
     ]),
     failureModes: Object.freeze([
@@ -734,6 +2776,9 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "opening claim substitution",
       "unsupported query set",
       "backend misclassified as production-ready",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Track lattice PCS parameter sets and verifier API shape.",
@@ -793,17 +2838,26 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.",
       "Parameter choices and reduction assumptions need explicit governance.",
       "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
     requiredState: Object.freeze([
       "lattice credential parameter registry",
       "issuer parameter registry",
       "credential showing verifier",
+      "wallet lattice credential witness store",
+      "lattice credential commitment registry",
+      "lattice credential verifier key registry",
     ]),
     failureModes: Object.freeze([
       "wrong parameter set",
       "issuer parameter substitution",
       "credential showing replay",
       "overclaiming production readiness from assumption research",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Track supported SIS-with-hints parameter sets and issuer parameters.",
@@ -826,6 +2880,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "lattice anonymous credential verifier",
       "credential parameter registry",
       "issuer parameter registry",
+      "typed SIS-with-hints credential proof instruction",
     ]),
   }),
   Object.freeze({
@@ -834,10 +2889,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Orchard Halo2",
     summary:
       "Zcash Orchard-style action bundle with note commitments, nullifiers, and one aggregated Halo2 proof over spend/output actions.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
     proofFamily: "halo2-pasta-action-bundle",
     publicInputsSchema:
-      "anchor,nullifiers,cmx,value_commitments,binding_signature,proof",
+      "anchor,nullifiers,cmx,value_commitments,binding_signature",
     verifierKeyId: "orchard_halo2_action_bundle_v1",
     pqLayers: PQ_LAYER_NONE,
     implementationStage: RESEARCH_STAGE_MAY_2026,
@@ -855,6 +2912,26 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         label: "Zcash Protocol Specification",
         url: "https://zips.z.cash/protocol/protocol.pdf",
       }),
+    ]),
+    securityNotes: Object.freeze([
+      "Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.",
+      "Viewing-key and outgoing-viewing metadata must remain wallet-local.",
+      "Production readiness requires audited Halo2 parameters and note-encryption review.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+    ]),
+    requiredState: Object.freeze([
+      "Orchard note commitment tree",
+      "Orchard nullifier set",
+      "Orchard action-bundle verifier key registry",
+      "wallet Orchard witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale anchor",
+      "duplicate nullifier",
+      "invalid action-bundle proof",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Add Orchard-compatible note, nullifier, action, and anchor data model types.",
@@ -876,6 +2953,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Orchard nullifier set",
       "Halo2 action-bundle verifier",
       "wallet Orchard witness store",
+      "typed Orchard action-bundle instruction",
     ]),
   }),
   Object.freeze({
@@ -884,6 +2962,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Penumbra MASP",
     summary:
       "Single multi-asset shielded pool using typed notes, note commitments, nullifiers, and spend/output proofs for private IBC-style assets.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze([
       "hide_amount",
       "hide_sender",
@@ -892,7 +2972,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     ]),
     proofFamily: "groth16-bls12-377-decaf377",
     publicInputsSchema:
-      "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment,proof",
+      "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
     verifierKeyId: "penumbra_masp_v1",
     pqLayers: PQ_LAYER_NONE,
     implementationStage: RESEARCH_STAGE_MAY_2026,
@@ -910,6 +2990,27 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         label: "Penumbra Cryptographic Primitives",
         url: "https://protocol.penumbra.zone/main/crypto.html",
       }),
+    ]),
+    securityNotes: Object.freeze([
+      "Typed asset values must bind asset identifiers to balance commitments.",
+      "Groth16 parameter registration must distinguish spend and output circuits.",
+      "Wallet note plaintexts and position metadata must not be exposed through public APIs.",
+      "Production MASP use requires audited parameter governance and chain-state integration review.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+    ]),
+    requiredState: Object.freeze([
+      "multi-asset state commitment tree",
+      "typed nullifier set",
+      "Groth16 spend/output verifier key registry",
+      "wallet asset metadata witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale state commitment anchor",
+      "duplicate nullifier",
+      "asset balance commitment mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Add typed-value notes, asset identifiers, state commitments, and nullifier state.",
@@ -932,6 +3033,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "typed note commitment and nullifier state",
       "Groth16 verifier registry",
       "wallet multi-asset witness store",
+      "typed Penumbra shielded-pool transaction admission",
     ]),
   }),
   Object.freeze({
@@ -940,10 +3042,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "FCMP++",
     summary:
       "Full-chain membership proof target that replaces small decoy rings with a full-output-set spend proof while retaining hidden amounts and one-time receivers.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
     proofFamily: "fcmp-plus-plus-curve-trees-bulletproofs",
     publicInputsSchema:
-      "membership_root,key_image_or_link_tag,amount_commitments,range_proof,spend_authorization",
+      "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
     verifierKeyId: "monero_fcmp_plus_plus_v1",
     pqLayers: PQ_LAYER_NONE,
     implementationStage: RESEARCH_STAGE_MAY_2026,
@@ -957,6 +3061,27 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         label: "Monero FCMP++ Development",
         url: "https://web.getmonero.org/2024/04/27/fcmps.html",
       }),
+    ]),
+    securityNotes: Object.freeze([
+      "Full-chain membership roots must be canonical and replay protected.",
+      "Link tags/key images must be unique without revealing owned outputs.",
+      "Range-proof and amount-commitment parameters require production verifier review.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+    ]),
+    requiredState: Object.freeze([
+      "full-output-set commitment accumulator",
+      "spent link-tag set",
+      "FCMP++ verifier key registry",
+      "wallet output ownership scan state",
+    ]),
+    failureModes: Object.freeze([
+      "stale membership root",
+      "duplicate link tag",
+      "amount commitment mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Add output commitment accumulator state suitable for full-chain membership proofs.",
@@ -978,6 +3103,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "spent link-tag set",
       "FCMP++ verifier",
       "wallet scanning and ownership recovery",
+      "typed FCMP++ transfer instruction",
     ]),
   }),
   Object.freeze({
@@ -986,6 +3112,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Miden STARK",
     summary:
       "Client-side STARK-proved account transition using private notes whose data stays off-chain while note hashes/nullifiers anchor correctness.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze([
       "hide_amount",
       "hide_receiver",
@@ -1016,6 +3144,28 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         url: "https://docs.miden.xyz/core-concepts/miden-base/note/",
       }),
     ]),
+    securityNotes: Object.freeze([
+      "Private note data and off-chain delivery metadata must stay wallet-local.",
+      "Account-local transition proofs must bind initial and final account commitments.",
+      "Reference blocks must prevent replay against stale account state.",
+      "Production Miden note transactions require audited STARK parameters and account-state integration review.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+    ]),
+    requiredState: Object.freeze([
+      "private note hash database",
+      "input note nullifier set",
+      "account commitment state",
+      "STARK VM verifier key registry",
+      "wallet private note witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale reference block",
+      "duplicate input note nullifier",
+      "account commitment transition mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
+    ]),
     setupSteps: Object.freeze([
       "Add private note hash/nullifier state and account-local transition verification.",
       "Register a STARK VM verifier and public-input commitment layout.",
@@ -1036,6 +3186,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "private note hash and nullifier database",
       "account commitment state",
       "wallet private-note delivery store",
+      "typed Miden note transaction instruction",
     ]),
   }),
   Object.freeze({
@@ -1044,10 +3195,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "Aztec private",
     summary:
       "Programmable private-state transaction using client-side private execution, note hashes, nullifiers, encrypted logs, and recursive private-kernel proofs.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
     proofFamily: "plonkish-private-kernel-rollup",
     publicInputsSchema:
-      "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_proof,rollup_state_roots",
+      "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
     verifierKeyId: "aztec_private_kernel_v1",
     pqLayers: PQ_LAYER_NONE,
     implementationStage: RESEARCH_STAGE_MAY_2026,
@@ -1065,6 +3218,28 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         label: "Aztec Private Kernel Circuit",
         url: "https://docs.aztec.network/developers/nightly/docs/foundational-topics/advanced/circuits/private_kernel",
       }),
+    ]),
+    securityNotes: Object.freeze([
+      "Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.",
+      "Encrypted log delivery metadata must not leak wallet note ownership.",
+      "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.",
+      "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+    ]),
+    requiredState: Object.freeze([
+      "private note-hash tree",
+      "nullifier tree",
+      "encrypted log delivery store",
+      "private-kernel verifier key registry",
+      "wallet private execution witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale rollup state root",
+      "duplicate nullifier",
+      "private-kernel public input mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
     ]),
     setupSteps: Object.freeze([
       "Add private note-hash and nullifier trees plus encrypted log delivery metadata.",
@@ -1087,6 +3262,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "encrypted log store",
       "private-kernel verifier",
       "wallet private execution environment",
+      "typed Aztec private-rollup transaction instruction",
     ]),
   }),
   Object.freeze({
@@ -1095,6 +3271,8 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     shortName: "PQ MASP v0",
     summary:
       "Target end-to-end post-quantum MASP using STARK/FRI proofs, ML-DSA authorization, and ML-KEM note encryption.",
+    category: "payment",
+    maturity: "specification",
     coveredCriteria: Object.freeze([
       "hide_amount",
       "hide_sender",
@@ -1135,12 +3313,43 @@ const PRIVACY_ALGORITHMS = Object.freeze([
         url: "https://csrc.nist.gov/pubs/fips/205/final",
       }),
     ]),
-    sdkEntrypoints: Object.freeze([
-      "buildRegisterAssetHiddenZkPoolInstruction",
-      "buildAssetHiddenZkTransferInstruction",
+    securityNotes: Object.freeze([
+      "PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.",
+      "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.",
+      "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
+      "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
     ]),
+    requiredState: Object.freeze([
+      "PQ MASP asset-set commitment root",
+      "PQ nullifier set",
+      "ML-KEM encrypted note payload store",
+      "wallet PQ note witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale asset-set root",
+      "duplicate PQ nullifier",
+      "ML-DSA or ML-KEM domain mismatch",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register STARK/FRI verifier parameters and PQ MASP public input layout.",
+      "Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.",
+      "Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.",
+    ]),
+    executionSteps: Object.freeze([
+      "Select PQ MASP input notes and derive nullifiers.",
+      "Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.",
+      "Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
     plannedSdkEntrypoints: Object.freeze([
       "buildPqMaspStarkTransferProofV0",
+      "buildPqMaspStarkRegisterPoolInstruction",
+      "buildPqMaspStarkTransferInstruction",
       "generateMlDsaKeyPair",
       "encapsulateMlKem",
     ]),
@@ -1153,10 +3362,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "active PQ MASP verifier key",
     ]),
   }),
-]);
+]));
 
 function cloneDescriptor(descriptor) {
-  return {
+  const productionGate = productionGateForDescriptor(descriptor);
+  const backendFamily = backendFamilyForDescriptor(descriptor);
+  return deepFreeze({
     id: descriptor.id,
     name: descriptor.name,
     shortName: descriptor.shortName,
@@ -1167,6 +3378,7 @@ function cloneDescriptor(descriptor) {
     proofFamily: descriptor.proofFamily,
     publicInputsSchema: descriptor.publicInputsSchema,
     verifierKeyId: descriptor.verifierKeyId,
+    backendFamily,
     pqLayers: { ...descriptor.pqLayers },
     implementationStage: descriptor.implementationStage ?? null,
     recommendedFor: [...(descriptor.recommendedFor ?? [])],
@@ -1182,17 +3394,28 @@ function cloneDescriptor(descriptor) {
     sdkEntrypoints: [...descriptor.sdkEntrypoints],
     plannedSdkEntrypoints: [...(descriptor.plannedSdkEntrypoints ?? [])],
     chainRequirements: [...descriptor.chainRequirements],
-  };
+    productionReady: productionGate.ready,
+    productionGate,
+  });
 }
 
 export function getPrivacyCriteria() {
-  return [...PRIVACY_CRITERIA];
+  return Object.freeze([...PRIVACY_CRITERIA]);
 }
 
 export function getPrivacyAlgorithmDescriptors() {
-  return PRIVACY_ALGORITHMS.map(cloneDescriptor);
+  return Object.freeze(PRIVACY_ALGORITHMS.map(cloneDescriptor));
 }
 
 export function getPrivacyAlgorithmDescriptor(id) {
   return getPrivacyAlgorithmDescriptors().find((algorithm) => algorithm.id === id) ?? null;
+}
+
+export function getPrivacyCapabilities() {
+  return deepFreeze({
+    javascriptSdkAvailable: true,
+    bridgeAvailable: isPrivacyNativeAvailable() === true,
+    privacyAlgorithms: getPrivacyAlgorithmDescriptors(),
+    privacyCriteria: getPrivacyCriteria(),
+  });
 }

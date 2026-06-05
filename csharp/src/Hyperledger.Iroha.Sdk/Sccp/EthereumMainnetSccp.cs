@@ -680,8 +680,8 @@ public static class EthereumMainnetSccp
         if (beaconFinality is null && consensusProvider is not null)
         {
             beaconFinality = await consensusProvider.CollectFinalityEvidenceAsync(
-                receipt,
-                block,
+                SnapshotDictionaryOrNull(receipt),
+                SnapshotDictionaryOrNull(block),
                 transactionHash,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -891,10 +891,10 @@ public static class EthereumMainnetSccp
             SourceDomain = DomainEthereum,
             TargetDomain = DomainSora,
             TransactionHash = transactionHash,
-            Receipt = receipt,
-            Block = block,
-            BeaconFinality = beaconFinality,
-            BlockReceipts = blockReceipts,
+            Receipt = SnapshotDictionaryOrNull(receipt),
+            Block = SnapshotDictionaryOrNull(block),
+            BeaconFinality = SnapshotDictionaryOrNull(beaconFinality),
+            BlockReceipts = blockReceipts?.Select(SnapshotDictionary).ToArray(),
             InclusionBranch = input.InclusionBranch is null
                 ? null
                 : CopyByteArrays(input.InclusionBranch),
@@ -1274,6 +1274,24 @@ public static class EthereumMainnetSccp
     public static EthereumMainnetSccpSubmission BuildEthereumCalldata(
         EthereumMainnetSccpSubmissionInput input)
     {
+        _ = BuildEthereumCalldataUnchecked(input);
+        throw new ArgumentException(
+            "Ethereum mainnet calldata requires verified native EVM prover artifacts.",
+            nameof(input));
+    }
+
+    public static EthereumMainnetSccpSubmission BuildEthereumCalldata(
+        EthereumMainnetSccpSubmissionInput input,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts)
+    {
+        var submission = BuildEthereumCalldataUnchecked(input);
+        RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, input.ProofResult!);
+        return submission;
+    }
+
+    private static EthereumMainnetSccpSubmission BuildEthereumCalldataUnchecked(
+        EthereumMainnetSccpSubmissionInput input)
+    {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(input.ProofResult);
         var proofResult = input.ProofResult;
@@ -1340,12 +1358,43 @@ public static class EthereumMainnetSccp
     public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
         EthereumMainnetSccpSubmissionInput input,
         IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        CancellationToken cancellationToken = default)
+        => await SubmitOutboundToEthereumAsync(
+            input,
+            outboundSubmitter,
+            nativeProverArtifacts,
+            executionProvider: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
         IEthereumMainnetExecutionProvider? executionProvider,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(outboundSubmitter);
 
         var submission = BuildEthereumCalldata(input);
+        if (executionProvider is not null)
+        {
+            _ = await ValidateExecutionProviderMainnetAsync(
+                executionProvider,
+                cancellationToken).ConfigureAwait(false);
+        }
+        return await outboundSubmitter.SubmitAsync(submission, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        IEthereumMainnetExecutionProvider? executionProvider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(outboundSubmitter);
+
+        var submission = BuildEthereumCalldata(input, nativeProverArtifacts);
         if (executionProvider is not null)
         {
             _ = await ValidateExecutionProviderMainnetAsync(
@@ -2065,6 +2114,70 @@ public static class EthereumMainnetSccp
         {
             throw new ArgumentException(
                 "nativeProverArtifacts artifact hashes must match proof request.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.VerifierKeyHash, artifacts.NativeProverBundle.VerifierKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts verifierKeyHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (string.IsNullOrEmpty(artifacts.Sdk)
+            || string.IsNullOrEmpty(artifacts.Implementation)
+            || string.IsNullOrEmpty(artifacts.ImplementationHash))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts must bind sdk implementation and implementationHash.",
+                nameof(artifacts));
+        }
+
+        var artifact = artifacts.NativeProverBundle.NativeSdkArtifacts
+            .FirstOrDefault(row => string.Equals(row.Sdk, artifacts.Sdk, StringComparison.Ordinal));
+        if (artifact is null)
+        {
+            throw new ArgumentException(
+                $"nativeProverBundle has no artifact row for sdk: {artifacts.Sdk}.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.Implementation, artifact.Implementation, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ImplementationHash, artifact.ImplementationHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts implementation binding must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+    }
+
+    private static void RequireVerifiedNativeProverArtifacts(
+        EthereumMainnetNativeEvmProverArtifacts? artifacts,
+        EthereumMainnetOutboundProofResult proofResult)
+    {
+        ArgumentNullException.ThrowIfNull(proofResult);
+        if (artifacts is null)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                proofResult.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts destinationBindingHash must match proofResult.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.ProofArtifactHash, proofResult.ProofArtifactHash, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ProvingKeyHash, proofResult.ProvingKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts artifact hashes must match proofResult.",
                 nameof(artifacts));
         }
 
@@ -3921,6 +4034,98 @@ public static class EthereumMainnetSccp
         }
 
         return proofBytes.ToArray();
+    }
+
+    private static EthereumMainnetInboundEvidence SnapshotInboundEvidence(
+        EthereumMainnetInboundEvidence evidence)
+    {
+        return evidence with
+        {
+            Receipt = SnapshotDictionaryOrNull(evidence.Receipt),
+            Block = SnapshotDictionaryOrNull(evidence.Block),
+            BeaconFinality = SnapshotDictionaryOrNull(evidence.BeaconFinality),
+            BlockReceipts = evidence.BlockReceipts?.Select(SnapshotDictionary).ToArray(),
+            InclusionBranch = evidence.InclusionBranch is null
+                ? null
+                : CopyByteArrays(evidence.InclusionBranch),
+            ReceiptProof = SnapshotReceiptProof(evidence.ReceiptProof),
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?>? SnapshotDictionaryOrNull(
+        IReadOnlyDictionary<string, object?>? dictionary)
+        => dictionary is null ? null : SnapshotDictionary(dictionary);
+
+    private static IReadOnlyDictionary<string, object?> SnapshotDictionary(
+        IReadOnlyDictionary<string, object?> dictionary)
+    {
+        var snapshot = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
+        foreach (var item in dictionary)
+        {
+            snapshot[item.Key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static object? SnapshotValue(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            string text => text,
+            byte[] bytes => bytes.ToArray(),
+            IReadOnlyDictionary<string, object?> dictionary => SnapshotDictionary(dictionary),
+            IReadOnlyList<object?> list => list.Select(SnapshotValue).ToArray(),
+            System.Collections.IDictionary dictionary => SnapshotDictionary(dictionary),
+            System.Collections.IEnumerable enumerable => SnapshotEnumerable(enumerable),
+            _ => value,
+        };
+    }
+
+    private static object SnapshotDictionary(System.Collections.IDictionary dictionary)
+    {
+        var snapshot = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
+        foreach (System.Collections.DictionaryEntry item in dictionary)
+        {
+            if (item.Key is not string key)
+            {
+                return SnapshotObjectDictionary(dictionary);
+            }
+
+            snapshot[key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static IReadOnlyDictionary<object, object?> SnapshotObjectDictionary(
+        System.Collections.IDictionary dictionary)
+    {
+        var snapshot = new Dictionary<object, object?>(dictionary.Count);
+        foreach (System.Collections.DictionaryEntry item in dictionary)
+        {
+            if (item.Key is null)
+            {
+                throw new ArgumentException(
+                    "SCCP callback evidence dictionaries must not contain null keys.");
+            }
+
+            snapshot[item.Key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static object?[] SnapshotEnumerable(System.Collections.IEnumerable enumerable)
+    {
+        var snapshot = new List<object?>();
+        foreach (var item in enumerable)
+        {
+            snapshot.Add(SnapshotValue(item));
+        }
+
+        return snapshot.ToArray();
     }
 
     private static byte[] RequireNativeRecursiveBytes(byte[] bytes, string parameterName)
@@ -5953,6 +6158,8 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
     private readonly record struct BeaconRestBlockId(string Id, ulong? Slot = null, string? Root = null);
 
     private readonly record struct BeaconRestFinalityUpdateSummary(
+        string FinalizedHeaderRoot,
+        ulong BeaconSlot,
         IReadOnlyList<string> FinalityBranch,
         string SyncCommitteeBits,
         string SyncCommitteeSignature,
@@ -6212,6 +6419,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
 
         var finalityUpdate = await FetchFinalityUpdateSummaryAsync(
             finalizedHeader.Slot,
+            finalizedHeader.Root,
             cancellationToken).ConfigureAwait(false);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -6219,9 +6427,9 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             ["executionBlockNumber"] = NormalizeUnsignedInteger(blockNumber, "block.number").ToString(),
             ["executionBlockHash"] = blockHash,
             ["executionReceiptsRoot"] = receiptsRoot,
-            ["finalizedHeaderRoot"] = targetHeader.Root,
+            ["finalizedHeaderRoot"] = finalityUpdate.FinalizedHeaderRoot,
             ["syncCommitteeRoot"] = syncCommitteeRoot,
-            ["beaconSlot"] = targetHeader.Slot.ToString(),
+            ["beaconSlot"] = finalityUpdate.BeaconSlot.ToString(),
             ["finalityBranch"] = finalityUpdate.FinalityBranch,
             ["syncCommitteeBits"] = finalityUpdate.SyncCommitteeBits,
             ["syncCommitteeSignature"] = finalityUpdate.SyncCommitteeSignature,
@@ -6363,18 +6571,23 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
 
     private async ValueTask<BeaconRestFinalityUpdateSummary> FetchFinalityUpdateSummaryAsync(
         ulong expectedFinalizedSlot,
+        string expectedFinalizedRoot,
         CancellationToken cancellationToken)
     {
         using var document = await FetchJsonDocumentAsync(
             "/eth/v1/beacon/light_client/finality_update",
             "Ethereum mainnet Beacon REST light-client finality update",
             cancellationToken).ConfigureAwait(false);
-        return BeaconRestFinalityUpdateSummaryFromPayload(document.RootElement, expectedFinalizedSlot);
+        return BeaconRestFinalityUpdateSummaryFromPayload(
+            document.RootElement,
+            expectedFinalizedSlot,
+            expectedFinalizedRoot);
     }
 
     private static BeaconRestFinalityUpdateSummary BeaconRestFinalityUpdateSummaryFromPayload(
         JsonElement payload,
-        ulong expectedFinalizedSlot)
+        ulong expectedFinalizedSlot,
+        string expectedFinalizedRoot)
     {
         const string Label = "Ethereum mainnet Beacon REST light-client finality update";
         RejectUnsafeBeaconRestPayload(payload, Label);
@@ -6394,6 +6607,36 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException(
                 "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot");
+        }
+        var finalizedHeaderRoot = BeaconBlockHeaderRoot(
+            finalizedSlot,
+            NormalizeUnsignedInteger(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "proposer_index"),
+                    $"{Label}.data.finalized_header.beacon.proposer_index"),
+                $"{Label}.data.finalized_header.beacon.proposer_index"),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "parent_root"),
+                    $"{Label}.data.finalized_header.beacon.parent_root"),
+                $"{Label}.data.finalized_header.beacon.parent_root",
+                32),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "state_root"),
+                    $"{Label}.data.finalized_header.beacon.state_root"),
+                $"{Label}.data.finalized_header.beacon.state_root",
+                32),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "body_root"),
+                    $"{Label}.data.finalized_header.beacon.body_root"),
+                $"{Label}.data.finalized_header.beacon.body_root",
+                32));
+        if (!string.Equals(finalizedHeaderRoot, expectedFinalizedRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root");
         }
         var signatureSlot = NormalizeBeaconSlot(
             RequireString(RequireProperty(data, $"{Label}.data", "signature_slot"), $"{Label}.data.signature_slot"),
@@ -6419,8 +6662,10 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
                 RequireProperty(syncAggregate, $"{Label}.data.sync_aggregate", "sync_committee_signature"),
                 $"{Label}.data.sync_aggregate.sync_committee_signature"),
             $"{Label}.data.sync_aggregate.sync_committee_signature",
-            96);
+                96);
         return new BeaconRestFinalityUpdateSummary(
+            finalizedHeaderRoot,
+            finalizedSlot,
             finalityBranch,
             syncCommitteeBits,
             syncCommitteeSignature,
@@ -6740,6 +6985,64 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             int item when item >= 0 => (ulong)item,
             _ => throw new ArgumentException($"{parameterName} must be an unsigned integer", parameterName),
         };
+
+    private static string BeaconBlockHeaderRoot(
+        ulong slot,
+        ulong proposerIndex,
+        string parentRoot,
+        string stateRoot,
+        string bodyRoot)
+        => "0x" + Convert.ToHexString(SszMerkleizeChunks([
+            SszU64Chunk(slot),
+            SszU64Chunk(proposerIndex),
+            BeaconRestHexBytes(parentRoot),
+            BeaconRestHexBytes(stateRoot),
+            BeaconRestHexBytes(bodyRoot),
+        ])).ToLowerInvariant();
+
+    private static byte[] BeaconRestHexBytes(string normalizedHex)
+        => Convert.FromHexString(normalizedHex[2..]);
+
+    private static byte[] SszU64Chunk(ulong value)
+    {
+        var chunk = new byte[32];
+        BinaryPrimitives.WriteUInt64LittleEndian(chunk.AsSpan(0, 8), value);
+        return chunk;
+    }
+
+    private static byte[] SszMerkleizeChunks(IReadOnlyList<byte[]> inputChunks)
+    {
+        if (inputChunks.Count == 0 || inputChunks.Any(static chunk => chunk.Length != 32))
+        {
+            throw new ArgumentException("SSZ chunks must be non-empty 32-byte values.");
+        }
+
+        var chunks = inputChunks.Select(static chunk => chunk.ToArray()).ToList();
+        var width = 1;
+        while (width < chunks.Count)
+        {
+            width <<= 1;
+        }
+        while (chunks.Count < width)
+        {
+            chunks.Add(new byte[32]);
+        }
+
+        while (chunks.Count > 1)
+        {
+            var next = new List<byte[]>(chunks.Count / 2);
+            for (var index = 0; index < chunks.Count; index += 2)
+            {
+                var pair = new byte[64];
+                chunks[index].CopyTo(pair.AsSpan(0, 32));
+                chunks[index + 1].CopyTo(pair.AsSpan(32, 32));
+                next.Add(SHA256.HashData(pair));
+            }
+            chunks = next;
+        }
+
+        return chunks[0];
+    }
 }
 
 public interface IEthereumMainnetInboundProver

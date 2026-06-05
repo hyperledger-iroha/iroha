@@ -137,7 +137,7 @@ struct QueryLoadFixture {
 
 fn contract_activity_metadata(index: usize) -> Metadata {
     let mut metadata = Metadata::default();
-    let matching = index % 4 == 0;
+    let matching = index.is_multiple_of(4);
     metadata.insert(
         "contract_address".parse().expect("metadata key"),
         Json::new(if matching {
@@ -164,7 +164,7 @@ fn contract_activity_metadata(index: usize) -> Metadata {
     );
     let amount_in = (index as u64).saturating_add(1);
     let min_out = index as u64;
-    let input_is_base = index % 2 == 0;
+    let input_is_base = index.is_multiple_of(2);
     metadata.insert(
         "contract_payload".parse().expect("metadata key"),
         Json::new(norito::json!({
@@ -188,7 +188,11 @@ fn contract_activity_accepted_transaction(
     chain_id: &ChainId,
     index: usize,
 ) -> AcceptedTransaction<'static> {
-    let authority_index = if index % 4 == 0 { 0 } else { (index % 7) + 1 };
+    let authority_index = if index.is_multiple_of(4) {
+        0
+    } else {
+        (index % 7) + 1
+    };
     let key_pair = query_load_contract_authority_key_pair(authority_index);
     let authority = AccountId::new(key_pair.public_key().clone());
     let mut metadata = contract_activity_metadata(index);
@@ -1291,6 +1295,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(clippy::too_many_lines)]
 fn bench_query_http_sustained(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1457,6 +1462,7 @@ fn socket_profile_client(profile: QueryLoadProfile) -> reqwest::Client {
         .expect("socket benchmark client")
 }
 
+#[allow(clippy::too_many_lines)]
 fn bench_query_http_socket_sustained(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

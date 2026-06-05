@@ -176,6 +176,14 @@ test("Connect session vector fixture matches browser crypto helpers", () => {
   );
 });
 
+test("Connect browser wallet signature encoder validates algorithm labels before byte encoding", () => {
+  for (const target of ["../src/connect.browser.js", "../dist/connect.browser.js"]) {
+    const source = readFileSync(new URL(target, import.meta.url), "utf8");
+    assert.match(source, /normalizeWalletSignatureAlgorithmTag/);
+    assert.doesNotMatch(source, /Uint8Array\.of\(signature\.algorithm\)/);
+  }
+});
+
 function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
   return Buffer.concat([
     taggedApproveField("domain", APPROVE_DOMAIN),
@@ -295,12 +303,12 @@ function nonce(seq) {
   return Buffer.concat([Buffer.alloc(4), u64(seq)]);
 }
 
-function encodeSignResultOk(preview, keys, seq, signature) {
+function encodeSignResultOk(preview, keys, seq, signature, algorithm = 0) {
   const payload = Buffer.concat([
     u32(3),
     lenPrefixed(
       encodeWalletSignature({
-        algorithm: 0,
+        algorithm,
         signature,
       }),
     ),
@@ -625,6 +633,49 @@ test("createConnectAppSession handles approval and sign success", async () => {
   socket.receive(encodeSignResultOk(preview, keys, signRequest.seq, signature));
   const detached = await signPromise;
   assert.deepEqual(Buffer.from(detached), signature);
+});
+
+test("createConnectAppSession rejects unsupported wallet signature algorithm tags", async () => {
+  RecordingWebSocket.instances.length = 0;
+  const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
+  const walletPrivateKey = new Uint8Array(32).fill(0x12);
+  const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
+  const keys = deriveKeys(preview, walletPrivateKey);
+  const session = createConnectAppSession({
+    baseUrl: "https://taira.sora.org",
+    preview,
+    session: {
+      sid: preview.sidBase64Url,
+      token_app: "token-app",
+      token_relay: relayToken,
+    },
+    webSocketImpl: RecordingWebSocket,
+  });
+  const socket = RecordingWebSocket.instances[0];
+  socket.open();
+  socket.receive(
+    encodeControlFrame({
+      sidBytes: preview.sidBytes,
+      dir: 1,
+      seq: 1,
+      control: encodeApproveControl(preview, walletPublicKey, account.accountId, account.privateKey, relayToken),
+    }),
+  );
+
+  await session.waitForApproval();
+  const signPromise = session.signTransaction(Buffer.from([0xaa]));
+  await Promise.resolve();
+  const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
+  socket.receive(encodeSignResultOk(preview, keys, signRequest.seq, Buffer.alloc(64), 1));
+
+  await assert.rejects(signPromise, (error) => {
+    assert.ok(error instanceof ConnectSignRequestError);
+    assert.equal(error.code, "UNSUPPORTED_ALGORITHM");
+    assert.match(error.message, /unsupported wallet signature algorithm 1/);
+    return true;
+  });
 });
 
 test("createConnectAppSession surfaces wallet rejection", async () => {

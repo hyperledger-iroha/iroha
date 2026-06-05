@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -9,6 +10,7 @@ using System.Text.Json.Serialization.Metadata;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Transactions;
+using Hyperledger.Iroha.Zk;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -870,6 +872,46 @@ public sealed class ToriiClient : IDisposable
         return GetAsync<ToriiRuntimeMetrics>("/v1/runtime/metrics", cancellationToken: cancellationToken);
     }
 
+    public Task<JsonDocument> GetVerifyingKeyAsync(
+        string backend,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            backend,
+            nameof(backend));
+        var normalizedName = NormalizeVerifyingKeyName(name, nameof(name));
+        return GetJsonDocumentAsync(
+            $"/v1/zk/vk/{EncodePathSegment(normalizedBackend)}/{EncodePathSegment(normalizedName)}",
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<JsonDocument> RegisterVerifyingKeyAsync(
+        ToriiVerifyingKeyRegisterRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(request);
+        return PostJsonDocumentAsync(
+            "/v1/zk/vk/register",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<JsonDocument> UpdateVerifyingKeyAsync(
+        ToriiVerifyingKeyUpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(request);
+        return PostJsonDocumentAsync(
+            "/v1/zk/vk/update",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
+    }
+
     public Task<ToriiSoraFsCidLookupResponse> GetSoraFsCidLookupAsync(
         string cid,
         CancellationToken cancellationToken = default)
@@ -878,6 +920,20 @@ public sealed class ToriiClient : IDisposable
         return GetAsync<ToriiSoraFsCidLookupResponse>(
             $"/v1/sorafs/cid/{EncodePathSegment(normalizedCid)}",
             cancellationToken: cancellationToken);
+    }
+
+    public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync(
+        ToriiSoraFsPinRegisterRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedRequest = NormalizeSoraFsPinRegisterRequest(request);
+        var response = await PostAsync<ToriiSoraFsPinRegisterRequest, ToriiSoraFsPinRegisterResponse>(
+            "/v1/sorafs/pin/register",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
+        return NormalizeSoraFsPinRegisterResponse(response);
     }
 
     public Task<ToriiSoraFsDenylistCatalogResponse> GetSoraFsDenylistCatalogAsync(
@@ -951,7 +1007,11 @@ public sealed class ToriiClient : IDisposable
         string? lastEventId = null,
         CancellationToken cancellationToken = default)
     {
-        return OpenSseAsync("/v1/events/sse", query, lastEventId, cancellationToken);
+        return OpenSseAsync(
+            "/v1/events/sse",
+            NormalizeEventSseQuery(query),
+            lastEventId,
+            cancellationToken);
     }
 
     public async IAsyncEnumerable<ToriiServerSentEvent> StreamEventsAsync(
@@ -1534,6 +1594,206 @@ public sealed class ToriiClient : IDisposable
         return builder.Uri;
     }
 
+    private static string? NormalizeEventSseQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return query;
+        }
+
+        var queryText = query[0] == '?' ? query[1..] : query;
+        var segments = queryText.Split('&');
+        var changed = false;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            if (segment.Length == 0)
+            {
+                continue;
+            }
+
+            var equalsIndex = segment.IndexOf('=');
+            var rawName = equalsIndex >= 0 ? segment[..equalsIndex] : segment;
+            var rawValue = equalsIndex >= 0 ? segment[(equalsIndex + 1)..] : string.Empty;
+            var name = DecodeQueryComponent(rawName);
+            if (!string.Equals(name, "filter", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = DecodeQueryComponent(rawValue);
+            var normalized = NormalizeEventFilterPayload(value, "eventFilter");
+            if (!string.Equals(normalized, value, StringComparison.Ordinal))
+            {
+                segments[index] = $"{Uri.EscapeDataString(name)}={Uri.EscapeDataString(normalized)}";
+                changed = true;
+            }
+        }
+
+        return changed ? string.Join('&', segments) : query;
+    }
+
+    private static string DecodeQueryComponent(string value)
+    {
+        return Uri.UnescapeDataString(value.Replace("+", " ", StringComparison.Ordinal));
+    }
+
+    private static string NormalizeEventFilterPayload(string filter, string context)
+    {
+        var trimmed = filter.Trim();
+        if (trimmed.Length == 0 || (trimmed[0] != '{' && trimmed[0] != '['))
+        {
+            return filter;
+        }
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(trimmed);
+        }
+        catch (JsonException)
+        {
+            return filter;
+        }
+
+        if (node is not JsonObject obj)
+        {
+            return filter;
+        }
+
+        var changed = NormalizeProductionEventFilterObject(obj, context);
+        return changed ? obj.ToJsonString() : filter;
+    }
+
+    private static bool NormalizeProductionEventFilterObject(JsonObject filter, string context)
+    {
+        var changed = false;
+        foreach (var eventKind in new[] { "VerifyingKey", "Proof" })
+        {
+            if (filter[eventKind] is not JsonObject body
+                || body["id_matcher"] is not JsonObject matcher
+                || !matcher.TryGetPropertyValue("backend", out var backendNode))
+            {
+                continue;
+            }
+
+            var backend = RequireJsonString(backendNode, $"{context}.{eventKind}.id_matcher.backend");
+            var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+                backend,
+                $"{context}.{eventKind}.id_matcher.backend");
+            if (!string.Equals(normalizedBackend, backend, StringComparison.Ordinal))
+            {
+                matcher["backend"] = normalizedBackend;
+                changed = true;
+            }
+
+            if (string.Equals(eventKind, "Proof", StringComparison.Ordinal))
+            {
+                changed |= NormalizeProofHashMatcher(
+                    matcher,
+                    "hash_hex",
+                    $"{context}.{eventKind}.id_matcher.hash_hex");
+                changed |= NormalizeProofHashMatcher(
+                    matcher,
+                    "proof_hash_hex",
+                    $"{context}.{eventKind}.id_matcher.proof_hash_hex");
+            }
+            else
+            {
+                changed |= NormalizeVerifyingKeyNameMatcher(
+                    matcher,
+                    $"{context}.{eventKind}.id_matcher.name");
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool NormalizeVerifyingKeyNameMatcher(JsonObject matcher, string context)
+    {
+        if (!matcher.TryGetPropertyValue("name", out var node))
+        {
+            return false;
+        }
+
+        var raw = RequireJsonString(node, context);
+        var normalized = raw.Trim();
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException($"{context} must be a non-empty string.", context);
+        }
+
+        if (normalized.Contains(':', StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{context} must not contain ':' characters.", context);
+        }
+
+        if (string.Equals(raw, normalized, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        matcher["name"] = normalized;
+        return true;
+    }
+
+    private static bool NormalizeProofHashMatcher(JsonObject matcher, string propertyName, string context)
+    {
+        if (!matcher.TryGetPropertyValue(propertyName, out var node))
+        {
+            return false;
+        }
+
+        var raw = RequireJsonString(node, context);
+        var normalized = NormalizeHex32String(raw, context);
+        if (string.Equals(raw, normalized, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        matcher[propertyName] = normalized;
+        return true;
+    }
+
+    private static string RequireJsonString(JsonNode? node, string context)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return text;
+        }
+
+        throw new ArgumentException($"{context} must be a string.", context);
+    }
+
+    private static string NormalizeHex32String(string raw, string context)
+    {
+        var normalized = raw.Trim().ToLowerInvariant();
+        if (normalized.StartsWith("0x", StringComparison.Ordinal))
+        {
+            normalized = normalized[2..];
+        }
+
+        if (normalized.Length != 64 || !IsLowerHex(normalized))
+        {
+            throw new ArgumentException($"{context} must be a 32-byte hex string.", context);
+        }
+
+        return normalized;
+    }
+
+    private static bool IsLowerHex(string value)
+    {
+        foreach (var c in value)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static string BuildPaginationQuery(
         int? limit,
         long offset,
@@ -1884,6 +2144,508 @@ public sealed class ToriiClient : IDisposable
             .Select(Uri.EscapeDataString);
         builder.Append(string.Join('/', segments));
         return builder.ToString();
+    }
+
+    private static ToriiVerifyingKeyRegisterRequest NormalizeVerifyingKeyRegisterRequest(
+        ToriiVerifyingKeyRegisterRequest request)
+    {
+        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            request.Backend,
+            nameof(request.Backend));
+        var vkBytes = NormalizeOptionalVerifierBytes(
+            request.VerifyingKeyBytes,
+            request.VerifyingKeyLength,
+            out var vkLength,
+            nameof(request.VerifyingKeyBytes));
+        var commitmentHex = NormalizeOptionalVerifyingKeyHex(
+            request.CommitmentHex,
+            nameof(request.CommitmentHex));
+        ValidateVerifyingKeyMaterial(vkBytes, vkLength, commitmentHex);
+        ValidateInlineVerifyingKeyCommitment(normalizedBackend, vkBytes, commitmentHex);
+        ValidateVerifyingKeyHeightRange(
+            request.ActivationHeight,
+            request.WithdrawHeight,
+            nameof(request.WithdrawHeight));
+
+        return request with
+        {
+            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Backend = normalizedBackend,
+            Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
+            Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
+            CircuitId = NormalizeRequiredValue(request.CircuitId, nameof(request.CircuitId)),
+            PublicInputsSchemaHashHex = NormalizeVerifyingKeyHex(
+                request.PublicInputsSchemaHashHex,
+                nameof(request.PublicInputsSchemaHashHex)),
+            Curve = NormalizeOptionalValue(request.Curve),
+            GasScheduleId = NormalizeRequiredValue(request.GasScheduleId, nameof(request.GasScheduleId)),
+            VerifyingKeyLength = vkLength,
+            MaxProofBytes = request.MaxProofBytes,
+            MetadataUriCid = NormalizeOptionalValue(request.MetadataUriCid),
+            VerifyingKeyBytesCid = NormalizeOptionalValue(request.VerifyingKeyBytesCid),
+            ActivationHeight = request.ActivationHeight,
+            WithdrawHeight = request.WithdrawHeight,
+            CommitmentHex = commitmentHex,
+            VerifyingKeyBytes = vkBytes,
+            Status = NormalizeOptionalVerifyingKeyStatus(request.Status, nameof(request.Status)),
+        };
+    }
+
+    private static ToriiVerifyingKeyUpdateRequest NormalizeVerifyingKeyUpdateRequest(
+        ToriiVerifyingKeyUpdateRequest request)
+    {
+        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            request.Backend,
+            nameof(request.Backend));
+        var vkBytes = NormalizeOptionalVerifierBytes(
+            request.VerifyingKeyBytes,
+            request.VerifyingKeyLength,
+            out var vkLength,
+            nameof(request.VerifyingKeyBytes));
+        var commitmentHex = NormalizeOptionalVerifyingKeyHex(
+            request.CommitmentHex,
+            nameof(request.CommitmentHex));
+        ValidateVerifyingKeyMaterial(vkBytes, vkLength, commitmentHex);
+        ValidateInlineVerifyingKeyCommitment(normalizedBackend, vkBytes, commitmentHex);
+        ValidateVerifyingKeyHeightRange(
+            request.ActivationHeight,
+            request.WithdrawHeight,
+            nameof(request.WithdrawHeight));
+
+        return request with
+        {
+            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Backend = normalizedBackend,
+            Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
+            Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
+            CircuitId = NormalizeRequiredValue(request.CircuitId, nameof(request.CircuitId)),
+            PublicInputsSchemaHashHex = NormalizeVerifyingKeyHex(
+                request.PublicInputsSchemaHashHex,
+                nameof(request.PublicInputsSchemaHashHex)),
+            Curve = NormalizeOptionalValue(request.Curve),
+            GasScheduleId = NormalizeOptionalValue(request.GasScheduleId),
+            CommitmentHex = commitmentHex,
+            VerifyingKeyLength = vkLength,
+            MaxProofBytes = request.MaxProofBytes,
+            MetadataUriCid = NormalizeOptionalValue(request.MetadataUriCid),
+            VerifyingKeyBytesCid = NormalizeOptionalValue(request.VerifyingKeyBytesCid),
+            ActivationHeight = request.ActivationHeight,
+            WithdrawHeight = request.WithdrawHeight,
+            VerifyingKeyBytes = vkBytes,
+            Status = NormalizeOptionalVerifyingKeyStatus(request.Status, nameof(request.Status)),
+        };
+    }
+
+    private static string NormalizeVerifyingKeyName(string? value, string paramName)
+    {
+        var normalized = NormalizeRequiredValue(value, paramName);
+        if (normalized.Contains(':', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain ':' characters.", paramName);
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeVerifyingKeyHex(string? value, string paramName)
+    {
+        var normalized = NormalizeRequiredValue(value, paramName);
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[2..].Trim();
+        }
+
+        if (normalized.Length != 64 || !IsHex(normalized))
+        {
+            throw new ArgumentException("Value must be a 32-byte hex string.", paramName);
+        }
+
+        return normalized.ToLowerInvariant();
+    }
+
+    private static string? NormalizeOptionalVerifyingKeyHex(string? value, string paramName)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : NormalizeVerifyingKeyHex(value, paramName);
+    }
+
+    private static byte[]? NormalizeOptionalVerifierBytes(
+        byte[]? bytes,
+        uint? explicitLength,
+        out uint? normalizedLength,
+        string paramName)
+    {
+        if (bytes is null)
+        {
+            normalizedLength = explicitLength;
+            if (normalizedLength == 0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, "vk_len must be positive when provided.");
+            }
+
+            return null;
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException("Value must be a non-empty verifying key byte payload.", paramName);
+        }
+
+        var actualLength = (uint)bytes.Length;
+        if (explicitLength.HasValue && explicitLength.Value != actualLength)
+        {
+            throw new ArgumentException("vk_len must match vk_bytes length.", paramName);
+        }
+
+        normalizedLength = actualLength;
+        return bytes.ToArray();
+    }
+
+    private static string? NormalizeOptionalVerifyingKeyStatus(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "proposed" => "Proposed",
+            "active" => "Active",
+            "withdrawn" => "Withdrawn",
+            _ => throw new ArgumentException(
+                "Value must be one of Proposed, Active, or Withdrawn.",
+                paramName),
+        };
+    }
+
+    private static void ValidateVerifyingKeyHeightRange(
+        ulong? activationHeight,
+        ulong? withdrawHeight,
+        string paramName)
+    {
+        if (activationHeight.HasValue
+            && withdrawHeight.HasValue
+            && withdrawHeight.Value < activationHeight.Value)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                "withdraw_height must be greater than or equal to activation_height.");
+        }
+    }
+
+    private static void ValidateVerifyingKeyMaterial(
+        byte[]? bytes,
+        uint? vkLength,
+        string? commitmentHex)
+    {
+        if (bytes is not null)
+        {
+            return;
+        }
+
+        if (commitmentHex is null)
+        {
+            throw new ArgumentException(
+                "commitment_hex is required when vk_bytes is omitted.",
+                nameof(commitmentHex));
+        }
+
+        if (!vkLength.HasValue)
+        {
+            throw new ArgumentException(
+                "vk_len is required when vk_bytes is omitted.",
+                nameof(vkLength));
+        }
+    }
+
+    private static uint RequirePositiveUInt32(uint? value, string paramName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException("Value must be provided.", paramName);
+        }
+
+        if (value.Value == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Value must be positive.");
+        }
+
+        return value.Value;
+    }
+
+    private static void ValidateInlineVerifyingKeyCommitment(
+        string backend,
+        byte[]? bytes,
+        string? commitmentHex)
+    {
+        if (bytes is null || commitmentHex is null)
+        {
+            return;
+        }
+
+        var expected = ComputeVerifyingKeyCommitmentHex(backend, bytes);
+        if (!string.Equals(expected, commitmentHex, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "commitment_hex must match domain-separated SHA-256 of backend and vk_bytes.",
+                nameof(commitmentHex));
+        }
+    }
+
+    private static string ComputeVerifyingKeyCommitmentHex(string backend, byte[] bytes)
+    {
+        var domainBytes = Encoding.UTF8.GetBytes("iroha:zk:v1:vk");
+        var backendBytes = Encoding.UTF8.GetBytes(backend);
+        var preimage = new byte[domainBytes.Length + 8 + backendBytes.Length + 8 + bytes.Length];
+        var offset = 0;
+        Buffer.BlockCopy(domainBytes, 0, preimage, offset, domainBytes.Length);
+        offset += domainBytes.Length;
+        WriteUInt64BigEndian(preimage, offset, (ulong)backendBytes.Length);
+        offset += 8;
+        Buffer.BlockCopy(backendBytes, 0, preimage, offset, backendBytes.Length);
+        offset += backendBytes.Length;
+        WriteUInt64BigEndian(preimage, offset, (ulong)bytes.Length);
+        offset += 8;
+        Buffer.BlockCopy(bytes, 0, preimage, offset, bytes.Length);
+        return Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
+    }
+
+    private static void WriteUInt64BigEndian(byte[] target, int offset, ulong value)
+    {
+        for (var index = 7; index >= 0; index--)
+        {
+            target[offset + index] = (byte)(value & 0xff);
+            value >>= 8;
+        }
+    }
+
+    private static ToriiSoraFsPinRegisterRequest NormalizeSoraFsPinRegisterRequest(
+        ToriiSoraFsPinRegisterRequest request)
+    {
+        var chunker = request.Chunker ?? throw new ArgumentNullException(nameof(request.Chunker));
+        var pinPolicy = request.PinPolicy ?? throw new ArgumentNullException(nameof(request.PinPolicy));
+
+        return new ToriiSoraFsPinRegisterRequest
+        {
+            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Chunker = NormalizeSoraFsChunker(chunker),
+            PinPolicy = NormalizeSoraFsPinPolicy(pinPolicy),
+            ManifestDigestHex = NormalizeSoraFsDigestHex(
+                request.ManifestDigestHex,
+                nameof(request.ManifestDigestHex)),
+            ChunkDigestSha3_256Hex = NormalizeSoraFsDigestHex(
+                request.ChunkDigestSha3_256Hex,
+                nameof(request.ChunkDigestSha3_256Hex)),
+            ContentLength = RequireSoraFsUnsigned(
+                request.ContentLength,
+                nameof(request.ContentLength),
+                allowZero: true),
+            SubmittedEpoch = RequireSoraFsUnsigned(
+                request.SubmittedEpoch,
+                nameof(request.SubmittedEpoch),
+                allowZero: true),
+            Alias = request.Alias is null
+                ? null
+                : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),
+            SuccessorOfHex = string.IsNullOrWhiteSpace(request.SuccessorOfHex)
+                ? null
+                : NormalizeSoraFsDigestHex(request.SuccessorOfHex, nameof(request.SuccessorOfHex)),
+        };
+    }
+
+    private static ToriiSoraFsPinRegisterResponse NormalizeSoraFsPinRegisterResponse(
+        ToriiSoraFsPinRegisterResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        return new ToriiSoraFsPinRegisterResponse
+        {
+            ManifestDigestHex = NormalizeSoraFsDigestHex(
+                response.ManifestDigestHex,
+                nameof(response.ManifestDigestHex)),
+            ChunkerHandle = NormalizeRequiredValue(
+                response.ChunkerHandle,
+                nameof(response.ChunkerHandle)),
+            SubmittedEpoch = RequireSoraFsUnsigned(
+                response.SubmittedEpoch,
+                nameof(response.SubmittedEpoch),
+                allowZero: true),
+            ContentLength = RequireSoraFsUnsigned(
+                response.ContentLength,
+                nameof(response.ContentLength),
+                allowZero: true),
+            PinFeeNano = RequireSoraFsUnsigned(
+                response.PinFeeNano,
+                nameof(response.PinFeeNano),
+                allowZero: true),
+            PinFeeAssetId = NormalizeRequiredValue(
+                response.PinFeeAssetId,
+                nameof(response.PinFeeAssetId)),
+            PinFeeTreasuryAccountId = NormalizeRequiredValue(
+                response.PinFeeTreasuryAccountId,
+                nameof(response.PinFeeTreasuryAccountId)),
+            Alias = response.Alias is null
+                ? null
+                : NormalizeSoraFsPinAlias(response.Alias, nameof(response.Alias)),
+            SuccessorOfHex = string.IsNullOrWhiteSpace(response.SuccessorOfHex)
+                ? null
+                : NormalizeSoraFsDigestHex(response.SuccessorOfHex, nameof(response.SuccessorOfHex)),
+        };
+    }
+
+    private static ToriiSoraFsChunkerHandle NormalizeSoraFsChunker(ToriiSoraFsChunkerHandle chunker)
+    {
+        return new ToriiSoraFsChunkerHandle
+        {
+            ProfileId = RequireSoraFsUnsigned(
+                chunker.ProfileId,
+                nameof(chunker.ProfileId),
+                allowZero: false),
+            Namespace = NormalizeRequiredValue(chunker.Namespace, nameof(chunker.Namespace)),
+            Name = NormalizeRequiredValue(chunker.Name, nameof(chunker.Name)),
+            Semver = NormalizeRequiredValue(chunker.Semver, nameof(chunker.Semver)),
+            MultihashCode = chunker.MultihashCode ?? 0,
+        };
+    }
+
+    private static ToriiSoraFsPinPolicy NormalizeSoraFsPinPolicy(ToriiSoraFsPinPolicy pinPolicy)
+    {
+        return new ToriiSoraFsPinPolicy
+        {
+            MinReplicas = RequireSoraFsUnsigned(
+                pinPolicy.MinReplicas,
+                nameof(pinPolicy.MinReplicas),
+                allowZero: false),
+            StorageClass = new ToriiSoraFsStorageClass
+            {
+                Type = NormalizeSoraFsStorageClass(pinPolicy.StorageClass),
+            },
+            RetentionEpoch = pinPolicy.RetentionEpoch ?? 0,
+        };
+    }
+
+    private static ToriiSoraFsPinAlias NormalizeSoraFsPinAlias(
+        ToriiSoraFsPinAlias alias,
+        string paramName)
+    {
+        return new ToriiSoraFsPinAlias
+        {
+            Namespace = NormalizeRequiredValue(alias.Namespace, $"{paramName}.{nameof(alias.Namespace)}"),
+            Name = NormalizeRequiredValue(alias.Name, $"{paramName}.{nameof(alias.Name)}"),
+            ProofBase64 = NormalizeRequiredBase64(
+                alias.ProofBase64,
+                $"{paramName}.{nameof(alias.ProofBase64)}"),
+        };
+    }
+
+    private static string NormalizeSoraFsStorageClass(ToriiSoraFsStorageClass? storageClass)
+    {
+        if (storageClass is null)
+        {
+            throw new ArgumentNullException(nameof(storageClass));
+        }
+
+        var normalized = NormalizeRequiredValue(storageClass.Type, nameof(storageClass.Type)).ToLowerInvariant();
+        return normalized switch
+        {
+            "hot" => "Hot",
+            "warm" => "Warm",
+            "cold" => "Cold",
+            _ => throw new ArgumentException("SoraFS storage class must be Hot, Warm, or Cold.", nameof(storageClass)),
+        };
+    }
+
+    private static uint RequireSoraFsUnsigned(uint? value, string paramName, bool allowZero)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException("Value must be provided.", paramName);
+        }
+
+        if (!allowZero && value.Value == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Value must be positive.");
+        }
+
+        return value.Value;
+    }
+
+    private static ulong RequireSoraFsUnsigned(ulong? value, string paramName, bool allowZero)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException("Value must be provided.", paramName);
+        }
+
+        if (!allowZero && value.Value == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Value must be positive.");
+        }
+
+        return value.Value;
+    }
+
+    private static string NormalizeSoraFsDigestHex(string? value, string paramName)
+    {
+        var normalized = NormalizeRequiredValue(value, paramName);
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[2..].Trim();
+        }
+
+        if (normalized.Length != 64 || !IsHex(normalized))
+        {
+            throw new ArgumentException("Value must be a 32-byte hex string.", paramName);
+        }
+
+        return normalized.ToLowerInvariant();
+    }
+
+    private static string NormalizeRequiredBase64(string? value, string paramName)
+    {
+        var normalized = NormalizeRequiredValue(value, paramName);
+        if (normalized.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must be base64 encoded without whitespace.", paramName);
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(normalized);
+        }
+        catch (FormatException exception)
+        {
+            throw new ArgumentException("Value must be base64 encoded.", paramName, exception);
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException("Value must be a non-empty base64 payload.", paramName);
+        }
+
+        return Convert.ToBase64String(bytes);
+    }
+
+    private static bool IsHex(string value)
+    {
+        foreach (var c in value)
+        {
+            var digit =
+                c is >= '0' and <= '9'
+                || c is >= 'a' and <= 'f'
+                || c is >= 'A' and <= 'F';
+            if (!digit)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string NormalizeRequiredValue(string? value, string paramName)

@@ -1,0 +1,24 @@
+<camt:Document xmlns:camt="urn:iso:std:iso:20022:tech:xsd:camt.056.001.09">
+  <camt:FIToFIPmtCxlReq>
+    <camt:Assgnmt>
+      <camt:Id>CANCEL-FIXTURE-9</camt:Id>
+      <camt:Assgnr><camt:Agt><camt:FinInstnId><camt:BICFI>DEUTDEFF</camt:BICFI></camt:FinInstnId></camt:Agt></camt:Assgnr>
+      <camt:Assgne><camt:Agt><camt:FinInstnId><camt:BICFI>MARKDEFF</camt:BICFI></camt:FinInstnId></camt:Agt></camt:Assgne>
+      <camt:CreDtTm>2025-01-01T00:05:00Z</camt:CreDtTm>
+    </camt:Assgnmt>
+    <camt:Undrlyg>
+      <camt:TxInf>
+        <camt:OrgnlGrpInf>
+          <camt:OrgnlMsgId>CANCEL-ORIG-9</camt:OrgnlMsgId>
+          <camt:OrgnlMsgNmId>pacs.008.001.08</camt:OrgnlMsgNmId>
+          <camt:OrgnlCreDtTm>2025-01-01T00:00:00Z</camt:OrgnlCreDtTm>
+        </camt:OrgnlGrpInf>
+        <camt:OrgnlInstrId>CANCEL-INSTR-9</camt:OrgnlInstrId>
+        <camt:CxlRsnInf>
+          <camt:Rsn><camt:Cd>CUST</camt:Cd></camt:Rsn>
+          <camt:AddtlInf>customer requested recall</camt:AddtlInf>
+        </camt:CxlRsnInf>
+      </camt:TxInf>
+    </camt:Undrlyg>
+  </camt:FIToFIPmtCxlReq>
+</camt:Document>

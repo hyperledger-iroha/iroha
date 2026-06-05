@@ -73,7 +73,7 @@ use iroha_data_model::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
-    zk::BackendTag,
+    zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_primitives::calendar;
 #[cfg(test)]
@@ -2438,22 +2438,35 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         // Early sanity: ensure commitments and backend labels match the
         // production no-trusted-setup verifier policy.
         for (id, rec) in &map {
-            if !matches!(rec.backend, BackendTag::Halo2IpaPasta | BackendTag::Stark) {
+            if !id.is_portable_registry_id() {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            let Some(registry_backend_tag) =
+                crate::zk::production_verify_backend_tag(id.backend.as_str())
+            else {
+                return Err(ivm::VMError::NoritoInvalid);
+            };
+            if registry_backend_tag != rec.backend {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if rec.commitment.iter().all(|byte| *byte == 0)
+                || rec.public_inputs_schema_hash.iter().all(|byte| *byte == 0)
+            {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if !Self::verifying_key_record_metadata_is_portable(rec) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if rec.backend.is_pending_production_backend() {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+                || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
+            {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             let backend_label = Self::backend_label_for_record(id, rec);
-            if crate::zk::is_trusted_setup_backend_label(&backend_label) {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-            if crate::zk::is_developer_only_backend_label(&backend_label) {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-            if rec.backend == BackendTag::Halo2IpaPasta && !backend_label.starts_with("halo2/") {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-            if rec.backend == BackendTag::Stark
-                && !crate::zk::is_stark_fri_v1_backend(&backend_label)
-            {
+            if !Self::production_backend_label_matches_record(&backend_label, rec.backend) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             if let Some(ref vk) = rec.key {
@@ -2465,6 +2478,79 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.verifying_keys = map;
         Ok(())
+    }
+
+    fn verifying_key_record_metadata_is_portable(rec: &VerifyingKeyRecord) -> bool {
+        if !iroha_data_model::proof::verifying_key_id_field_is_portable(&rec.namespace) {
+            return false;
+        }
+        if rec.owner_manifest_id.as_ref().is_some_and(|owner| {
+            !iroha_data_model::proof::verifying_key_id_field_is_portable(owner)
+        }) {
+            return false;
+        }
+        if rec
+            .gas_schedule_id
+            .as_ref()
+            .is_some_and(|gas| !iroha_data_model::proof::verifying_key_id_field_is_portable(gas))
+        {
+            return false;
+        }
+        if rec
+            .metadata_uri_cid
+            .as_ref()
+            .is_some_and(|uri| !Self::verifying_key_content_uri_is_portable(uri))
+        {
+            return false;
+        }
+        if rec
+            .vk_bytes_cid
+            .as_ref()
+            .is_some_and(|uri| !Self::verifying_key_content_uri_is_portable(uri))
+        {
+            return false;
+        }
+        !matches!(
+            (rec.activation_height, rec.withdraw_height),
+            (Some(activation), Some(withdraw)) if withdraw <= activation
+        )
+    }
+
+    fn verifying_key_content_uri_is_portable(uri: &str) -> bool {
+        const MAX_URI_BYTES: usize = 512;
+
+        if uri.is_empty()
+            || uri.len() > MAX_URI_BYTES
+            || uri.trim() != uri
+            || uri
+                .as_bytes()
+                .iter()
+                .any(|byte| !byte.is_ascii_graphic() || matches!(*byte, b'\\' | b'?' | b'#' | b'@'))
+        {
+            return false;
+        }
+
+        let body = uri
+            .strip_prefix("ipfs://")
+            .or_else(|| uri.strip_prefix("cid:"))
+            .unwrap_or(uri);
+
+        if body.is_empty()
+            || body.starts_with('/')
+            || body.ends_with('/')
+            || body.contains("..")
+            || body.contains("//")
+        {
+            return false;
+        }
+
+        body.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
+        })
     }
 
     fn backend_label_for_record(id: &VerifyingKeyId, rec: &VerifyingKeyRecord) -> String {
@@ -2486,8 +2572,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             BackendTag::Groth16 => "groth16",
             BackendTag::Stark => "stark",
             BackendTag::Unsupported => "unsupported",
+            BackendTag::Halo2IpaOrchard
+            | BackendTag::Groth16Bls12377
+            | BackendTag::FcmpPlusPlusCurveTree
+            | BackendTag::LatticePcsSis
+            | BackendTag::MidenStark
+            | BackendTag::AztecPlonkishPrivateKernel
+            | BackendTag::PqMaspStarkFri => rec.backend.canonical_label(),
+            _ => rec.backend.canonical_label(),
         }
         .to_string()
+    }
+
+    fn production_backend_label_matches_record(
+        backend_label: &str,
+        backend_tag: BackendTag,
+    ) -> bool {
+        matches!(backend_tag, BackendTag::Halo2IpaPasta | BackendTag::Stark)
+            && crate::zk::production_verify_backend_tag(backend_label)
+                .is_some_and(|expected| expected == backend_tag)
     }
 
     #[cfg(test)]
@@ -2571,20 +2674,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .iter()
             .find(|(_, r)| r.commitment == vk_commitment)
             .ok_or(ivm::host::ERR_VK_MISSING)?;
-        if !matches!(
-            vk_rec.backend,
-            BackendTag::Halo2IpaPasta | BackendTag::Stark
-        ) {
-            return Err(ivm::host::ERR_BACKEND);
-        }
         if !vk_rec.is_active() {
             return Err(ivm::host::ERR_VK_INACTIVE);
         }
         let backend_label = Self::backend_label_for_record(vk_id, vk_rec);
-        if crate::zk::is_trusted_setup_backend_label(&backend_label) {
-            return Err(ivm::host::ERR_BACKEND);
-        }
-        if crate::zk::is_developer_only_backend_label(&backend_label) {
+        if !Self::production_backend_label_matches_record(&backend_label, vk_rec.backend) {
             return Err(ivm::host::ERR_BACKEND);
         }
         Ok((vk_rec.clone(), backend_label))
@@ -2615,6 +2709,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::host::ERR_PROOF_LEN);
         }
         Ok(())
+    }
+
+    fn map_open_verify_envelope_validation_error(err: OpenVerifyEnvelopeValidationError) -> u64 {
+        match err {
+            OpenVerifyEnvelopeValidationError::UnsupportedBackend
+            | OpenVerifyEnvelopeValidationError::PendingProductionBackend { .. } => {
+                ivm::host::ERR_BACKEND
+            }
+            OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash => ivm::host::ERR_VK_MISSING,
+            OpenVerifyEnvelopeValidationError::NonEmptyAux => ivm::host::ERR_VK_MISMATCH,
+            OpenVerifyEnvelopeValidationError::ProofBytesTooLarge { .. } => {
+                ivm::host::ERR_PROOF_LEN
+            }
+            OpenVerifyEnvelopeValidationError::PublicInputsTooLarge { .. }
+            | OpenVerifyEnvelopeValidationError::CircuitIdTooLarge { .. }
+            | OpenVerifyEnvelopeValidationError::AuxTooLarge { .. } => ivm::host::ERR_ENVELOPE_SIZE,
+            OpenVerifyEnvelopeValidationError::EmptyCircuitId
+            | OpenVerifyEnvelopeValidationError::InvalidCircuitId
+            | OpenVerifyEnvelopeValidationError::EmptyPublicInputs
+            | OpenVerifyEnvelopeValidationError::EmptyProofBytes => ivm::host::ERR_DECODE,
+        }
     }
 
     fn parse_zk1_ipa_k(vk_bytes: &[u8]) -> Option<u32> {
@@ -2668,13 +2783,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let env: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(payload).map_err(|_| ivm::host::ERR_DECODE)?;
         self.validate_envelope_header(&env, payload.len())?;
-        if !env.aux.is_empty() {
-            return Err(ivm::host::ERR_VK_MISMATCH);
-        }
-        if env.vk_hash == [0u8; 32] {
-            return Err(ivm::host::ERR_VK_MISSING);
-        }
+        let max_proof_bytes = match env.backend {
+            BackendTag::Stark => self.stark_config.max_proof_bytes,
+            _ => self.halo2_config.max_proof_bytes,
+        };
+        env.validate_with_bounds(OpenVerifyEnvelopeBounds {
+            max_proof_bytes,
+            ..OpenVerifyEnvelopeBounds::default()
+        })
+        .map_err(Self::map_open_verify_envelope_validation_error)?;
         let (vk_rec, backend_label) = self.load_vk_record_any_namespace(env.vk_hash)?;
+        let expected_env_backend = crate::zk::production_verify_backend_tag(&backend_label)
+            .ok_or(ivm::host::ERR_BACKEND)?;
+        if env.backend != expected_env_backend {
+            return Err(ivm::host::ERR_BACKEND);
+        }
         if let Some(expected_namespace) = namespace
             && vk_rec.namespace != expected_namespace
         {
@@ -7128,9 +7251,26 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Accept a Norito-encoded InstructionBox and enqueue it for later execution.
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
                 let p = vm.register(10);
-                let tlv = Self::decode_pointer_tlv(vm, p, PointerType::NoritoBytes)?;
+                let tlv = Self::decode_pointer_tlv(vm, p, PointerType::NoritoBytes)
+                    .or_else(|_| Self::decode_pointer_tlv(vm, p, PointerType::Blob))?;
+                let payload = if tlv.type_id == PointerType::Blob {
+                    std::str::from_utf8(tlv.payload)
+                        .ok()
+                        .and_then(|raw| {
+                            let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
+                            (!trimmed.is_empty()
+                                && trimmed.len() % 2 == 0
+                                && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()))
+                            .then(|| hex::decode(trimmed).ok())
+                            .flatten()
+                        })
+                        .map(std::borrow::Cow::Owned)
+                        .unwrap_or_else(|| std::borrow::Cow::Borrowed(tlv.payload))
+                } else {
+                    std::borrow::Cow::Borrowed(tlv.payload)
+                };
                 let ib: iroha_data_model::isi::InstructionBox =
-                    norito::decode_from_bytes(tlv.payload)
+                    norito::decode_from_bytes(payload.as_ref())
                         .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 // Only enqueue supported ZK ISIs via this vendor syscall for now.
                 // If present, attach the last verify envelope hash to the proof attachment
@@ -13020,6 +13160,49 @@ seiyaku AliasPayout {{
     }
 
     #[test]
+    fn execute_instruction_syscall_accepts_blob_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::Blob, &payload);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued from Blob bytes");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_accepts_blob_hex_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let hex_payload = hex::encode(payload);
+        let ptr = store_tlv(&mut vm, PointerType::Blob, hex_payload.as_bytes());
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued from Blob hex bytes");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
     fn execute_instruction_syscall_accepts_code_literal_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
@@ -17187,6 +17370,360 @@ seiyaku Vault {
     }
 
     #[test]
+    fn set_verifying_keys_rejects_malformed_circuit_ids() {
+        crate::test_alias::ensure();
+        let invalid_circuit_ids = [
+            ("empty", " "),
+            ("uppercase", "halo2/ipa:Transfer"),
+            ("control", "halo2/ipa:transfer\nforged"),
+            ("zero-width", "halo2/ipa:transfer\u{200B}"),
+            ("path-traversal", "halo2/ipa/../transfer"),
+            ("dot-segment", "halo2/ipa/./transfer"),
+            ("hidden-segment", "halo2/ipa/.transfer"),
+            ("slash-colon-adjacent", "halo2/ipa/:transfer"),
+            ("colon-slash-adjacent", "halo2/ipa:/transfer"),
+            ("dot-colon-adjacent", "halo2/ipa.:transfer"),
+            ("colon-dot-adjacent", "halo2/ipa:.transfer"),
+            ("backslash", "halo2\\ipa\\transfer"),
+        ];
+        for (label, circuit_id) in invalid_circuit_ids {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment, [0x42; 32], backend, circuit_id, "core", vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject malformed circuit id `{circuit_id}`"
+            );
+        }
+
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![1, 2, 3, 4];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let oversized_circuit_id =
+            "a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+        let rec = active_vk_record(
+            commitment,
+            [0x42; 32],
+            backend,
+            &oversized_circuit_id,
+            "core",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        assert!(
+            host.set_verifying_keys(map).is_err(),
+            "oversized circuit id must be rejected"
+        );
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_malformed_registry_ids() {
+        crate::test_alias::ensure();
+        const OVERSIZED_VERIFYING_KEY_FIELD_BYTES: usize = 257;
+
+        let invalid_registry_ids = [
+            ("blank-backend", " ", "vk"),
+            ("blank-name", "halo2/ipa", " "),
+            ("uppercase-backend", "Halo2/ipa", "vk"),
+            ("uppercase-name", "halo2/ipa", "Vk"),
+            ("control-backend", "halo2/ipa\nforged", "vk"),
+            ("control-name", "halo2/ipa", "vk\nforged"),
+            ("zero-width-backend", "halo2/ipa\u{200B}", "vk"),
+            ("zero-width-name", "halo2/ipa", "vk\u{200B}forged"),
+            ("path-traversal-backend", "halo2/ipa/../vk", "vk"),
+            ("path-traversal-name", "halo2/ipa", "vk/../forged"),
+            ("dot-segment-backend", "halo2/ipa/./vk", "vk"),
+            ("dot-segment-name", "halo2/ipa", "vk/./forged"),
+            ("hidden-backend", "halo2/.ipa", "vk"),
+            ("hidden-name", "halo2/ipa", ".vk"),
+            ("slash-colon-backend", "halo2/ipa/:vk", "vk"),
+            ("colon-slash-name", "halo2/ipa", "vk:/forged"),
+            ("backslash-backend", "halo2\\ipa", "vk"),
+            ("backslash-name", "halo2/ipa", "vk\\forged"),
+            ("leading-delimiter-name", "halo2/ipa", "-vk"),
+            ("trailing-delimiter-name", "halo2/ipa", "vk_"),
+            ("backend-double-colon-alias", "halo2/ipa::transfer", "vk"),
+        ];
+        for (label, id_backend, id_name) in invalid_registry_ids {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(id_backend, id_name), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject verifier-key registry id `{id_backend}` / `{id_name}`"
+            );
+        }
+
+        for (label, id_backend, id_name) in [
+            (
+                "oversized-backend",
+                "a".repeat(OVERSIZED_VERIFYING_KEY_FIELD_BYTES),
+                "vk".to_string(),
+            ),
+            (
+                "oversized-name",
+                "halo2/ipa".to_string(),
+                "a".repeat(OVERSIZED_VERIFYING_KEY_FIELD_BYTES),
+            ),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(
+                VerifyingKeyId::new(id_backend.as_str(), id_name.as_str()),
+                rec,
+            );
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject oversized verifier-key registry id"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_registry_backend_tag_mismatches() {
+        crate::test_alias::ensure();
+        for (label, registry_backend, record_backend, circuit_id) in [
+            (
+                "stark-registry-halo2-record",
+                "stark/fri",
+                "halo2/ipa",
+                "halo2/ipa:test-circuit",
+            ),
+            (
+                "halo2-registry-stark-record",
+                "halo2/ipa",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:zk-ace",
+            ),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(record_backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                record_backend,
+                circuit_id,
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(registry_backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject registry backend tag mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_zero_commitment_or_schema_hash() {
+        crate::test_alias::ensure();
+        for (label, zero_commitment, zero_schema_hash, keyless) in [
+            ("keyless-zero-commitment", true, false, true),
+            ("stored-key-zero-schema-hash", false, true, false),
+            ("keyless-zero-commitment-and-schema-hash", true, true, true),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let schema_hash = if zero_schema_hash {
+                [0u8; 32]
+            } else {
+                [0x42; 32]
+            };
+            let mut rec = active_vk_record(
+                commitment,
+                schema_hash,
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            if zero_commitment {
+                rec.commitment = [0u8; 32];
+            }
+            if keyless {
+                rec.key = None;
+            }
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject zero verifier-key binding material"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_malformed_record_metadata() {
+        crate::test_alias::ensure();
+
+        #[derive(Clone, Copy)]
+        enum Field {
+            Namespace,
+            OwnerManifest,
+            GasSchedule,
+            MetadataUri,
+            VkBytesUri,
+        }
+
+        let oversized_uri = format!("ipfs://{}", "a".repeat(513));
+        let cases = [
+            ("blank-namespace", Field::Namespace, " "),
+            ("uppercase-namespace", Field::Namespace, "Core"),
+            ("control-namespace", Field::Namespace, "core\nforged"),
+            ("zero-width-namespace", Field::Namespace, "core\u{200B}"),
+            ("traversal-namespace", Field::Namespace, "core/../vk"),
+            ("hidden-owner", Field::OwnerManifest, ".core"),
+            ("control-owner", Field::OwnerManifest, "core\tforged"),
+            ("slash-colon-owner", Field::OwnerManifest, "core/:owner"),
+            ("blank-gas-schedule", Field::GasSchedule, " "),
+            ("space-gas-schedule", Field::GasSchedule, "sched 0"),
+            ("trailing-gas-delimiter", Field::GasSchedule, "sched_0_"),
+            ("empty-metadata-uri", Field::MetadataUri, ""),
+            ("trimmed-metadata-uri", Field::MetadataUri, " ipfs://vk"),
+            ("empty-ipfs-metadata-uri", Field::MetadataUri, "ipfs://"),
+            (
+                "traversal-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk/../admin",
+            ),
+            (
+                "repeated-slash-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk//admin",
+            ),
+            (
+                "credentialed-metadata-uri",
+                Field::MetadataUri,
+                "https://user@example.com/vk",
+            ),
+            (
+                "query-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk?token=secret",
+            ),
+            (
+                "fragment-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk#section",
+            ),
+            (
+                "zero-width-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk\u{200B}",
+            ),
+            (
+                "backslash-metadata-uri",
+                Field::MetadataUri,
+                "ipfs://vk\\admin",
+            ),
+            ("empty-cid-vk-bytes-uri", Field::VkBytesUri, "cid:"),
+            (
+                "traversal-vk-bytes-uri",
+                Field::VkBytesUri,
+                "cid:vk/../bytes",
+            ),
+            (
+                "query-vk-bytes-uri",
+                Field::VkBytesUri,
+                "cid:vk?token=secret",
+            ),
+            (
+                "oversized-metadata-uri",
+                Field::MetadataUri,
+                oversized_uri.as_str(),
+            ),
+        ];
+
+        for (label, field, value) in cases {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let mut rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            match field {
+                Field::Namespace => rec.namespace = value.to_owned(),
+                Field::OwnerManifest => rec.owner_manifest_id = Some(value.to_owned()),
+                Field::GasSchedule => rec.gas_schedule_id = Some(value.to_owned()),
+                Field::MetadataUri => rec.metadata_uri_cid = Some(value.to_owned()),
+                Field::VkBytesUri => rec.vk_bytes_cid = Some(value.to_owned()),
+            }
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject malformed verifier-key metadata `{value}`"
+            );
+        }
+
+        for (label, activation_height, withdraw_height) in [
+            ("same-height-window", Some(10), Some(10)),
+            ("inverted-window", Some(10), Some(9)),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let mut rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            rec.activation_height = activation_height;
+            rec.withdraw_height = withdraw_height;
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {label} must reject invalid verifier-key activation window"
+            );
+        }
+    }
+
+    #[test]
     fn set_verifying_keys_rejects_trusted_setup_backend_labels() {
         crate::test_alias::ensure();
         for backend in [
@@ -17244,6 +17781,119 @@ seiyaku Vault {
             assert!(
                 host.set_verifying_keys(map).is_err(),
                 "case {backend} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_pending_production_backend_labels() {
+        crate::test_alias::ensure();
+        for backend in [
+            "halo2/ipa/orchard",
+            "halo2/ipa:zcash-orchard",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zk-ams",
+            "zk-x509",
+            "sis-with-hints",
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                &format!("{backend}:test-circuit"),
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {backend} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_production_claim_and_unsupported_backend_labels() {
+        crate::test_alias::ensure();
+        for (backend, backend_tag) in [
+            ("halo2/ipa:production-ready", BackendTag::Halo2IpaPasta),
+            ("halo2/ipa:mainnet-complete", BackendTag::Halo2IpaPasta),
+            ("stark/fri/audit-signoff", BackendTag::Stark),
+            ("halo2/unknown-native-v1", BackendTag::Halo2IpaPasta),
+            ("stark/fri/random-profile", BackendTag::Stark),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let mut rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                &format!("{backend}:test-circuit"),
+                "core",
+                vk_bytes,
+            );
+            rec.backend = backend_tag;
+            rec.curve = if backend_tag == BackendTag::Stark {
+                "goldilocks".to_string()
+            } else {
+                "pallas".to_string()
+            };
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {backend} must be rejected before reaching IVM verification"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_pending_production_record_tags() {
+        crate::test_alias::ensure();
+        for backend_tag in [
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let mut rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            rec.backend = backend_tag;
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {} must be rejected",
+                backend_tag.canonical_label()
             );
         }
     }
@@ -18454,6 +19104,20 @@ seiyaku Vault {
         norito::to_bytes(&env).expect("serialize envelope")
     }
 
+    fn mutated_dummy_env(
+        circuit_id: &str,
+        vk_hash: [u8; 32],
+        public_inputs: Vec<u8>,
+        proof_bytes: Vec<u8>,
+        mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
+    ) -> Vec<u8> {
+        let mut env: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(circuit_id, vk_hash, public_inputs, proof_bytes))
+                .expect("decode dummy envelope");
+        mutate(&mut env);
+        norito::to_bytes(&env).expect("serialize mutated envelope")
+    }
+
     fn minimal_zk1_vk_bytes(k: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"ZK1\0");
@@ -18583,6 +19247,112 @@ seiyaku Vault {
     }
 
     #[test]
+    fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+        host.halo2_config.max_envelope_bytes = usize::MAX;
+        host.halo2_config.max_proof_bytes = usize::MAX;
+
+        let backend = "halo2/ipa";
+        let circuit_id = "halo2/ipa:transfer-check";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let public_inputs = vec![1u8, 2, 3, 4];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+
+        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 8] = [
+            (
+                "empty circuit id",
+                |env| env.circuit_id.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "malformed circuit id",
+                |env| env.circuit_id = "halo2/ipa:transfer-check\nforged".to_owned(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "oversized circuit id",
+                |env| {
+                    env.circuit_id = "a"
+                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                },
+                ivm::host::ERR_ENVELOPE_SIZE,
+            ),
+            (
+                "zero verifier-key hash",
+                |env| env.vk_hash = [0u8; 32],
+                ivm::host::ERR_VK_MISSING,
+            ),
+            (
+                "empty public inputs",
+                |env| env.public_inputs.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "oversized public inputs",
+                |env| {
+                    env.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                },
+                ivm::host::ERR_ENVELOPE_SIZE,
+            ),
+            (
+                "empty proof bytes",
+                |env| env.proof_bytes.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "auxiliary bytes",
+                |env| env.aux = b"ignored-hint".to_vec(),
+                ivm::host::ERR_VK_MISMATCH,
+            ),
+        ];
+        for (label, mutate, expected_code) in invalid_cases {
+            let payload = mutated_dummy_env(
+                circuit_id,
+                commitment,
+                public_inputs.clone(),
+                vec![0xAA; 16],
+                mutate,
+            );
+            assert_eq!(
+                host.enforce_zk_envelope(&payload, "transfer"),
+                Err(expected_code),
+                "{label} should map to the shared validation error code"
+            );
+        }
+
+        host.halo2_config.max_proof_bytes = 8;
+        let too_large_proof = dummy_env(
+            circuit_id,
+            commitment,
+            public_inputs,
+            vec![0xAA; host.halo2_config.max_proof_bytes + 1],
+        );
+        assert_eq!(
+            host.enforce_zk_envelope(&too_large_proof, "transfer"),
+            Err(ivm::host::ERR_PROOF_LEN)
+        );
+    }
+
+    #[test]
     fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
@@ -18681,6 +19451,19 @@ seiyaku Vault {
             Err(ivm::host::ERR_VK_MISSING)
         );
 
+        host.stark_config.enabled = true;
+        let env_bad_backend = mutated_dummy_env(
+            circuit_id,
+            commitment,
+            public_inputs.clone(),
+            vec![0xAA; 16],
+            |env| env.backend = BackendTag::Stark,
+        );
+        assert_eq!(
+            host.enforce_zk_envelope(&env_bad_backend, "transfer"),
+            Err(ivm::host::ERR_BACKEND)
+        );
+
         // Opaque auxiliary metadata is not admitted by the registered-key guard.
         let mut env_aux: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(&dummy_env(
@@ -18728,39 +19511,51 @@ seiyaku Vault {
     }
 
     #[test]
-    fn generic_verify_proof_syscall_rejects_injected_developer_only_vk_snapshot() {
+    fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
         crate::test_alias::ensure();
-        let mut host = CoreHost::new(fixture_account("alice"));
-        host.set_chain_id_bytes(b"chain".to_vec());
-        host.set_current_manifest_id(Some("core".to_string()));
+        for backend in [
+            "halo2/mock",
+            "halo2/ipa:production-ready",
+            "halo2/unknown-native-v1",
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            host.set_chain_id_bytes(b"chain".to_vec());
+            host.set_current_manifest_id(Some("core".to_string()));
 
-        let backend = "halo2/mock";
-        let circuit_id = "halo2/mock:dev-circuit";
-        let public_inputs = vec![1u8, 2, 3, 4];
-        let vk_bytes = vec![4, 3, 2, 1];
-        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let rec = active_vk_record(
-            commitment,
-            schema_hash(&public_inputs),
-            backend,
-            circuit_id,
-            "core",
-            vk_bytes,
-        );
-        host.verifying_keys
-            .insert(VerifyingKeyId::new(backend, "vk"), rec);
+            let circuit_id = format!("{backend}:rejected-circuit");
+            let public_inputs = vec![1u8, 2, 3, 4];
+            let vk_bytes = vec![4, 3, 2, 1];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                schema_hash(&public_inputs),
+                backend,
+                &circuit_id,
+                "core",
+                vk_bytes,
+            );
+            host.verifying_keys
+                .insert(VerifyingKeyId::new(backend, "vk"), rec);
 
-        let payload = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, ptr);
+            let payload = dummy_env(&circuit_id, commitment, public_inputs, vec![0xAA; 16]);
+            let mut vm = IVM::new(1_000_000);
+            let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+            vm.set_register(10, ptr);
 
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
-            .expect("generic verify proof syscall");
-        assert!(gas > 0, "verification prechecks still charge proof gas");
-        assert_eq!(vm.register(10), 0);
-        assert_eq!(vm.register(11), ivm::host::ERR_BACKEND);
+            let gas = host
+                .syscall(ivm_sys::SYSCALL_VERIFY_PROOF, &mut vm)
+                .expect("generic verify proof syscall");
+            assert!(
+                gas > 0,
+                "verification prechecks still charge proof gas for {backend}"
+            );
+            assert_eq!(vm.register(10), 0, "case {backend} must fail");
+            assert_eq!(
+                vm.register(11),
+                ivm::host::ERR_BACKEND,
+                "case {backend} must fail as backend admission"
+            );
+        }
     }
 
     #[cfg(feature = "zk-stark")]

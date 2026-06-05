@@ -8709,6 +8709,15 @@ Temporal properties:
 - `GstElapsedStepAlwaysOnlySetsGst` proves that a GST-elapsed step flips only
   the GST flag while preserving phase, view, vote, RBC, commit-certificate,
   and finality state.
+- `GstNeverRegresses` proves that once GST is observed, every real or
+  stuttering step preserves the GST flag.
+- `ViewNeverRegresses` proves that every real or stuttering step preserves or
+  advances the active view counter, ruling out view rollback.
+- `CommitViewNeverRegresses` proves that the latched commit-view witness can
+  only stay absent/preserved or advance to the committing view, never roll back.
+- `CommitEvidenceNeverRegresses` proves that the latched commit-certificate
+  vote and stake witnesses can only stay absent/preserved or advance to the
+  committing certificate, never roll back.
 - `TimeoutTickGateNeverBypassesStalledProgress` proves that the timeout-driven
   view-change gate is enabled only before finality, and only before GST or when
   every post-GST honest/RBC progress action is disabled.

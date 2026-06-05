@@ -99,14 +99,37 @@ class NexusAppClientTest {
         )
         val draft = client.buildTransferDraft(sampleInput())
 
-        val error = assertFailsWith<NexusAppError> {
-            client.finalizeAndSubmit(
-                draft.signable,
-                NexusWalletSignature(ByteArray(64) { 0x07 }, "secp256k1"),
-            )
+        for (algorithm in listOf(
+            "secp256k1",
+            "ed\t25519",
+            "ed\u200B25519",
+            "\u0435d25519",
+            "ed\uFF0D25519",
+            " ED25519 ",
+        )) {
+            val error = assertFailsWith<NexusAppError> {
+                client.finalizeAndSubmit(
+                    draft.signable,
+                    NexusWalletSignature(ByteArray(64) { 0x07 }, algorithm),
+                )
+            }
+
+            assertEquals("unsupported_signature_algorithm", error.code)
         }
 
-        assertEquals("unsupported_signature_algorithm", error.code)
+        val signableError = assertFailsWith<NexusAppError> {
+            client.finalizeAndSubmit(
+                NexusSignableTransaction(
+                    draft.signable.payloadBytes,
+                    draft.signable.payloadHashHex,
+                    draft.signable.authority,
+                    draft.signable.signingPublicKey,
+                    "ed\u200B25519",
+                ),
+                NexusWalletSignature(ByteArray(64) { 0x07 }),
+            )
+        }
+        assertEquals("unsupported_signature_algorithm", signableError.code)
     }
 
     @Test

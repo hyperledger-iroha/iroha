@@ -716,6 +716,9 @@ fn minimal_config_snapshot() {
                     default_profile: "generic-iso20022",
                     profiles: [],
                     store_dir: None,
+                    store_retention_secs: 0,
+                    store_max_records: 0,
+                    audit_export_dir: None,
                     embedded_signature_policy: None,
                     signer: None,
                     account_aliases: [],
@@ -725,6 +728,9 @@ fn minimal_config_snapshot() {
                         isin_crosswalk_path: None,
                         bic_lei_path: None,
                         mic_directory_path: None,
+                        csd_venue_path: None,
+                        securities_account_path: None,
+                        cash_leg_path: None,
                         cache_dir: None,
                     },
                 },
@@ -1563,6 +1569,37 @@ fn minimal_config_snapshot() {
                     burn_from_unix_timestamp_ms: 18446744073709551615,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
+                    sponsored_contract_operation_allowlist: [
+                        SponsoredContractOperationAllowlistEntry {
+                            contract_alias: Some(
+                                ContractAlias(
+                                    "dpn_suite::dpn",
+                                ),
+                            ),
+                            contract_address: None,
+                            entrypoints: {
+                                "approve_factored_invoice_counterparty",
+                                "approve_factoring",
+                                "approve_reverse_factored_invoice_counterparty",
+                                "configure",
+                                "confirm_factoring_funds_received",
+                                "finalize_factored_invoice_dpn",
+                                "finalize_factoring",
+                                "finalize_reverse_factored_invoice_dpn",
+                                "freeze_dpn",
+                                "mark_factoring_funds_sent",
+                                "mark_pending_settlement",
+                                "record_issued_dpn",
+                                "register_ed25519_key",
+                                "request_factored_invoice_issue",
+                                "request_factoring",
+                                "request_reverse_factored_invoice_issue",
+                                "sync_nft_metadata",
+                                "transfer_dpn",
+                                "unfreeze_dpn",
+                            },
+                        },
+                    ],
                 },
                 relay_worker: NexusRelayWorker {
                     enabled: false,
@@ -2114,7 +2151,7 @@ fn minimal_config_snapshot() {
                 kaigi_roster_join_vk: None,
                 kaigi_roster_leave_vk: None,
                 kaigi_usage_vk: None,
-                max_proof_size_bytes: 262144,
+                max_proof_size_bytes: 1048576,
                 max_nullifiers_per_tx: 8,
                 max_commitments_per_tx: 8,
                 max_confidential_ops_per_block: 256,
@@ -2453,7 +2490,7 @@ fn minimal_config_snapshot() {
                 enabled: false,
                 assume_valid: false,
                 verifier_backend: "halo2-ipa-pallas",
-                max_proof_size_bytes: 262144,
+                max_proof_size_bytes: 1048576,
                 max_nullifiers_per_tx: 8,
                 max_commitments_per_tx: 8,
                 max_confidential_ops_per_block: 256,
@@ -4003,6 +4040,7 @@ fn full_config_parses_fine() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

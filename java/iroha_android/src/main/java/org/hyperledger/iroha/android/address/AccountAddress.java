@@ -728,7 +728,11 @@ public final class AccountAddress {
   // -- Encoding helpers --
 
   private static byte curveIdForAlgorithm(final String algorithm) throws AccountAddressException {
-    final String normalized = algorithm.trim().toLowerCase();
+    final String normalized = algorithm.trim().toLowerCase(Locale.ROOT);
+    if (!isPrintableAscii(normalized)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, "unsupported signing algorithm: " + algorithm);
+    }
     final int curveId;
     switch (normalized) {
       case "ed25519":
@@ -792,6 +796,16 @@ public final class AccountAddress {
     }
     ensureCurveEnabled(curveId, "signing algorithm: " + normalized);
     return (byte) curveId;
+  }
+
+  private static boolean isPrintableAscii(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char ch = value.charAt(i);
+      if (ch < 0x20 || ch > 0x7E) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public static void configureCurveSupport(final CurveSupportConfig config) {

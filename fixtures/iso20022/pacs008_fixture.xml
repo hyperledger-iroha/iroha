@@ -1,0 +1,35 @@
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <pacs:FIToFICstmrCdtTrf>
+    <pacs:GrpHdr>
+      <pacs:MsgId>ISO-SAMPLE-001</pacs:MsgId>
+      <pacs:CreDtTm>2025-11-11T09:34:09Z</pacs:CreDtTm>
+      <pacs:BtchBookg>false</pacs:BtchBookg>
+      <pacs:NbOfTxs>1</pacs:NbOfTxs>
+      <pacs:SttlmInf><pacs:SttlmMtd>CLRG</pacs:SttlmMtd></pacs:SttlmInf>
+    </pacs:GrpHdr>
+    <pacs:CdtTrfTxInf>
+      <pacs:PmtId>
+        <pacs:InstrId>SAMPLE-INSTR-008</pacs:InstrId>
+        <pacs:EndToEndId>SAMPLE-E2E-008</pacs:EndToEndId>
+        <pacs:TxId>SAMPLE-TX-008</pacs:TxId>
+        <pacs:UETR>123e4567-e89b-42d3-a456-426614174000</pacs:UETR>
+      </pacs:PmtId>
+      <pacs:PmtTpInf>
+        <pacs:ClrChanl>RTNS</pacs:ClrChanl>
+        <pacs:SvcLvl><pacs:Prtry>0100</pacs:Prtry></pacs:SvcLvl>
+        <pacs:LclInstrm><pacs:Prtry>CTAA</pacs:Prtry></pacs:LclInstrm>
+        <pacs:CtgyPurp><pacs:Prtry>005</pacs:Prtry></pacs:CtgyPurp>
+      </pacs:PmtTpInf>
+      <pacs:IntrBkSttlmAmt Ccy="USD">1400.00</pacs:IntrBkSttlmAmt>
+      <pacs:IntrBkSttlmDt>2025-11-11</pacs:IntrBkSttlmDt>
+      <pacs:ChrgBr>SHAR</pacs:ChrgBr>
+      <pacs:Dbtr><pacs:Nm>Example Debtor</pacs:Nm></pacs:Dbtr>
+      <pacs:DbtrAcct><pacs:Id><pacs:IBAN>GB82WEST12345698765432</pacs:IBAN></pacs:Id></pacs:DbtrAcct>
+      <pacs:DbtrAgt><pacs:FinInstnId><pacs:BICFI>ALPHGB2L</pacs:BICFI></pacs:FinInstnId></pacs:DbtrAgt>
+      <pacs:CdtrAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>OMEGGB2L</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:CdtrAgt>
+      <pacs:Cdtr><pacs:Nm>Example Creditor</pacs:Nm></pacs:Cdtr>
+      <pacs:CdtrAcct><pacs:Id><pacs:IBAN>GB33BUKB20201555555555</pacs:IBAN></pacs:Id></pacs:CdtrAcct>
+      <pacs:InstrForNxtAgt><pacs:InstrInf>/INFO/Example note</pacs:InstrInf></pacs:InstrForNxtAgt>
+    </pacs:CdtTrfTxInf>
+  </pacs:FIToFICstmrCdtTrf>
+</pacs:Document>

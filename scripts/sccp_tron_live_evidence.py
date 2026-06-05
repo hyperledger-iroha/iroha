@@ -32,7 +32,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import sccp_tron_source_bridge_evidence as evidence  # noqa: E402
-from iroha_torii_client import sccp as sccp_client  # noqa: E402
+from sccp_client_loader import load_sccp_module  # noqa: E402
+
+
+sccp_client = load_sccp_module()
 
 
 Urlopen = Callable[..., Any]

@@ -42,6 +42,11 @@ class VerifyingKeyRecordDescription private constructor(
      * embedded verifying key bytes.
      */
     fun toArguments(backend: String): Map<String, String> {
+        if (_inlineKeyBytes != null) {
+            require(computeCommitmentHex(backend, _inlineKeyBytes) == commitmentHex) {
+                "backend does not match inline key commitment"
+            }
+        }
         val args = linkedMapOf<String, String>()
         args["record.version"] = version.toUInt().toString()
         args["record.circuit_id"] = circuitId
@@ -236,7 +241,7 @@ class VerifyingKeyRecordDescription private constructor(
 
         private fun computeCommitmentHex(backend: String, bytes: ByteArray): String {
             val digest = MessageDigest.getInstance("SHA-256")
-            digest.update(backend.toByteArray())
+            digest.update(backend.toByteArray(Charsets.UTF_8))
             digest.update(bytes)
             return digest.digest().joinToString("") { "%02x".format(it) }
         }

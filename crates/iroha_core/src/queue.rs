@@ -8271,17 +8271,11 @@ pub mod tests {
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "fee_sponsor".parse().expect("fee sponsor key"),
-            Json::new(fixture.sponsor_id.to_string()),
-        );
-        let tx = accepted_tx_with(
+        let tx = accepted_dpn_contract_call_tx(
             fixture.authority_id.clone(),
             &fixture.authority_keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
-            metadata,
+            Some(&fixture.sponsor_id),
         );
 
         queue
@@ -8303,10 +8297,11 @@ pub mod tests {
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by(
+        let tx = accepted_dpn_contract_call_tx(
             fixture.authority_id.clone(),
             &fixture.authority_keypair,
             &time_source,
+            None,
         );
 
         queue
@@ -8328,17 +8323,11 @@ pub mod tests {
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "fee_sponsor".parse().expect("fee sponsor key"),
-            Json::new(fixture.sponsor_id.to_string()),
-        );
-        let tx = accepted_tx_with(
+        let tx = accepted_dpn_contract_call_tx(
             fixture.authority_id.clone(),
             &fixture.authority_keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
-            metadata,
+            Some(&fixture.sponsor_id),
         );
 
         queue
@@ -8373,17 +8362,11 @@ pub mod tests {
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "fee_sponsor".parse().expect("fee sponsor key"),
-            Json::new(fixture.sponsor_id.to_string()),
-        );
-        let tx = accepted_tx_with(
+        let tx = accepted_dpn_contract_call_tx(
             fixture.authority_id.clone(),
             &fixture.authority_keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
-            metadata,
+            Some(&fixture.sponsor_id),
         );
 
         queue
@@ -9065,6 +9048,86 @@ pub mod tests {
         )
     }
 
+    fn dpn_contract_call_executable_and_metadata(
+        authority: &AccountId,
+        entrypoint: &str,
+        fee_sponsor: Option<&AccountId>,
+    ) -> (Executable, Metadata) {
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive DPN contract address");
+        let call = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: contract_address.clone(),
+            entrypoint: entrypoint.to_owned(),
+            payload: None,
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "contract_address".parse().expect("contract_address key"),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
+            "contract_alias".parse().expect("contract_alias key"),
+            Json::new("dpn_suite::dpn".to_owned()),
+        );
+        metadata.insert(
+            "contract_entrypoint"
+                .parse()
+                .expect("contract_entrypoint key"),
+            Json::new(entrypoint.to_owned()),
+        );
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit key"),
+            Json::new(1_u64),
+        );
+        if let Some(fee_sponsor) = fee_sponsor {
+            metadata.insert(
+                "fee_sponsor".parse().expect("fee_sponsor key"),
+                Json::new(fee_sponsor.to_string()),
+            );
+        }
+        (Executable::ContractCall(call), metadata)
+    }
+
+    fn accepted_dpn_contract_call_tx(
+        account_id: AccountId,
+        key_pair: &KeyPair,
+        time_source: &TimeSource,
+        fee_sponsor: Option<&AccountId>,
+    ) -> AcceptedTransaction<'static> {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let (executable, metadata) =
+            dpn_contract_call_executable_and_metadata(&account_id, "transfer_dpn", fee_sponsor);
+        let tx =
+            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
+                .with_executable(executable)
+                .with_metadata(metadata)
+                .sign(key_pair.private_key());
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::accept_with_time_source(
+            tx,
+            &chain_id,
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+            time_source,
+        )
+        .expect("Failed to accept DPN contract-call Transaction.")
+    }
+
     fn accepted_tx_with_ttl(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -9249,6 +9312,23 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
+        let dpn_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority_id,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive DPN contract address");
+        state
+            .world
+            .bind_contract_alias(
+                &dpn_contract_address,
+                "dpn_suite::dpn".parse().expect("DPN contract alias"),
+                None,
+                None,
+                0,
+            )
+            .expect("bind DPN contract alias");
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;

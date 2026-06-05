@@ -260,7 +260,7 @@ cat >vk_register.json <<'JSON'
   "name": "vk_add",
   "version": 1,
   "circuit_id": "circuit_alpha",
-  "public_inputs_schema_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "vk_bytes": "BASE64..."
 }
 JSON
@@ -278,7 +278,7 @@ cat >vk_update.json <<'JSON'
   "name": "vk_add",
   "version": 2,
   "circuit_id": "circuit_alpha",
-  "public_inputs_schema_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "public_inputs_schema_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "commitment_hex": "0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd"
 }
 JSON

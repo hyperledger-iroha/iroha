@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 /** Native record-backed Kagemusha compact payment token prover. */
 public final class KagemushaCompactPaymentTokenProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private KagemushaCompactPaymentTokenProver() {}
@@ -78,6 +79,9 @@ public final class KagemushaCompactPaymentTokenProver {
     }
     if (output.length == 0) {
       throw new IllegalStateException(label + " returned empty output");
+    }
+    if (output.length > NATIVE_ARCHIVE_MAX_BYTES) {
+      throw new IllegalStateException(label + " returned oversized output");
     }
     return output;
   }

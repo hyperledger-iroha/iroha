@@ -19,16 +19,16 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /** Native JVM implementation of Iroha Offline Note V2 canonical Norito encodings. */
 object OfflineNoteV2 {
     const val KEY_CERTIFICATE_PAYLOAD_DOMAIN: String =
-        "iroha:offline-note-v2:key-certificate-payload:v1"
-    const val ISSUED_CLAIM_DOMAIN: String = "iroha:offline-note-v2:issued-claim:v1"
+        "iroha:offline-note:key-certificate-payload"
+    const val ISSUED_CLAIM_DOMAIN: String = "iroha:offline-note:issued-claim"
     const val REDEEM_PUBLIC_INPUTS_DOMAIN: String =
-        "iroha:offline-note-v2:redeem-public-inputs:v1"
+        "iroha:offline-note:redeem-public-inputs"
     const val AUDIT_PUBLIC_INPUTS_DOMAIN: String =
-        "iroha:offline-note-v2:audit-public-inputs:v1"
+        "iroha:offline-note:audit-public-inputs"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
-        "{\"schema\":\"offline_note_v2_recursive_v1\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
+        "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
 
     private const val MULTISIG_POLICY_VERSION_V1 = 1
     private const val MAX_NUMERIC_SCALE = 28
@@ -41,21 +41,21 @@ object OfflineNoteV2 {
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
     private const val KEY_CERTIFICATE_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2"
+        "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
     private const val KEY_CERTIFICATE_PAYLOAD_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayloadV2"
-    private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssueV2"
+        "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload"
+    private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssue"
     private const val ISSUED_CLAIM_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteIssuedClaimV2"
+        "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
     private const val AUDIT_OUTPUT_CLAIM_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditOutputClaimV2"
-    private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeemV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim"
+    private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeem"
     private const val REDEEM_PUBLIC_INPUTS_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputsV2"
+        "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
     private const val AUDIT_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditBundleV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditBundle"
     private const val AUDIT_PUBLIC_INPUTS_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs"
 
     @JvmStatic
     fun encodeCertificatePayload(value: KeyCertificatePayloadV2): ByteArray =
@@ -107,20 +107,23 @@ object OfflineNoteV2 {
         NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN)
 
     class VerifyingKeyIdReference @JvmOverloads constructor(
-        val backend: String = RECURSIVE_BACKEND,
-        val name: String = RECURSIVE_VERIFIER_NAME,
+        backend: String = RECURSIVE_BACKEND,
+        name: String = RECURSIVE_VERIFIER_NAME,
     ) {
+        val backend: String = requireNonBlank(backend, "verifying key backend")
+        val name: String = requireNonBlank(name, "verifying key name")
+
         init {
-            require(backend.trim().isNotEmpty()) { "verifying key backend must not be empty" }
-            require(name.trim().isNotEmpty()) { "verifying key name must not be empty" }
+            require(this.backend.indexOf(':') < 0) { "verifying key backend must not contain ':'" }
+            require(this.name.indexOf(':') < 0) { "verifying key name must not contain ':'" }
         }
     }
 
-    class ProofBox(val backend: String, bytes: ByteArray) {
+    class ProofBox(backend: String, bytes: ByteArray) {
+        val backend: String = requireNonBlank(backend, "proof backend")
         private val _bytes = bytes.copyOf()
 
         init {
-            require(backend.trim().isNotEmpty()) { "proof backend must not be empty" }
             require(_bytes.isNotEmpty()) { "proof bytes must not be empty" }
         }
 
@@ -431,6 +434,12 @@ object OfflineNoteV2 {
             }
             requireHashes(_outputCommitments, "output_commitments")
             require(outputClaims.isNotEmpty()) { "output claims must not be empty" }
+            val committed = _outputCommitments.map { hexLower(it) }.toSet()
+            for (claim in outputClaims) {
+                require(hexLower(claim.noteCommitment()) in committed) {
+                    "audit output claim is not listed in output commitments"
+                }
+            }
         }
 
         fun tokenId(): ByteArray = _tokenId.copyOf()
@@ -1059,6 +1068,12 @@ object OfflineNoteV2 {
         for (i in values.indices) {
             requireHash(values[i], "$field[$i]")
         }
+    }
+
+    private fun requireNonBlank(value: String, field: String): String {
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty()) { "$field must not be empty" }
+        return trimmed
     }
 
     private fun canonicalSortKey(member: MultisigMemberPayload): ByteArray {

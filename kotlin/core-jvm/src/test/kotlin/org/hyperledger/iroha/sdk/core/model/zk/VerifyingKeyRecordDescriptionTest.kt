@@ -310,6 +310,15 @@ class VerifyingKeyRecordDescriptionTest {
     }
 
     @Test
+    fun `toArguments throws when inline key commitment was computed with different backend`() {
+        val desc = createWithInlineBytes()
+
+        assertFailsWith<IllegalArgumentException> {
+            desc.toArguments("other-backend")
+        }
+    }
+
+    @Test
     fun `toArguments omits null optional fields`() {
         val desc = createWithCommitment()
         val args = desc.toArguments(backend)

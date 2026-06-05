@@ -194,6 +194,8 @@ class CurveId(IntEnum):
     @classmethod
     def from_algorithm(cls, algorithm: str) -> "CurveId":
         normalized = algorithm.strip().lower()
+        if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized):
+            raise AccountAddressError(f"unsupported signing algorithm: {algorithm}")
         mapping = {
             "ed25519": cls.ED25519,
             "ed": cls.ED25519,

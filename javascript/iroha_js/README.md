@@ -29,6 +29,87 @@ mismatched, SDK startup fails. Run `npm run build:native` explicitly after
 installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only in test harnesses
 that need to point at an alternate `native/` folder.
 
+## Native Recursive Kagemusha Spend
+
+Native builds expose ABI-6 recursive Kagemusha spend helpers from the crypto
+surface. `preferredKagemushaOfflineSpendMode()` returns `recursive_spend_v1`
+only when the native host reports bridge ABI 6 and every required method
+rejects the malformed availability probe: `kagemushaRecursiveSpendInit`,
+`kagemushaRecursiveSpendAppend`,
+`kagemushaRecursiveSpendTransitionProfileInit`,
+`kagemushaRecursiveSpendTransitionProfileAppend`,
+the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
+lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
+`kagemushaRecursiveSpendRedeem`.
+
+All helper inputs and outputs are raw Norito archives. The transition-profile
+helpers return the canonical Reserved-lineage accumulator transition profile for
+fixture generation and circuit preflight. Browser-only builds expose matching
+stubs that throw native-only errors.
+`kagemushaRecursiveSpendLineageAppendBoundary(profileArchive)` derives the
+compact append-boundary Norito archive from a full append transition profile
+with native opening preflight material. The append-boundary digest uses the
+public `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain,
+plus
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1`
+and
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1`
+for chain/asset and final-root/current-note binding.
+`previous_recursive_proof_open_envelopes_archive` is opaque native prover
+material: JavaScript wallet code must pass it through Norito unchanged and must
+not construct, rewrite, or mutate it. The native NAPI host validates
+`vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
+previous bundle before proving or returning output bytes.
+Production init requests and Reserved-lineage append-output requests must also
+include packaged lineage key artifacts in the raw Norito request:
+`lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
+rejected before runtime key generation.
+Reserved-lineage append output is valid only when the previous bundle is
+already Reserved-lineage; semantic previous bundles keep using semantic append
+plus a record-backed lineage witness.
+
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
+and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
+`true`: witnessless Reserved-lineage online redemption is available for lineage
+bundles inside the 64-hop cap.
+Wallets should use the exported `canRedeem...`, `requires...LineageWitness...`,
+`preferred...AppendOutput...`, and `canSelect...AppendOutput...` helpers and
+select Reserved-lineage append for previous hop counts `1..63`.
+Semantic append is bounded by the separate
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
+append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+
+## Native Privacy Bridge
+
+The privacy native surface is intentionally exposed as a generic raw Norito
+archive bridge: `isPrivacyNativeAvailable()`, `privacyCapabilitiesV1()`,
+`privacyBuildProofV1(requestArchive)`, and
+`privacyVerifyProofV1(requestArchive)`. The JS SDK does not expose
+algorithm-specific production proof builders while the privacy rows remain
+gated. Native availability requires bridge ABI 6 plus successful `capabilities`,
+`build`, and `verify` probes whose operation-specific result schema bytes match
+the called entry point.
+
+All privacy request and response payloads must stay as raw Norito archives.
+JavaScript validates archive magic, length, CRC, the 64 MiB native size cap, and
+the operation-specific result schema before returning bytes to callers.
+`getPrivacyCapabilities()` reports `privacy-production-gate-v1`, keeps
+`productionReady = false`, and remains fail-closed with missing production
+gates and no audit references until real proving, verification, chain
+admission, deterministic testing, fuzzing, performance gates, and external
+audit signoff are complete.
+
+JavaScript also exposes the deterministic privacy FFI status/error-code contract
+for diagnostics and cross-language parity:
+`PRIVACY_FFI_STATUS_ERROR`, `PRIVACY_FFI_ERROR_NULL_POINTER`,
+`PRIVACY_FFI_ERROR_MALFORMED_NORITO`,
+`PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM`,
+`PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, and
+`PRIVACY_FFI_ERROR_INVALID_REQUEST`. The stable wire values are
+`status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
+`unsupported_algorithm = 3`, `production_disabled = 4`, and
+`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
 > when migrating existing CJS callers.

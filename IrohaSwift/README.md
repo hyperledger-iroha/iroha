@@ -13,7 +13,7 @@ Features:
 - Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA, GOST R 34.10-2012, BLS normal/small, and SM2 support
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
-- Verifying key registry read/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
+- Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
 ## Installation
 
@@ -627,7 +627,8 @@ loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
 against its verifier record and returns a Norito-encoded
-`KagemushaCompactPaymentToken` when an ABI 6 `NoritoBridge` is available.
+`KagemushaCompactPaymentToken` when an ABI 6 `NoritoBridge` is available and
+its Kagemusha entry point rejects the malformed availability probe.
 `KagemushaRecursiveAggregationProofBundleProver` exposes the matching
 admission-neutral recursive proof-bundle path. Pass the same record-bundle
 archive plus a Norito-encoded Pallas open-envelope archive to receive a
@@ -637,10 +638,101 @@ surface. Pass raw Norito archives to initialize the first recursive spend
 bundle, append each offline hop, verify a received bundle, and build the online
 redeem archive without reimplementing the accumulator or proof internals in
 Swift. `KagemushaRecursiveSpendProver.preferredMode` selects
-`recursive_spend_v1` when ABI 6 recursive spend support is available and falls
-back to `checked_prefold_v1` for legacy checked pre-fold runtimes.
-All three native Kagemusha prover wrappers reject empty native result archives
-instead of treating them as successful proof material.
+`recursive_spend_v1` only when the ABI 6 recursive spend surface includes init,
+append, both transition-profile helpers, the append-boundary helper, both
+lineage-witness helpers, verify, and redeem, and every required symbol rejects
+the malformed availability probe
+without returning output bytes. It falls back to `checked_prefold_v1` for
+legacy checked pre-fold runtimes. `transitionProfileInit(requestArchive:)` and
+`transitionProfileAppend(requestArchive:)` return the canonical
+Reserved-lineage accumulator transition profile as raw Norito archives for
+fixture generation and circuit preflight.
+`lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
+Norito archive from a full append transition profile with native opening
+preflight material; wallet code should treat the boundary bytes as opaque
+verifier material.
+The append-boundary digest uses the public
+`recursiveSpendLineageAppendBoundaryDomainV1` domain, plus the
+`recursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1` and
+`recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1` subdomains for
+chain/asset and final-root/current-note binding.
+`KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1`
+is `64`, and `recursiveSpendLineageTransitionCircuitWiredV1` is `true`;
+witnessless Reserved-lineage online redemption is admitted for lineage bundles
+whose hop count is inside that cap.
+Use
+`KagemushaRecursiveSpendProver.canRedeemWitnessless` or
+`requiresLineageWitnessForRedeem` to make that branch from circuit id and hop
+count. Use `canAppendWitnesslessLineage` before attempting a witnessless
+Reserved-lineage append; it returns `true` for previous hop counts `1...63`.
+`preferredAppendOutputCircuitId(previousHopCount:)` returns the recommended
+append output selector for this release; it selects Reserved-lineage append
+inside that range.
+`canProveAppendOutputCircuitId(_:previousHopCount:)` tells wallet code whether
+the selected append output can be proved in this release: semantic recursive
+append is available through hop 64, and Reserved-lineage append is available
+for previous hop counts `1...63`.
+The semantic append path is bounded by `compactTokenMaxHops`; witnessless
+Reserved-lineage append and redeem use the separate
+`recursiveSpendLineageWitnesslessMaxHopsV1` cap.
+`canSelectAppendOutputCircuitId(previousProofCircuitId:outputCircuitId:previousHopCount:)`
+adds the previous-proof transition check before a wallet serializes the append
+request.
+`isSupportedPreviousProofCircuitId(_:)` and
+`requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId:)` let
+wallets reject unknown previous recursive proof circuits and include
+`previous_lineage_verifier_record` only for Reserved-lineage previous bundles.
+`requiresPreviousProofOpenEnvelopesForAppend(outputCircuitId:previousHopCount:)`
+tells wallet code whether the selected append output circuit requires the
+request to carry the previous recursive proof opening archive. The
+`outputCircuitId` argument is the append request's `output_proof_circuit_id`;
+missing or empty request values preserve semantic compatibility append. The
+`previous_recursive_proof_open_envelopes_archive` field is opaque native prover
+material: Swift wallet code must pass it through Norito unchanged and must not
+construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
+`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
+before proving or returning output bytes. Production init requests and
+Reserved-lineage append-output requests must also include packaged lineage key
+artifacts in the raw Norito request: `lineage_verifier_key` and
+`lineage_proving_key_archive`. Missing artifacts are rejected before runtime key
+generation. The
+previous bundle must already be Reserved-lineage before a Reserved-lineage
+append output is valid; semantic previous bundles keep using semantic append
+plus a record-backed lineage witness.
+`normalizedAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId`
+helpers expose that defaulting rule for wallet-side preflight. The
+`recursivePreviousProofOpenEnvelopesRequiredCountV1` and
+`recursivePreviousProofOpenEnvelopesMaxBytes` expose the exactly-one-envelope
+cardinality rule and native 8 MiB pre-decode cap for that archive.
+Native Kagemusha prover wrappers reject empty native result archives and native
+outputs larger than 64 MiB instead of treating them as successful proof
+material.
+
+### Native privacy bridge
+
+`PrivacyNativeBridge` exposes the privacy FFI surface as generic raw Norito
+archives: `capabilitiesV1()`, `buildProofV1(requestArchive:)`, and
+`verifyProofV1(requestArchive:)`. The SDK does not expose algorithm-specific
+production proof builders while the privacy rows remain gated. Native
+availability requires ABI 6, the privacy capability/build/verify symbols, and
+successful Norito probe outputs whose operation-specific result schema bytes
+match the called entry point.
+
+All privacy request and response payloads must stay as raw Norito archives.
+Swift validates archive magic, length, CRC, the 64 MiB native size cap, and the
+operation-specific result schema before returning bytes to callers. Capability
+metadata reports `privacy-production-gate-v1`, keeps `productionReady = false`,
+and remains fail-closed with missing production gates and no audit references
+until real proving, verification, chain admission, deterministic testing,
+fuzzing, performance gates, and external audit signoff are complete.
+
+Swift also exposes the deterministic privacy FFI status/error-code contract for
+diagnostics and cross-language parity: `ffiStatusError`, `ffiErrorNullPointer`,
+`ffiErrorMalformedNorito`, `ffiErrorUnsupportedAlgorithm`,
+`ffiErrorProductionDisabled`, and `ffiErrorInvalidRequest`. The stable wire
+values are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
+`unsupported_algorithm = 3`, `production_disabled = 4`, and
+`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
 
 `OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
 the Offline Note wallet under the cash naming layer, so value is represented by
@@ -1000,11 +1092,28 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-The typed register/update/deprecate request DTOs remain useful when you are
-assembling locally signed transactions, but the direct Torii mutation helpers
-now fail closed instead of accepting embedded private keys. Submit those
-verifier-management transactions through the pipeline helpers after local
-signing.
+Direct register/update helpers post the Torii app API payloads with explicit
+`authority` and `private_key` fields, and validate backend labels plus inline
+verifier-key commitments before sending:
+
+```swift
+if #available(iOS 15, macOS 12, *) {
+    try await torii.registerVerifyingKey(
+        ToriiVerifyingKeyRegisterRequest(
+            authority: "alice",
+            privateKey: "ed25519:...",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([1, 2, 3]),
+            status: .active
+        )
+    )
+}
+```
 
 Completion-style overloads still mirror the async read and event-stream helpers
 so UI layers can cancel inflight work if needed.

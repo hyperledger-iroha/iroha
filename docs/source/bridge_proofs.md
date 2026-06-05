@@ -118,7 +118,10 @@ provider resolves the target Beacon block from an explicit slot/root/id or from
 the execution block timestamp, then fetches that target header, block root, and
 block body instead of binding the receipt to the moving finalized head. The
 current finalized header and finalized checkpoint still bound the target as
-finalized. SDK Beacon REST URL builders preserve endpoint query strings when
+finalized, while generated `beaconFinality.finalizedHeaderRoot` and
+`beaconFinality.beaconSlot` identify the finalized header covered by the
+Beacon REST light-client finality update. SDK Beacon REST URL builders preserve
+endpoint query strings when
 appending finalized-header and checkpoint paths, allowing apps to use provider
 URLs that carry query-scoped credentials while still sending headers separately.
 Browser fetch adapters also
@@ -1186,18 +1189,23 @@ artifact descriptors before local proof execution: JS/browser, Swift,
 Kotlin/JVM, and Java Android reject missing or mismatched artifact descriptors
 after Ethereum request construction and before invoking the app-owned prover
 callback, while .NET/C# exposes an artifact-bound
-`ProveOutboundToEthereumAsync` overload that applies the verified bundle before
-	calling the native prover interface. A descriptor is not considered verified
-	unless it also carries the verifier-key hash, the SDK implementation row, and
-	a matching implementation-byte hash from the signed native prover bundle.
+`ProveOutboundToEthereumAsync` overload that applies the verified bundle
+before calling the native prover interface. A descriptor is not considered
+verified unless it also carries the verifier-key hash, the SDK implementation
+row, and a matching implementation-byte hash from the signed native prover
+bundle. The same verified descriptor gate also runs when Ethereum mainnet
+calldata is built or submitted: JS/browser, Swift, Kotlin/JVM, Java Android,
+and C# refuse the easy product path unless the wrapped proof result is bound to
+matching native prover artifacts, while the older generic EVM helpers remain
+available only for callers that choose those explicit APIs.
 The signed native prover bundle manifest parsers in JS/browser, Swift,
 Kotlin/JVM, Java Android, and C# also reject duplicate JSON object keys before
 building descriptor objects, including escaped-key aliases, so app-side bundle
 loading cannot depend on last-key-wins parsing.
-	When an Ethereum execution provider is configured on those facades, the
-	outbound submitter path checks `eth_chainId == 1` before invoking the app-owned
-	submit callback, so a configured BSC or non-mainnet provider cannot be silently
-	ignored during SORA -> Ethereum submission.
+When an Ethereum execution provider is configured on those facades, the
+outbound submitter path checks `eth_chainId == 1` before invoking the
+app-owned submit callback, so a configured BSC or non-mainnet provider cannot
+be silently ignored during SORA -> Ethereum submission.
 The Python Ethereum mainnet facade mirrors that final step with
 `submit_outbound_to_ethereum`, which passes the validated calldata package to an
 app-owned transaction hook.

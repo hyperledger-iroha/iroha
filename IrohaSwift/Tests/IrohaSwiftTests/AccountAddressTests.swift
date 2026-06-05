@@ -348,6 +348,29 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testConfusableAlgorithmAliasesRejected() {
+        let publicKey = Data(repeating: 0xAA, count: 32)
+        let algorithms = [
+            "future-curve",
+            "ed\t25519",
+            "ed\u{200B}25519",
+            "\u{0435}d25519",
+            "ml\u{FF0D}dsa",
+            "gost256\u{0430}",
+        ]
+
+        for algorithm in algorithms {
+            XCTAssertThrowsError(
+                try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm)
+            ) { error in
+                guard case let AccountAddressError.unsupportedAlgorithm(name) = error else {
+                    return XCTFail("unexpected error for \(algorithm): \(error)")
+                }
+                XCTAssertEqual(name, algorithm)
+            }
+        }
+    }
+
     func testAccountControllerNoritoUsesAlgorithmTaggedPublicKeyBytes() throws {
         let publicKey = Data(repeating: 0x42, count: 32)
         let address = try AccountAddress.fromAccount(publicKey: publicKey)

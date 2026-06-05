@@ -327,7 +327,7 @@ final class SccpSolanaProverTests: XCTestCase {
         override func stopLoading() {}
     }
 
-    private static func ethereumBeaconHeaderJson(finalizedHeaderRoot: String = "0x" + String(repeating: "dd", count: 32),
+    private static func ethereumBeaconHeaderJson(finalizedHeaderRoot: String = "0xed5b18104f470370f9f7ce3e5c2f4892ab541f2991e626578b76cf34819def1b",
                                                  slot: String = "32",
                                                  executionOptimistic: Bool = false,
                                                  finalized: Bool = true,
@@ -354,7 +354,7 @@ final class SccpSolanaProverTests: XCTestCase {
         """.utf8)
     }
 
-    private static func ethereumBeaconCheckpointJson(finalizedHeaderRoot: String = "0x" + String(repeating: "dd", count: 32),
+    private static func ethereumBeaconCheckpointJson(finalizedHeaderRoot: String = "0xed5b18104f470370f9f7ce3e5c2f4892ab541f2991e626578b76cf34819def1b",
                                                      executionOptimistic: Bool = false,
                                                      finalized: Bool = true) -> Data {
         Data("""
@@ -370,7 +370,7 @@ final class SccpSolanaProverTests: XCTestCase {
         """.utf8)
     }
 
-    private static func ethereumBeaconBlockRootJson(finalizedHeaderRoot: String = "0x" + String(repeating: "dd", count: 32),
+    private static func ethereumBeaconBlockRootJson(finalizedHeaderRoot: String = "0xed5b18104f470370f9f7ce3e5c2f4892ab541f2991e626578b76cf34819def1b",
                                                     executionOptimistic: Bool = false,
                                                     finalized: Bool = true) -> Data {
         Data("""
@@ -9387,15 +9387,23 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
         }
-        let submission = try facade.buildEthereumCalldata(EvmSccpSubmissionInput(proofResult: proofResult))
+        XCTAssertThrowsError(try facade.buildEthereumCalldata(EvmSccpSubmissionInput(proofResult: proofResult))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverArtifacts"))
+        }
+        let submissionFacade = EthereumMainnetSccp(nativeProverArtifacts: verifiedArtifacts)
+        let submission = try submissionFacade.buildEthereumCalldata(
+            EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+        )
         XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(submission.proofBytes, proofBytes)
         let submitFacade = EthereumMainnetSccp(outboundSubmitFunction: { submission in
             XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
             XCTAssertEqual(submission.proofBytes, proofBytes)
             return "eth-submitted"
-        })
-        let submitted = try await submitFacade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+        }, nativeProverArtifacts: verifiedArtifacts)
+        let submitted = try await submitFacade.submitOutboundToEthereum(
+            EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+        )
         XCTAssertEqual(submitted as? String, "eth-submitted")
         var guardedSubmitterCalled = false
         let guardedSubmitFacade = EthereumMainnetSccp(
@@ -9407,17 +9415,22 @@ final class SccpSolanaProverTests: XCTestCase {
             outboundSubmitFunction: { _ in
                 guardedSubmitterCalled = true
                 return "wrong-chain"
-            }
+            },
+            nativeProverArtifacts: verifiedArtifacts
         )
         do {
-            _ = try await guardedSubmitFacade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+            _ = try await guardedSubmitFacade.submitOutboundToEthereum(
+                EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+            )
             XCTFail("Ethereum outbound submitter must reject non-mainnet execution RPC")
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .invalidPublicInputs("eth_chainId"))
         }
         XCTAssertFalse(guardedSubmitterCalled)
         do {
-            _ = try await facade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+            _ = try await submissionFacade.submitOutboundToEthereum(
+                EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+            )
             XCTFail("Ethereum outbound submitter must be app-supplied")
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .localProverUnavailable)
@@ -9656,7 +9669,7 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence() async throws {
-        let finalizedHeaderRoot = "0x" + String(repeating: "dd", count: 32)
+        let finalizedHeaderRoot = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c"
         let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
@@ -9707,7 +9720,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(finality["executionBlockNumber"] as? String, "4660")
         XCTAssertEqual(finality["executionBlockHash"] as? String, blockHash)
         XCTAssertEqual(finality["executionReceiptsRoot"] as? String, receiptsRoot)
-        XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, targetHeaderRoot)
+        XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, finalizedHeaderRoot)
         XCTAssertEqual(finality["syncCommitteeRoot"] as? String, syncCommitteeRoot)
         XCTAssertEqual(finality["beaconSlot"] as? String, "64")
         XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
@@ -9727,7 +9740,7 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testEthereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp() async throws {
-        let finalizedHeaderRoot = "0x" + String(repeating: "dd", count: 32)
+        let finalizedHeaderRoot = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c"
         let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
@@ -9775,7 +9788,7 @@ final class SccpSolanaProverTests: XCTestCase {
             transactionHash: nil
         )
 
-        XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, targetHeaderRoot)
+        XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, finalizedHeaderRoot)
         XCTAssertEqual(finality["beaconSlot"] as? String, "64")
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/genesis",
@@ -9851,7 +9864,7 @@ final class SccpSolanaProverTests: XCTestCase {
             }
         }
 
-        let finalizedHeaderRoot = "0x" + String(repeating: "dd", count: 32)
+        let finalizedHeaderRoot = "0xed5b18104f470370f9f7ce3e5c2f4892ab541f2991e626578b76cf34819def1b"
         let block: [String: Any] = [
             "hash": "0x" + String(repeating: "bb", count: 32),
             "number": "0x1234",

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.crypto
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class SigningAlgorithmTest {
     @Test
@@ -37,5 +38,25 @@ class SigningAlgorithmTest {
             SigningAlgorithm.fromAlgorithmName("GOST3410-2012-512-PARAMSET-B"),
         )
         assertEquals(SigningAlgorithm.SM2, SigningAlgorithm.fromAlgorithmName("sm-2"))
+    }
+
+    @Test
+    fun unsupportedAndUnicodeConfusableAliasesFailClosed() {
+        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName(null))
+        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName(""))
+        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName("   "))
+
+        for (algorithm in listOf(
+            "unknown",
+            "ed\t25519",
+            "ed\u200B25519",
+            "\u0435d25519",
+            "ml\uFF0Ddsa",
+            "gost3410-2012-512-paramset-\u0432",
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                SigningAlgorithm.fromAlgorithmName(algorithm)
+            }
+        }
     }
 }

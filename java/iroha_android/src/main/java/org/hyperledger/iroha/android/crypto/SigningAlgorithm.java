@@ -89,7 +89,7 @@ public enum SigningAlgorithm {
     if ("sm2".equals(normalized)) {
       return SM2;
     }
-    return ED25519;
+    throw new IllegalArgumentException("Unsupported signing algorithm: " + name);
   }
 
   public static SigningAlgorithm fromBridgeCode(final int code) {
@@ -102,12 +102,16 @@ public enum SigningAlgorithm {
   }
 
   private static String normalize(final String name) {
-    if (name == null || name.isBlank()) {
+    final String trimmed = name == null ? "" : name.trim();
+    if (trimmed.isEmpty()) {
       return ED25519.wireName;
     }
-    final StringBuilder builder = new StringBuilder(name.length());
-    for (int i = 0; i < name.length(); i++) {
-      final char ch = Character.toLowerCase(name.charAt(i));
+    final StringBuilder builder = new StringBuilder(trimmed.length());
+    for (int i = 0; i < trimmed.length(); i++) {
+      final char ch = Character.toLowerCase(trimmed.charAt(i));
+      if (ch < 0x20 || ch == 0x7F || ch > 0x7F) {
+        throw new IllegalArgumentException("Unsupported signing algorithm: " + name);
+      }
       if (Character.isLetterOrDigit(ch)) {
         builder.append(ch);
       }

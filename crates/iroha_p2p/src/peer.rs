@@ -7470,10 +7470,7 @@ mod state {
                 connection.transport_binding.as_ref(),
             );
             let signature = Signature::new(key_pair.private_key(), &payload);
-            let (alg, pk_bytes) = key_pair
-                .public_key()
-                .try_to_bytes()
-                .map_err(crate::Error::HandshakePublicKeyMalformed)?;
+            let (alg, pk_bytes) = key_pair.public_key().to_bytes();
             let hello = HandshakeHelloV1 {
                 algorithm: alg,
                 public_key: pk_bytes.to_vec(),

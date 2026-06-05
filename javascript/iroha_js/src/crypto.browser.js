@@ -10,6 +10,15 @@ export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 export const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
+export const PRIVACY_FFI_VERSION_V1 = 1;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const PRIVACY_FFI_STATUS_ERROR = 1;
+export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
+export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
+export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
+export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
+export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
 
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
@@ -121,10 +130,12 @@ function unsupported(operation) {
 }
 
 function cryptoAlgorithmAliasKey(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+  const raw = String(value);
+  const trimmed = raw.trim();
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
+    throw new Error(`unsupported crypto algorithm: ${raw}`);
+  }
+  return trimmed.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 export function supportedCryptoAlgorithms() {
@@ -303,6 +314,36 @@ export function deriveConfidentialNullifierV2() {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-aggregation-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-append-v1";
+export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
+export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
+export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
@@ -310,6 +351,158 @@ export function preferredKagemushaOfflineSpendMode(
   return recursiveSpendAvailable
     ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+}
+
+export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
+  return (
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+    isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) &&
+    Number.isInteger(hopCount) &&
+    hopCount >= 1 &&
+    hopCount <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
+  return (
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
+  return (
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit() {
+  return true;
+}
+
+export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+  proofCircuitId,
+  hopCount,
+) {
+  return !canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount);
+}
+
+export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount) {
+  return (
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+    Number.isInteger(previousHopCount) &&
+    previousHopCount >= 1 &&
+    previousHopCount < KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
+  if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
+    return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
+  }
+  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  }
+  return outputProofCircuitId;
+}
+
+export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
+  const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  return (
+    normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+  outputProofCircuitId,
+) {
+  return isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
+  );
+}
+
+export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(previousHopCount) {
+  return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount)
+    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    : KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
+}
+
+export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  if (!Number.isInteger(previousHopCount) || previousHopCount < 1) {
+    return false;
+  }
+  const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
+    return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
+  }
+  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
+    return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount);
+  }
+  return false;
+}
+
+export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId) {
+  return (
+    previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+    isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId)
+  );
+}
+
+export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+  previousProofCircuitId,
+) {
+  return isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId);
+}
+
+export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
+  previousProofCircuitId,
+  outputProofCircuitId,
+) {
+  const normalizedOutput =
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  return (
+    (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
+      normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
+    (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
+      (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
+  );
+}
+
+export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  previousProofCircuitId,
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  if (!canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId, previousHopCount)) {
+    return false;
+  }
+  if (!isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId)) {
+    return false;
+  }
+  return isSupportedKagemushaRecursiveSpendAppendProofTransition(
+    previousProofCircuitId,
+    outputProofCircuitId,
+  );
+}
+
+export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  return (
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
+    ) &&
+    Number.isInteger(previousHopCount) &&
+    previousHopCount >= 1
+  );
 }
 
 export function isKagemushaRecursiveSpendNativeAvailable() {
@@ -324,12 +517,48 @@ export function kagemushaRecursiveSpendAppend() {
   return unsupported("kagemushaRecursiveSpendAppend");
 }
 
+export function kagemushaRecursiveSpendTransitionProfileInit() {
+  return unsupported("kagemushaRecursiveSpendTransitionProfileInit");
+}
+
+export function kagemushaRecursiveSpendTransitionProfileAppend() {
+  return unsupported("kagemushaRecursiveSpendTransitionProfileAppend");
+}
+
+export function kagemushaRecursiveSpendLineageAppendBoundary() {
+  return unsupported("kagemushaRecursiveSpendLineageAppendBoundary");
+}
+
+export function kagemushaRecursiveSpendLineageWitnessFromInitResult() {
+  return unsupported("kagemushaRecursiveSpendLineageWitnessFromInitResult");
+}
+
+export function kagemushaRecursiveSpendLineageWitnessAppendResult() {
+  return unsupported("kagemushaRecursiveSpendLineageWitnessAppendResult");
+}
+
 export function kagemushaRecursiveSpendVerify() {
   return unsupported("kagemushaRecursiveSpendVerify");
 }
 
 export function kagemushaRecursiveSpendRedeem() {
   return unsupported("kagemushaRecursiveSpendRedeem");
+}
+
+export function isPrivacyNativeAvailable() {
+  return false;
+}
+
+export function privacyCapabilitiesV1() {
+  return unsupported("privacyCapabilitiesV1");
+}
+
+export function privacyBuildProofV1() {
+  return unsupported("privacyBuildProofV1");
+}
+
+export function privacyVerifyProofV1() {
+  return unsupported("privacyVerifyProofV1");
 }
 
 export function sm2FixtureFromSeed() {

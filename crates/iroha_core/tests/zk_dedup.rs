@@ -8,12 +8,32 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
+    zk::ZK_BACKEND_HALO2_IPA,
 };
-use iroha_data_model::{block::BlockHeader, proof::ProofBox};
+use iroha_data_model::{
+    block::BlockHeader,
+    proof::ProofBox,
+    zk::{BackendTag, OpenVerifyEnvelope},
+};
 use nonzero_ext::nonzero;
 
+fn open_verify_proof(vk_hash: [u8; 32]) -> ProofBox {
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: "halo2/ipa:dedup-state-wrapper".to_owned(),
+        vk_hash,
+        public_inputs: vec![1],
+        proof_bytes: vec![2, 3],
+        aux: Vec::new(),
+    };
+    ProofBox::new(
+        ZK_BACKEND_HALO2_IPA.to_owned(),
+        norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+    )
+}
+
 #[test]
-fn dedup_allows_same_proof_with_different_commitments() {
+fn preverify_state_wrapper_requires_bound_commitments_and_dedups() {
     // Build minimal state and block context
     let state = State::new(
         World::new(),
@@ -24,22 +44,28 @@ fn dedup_allows_same_proof_with_different_commitments() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let proof = ProofBox::new("preverify/test".into(), vec![1, 2, 3, 4]);
+    let c1 = [0x11u8; 32];
+    let proof = open_verify_proof(c1);
 
-    // No commitment: first pass accepted, second duplicate
-    let r1 = stx.preverify_proof(&proof, None, 100_000, None, None, true);
+    let missing = stx.preverify_proof(&proof, None, 100_000, Some(c1), None, true);
+    assert!(matches!(
+        missing,
+        iroha_core::zk::PreverifyResult::VerifyingKeyMissing
+    ));
+
+    let r1 = stx.preverify_proof(&proof, None, 100_000, None, Some(c1), true);
     assert!(matches!(r1, iroha_core::zk::PreverifyResult::Accepted));
-    let r1_dup = stx.preverify_proof(&proof, None, 100_000, None, None, true);
+    let r1_dup = stx.preverify_proof(&proof, None, 100_000, Some(c1), Some(c1), true);
     assert!(matches!(r1_dup, iroha_core::zk::PreverifyResult::Duplicate));
 
-    // Different commitment should make the same proof distinct
-    let c1 = [0x11u8; 32];
-    let r2 = stx.preverify_proof(&proof, None, 100_000, Some(c1), None, true);
-    assert!(matches!(r2, iroha_core::zk::PreverifyResult::Accepted));
-    let r2_dup = stx.preverify_proof(&proof, None, 100_000, Some(c1), None, true);
-    assert!(matches!(r2_dup, iroha_core::zk::PreverifyResult::Duplicate));
-
     let c2 = [0x22u8; 32];
-    let r3 = stx.preverify_proof(&proof, None, 100_000, Some(c2), None, true);
-    assert!(matches!(r3, iroha_core::zk::PreverifyResult::Accepted));
+    let mismatch = stx.preverify_proof(&proof, None, 100_000, Some(c2), Some(c1), true);
+    assert!(matches!(
+        mismatch,
+        iroha_core::zk::PreverifyResult::VerifyingKeyMismatch
+    ));
+
+    let proof2 = open_verify_proof(c2);
+    let r2 = stx.preverify_proof(&proof2, None, 100_000, Some(c2), Some(c2), true);
+    assert!(matches!(r2, iroha_core::zk::PreverifyResult::Accepted));
 }

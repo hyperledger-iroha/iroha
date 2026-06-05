@@ -106,15 +106,37 @@ final class NexusAppClientTests: XCTestCase {
         )
         let draft = try client.buildTransferDraft(input: sampleInput())
 
-        let error = await expectNexusErrorAsync {
-            _ = try await client.finalizeAndSubmit(
-                signable: draft.signable,
-                signature: NexusWalletSignature(signature: Data(repeating: 0x07, count: 64),
-                                                 algorithm: "secp256k1")
-            )
+        for algorithm in [
+            "secp256k1",
+            "ed\t25519",
+            "ed\u{200B}25519",
+            "\u{0435}d25519",
+            "ed\u{FF0D}25519",
+            " ED25519 ",
+        ] {
+            let error = await expectNexusErrorAsync {
+                _ = try await client.finalizeAndSubmit(
+                    signable: draft.signable,
+                    signature: NexusWalletSignature(signature: Data(repeating: 0x07, count: 64),
+                                                     algorithm: algorithm)
+                )
+            }
+
+            XCTAssertEqual(error.code, "unsupported_signature_algorithm")
         }
 
-        XCTAssertEqual(error.code, "unsupported_signature_algorithm")
+        let signable = NexusSignableTransaction(payloadBytes: draft.signable.payloadBytes,
+                                                payloadHashHex: draft.signable.payloadHashHex,
+                                                authority: draft.signable.authority,
+                                                signingPublicKey: draft.signable.signingPublicKey,
+                                                signatureAlgorithm: "ed\u{200B}25519")
+        let signableError = await expectNexusErrorAsync {
+            _ = try await client.finalizeAndSubmit(
+                signable: signable,
+                signature: NexusWalletSignature(signature: Data(repeating: 0x07, count: 64))
+            )
+        }
+        XCTAssertEqual(signableError.code, "unsupported_signature_algorithm")
     }
 
     func testAwaitApprovalRejectsMissingAccountAndSigningKey() async throws {

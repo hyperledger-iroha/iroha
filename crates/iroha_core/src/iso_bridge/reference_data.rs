@@ -1,10 +1,10 @@
 //! ISO 20022 reference-data ingestion and telemetry helpers.
 //!
 //! This module loads regulated identifier crosswalks (ISIN↔CUSIP, BIC↔LEI, MIC)
-//! from operator-provided snapshots, captures provenance metadata, and exposes
-//! ready-to-query maps for the Torii ISO bridge runtime. Each dataset is tagged
-//! with refresh metadata and emits Prometheus metrics so operators can monitor
-//! staleness or ingestion failures.
+//! and securities ledger crosswalks from operator-provided snapshots, captures
+//! provenance metadata, and exposes ready-to-query maps for the Torii ISO bridge
+//! runtime. Each dataset is tagged with refresh metadata and emits Prometheus
+//! metrics so operators can monitor staleness or ingestion failures.
 
 use core::convert::TryFrom;
 use std::{
@@ -36,6 +36,12 @@ pub enum DatasetKind {
     BicLei,
     /// MIC directory.
     MicDirectory,
+    /// Securities settlement venue to ledger-domain mapping.
+    CsdVenue,
+    /// Securities settlement-account mapping.
+    SecuritiesAccount,
+    /// Securities cash-leg mapping.
+    CashLeg,
 }
 
 impl DatasetKind {
@@ -46,6 +52,9 @@ impl DatasetKind {
             DatasetKind::IsinCusip => "isin_cusip",
             DatasetKind::BicLei => "bic_lei",
             DatasetKind::MicDirectory => "mic_directory",
+            DatasetKind::CsdVenue => "csd_venue",
+            DatasetKind::SecuritiesAccount => "securities_account",
+            DatasetKind::CashLeg => "cash_leg",
         }
     }
 }
@@ -116,6 +125,16 @@ pub enum ReferenceDataError {
         mic: String,
         /// Optional upstream status string.
         status: Option<String>,
+    },
+    #[error("{kind_label} reference `{value}` lacks required ledger mapping `{mapping}`", kind_label = .kind.label())]
+    /// Reference exists but does not carry the ledger mapping required for admission.
+    MissingLedgerMapping {
+        /// Dataset kind used for lookup.
+        kind: DatasetKind,
+        /// Identifier value that was queried.
+        value: String,
+        /// Mapping field that was missing.
+        mapping: &'static str,
     },
 }
 
@@ -295,6 +314,12 @@ pub struct ReferenceDataSnapshots {
     bic_lei: DatasetSnapshot<BicLeiCrosswalk>,
     /// MIC directory (SWIFT).
     mic_directory: DatasetSnapshot<MicDirectory>,
+    /// CSD venue to ledger-domain crosswalk.
+    csd_venue: DatasetSnapshot<CsdVenueDirectory>,
+    /// Securities settlement-account crosswalk.
+    securities_account: DatasetSnapshot<SecuritiesAccountCrosswalk>,
+    /// Securities cash-leg crosswalk.
+    cash_leg: DatasetSnapshot<CashLegCrosswalk>,
     /// Configured refresh interval.
     refresh_interval: Duration,
     /// Timestamp when the loader executed.
@@ -336,10 +361,43 @@ impl ReferenceDataSnapshots {
             },
         );
 
+        let csd_venue_snapshot = config.csd_venue_path.as_deref().map_or_else(
+            || DatasetSnapshot::missing(DatasetKind::CsdVenue),
+            |path| match load_csd_venue_directory(path) {
+                Ok((meta, records)) => {
+                    DatasetSnapshot::loaded(DatasetKind::CsdVenue, path, meta, records)
+                }
+                Err(err) => DatasetSnapshot::failed(DatasetKind::CsdVenue, path, &err),
+            },
+        );
+
+        let securities_account_snapshot = config.securities_account_path.as_deref().map_or_else(
+            || DatasetSnapshot::missing(DatasetKind::SecuritiesAccount),
+            |path| match load_securities_account_crosswalk(path) {
+                Ok((meta, records)) => {
+                    DatasetSnapshot::loaded(DatasetKind::SecuritiesAccount, path, meta, records)
+                }
+                Err(err) => DatasetSnapshot::failed(DatasetKind::SecuritiesAccount, path, &err),
+            },
+        );
+
+        let cash_leg_snapshot = config.cash_leg_path.as_deref().map_or_else(
+            || DatasetSnapshot::missing(DatasetKind::CashLeg),
+            |path| match load_cash_leg_crosswalk(path) {
+                Ok((meta, records)) => {
+                    DatasetSnapshot::loaded(DatasetKind::CashLeg, path, meta, records)
+                }
+                Err(err) => DatasetSnapshot::failed(DatasetKind::CashLeg, path, &err),
+            },
+        );
+
         let snapshots = Self {
             isin_cusip: isin_snapshot,
             bic_lei: bic_lei_snapshot,
             mic_directory: mic_snapshot,
+            csd_venue: csd_venue_snapshot,
+            securities_account: securities_account_snapshot,
+            cash_leg: cash_leg_snapshot,
             refresh_interval: config.refresh_interval,
             loaded_at: now,
         };
@@ -362,12 +420,19 @@ impl ReferenceDataSnapshots {
         self.isin_cusip.log_status();
         self.bic_lei.log_status();
         self.mic_directory.log_status();
+        self.csd_venue.log_status();
+        self.securities_account.log_status();
+        self.cash_leg.log_status();
     }
 
     fn publish_metrics(&self) {
         self.isin_cusip.publish_metrics(self.refresh_interval);
         self.bic_lei.publish_metrics(self.refresh_interval);
         self.mic_directory.publish_metrics(self.refresh_interval);
+        self.csd_venue.publish_metrics(self.refresh_interval);
+        self.securities_account
+            .publish_metrics(self.refresh_interval);
+        self.cash_leg.publish_metrics(self.refresh_interval);
     }
 
     fn persist_cache(&self, root: &Path) -> eyre::Result<()> {
@@ -377,6 +442,9 @@ impl ReferenceDataSnapshots {
         self.persist_dataset(root, self.isin_cusip())?;
         self.persist_dataset(root, self.bic_lei())?;
         self.persist_dataset(root, self.mic_directory())?;
+        self.persist_dataset(root, self.csd_venue())?;
+        self.persist_dataset(root, self.securities_account())?;
+        self.persist_dataset(root, self.cash_leg())?;
         Ok(())
     }
 
@@ -566,6 +634,24 @@ impl ReferenceDataSnapshots {
         &self.mic_directory
     }
 
+    /// Access the CSD venue crosswalk snapshot.
+    #[must_use]
+    pub fn csd_venue(&self) -> &DatasetSnapshot<CsdVenueDirectory> {
+        &self.csd_venue
+    }
+
+    /// Access the securities account crosswalk snapshot.
+    #[must_use]
+    pub fn securities_account(&self) -> &DatasetSnapshot<SecuritiesAccountCrosswalk> {
+        &self.securities_account
+    }
+
+    /// Access the securities cash-leg crosswalk snapshot.
+    #[must_use]
+    pub fn cash_leg(&self) -> &DatasetSnapshot<CashLegCrosswalk> {
+        &self.cash_leg
+    }
+
     /// Configured refresh interval.
     #[must_use]
     pub fn refresh_interval(&self) -> Duration {
@@ -588,6 +674,9 @@ impl ReferenceDataSnapshots {
                 dataset_snapshot_value(self.isin_cusip()),
                 dataset_snapshot_value(self.bic_lei()),
                 dataset_snapshot_value(self.mic_directory()),
+                dataset_snapshot_value(self.csd_venue()),
+                dataset_snapshot_value(self.securities_account()),
+                dataset_snapshot_value(self.cash_leg()),
             ]),
         );
         let rendered = json::to_json(&Value::Object(root)).unwrap_or_default();
@@ -731,6 +820,146 @@ impl ReferenceDataSnapshots {
                         }
                     },
                 )
+            },
+        )
+    }
+
+    /// Validate that an instrument exists and carries an on-ledger mapping.
+    ///
+    /// # Errors
+    /// Returns [`ReferenceDataError`] if the dataset failed to load, the identifier
+    /// is unknown, or the record lacks both `asset_definition_id` and `asset_id`.
+    pub fn validate_instrument_ledger_mapping(
+        &self,
+        instrument: &str,
+    ) -> Result<ValidationOutcome, ReferenceDataError> {
+        Self::dataset_records_or_skip(&self.isin_cusip)?.map_or_else(
+            || Ok(ValidationOutcome::Skipped),
+            |records| {
+                let isin = normalise_upper_ascii(instrument);
+                let record = records.by_isin(&isin).or_else(|| records.by_cusip(&isin));
+                let Some(record) = record else {
+                    return Err(ReferenceDataError::NotFound {
+                        kind: DatasetKind::IsinCusip,
+                        value: isin,
+                    });
+                };
+                if record.asset_definition_id.is_some() || record.asset_id.is_some() {
+                    Ok(ValidationOutcome::Enforced)
+                } else {
+                    Err(ReferenceDataError::MissingLedgerMapping {
+                        kind: DatasetKind::IsinCusip,
+                        value: record.isin.clone(),
+                        mapping: "asset_definition_id_or_asset_id",
+                    })
+                }
+            },
+        )
+    }
+
+    /// Validate that a settlement venue maps to a configured CSD ledger domain.
+    ///
+    /// # Errors
+    /// Returns [`ReferenceDataError`] if the dataset failed to load, the MIC is
+    /// unknown, or the row lacks a ledger-domain identifier.
+    pub fn validate_csd_venue(&self, mic: &str) -> Result<ValidationOutcome, ReferenceDataError> {
+        Self::dataset_records_or_skip(&self.csd_venue)?.map_or_else(
+            || Ok(ValidationOutcome::Skipped),
+            |records| {
+                let key = normalise_upper_ascii(mic);
+                let Some(record) = records.by_mic(&key) else {
+                    return Err(ReferenceDataError::NotFound {
+                        kind: DatasetKind::CsdVenue,
+                        value: key,
+                    });
+                };
+                if record.ledger_domain_id.is_some() {
+                    Ok(ValidationOutcome::Enforced)
+                } else {
+                    Err(ReferenceDataError::MissingLedgerMapping {
+                        kind: DatasetKind::CsdVenue,
+                        value: key,
+                        mapping: "ledger_domain_id",
+                    })
+                }
+            },
+        )
+    }
+
+    /// Validate that a securities settlement account maps to a ledger account.
+    ///
+    /// # Errors
+    /// Returns [`ReferenceDataError`] if the dataset failed to load, the account is
+    /// unknown, the optional party BIC conflicts, or the row lacks `account_id`.
+    pub fn validate_securities_account(
+        &self,
+        account: &str,
+        bic: Option<&str>,
+    ) -> Result<ValidationOutcome, ReferenceDataError> {
+        Self::dataset_records_or_skip(&self.securities_account)?.map_or_else(
+            || Ok(ValidationOutcome::Skipped),
+            |records| {
+                let key = normalise_upper_ascii(account);
+                let Some(record) = records.by_account(&key) else {
+                    return Err(ReferenceDataError::NotFound {
+                        kind: DatasetKind::SecuritiesAccount,
+                        value: key,
+                    });
+                };
+                if let (Some(expected), Some(actual)) = (record.bic.as_deref(), bic)
+                    && expected != normalise_upper_ascii(actual)
+                {
+                    return Err(ReferenceDataError::NotFound {
+                        kind: DatasetKind::SecuritiesAccount,
+                        value: format!("{key}:{}", normalise_upper_ascii(actual)),
+                    });
+                }
+                if record.account_id.is_some() {
+                    Ok(ValidationOutcome::Enforced)
+                } else {
+                    Err(ReferenceDataError::MissingLedgerMapping {
+                        kind: DatasetKind::SecuritiesAccount,
+                        value: key,
+                        mapping: "account_id",
+                    })
+                }
+            },
+        )
+    }
+
+    /// Validate that a securities cash leg maps to a ledger asset definition.
+    ///
+    /// # Errors
+    /// Returns [`ReferenceDataError`] if the dataset failed to load, no matching
+    /// currency/payment-type row exists, or the row lacks `asset_definition_id`.
+    pub fn validate_cash_leg(
+        &self,
+        currency: &str,
+        payment_type: Option<&str>,
+    ) -> Result<ValidationOutcome, ReferenceDataError> {
+        Self::dataset_records_or_skip(&self.cash_leg)?.map_or_else(
+            || Ok(ValidationOutcome::Skipped),
+            |records| {
+                let currency_key = normalise_upper_ascii(currency);
+                let payment_key = payment_type.map(normalise_upper_ascii);
+                let record = records.by_currency_and_payment(&currency_key, payment_key.as_deref());
+                let Some(record) = record else {
+                    return Err(ReferenceDataError::NotFound {
+                        kind: DatasetKind::CashLeg,
+                        value: payment_key.map_or(currency_key.clone(), |payment| {
+                            format!("{currency_key}:{payment}")
+                        }),
+                    });
+                };
+                if record.asset_definition_id.is_some() {
+                    Ok(ValidationOutcome::Enforced)
+                } else {
+                    Err(ReferenceDataError::MissingLedgerMapping {
+                        kind: DatasetKind::CashLeg,
+                        value: currency_key,
+                        mapping: "asset_definition_id",
+                    })
+                }
             },
         )
     }
@@ -982,6 +1211,161 @@ impl MicDirectory {
     }
 }
 
+/// CSD settlement venue mapping entry.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CsdVenueRecord {
+    /// MIC identifier for the settlement venue.
+    pub mic: String,
+    /// Operator or upstream CSD identifier.
+    pub csd_id: Option<String>,
+    /// Ledger domain identifier used for CSD-owned state.
+    pub ledger_domain_id: Option<String>,
+}
+
+/// CSD venue lookup.
+#[derive(Debug, Clone, Default)]
+pub struct CsdVenueDirectory {
+    by_mic: BTreeMap<String, CsdVenueRecord>,
+}
+
+impl CsdVenueDirectory {
+    fn insert(&mut self, record: CsdVenueRecord) -> eyre::Result<()> {
+        let key = normalise_upper_ascii(&record.mic);
+        if self.by_mic.contains_key(&key) {
+            eyre::bail!("duplicate CSD venue entry encountered: {key}");
+        }
+        self.by_mic.insert(key, record);
+        Ok(())
+    }
+
+    /// Number of CSD venue entries loaded.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_mic.len()
+    }
+
+    /// Returns true when no CSD venue entries are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_mic.is_empty()
+    }
+
+    /// Lookup a CSD venue entry by MIC.
+    #[must_use]
+    pub fn by_mic(&self, mic: &str) -> Option<&CsdVenueRecord> {
+        let key = normalise_upper_ascii(mic);
+        self.by_mic.get(&key)
+    }
+}
+
+/// Securities settlement-account mapping entry.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SecuritiesAccountRecord {
+    /// External CSD settlement account literal.
+    pub settlement_account: String,
+    /// Optional party BIC expected for the account.
+    pub bic: Option<String>,
+    /// On-ledger account identifier.
+    pub account_id: Option<String>,
+}
+
+/// Securities settlement-account lookup.
+#[derive(Debug, Clone, Default)]
+pub struct SecuritiesAccountCrosswalk {
+    by_account: BTreeMap<String, SecuritiesAccountRecord>,
+}
+
+impl SecuritiesAccountCrosswalk {
+    fn insert(&mut self, record: SecuritiesAccountRecord) -> eyre::Result<()> {
+        let key = normalise_upper_ascii(&record.settlement_account);
+        if self.by_account.contains_key(&key) {
+            eyre::bail!("duplicate securities account entry encountered: {key}");
+        }
+        self.by_account.insert(key, record);
+        Ok(())
+    }
+
+    /// Number of securities account entries loaded.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_account.len()
+    }
+
+    /// Returns true when no securities account entries are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_account.is_empty()
+    }
+
+    /// Lookup a securities settlement account by external account literal.
+    #[must_use]
+    pub fn by_account(&self, account: &str) -> Option<&SecuritiesAccountRecord> {
+        let key = normalise_upper_ascii(account);
+        self.by_account.get(&key)
+    }
+}
+
+/// Securities cash-leg mapping entry.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CashLegRecord {
+    /// ISO 4217 currency code.
+    pub currency: String,
+    /// Optional ISO settlement payment type for the row.
+    pub payment_type: Option<String>,
+    /// On-ledger asset definition identifier used for the cash leg.
+    pub asset_definition_id: Option<String>,
+}
+
+/// Securities cash-leg lookup.
+#[derive(Debug, Clone, Default)]
+pub struct CashLegCrosswalk {
+    by_currency_payment: BTreeMap<(String, Option<String>), CashLegRecord>,
+}
+
+impl CashLegCrosswalk {
+    fn insert(&mut self, record: CashLegRecord) -> eyre::Result<()> {
+        let key = (
+            normalise_upper_ascii(&record.currency),
+            record.payment_type.as_deref().map(normalise_upper_ascii),
+        );
+        if self.by_currency_payment.contains_key(&key) {
+            eyre::bail!(
+                "duplicate cash-leg entry encountered: {}:{}",
+                key.0,
+                key.1.as_deref().unwrap_or("*")
+            );
+        }
+        self.by_currency_payment.insert(key, record);
+        Ok(())
+    }
+
+    /// Number of cash-leg entries loaded.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_currency_payment.len()
+    }
+
+    /// Returns true when no cash-leg entries are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_currency_payment.is_empty()
+    }
+
+    /// Lookup by currency and optional payment type, falling back to a currency-only row.
+    #[must_use]
+    pub fn by_currency_and_payment(
+        &self,
+        currency: &str,
+        payment_type: Option<&str>,
+    ) -> Option<&CashLegRecord> {
+        let currency_key = normalise_upper_ascii(currency);
+        let payment_key = payment_type.map(normalise_upper_ascii);
+        self.by_currency_payment
+            .get(&(currency_key.clone(), payment_key))
+            .or_else(|| self.by_currency_payment.get(&(currency_key, None)))
+    }
+}
+
 fn load_isin_crosswalk(path: &Path) -> eyre::Result<(SnapshotMetadata, InstrumentCrosswalk)> {
     let root = read_json(path)?;
     let mut metadata = parse_metadata(DatasetKind::IsinCusip, &root)?;
@@ -1130,6 +1514,134 @@ fn load_mic_directory(path: &Path) -> eyre::Result<(SnapshotMetadata, MicDirecto
     Ok((metadata, directory))
 }
 
+fn load_csd_venue_directory(path: &Path) -> eyre::Result<(SnapshotMetadata, CsdVenueDirectory)> {
+    let root = read_json(path)?;
+    let mut metadata = parse_metadata(DatasetKind::CsdVenue, &root)?;
+    let entries = root
+        .as_object()
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre::eyre!("csd_venue snapshot missing `entries` array"))?;
+
+    let mut directory = CsdVenueDirectory::default();
+    for entry in entries {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| eyre::eyre!("csd_venue entry must be an object"))?;
+        let mic = obj
+            .get("mic")
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre::eyre!("csd_venue entry missing `mic`"))?
+            .trim()
+            .to_ascii_uppercase();
+        if !iso20022::validate_identifier(IdentifierKind::Mic, &mic) {
+            eyre::bail!("csd_venue entry contains invalid MIC `{mic}`");
+        }
+        let csd_id = optional_trimmed_string(obj, "csd_id");
+        let ledger_domain_id = optional_trimmed_string(obj, "ledger_domain_id");
+
+        directory.insert(CsdVenueRecord {
+            mic,
+            csd_id,
+            ledger_domain_id,
+        })?;
+    }
+
+    metadata.record_count = directory.len();
+    Ok((metadata, directory))
+}
+
+fn load_securities_account_crosswalk(
+    path: &Path,
+) -> eyre::Result<(SnapshotMetadata, SecuritiesAccountCrosswalk)> {
+    let root = read_json(path)?;
+    let mut metadata = parse_metadata(DatasetKind::SecuritiesAccount, &root)?;
+    let entries = root
+        .as_object()
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre::eyre!("securities_account snapshot missing `entries` array"))?;
+
+    let mut crosswalk = SecuritiesAccountCrosswalk::default();
+    for entry in entries {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| eyre::eyre!("securities_account entry must be an object"))?;
+        let settlement_account = obj
+            .get("settlement_account")
+            .or_else(|| obj.get("account"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre::eyre!("securities_account entry missing `settlement_account`"))?
+            .trim()
+            .to_ascii_uppercase();
+        if settlement_account.is_empty() {
+            eyre::bail!("securities_account entry contains empty settlement account");
+        }
+        let bic = optional_trimmed_string(obj, "bic").map(|value| value.to_ascii_uppercase());
+        if let Some(bic) = bic.as_deref()
+            && !iso20022::validate_identifier(IdentifierKind::Bic, bic)
+        {
+            eyre::bail!("securities_account entry contains invalid BIC `{bic}`");
+        }
+        let account_id = optional_trimmed_string(obj, "account_id");
+
+        crosswalk.insert(SecuritiesAccountRecord {
+            settlement_account,
+            bic,
+            account_id,
+        })?;
+    }
+
+    metadata.record_count = crosswalk.len();
+    Ok((metadata, crosswalk))
+}
+
+fn load_cash_leg_crosswalk(path: &Path) -> eyre::Result<(SnapshotMetadata, CashLegCrosswalk)> {
+    let root = read_json(path)?;
+    let mut metadata = parse_metadata(DatasetKind::CashLeg, &root)?;
+    let entries = root
+        .as_object()
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre::eyre!("cash_leg snapshot missing `entries` array"))?;
+
+    let mut crosswalk = CashLegCrosswalk::default();
+    for entry in entries {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| eyre::eyre!("cash_leg entry must be an object"))?;
+        let currency = obj
+            .get("currency")
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre::eyre!("cash_leg entry missing `currency`"))?
+            .trim()
+            .to_ascii_uppercase();
+        if !iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
+            eyre::bail!("cash_leg entry contains invalid currency `{currency}`");
+        }
+        let payment_type =
+            optional_trimmed_string(obj, "payment_type").map(|value| value.to_ascii_uppercase());
+        let asset_definition_id = optional_trimmed_string(obj, "asset_definition_id");
+
+        crosswalk.insert(CashLegRecord {
+            currency,
+            payment_type,
+            asset_definition_id,
+        })?;
+    }
+
+    metadata.record_count = crosswalk.len();
+    Ok((metadata, crosswalk))
+}
+
+fn optional_trimmed_string(obj: &json::Map, field: &str) -> Option<String> {
+    obj.get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn read_json(path: &Path) -> eyre::Result<Value> {
     let raw = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read ISO reference dataset at {}", path.display()))?;
@@ -1261,6 +1773,12 @@ mod tests {
         assert_eq!(snapshots.isin_cusip().state(), SnapshotState::Missing);
         assert_eq!(snapshots.bic_lei().state(), SnapshotState::Missing);
         assert_eq!(snapshots.mic_directory().state(), SnapshotState::Missing);
+        assert_eq!(snapshots.csd_venue().state(), SnapshotState::Missing);
+        assert_eq!(
+            snapshots.securities_account().state(),
+            SnapshotState::Missing
+        );
+        assert_eq!(snapshots.cash_leg().state(), SnapshotState::Missing);
     }
 
     #[test]
@@ -1437,5 +1955,143 @@ mod tests {
         );
         let err = snapshots.validate_mic("XTBD").unwrap_err();
         assert!(matches!(err, ReferenceDataError::MicInactive { .. }));
+    }
+
+    #[test]
+    fn loads_and_validates_securities_ledger_crosswalk_snapshots() {
+        let _guard = iso_reference_test_guard();
+        let instrument_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"ANNA DSB sample",
+                "entries":[{"isin":"US0378331005","cusip":"037833100","asset_definition_id":"usd#securities"}]
+            }"#,
+        );
+        let csd_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD sample",
+                "entries":[{"mic":"XNAS","csd_id":"DTC","ledger_domain_id":"securities"}]
+            }"#,
+        );
+        let account_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD account sample",
+                "entries":[{"settlement_account":"DLVRY-ACC","bic":"DEUTDEFF","account_id":"alice@test"}]
+            }"#,
+        );
+        let cash_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD cash-leg sample",
+                "entries":[{"currency":"USD","payment_type":"APMT","asset_definition_id":"usd#securities"}]
+            }"#,
+        );
+        let config = IsoReferenceData {
+            isin_crosswalk_path: Some(instrument_snapshot.path().to_path_buf()),
+            csd_venue_path: Some(csd_snapshot.path().to_path_buf()),
+            securities_account_path: Some(account_snapshot.path().to_path_buf()),
+            cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
+            ..IsoReferenceData::default()
+        };
+
+        let snapshots = ReferenceDataSnapshots::from_config(&config);
+
+        assert_eq!(
+            snapshots
+                .validate_instrument_ledger_mapping("037833100")
+                .expect("instrument ledger mapping"),
+            ValidationOutcome::Enforced
+        );
+        assert_eq!(
+            snapshots
+                .validate_csd_venue("XNAS")
+                .expect("CSD venue mapping"),
+            ValidationOutcome::Enforced
+        );
+        assert_eq!(
+            snapshots
+                .validate_securities_account("DLVRY-ACC", Some("DEUTDEFF"))
+                .expect("securities account mapping"),
+            ValidationOutcome::Enforced
+        );
+        assert_eq!(
+            snapshots
+                .validate_cash_leg("USD", Some("APMT"))
+                .expect("cash-leg mapping"),
+            ValidationOutcome::Enforced
+        );
+    }
+
+    #[test]
+    fn securities_ledger_crosswalk_validation_rejects_incomplete_rows() {
+        let _guard = iso_reference_test_guard();
+        let instrument_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"ANNA DSB sample",
+                "entries":[{"isin":"US0378331005","cusip":"037833100"}]
+            }"#,
+        );
+        let csd_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD sample",
+                "entries":[{"mic":"XNAS","csd_id":"DTC"}]
+            }"#,
+        );
+        let account_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD account sample",
+                "entries":[{"settlement_account":"DLVRY-ACC","bic":"DEUTDEFF"}]
+            }"#,
+        );
+        let cash_snapshot = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"CSD cash-leg sample",
+                "entries":[{"currency":"USD","payment_type":"APMT"}]
+            }"#,
+        );
+        let config = IsoReferenceData {
+            isin_crosswalk_path: Some(instrument_snapshot.path().to_path_buf()),
+            csd_venue_path: Some(csd_snapshot.path().to_path_buf()),
+            securities_account_path: Some(account_snapshot.path().to_path_buf()),
+            cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
+            ..IsoReferenceData::default()
+        };
+
+        let snapshots = ReferenceDataSnapshots::from_config(&config);
+
+        assert!(matches!(
+            snapshots
+                .validate_instrument_ledger_mapping("US0378331005")
+                .unwrap_err(),
+            ReferenceDataError::MissingLedgerMapping { .. }
+        ));
+        assert!(matches!(
+            snapshots.validate_csd_venue("XNAS").unwrap_err(),
+            ReferenceDataError::MissingLedgerMapping { .. }
+        ));
+        assert!(matches!(
+            snapshots
+                .validate_securities_account("DLVRY-ACC", Some("DEUTDEFF"))
+                .unwrap_err(),
+            ReferenceDataError::MissingLedgerMapping { .. }
+        ));
+        assert!(matches!(
+            snapshots
+                .validate_cash_leg("USD", Some("APMT"))
+                .unwrap_err(),
+            ReferenceDataError::MissingLedgerMapping { .. }
+        ));
+        assert!(matches!(
+            snapshots
+                .validate_securities_account("DLVRY-ACC", Some("MARKDEFF"))
+                .unwrap_err(),
+            ReferenceDataError::NotFound { .. }
+        ));
     }
 }

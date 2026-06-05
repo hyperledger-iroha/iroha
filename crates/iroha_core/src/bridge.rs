@@ -42,6 +42,12 @@ pub trait BridgeStateReadOnly {
     fn bridge_chain_id(&self) -> &ChainId;
     /// Load a committed block at `height`.
     fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
+    /// Load the commit certificate persisted for `height`/`block_hash`.
+    fn bridge_commit_qc_for_block(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<Qc>;
     /// Resolve a validator consensus-key proof-of-possession by public key.
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>>;
 }
@@ -53,6 +59,17 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
 
     fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.kura().get_block(height)
+    }
+
+    fn bridge_commit_qc_for_block(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<Qc> {
+        let sidecar = self.kura().read_roster_metadata(height)?;
+        let commit_qc = sidecar.commit_qc?;
+        (commit_qc.height == height && commit_qc.subject_block_hash == block_hash)
+            .then_some(commit_qc)
     }
 
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
@@ -67,6 +84,16 @@ impl BridgeStateReadOnly for CoreState {
 
     fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.block_by_height(height)
+    }
+
+    fn bridge_commit_qc_for_block(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<Qc> {
+        self.commit_roster_snapshot_for_block(height, block_hash)
+            .map(|snapshot| snapshot.commit_qc)
+            .or_else(|| self.commit_qc_for_block(height, block_hash))
     }
 
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
@@ -136,12 +163,41 @@ pub struct RecordedSccpMessage {
     pub commitment: SccpHubCommitmentV1,
 }
 
+fn decode_verified_sccp_payload(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
+    if let Some(payload) = iroha_sccp::decode_canonical_sccp_payload_bytes(payload_bytes) {
+        return iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload);
+    }
+    let payload = SccpPayloadV1::Transfer(iroha_sccp::decode_canonical_transfer_payload_bytes(
+        payload_bytes,
+    )?);
+    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+}
+
+fn decode_ascii_hex_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<Vec<u8>> {
+    let raw = std::str::from_utf8(payload_bytes).ok()?.trim();
+    let hex = raw.strip_prefix("0x").unwrap_or(raw);
+    if hex.is_empty()
+        || hex.len() % 2 != 0
+        || !hex.chars().all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    hex::decode(hex).ok()
+}
+
+pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
+    if let Some(payload) = decode_verified_sccp_payload(payload_bytes) {
+        return Some(payload);
+    }
+    let decoded = decode_ascii_hex_sccp_payload_bytes(payload_bytes)?;
+    decode_verified_sccp_payload(&decoded)
+}
+
 fn decode_recorded_sccp_message(instruction: &InstructionBox) -> Option<SccpPayloadV1> {
     let record = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()?;
-    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)?;
-    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+    decode_recorded_sccp_payload_bytes(&record.payload_bytes)
 }
 
 fn collect_sccp_messages_from_executable(
@@ -344,6 +400,8 @@ pub fn build_finality_proof(
         .find(|candidate| candidate.subject_block_hash == block_hash)
     {
         cert.clone()
+    } else if let Some(cert) = state.bridge_commit_qc_for_block(height, block_hash) {
+        cert
     } else if let Some(cert) = cert_candidates.pop() {
         return Err(BridgeFinalityError::QcHashMismatch {
             height,
@@ -925,8 +983,10 @@ mod tests {
         ChainId,
         account::AccountId,
         block::{BlockSignature, SignedBlock},
+        consensus::{CertPhase, QcAggregate, default_chain_order_hash},
         isi::InstructionBox,
         nexus::DataSpaceId,
+        peer::PeerId,
         prelude::TransactionBuilder,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
         transaction::{
@@ -942,6 +1002,38 @@ mod tests {
 
     struct EmptySccpFinalityState {
         chain_id: ChainId,
+    }
+
+    struct PersistedQcBridgeState {
+        chain_id: ChainId,
+        block: Arc<SignedBlock>,
+        commit_qc: Qc,
+        validator_public_key: PublicKey,
+        validator_pop: Vec<u8>,
+    }
+
+    impl BridgeStateReadOnly for PersistedQcBridgeState {
+        fn bridge_chain_id(&self) -> &ChainId {
+            &self.chain_id
+        }
+
+        fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+            (u64::try_from(height.get()).ok() == Some(self.block.header().height().get()))
+                .then(|| self.block.clone())
+        }
+
+        fn bridge_commit_qc_for_block(
+            &self,
+            height: u64,
+            block_hash: HashOf<BlockHeader>,
+        ) -> Option<Qc> {
+            (self.commit_qc.height == height && self.commit_qc.subject_block_hash == block_hash)
+                .then(|| self.commit_qc.clone())
+        }
+
+        fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
+            (public_key == &self.validator_public_key).then(|| self.validator_pop.clone())
+        }
     }
 
     impl SccpFinalityStateReadOnly for EmptySccpFinalityState {
@@ -1029,6 +1121,51 @@ mod tests {
             .set_transaction_results(Vec::new(), &entry_hashes, results)
             .expect("test block entrypoint hashes should match payload");
         block
+    }
+
+    #[test]
+    fn build_finality_proof_uses_persisted_qc_when_status_history_misses_height() {
+        let height = 987_654;
+        let chain_id: ChainId = "bridge-sccp-persisted-qc".parse().expect("chain id");
+        let block = Arc::new(signed_block_with_transactions(Vec::new(), height));
+        let block_hash = block.hash();
+        let validator_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let validator_public_key = validator_keypair.public_key().clone();
+        let validator_set = vec![PeerId::new(validator_public_key.clone())];
+        let commit_qc = Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::new(b"persisted-qc-parent"),
+            post_state_root: Hash::new(b"persisted-qc-post"),
+            height,
+            view: 3,
+            epoch: 0,
+            chain_order_hash: default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: iroha_data_model::block::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        };
+        let validator_pop = vec![0x42; 48];
+        let state = PersistedQcBridgeState {
+            chain_id,
+            block,
+            commit_qc: commit_qc.clone(),
+            validator_public_key,
+            validator_pop: validator_pop.clone(),
+        };
+
+        let proof = build_finality_proof(&state, height)
+            .expect("persisted commit QC should satisfy finality proof build");
+
+        assert_eq!(proof.commit_qc, commit_qc);
+        assert_eq!(proof.validator_set_pops, vec![validator_pop]);
     }
 
     fn signed_block_with_sccp_payloads(
@@ -1202,6 +1339,19 @@ mod tests {
             iroha_sccp::merkle_root_from_commitment(&messages[1].commitment, &proof),
             root
         );
+    }
+
+    #[test]
+    fn collect_sccp_messages_accepts_hex_encoded_record_payload_bytes() {
+        let expected_payload =
+            sample_transfer_payload(6, b"0x0000000000000000000000000000000000000006");
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let encoded_payload = hex::encode(&payload).into_bytes();
+        let (block, _) = signed_block_with_sccp_payloads(&[encoded_payload], 4);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload, expected_payload);
     }
 
     #[test]

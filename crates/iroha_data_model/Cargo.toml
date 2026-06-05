@@ -1,5 +1,6 @@
 [package]
 name = "iroha_data_model"
+autobins = false
 
 edition.workspace = true
 version.workspace = true
