@@ -165,24 +165,45 @@ def write_checked_in_xsd_summary(
     return summary_path
 
 
-def write_evidence_summary(root):
+def write_evidence_summary(root, *, direct_receipts=True):
     root.mkdir(parents=True, exist_ok=True)
-    canary_path = evidence_test.write_canary(root)
-    trust_path = evidence_test.write_trust_summary(root / "trust")
-    summary_path = root / "evidence.summary.json"
-    rc, _stdout, stderr = evidence_test.run_evidence(
-        [
-            "--canary-summary",
-            str(canary_path),
-            "--trust-summary",
-            str(trust_path),
-            "--provider",
-            "local-bank",
-            "--environment",
-            "preprod",
-            "--summary-out",
-            str(summary_path),
+    receipt_args = []
+    receipt_entries = None
+    if direct_receipts:
+        notary_receipts, rail_receipts = evidence_test.write_https_receipt_dirs(root)
+        receipt_args = [
+            "--receipt-dir",
+            str(notary_receipts),
+            "--receipt-dir",
+            str(rail_receipts),
         ]
+        receipt_entries = evidence_test.receipt_entries_from_dirs(
+            notary_receipts,
+            rail_receipts,
+        )
+    canary_path = evidence_test.write_canary(
+        root,
+        evidence_test.valid_canary_summary(receipt_entries=receipt_entries),
+    )
+    trust_path = evidence_test.write_trust_summary(root / "trust")
+    argv = [
+        "--canary-summary",
+        str(canary_path),
+        "--trust-summary",
+        str(trust_path),
+        "--provider",
+        "local-bank",
+        "--environment",
+        "preprod",
+    ]
+    if direct_receipts:
+        argv.extend(receipt_args)
+    else:
+        argv.append("--allow-canary-stage-receipts-only")
+    summary_path = root / "evidence.summary.json"
+    argv.extend(["--summary-out", str(summary_path)])
+    rc, _stdout, stderr = evidence_test.run_evidence(
+        argv
     )
     if rc != 0:
         raise AssertionError(stderr)
@@ -191,9 +212,17 @@ def write_evidence_summary(root):
 
 def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receipts=None):
     evidence = json.loads(path.read_text(encoding="utf-8"))
+    receipts = None
+    if receipt_kind is None and verified_receipts is None:
+        receipts = [
+            dict(receipt)
+            for receipt in evidence["canary_summaries"][0]["receipt_summary"]["receipts"]
+        ]
+        receipt_kind = sorted({receipt["receipt_kind"] for receipt in receipts})
     evidence["receipt_verification"] = receipt_verification_summary(
         receipt_kind,
         verified_receipts=verified_receipts,
+        receipts=receipts,
     )
     refresh_digest(evidence)
     return write_json(path, evidence)
@@ -289,6 +318,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertTrue(trust_summary["path"].endswith("trust.summary.json"))
             self.assertRegex(trust_summary["verified_at"], r"^\d{4}-\d{2}-\d{2}T")
             self.assertRegex(trust_summary["summary_sha256"], r"^[0-9a-f]{64}$")
+            self.assertTrue(trust_summary["profile_json_emitted"])
+            self.assertTrue(trust_summary["profile_json_emittable"])
+            self.assertRegex(trust_summary["profile_json_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(trust_profile["bundle_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 trust_profile["source"],
                 {
@@ -298,12 +331,119 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertTrue(trust_profile["x509_require_crl_revocation_check"])
             self.assertEqual(trust_profile["x509_crl_count"], 1)
+            self.assertEqual(len(trust_profile["x509_crl_der"]), 1)
+            self.assertRegex(trust_profile["x509_crl_der"][0]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(trust_profile["x509_crl_der"][0]["byte_len"], 0)
             self.assertTrue(trust_profile["x509_require_ocsp_revocation_check"])
             self.assertEqual(trust_profile["x509_ocsp_response_count"], 1)
+            self.assertEqual(len(trust_profile["x509_ocsp_response_der"]), 1)
+            self.assertRegex(
+                trust_profile["x509_ocsp_response_der"][0]["sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+            self.assertGreater(trust_profile["x509_ocsp_response_der"][0]["byte_len"], 0)
+            self.assertEqual(trust_profile["revoked_certificate_pin_count"], 1)
+            self.assertEqual(len(trust_profile["x509_trust_anchor_der"]), 1)
+            self.assertEqual(len(trust_profile["revoked_certificate_der"]), 1)
+            self.assertEqual(trust_profile["x509_required_certificate_policy_oid_count"], 1)
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, READINESS.sha256_hex(READINESS._canonical_json_bytes(body)))
+
+    def test_symlinked_summary_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            target = root / "readiness-target.summary.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            summary_out = root / "readiness-link.summary.json"
+            try:
+                summary_out.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_summary_inputs_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            xsd_target = write_strict_xsd_summary(root / "xsd-target")
+            xsd_link = root / "xsd-link.summary.json"
+            try:
+                xsd_link.symlink_to(xsd_target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_link), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_target = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence-target")
+            )
+            evidence_link = root / "evidence-link.summary.json"
+            try:
+                evidence_link.symlink_to(evidence_target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_link)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_directory_summary_inputs_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            xsd_dir = root / "xsd-dir.summary.json"
+            xsd_dir.mkdir()
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_dir), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must be a regular file", stderr)
+
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_dir = root / "evidence-dir.summary.json"
+            evidence_dir.mkdir()
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_dir)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must be a regular file", stderr)
 
     def test_xsd_and_evidence_summaries_are_required(self):
         rc, _stdout, stderr = run_readiness([])
@@ -351,6 +491,20 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("provide --provider", stderr)
+
+            rc, _stdout, stderr = run_readiness(
+                base_argv + ["--provider", "local-bank ", "--environment", "preprod"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--provider must not have surrounding whitespace", stderr)
+
+            rc, _stdout, stderr = run_readiness(
+                base_argv + ["--provider", "local-bank", "--environment", " preprod"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--environment must not have surrounding whitespace", stderr)
 
     def test_freshness_budgets_are_required_and_positive(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -757,7 +911,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             duplicate_fixture = json.loads(xsd_summary.read_text(encoding="utf-8"))
             copied_fixture = dict(duplicate_fixture["fixtures"][0])
-            copied_fixture["path"] = "../copied_fixture.xml"
+            copied_fixture["path"] = "fixtures/copied_fixture.xml"
             duplicate_fixture["fixtures"].append(copied_fixture)
             duplicate_fixture["verified_fixtures"] += 1
             duplicate_fixture["schema_backed_fixtures"] += 1
@@ -801,6 +955,86 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
 
+    def test_xsd_reviewed_gap_reason_strings_are_canonical(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = []
+
+            schema_only_whitespace = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            schema_only_whitespace["schemas"][0]["schema_only"] = True
+            schema_only_whitespace["schemas"][0][
+                "schema_only_reason"
+            ] = " reviewed standalone fixture gap"
+            cases.append(
+                (
+                    schema_only_whitespace,
+                    "schema_only_reason must not have surrounding whitespace",
+                )
+            )
+
+            schema_only_control = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            schema_only_control["schemas"][0]["schema_only"] = True
+            schema_only_control["schemas"][0][
+                "schema_only_reason"
+            ] = "reviewed\nstandalone fixture gap"
+            cases.append(
+                (
+                    schema_only_control,
+                    "schema_only_reason must not contain control characters",
+                )
+            )
+
+            missing_reason_whitespace = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_reason_whitespace["fixtures"][0]["schema_backed"] = False
+            missing_reason_whitespace["fixtures"][0]["schema"] = None
+            missing_reason_whitespace["fixtures"][0][
+                "missing_schema_reason"
+            ] = " reviewed missing schema package"
+            cases.append(
+                (
+                    missing_reason_whitespace,
+                    "missing_schema_reason must not have surrounding whitespace",
+                )
+            )
+
+            missing_reason_control = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_reason_control["fixtures"][0]["schema_backed"] = False
+            missing_reason_control["fixtures"][0]["schema"] = None
+            missing_reason_control["fixtures"][0][
+                "missing_schema_reason"
+            ] = "reviewed\nmissing schema package"
+            cases.append(
+                (
+                    missing_reason_control,
+                    "missing_schema_reason must not contain control characters",
+                )
+            )
+
+            for offset, (body, message) in enumerate(cases):
+                with self.subTest(message=message):
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-reviewed-gap-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                            "--allow-reviewed-xsd-gaps",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_forged_xsd_schema_paths_are_rechecked_by_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -821,6 +1055,28 @@ class IsoProductionReadinessTest(unittest.TestCase):
             non_xsd_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             non_xsd_path["schemas"][0]["path"] = "iso/fooo.001.001.01.xml"
             malformed_cases.append((non_xsd_path, "must point to an .xsd file"))
+
+            fixture_schema_whitespace = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            fixture_schema_whitespace["fixtures"][0]["schema"] = (
+                fixture_schema_whitespace["fixtures"][0]["schema"] + " "
+            )
+            malformed_cases.append(
+                (
+                    fixture_schema_whitespace,
+                    "schema must not have surrounding whitespace",
+                )
+            )
+
+            fixture_schema_control = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            fixture_schema_control["fixtures"][0]["schema"] = (
+                fixture_schema_control["fixtures"][0]["schema"] + "\n"
+            )
+            malformed_cases.append(
+                (
+                    fixture_schema_control,
+                    "schema must not contain control characters",
+                )
+            )
 
             for offset, (body, message) in enumerate(malformed_cases):
                 with self.subTest(message=message):
@@ -874,6 +1130,18 @@ class IsoProductionReadinessTest(unittest.TestCase):
             non_xml_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             non_xml_path["fixtures"][0]["path"] = "../foo_fixture.txt"
             cases.append((non_xml_path, "must point to an .xml file"))
+
+            dot_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            dot_path["fixtures"][0]["path"] = "fixtures/./foo_fixture.xml"
+            cases.append((dot_path, "must not contain empty or dot segments"))
+
+            empty_segment = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            empty_segment["fixtures"][0]["path"] = "fixtures//foo_fixture.xml"
+            cases.append((empty_segment, "must not contain empty or dot segments"))
+
+            nonleading_parent = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            nonleading_parent["fixtures"][0]["path"] = "fixtures/../foo_fixture.xml"
+            cases.append((nonleading_parent, "parent segments must be leading"))
 
             for offset, (body, message) in enumerate(cases):
                 with self.subTest(message=message):
@@ -1055,6 +1323,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             cases.append((duplicate_skipped, "xsd.profile_catalog_skipped_duplicate"))
 
+            mismatched_skipped = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            mismatched_skipped["profile_catalog"]["skipped_family_versions"].append(
+                {
+                    "profile_id": "minimal-profile",
+                    "message_type": "fooo.001",
+                    "direction": "inbound",
+                    "version": "fooo.002",
+                }
+            )
+            cases.append(
+                (
+                    mismatched_skipped,
+                    "xsd.profile_catalog_skipped_family_mismatch",
+                )
+            )
+
             for offset, (body, code) in enumerate(cases):
                 with self.subTest(code=code):
                     refresh_digest(body)
@@ -1075,6 +1359,93 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
+
+    def test_xsd_profile_catalog_coordinates_are_canonical(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            missing_version = {
+                "profile_id": "minimal-profile",
+                "message_type": "fooo.001",
+                "direction": "inbound",
+                "message_def_id": "fooo.001.001.02",
+            }
+
+            def set_version_field(field, value):
+                def mutate(body):
+                    body["profile_catalog"]["versions"][0][field] = value
+
+                return mutate
+
+            def append_top_level_missing(entry):
+                def mutate(body):
+                    body["missing_profile_schema_versions"].append(entry)
+
+                return mutate
+
+            def append_catalog_missing(entry):
+                def mutate(body):
+                    body["profile_catalog"]["missing_schema_versions"].append(entry)
+
+                return mutate
+
+            cases = (
+                (
+                    "profile-id",
+                    set_version_field("profile_id", "MinimalProfile"),
+                    "profile_id must be a canonical lowercase profile id",
+                ),
+                (
+                    "message-type",
+                    set_version_field("message_type", "FOOO.001"),
+                    "message_type must be lowercase ISO family id",
+                ),
+                (
+                    "direction",
+                    set_version_field("direction", "sideways"),
+                    "direction must be one of",
+                ),
+                (
+                    "message-family",
+                    set_version_field("message_def_id", "barr.001.001.01"),
+                    "message_def_id must match message_type",
+                ),
+                (
+                    "top-level-missing-profile-id",
+                    append_top_level_missing({**missing_version, "profile_id": "minimal_"}),
+                    "profile_id must be a canonical lowercase profile id",
+                ),
+                (
+                    "catalog-missing-message-type",
+                    append_catalog_missing({**missing_version, "message_type": "fooo.01"}),
+                    "message_type must be lowercase ISO family id",
+                ),
+            )
+
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(xsd)
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-profile-coordinate-{name}.summary.json",
+                        xsd,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_unknown_xsd_summary_keys_are_malformed(self):
         def get_nested(value, parts):
@@ -1380,8 +1751,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 write_evidence_summary(root / "evidence")
             )
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
-            evidence["policy"]["allow_insecure_http"] = True
-            evidence["policy"]["allow_legacy_colr007"] = True
+            for flag in READINESS.PRODUCTION_FALSE_POLICY_FLAGS:
+                evidence["policy"][flag] = True
             refresh_digest(evidence)
             mutated_path = write_json(root / "policy-evidence.summary.json", evidence)
 
@@ -1401,13 +1772,87 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 1, stderr)
             summary = json.loads(stdout)
             codes = {blocker["code"] for blocker in summary["blockers"]}
-            self.assertIn("evidence.policy.allow_insecure_http", codes)
-            self.assertIn("evidence.policy.allow_legacy_colr007", codes)
+            for flag in READINESS.PRODUCTION_FALSE_POLICY_FLAGS:
+                self.assertIn(f"evidence.policy.{flag}", codes)
             self.assertIn("evidence.policy_provider_mismatch", codes)
             self.assertIn("evidence.policy_environment_mismatch", codes)
             self.assertIn("evidence.provider_mismatch", codes)
             self.assertIn("evidence.environment_mismatch", codes)
             self.assertIn("trust.environment_mismatch", codes)
+
+    def test_profile_json_not_emitted_evidence_blocks_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_root = root / "evidence"
+            evidence_root.mkdir()
+            notary_receipts, rail_receipts = evidence_test.write_https_receipt_dirs(evidence_root)
+            canary_path = evidence_test.write_canary(
+                evidence_root,
+                evidence_test.valid_canary_summary(
+                    receipt_entries=evidence_test.receipt_entries_from_dirs(
+                        notary_receipts,
+                        rail_receipts,
+                    )
+                ),
+            )
+            trust_path = evidence_test.write_trust_summary(
+                evidence_root / "trust",
+                emit_profile_json=False,
+            )
+            evidence_summary = evidence_root / "evidence.summary.json"
+            rc, _stdout, stderr = evidence_test.run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--provider",
+                    "local-bank",
+                    "--environment",
+                    "preprod",
+                    "--allow-profile-json-not-emitted",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(evidence_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            evidence_summary = add_archive_receipt_verification(evidence_summary)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            codes = {blocker["code"] for blocker in summary["blockers"]}
+            self.assertIn("evidence.policy.allow_profile_json_not_emitted", codes)
+            self.assertIn("trust.profile_json_not_emitted", codes)
+
+    def test_profile_json_not_emittable_evidence_blocks_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["trust_summaries"][0]["profile_json_emittable"] = False
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "not-emittable-evidence.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            codes = {blocker["code"] for blocker in summary["blockers"]}
+            self.assertIn("trust.profile_json_not_emittable", codes)
 
     def test_missing_evidence_policy_flag_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1416,14 +1861,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence_summary = add_archive_receipt_verification(
                 write_evidence_summary(root / "evidence")
             )
-            cases = (
-                ("provider", "policy.provider must be a non-empty string"),
-                ("environment", "policy.environment must be a non-empty string"),
-                ("allow_insecure_http", "policy.allow_insecure_http must be a boolean"),
-                ("max_canary_age_days", "policy.max_canary_age_days must be a positive integer"),
-                ("max_trust_age_days", "policy.max_trust_age_days must be a positive integer"),
-                ("max_trust_source_age_days", "policy.max_trust_source_age_days must be a positive integer"),
-            )
+            cases = []
+            for key in sorted(READINESS.EVIDENCE_POLICY_KEYS):
+                if key in {"provider", "environment"}:
+                    message = f"policy.{key} must be a non-empty string"
+                elif key in READINESS.PRODUCTION_FALSE_POLICY_FLAGS:
+                    message = f"policy.{key} must be a boolean"
+                else:
+                    self.assertIn(key, READINESS.EVIDENCE_FRESHNESS_POLICY_FIELDS)
+                    message = f"policy.{key} must be a positive integer"
+                cases.append((key, message))
             for key, message in cases:
                 with self.subTest(key=key):
                     evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
@@ -1544,6 +1991,113 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_compact_identity_strings_reject_surrounding_whitespace(self):
+        def set_nested(evidence, parts, value):
+            target = evidence
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+
+        cases = (
+            (
+                "policy-provider",
+                ("policy", "provider"),
+                "local-bank ",
+                "policy.provider must not have surrounding whitespace",
+            ),
+            (
+                "canary-path",
+                ("canary_summaries", 0, "path"),
+                " canary.summary.json",
+                "path must not have surrounding whitespace",
+            ),
+            (
+                "canary-config-path",
+                ("canary_summaries", 0, "config_path"),
+                "/ops/iso/canary.json ",
+                "config_path must not have surrounding whitespace",
+            ),
+            (
+                "stage-name",
+                ("canary_summaries", 0, "stage_names", 0),
+                "rail ",
+                "stage_names[0] must not have surrounding whitespace",
+            ),
+            (
+                "stage-window-name",
+                ("canary_summaries", 0, "stage_windows", 0, "name"),
+                " rail",
+                "name must not have surrounding whitespace",
+            ),
+            (
+                "trust-summary-path",
+                ("trust_summaries", 0, "path"),
+                " trust.summary.json",
+                "path must not have surrounding whitespace",
+            ),
+            (
+                "trust-source-url",
+                ("trust_summaries", 0, "profiles", 0, "source", "url"),
+                "https://pki.example.invalid/swift-cbpr-plus ",
+                "source.url must not have surrounding whitespace",
+            ),
+            (
+                "trust-profile-id",
+                ("trust_summaries", 0, "profiles", 0, "profile_id"),
+                " swift-cbpr-plus",
+                "profile_id must not have surrounding whitespace",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, parts, value, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    set_nested(evidence, parts, value)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"trim-{name}.summary.json", evidence)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+            with self.subTest(name="receipt-path"):
+                evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+                receipt_summary["receipts"][0]["path"] += " "
+                refresh_digest(receipt_summary)
+                refresh_digest(evidence)
+                mutated_path = write_json(root / "trim-receipt-path.summary.json", evidence)
+
+                rc, _stdout, stderr = run_readiness(
+                    ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertIn("path must not have surrounding whitespace", stderr)
+
+            with self.subTest(name="receipt-kind"):
+                evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+                receipt_summary["receipt_kind"][0] += " "
+                refresh_digest(receipt_summary)
+                refresh_digest(evidence)
+                mutated_path = write_json(root / "trim-receipt-kind.summary.json", evidence)
+
+                rc, _stdout, stderr = run_readiness(
+                    ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertIn("receipt_kind[0] must not have surrounding whitespace", stderr)
+
     def test_unknown_compact_evidence_keys_are_malformed(self):
         def get_nested(value, parts):
             target = value
@@ -1663,6 +2217,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
             cases = (
                 ("path", "path must be a non-empty string"),
                 ("verified_at", "verified_at must be a non-empty string"),
+                ("profile_json_emitted", "profile_json_emitted must be a boolean"),
+                ("profile_json_emittable", "profile_json_emittable must be a boolean"),
+                ("profile_json_sha256", "profile_json_sha256 must be a lowercase SHA-256 digest"),
                 ("summary_sha256", "summary_sha256 must be a lowercase SHA-256 digest"),
             )
             for key, message in cases:
@@ -1797,6 +2354,27 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("http-url", lambda evidence: set_source_field(evidence, "url", "http://pki.example.invalid/source"), "source.url must use HTTPS URL"),
             ("credential-url", lambda evidence: set_source_field(evidence, "url", "https://user:pass@pki.example.invalid/source"), "source.url must not contain credentials"),
             ("query-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/source?debug=true"), "source.url must not contain params, query, or fragment"),
+            ("whitespace-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift cbpr/source"), "source.url must not contain whitespace"),
+            ("invalid-port-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid:abc/source"), "source.url has invalid port"),
+            ("out-of-range-port-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid:99999/source"), "source.url has invalid port"),
+            ("default-port-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid:443/source"), "source.url must not explicitly specify the default port"),
+            ("uppercase-host-url", lambda evidence: set_source_field(evidence, "url", "https://PKI.example.invalid/source"), "source.url host must be lowercase"),
+            ("trailing-dot-host-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid./source"), "source.url host must not end with a dot"),
+            ("empty-label-host-url", lambda evidence: set_source_field(evidence, "url", "https://pki..example.invalid/source"), "source.url host must not contain empty labels"),
+            ("hyphen-edge-host-url", lambda evidence: set_source_field(evidence, "url", "https://-pki.example.invalid/source"), "source.url host labels must not start or end with hyphen"),
+            ("underscore-host-url", lambda evidence: set_source_field(evidence, "url", "https://pki._tcp.example.invalid/source"), "source.url host labels must use lowercase ASCII letters, digits, or hyphens"),
+            ("encoded-host-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example%2einvalid/source"), "source.url host must not contain percent escapes"),
+            ("numeric-spoof-host-url", lambda evidence: set_source_field(evidence, "url", "https://123.000.000.001/source"), "source.url numeric host labels must be a valid IP address"),
+            ("dot-segment-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/../source"), "source.url path must not contain dot segments"),
+            ("encoded-dot-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/%2e%2e/source"), "source.url path must not contain encoded dot or separator characters"),
+            ("encoded-slash-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%2fsource"), "source.url path must not contain encoded dot or separator characters"),
+            ("encoded-percent-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%252fsource"), "source.url path must not contain encoded percent characters"),
+            ("semicolon-path-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/sources;debug/source"), "source.url path must not contain semicolon parameters"),
+            ("backslash-path-url", lambda evidence: set_source_field(evidence, "url", r"https://pki.example.invalid/sources\source"), "source.url path must use forward slashes"),
+            ("encoded-space-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%20source"), "source.url must not contain percent-encoded control or space characters"),
+            ("encoded-nul-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%00source"), "source.url must not contain percent-encoded control or space characters"),
+            ("encoded-del-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%7fsource"), "source.url must not contain percent-encoded control or space characters"),
+            ("malformed-percent-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%zzsource"), "source.url must not contain malformed percent escapes"),
             ("localhost-url", lambda evidence: set_source_field(evidence, "url", "https://localhost/source"), "source.url must not use localhost"),
             ("local-ip-url", lambda evidence: set_source_field(evidence, "url", "https://127.0.0.1/source"), "source.url must not use local, private, or reserved IP addresses"),
             ("missing-retrieved-at", lambda evidence: evidence["trust_summaries"][0]["profiles"][0]["source"].pop("retrieved_at"), "source.retrieved_at must be a non-empty string"),
@@ -2102,6 +2680,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             profile["embedded_signature_policy"] = "record-only"
             profile["signature_public_key_pin_count"] = 0
             profile["x509_trust_anchor_pin_count"] = 0
+            profile["x509_trust_anchor_der"] = []
             refresh_digest(evidence)
             mutated_path = write_json(root / "weak-trust.summary.json", evidence)
 
@@ -2143,6 +2722,76 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     del profile[flag]
                     refresh_digest(evidence)
                     mutated_path = write_json(root / f"missing-{flag}.summary.json", evidence)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_compact_trust_der_proofs_are_required_and_shape_checked(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "missing-crl-der",
+                    lambda profile: profile.pop("x509_crl_der"),
+                    "x509_crl_der must be a JSON array",
+                ),
+                (
+                    "bad-crl-digest",
+                    lambda profile: profile["x509_crl_der"][0].__setitem__(
+                        "sha256",
+                        "not-a-digest",
+                    ),
+                    "sha256 must be a lowercase SHA-256 digest",
+                ),
+                (
+                    "zero-crl-byte-len",
+                    lambda profile: profile["x509_crl_der"][0].__setitem__(
+                        "byte_len",
+                        0,
+                    ),
+                    "byte_len must be a positive integer",
+                ),
+                (
+                    "duplicate-ocsp-digest",
+                    lambda profile: profile["x509_ocsp_response_der"].append(
+                        dict(profile["x509_ocsp_response_der"][0])
+                    ),
+                    "duplicates",
+                ),
+                (
+                    "crl-count-drift",
+                    lambda profile: profile.__setitem__("x509_crl_der", []),
+                    "x509_crl_der length does not match x509_crl_count",
+                ),
+                (
+                    "ocsp-count-drift",
+                    lambda profile: profile.__setitem__("x509_ocsp_response_der", []),
+                    "x509_ocsp_response_der length does not match x509_ocsp_response_count",
+                ),
+                (
+                    "anchor-count-drift",
+                    lambda profile: profile.__setitem__(
+                        "x509_trust_anchor_pin_count",
+                        0,
+                    ),
+                    "x509_trust_anchor_der length exceeds x509_trust_anchor_pin_count",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    profile = evidence["trust_summaries"][0]["profiles"][0]
+                    mutate(profile)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"bad-der-{name}.summary.json", evidence)
 
                     rc, _stdout, stderr = run_readiness(
                         ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
@@ -2193,6 +2842,45 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("trust.profile_id_duplicate", codes)
 
+    def test_trust_bundle_digest_is_required_and_unique(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            malformed = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            del malformed["trust_summaries"][0]["profiles"][0]["bundle_sha256"]
+            refresh_digest(malformed)
+            malformed_path = write_json(root / "missing-bundle-digest.summary.json", malformed)
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(malformed_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("bundle_sha256 must be a lowercase SHA-256 digest", stderr)
+
+            duplicate = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            trust_summary = duplicate["trust_summaries"][0]
+            copied_profile = {
+                **trust_summary["profiles"][0],
+                "profile_id": "fedwire-funds",
+                "rail": "fedwire-funds",
+            }
+            trust_summary["profiles"].append(copied_profile)
+            trust_summary["verified_bundles"] = 2
+            refresh_digest(duplicate)
+            duplicate_path = write_json(root / "duplicate-bundle-digest.summary.json", duplicate)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(duplicate_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("trust.bundle_digest_duplicate", codes)
+
     def test_weak_trust_revocation_posture_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2204,8 +2892,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             profile = evidence["trust_summaries"][0]["profiles"][0]
             profile["x509_require_crl_revocation_check"] = False
             profile["x509_crl_count"] = 0
+            profile["x509_crl_der"] = []
             profile["x509_require_ocsp_revocation_check"] = False
             profile["x509_ocsp_response_count"] = 0
+            profile["x509_ocsp_response_der"] = []
             refresh_digest(evidence)
             mutated_path = write_json(root / "weak-revocation.summary.json", evidence)
 
@@ -2228,7 +2918,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             profile = evidence["trust_summaries"][0]["profiles"][0]
             profile["x509_crl_count"] = 0
+            profile["x509_crl_der"] = []
             profile["x509_ocsp_response_count"] = 0
+            profile["x509_ocsp_response_der"] = []
             refresh_digest(evidence)
             mutated_path = write_json(root / "missing-revocation-material.summary.json", evidence)
 
@@ -2245,7 +2937,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             xsd_summary = write_strict_xsd_summary(root / "xsd")
-            evidence_summary = write_evidence_summary(root / "evidence")
+            evidence_summary = write_evidence_summary(
+                root / "evidence",
+                direct_receipts=False,
+            )
 
             rc, stdout, stderr = run_readiness(
                 ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_summary)]
@@ -2253,6 +2948,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 1, stderr)
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.archive_receipts_not_reverified", codes)
+            self.assertIn("evidence.policy.allow_canary_stage_receipts_only", codes)
 
             rc, stdout, stderr = run_readiness(
                 [
@@ -2297,6 +2993,174 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("receipt_verification summary_sha256 mismatch", stderr)
+
+    def test_archive_receipts_must_cover_canary_receipt_digests(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["receipt_verification"]["receipts"][0]["receipt_sha256"] = "f" * 64
+            refresh_digest(evidence["receipt_verification"])
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "unbound-receipts.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.archive_receipt_missing_canary_digest", codes)
+
+    def test_archive_receipts_must_not_include_unreferenced_digests(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            archive = evidence["receipt_verification"]
+            extra = dict(archive["receipts"][0])
+            extra["path"] = "/ops/iso/receipts/extra-unreferenced.receipt.json"
+            extra["receipt_sha256"] = "e" * 64
+            archive["receipts"].append(extra)
+            archive["verified_receipts"] += 1
+            refresh_digest(archive)
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "extra-archive-receipt.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.archive_receipt_unreferenced_digest", codes)
+
+    def test_archive_receipts_must_bind_canary_receipt_kinds(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipts = evidence["canary_summaries"][0]["receipt_summary"]["receipts"]
+            receipts[0]["receipt_kind"], receipts[1]["receipt_kind"] = (
+                receipts[1]["receipt_kind"],
+                receipts[0]["receipt_kind"],
+            )
+            refresh_digest(evidence["canary_summaries"][0]["receipt_summary"])
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "kind-swapped-receipts.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.archive_receipt_canary_kind_mismatch", codes)
+
+    def test_canary_receipts_cannot_be_reused_across_compact_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            copied_canary = json.loads(json.dumps(evidence["canary_summaries"][0]))
+            copied_canary["path"] = "/ops/iso/copied-canary.summary.json"
+            copied_canary["config_path"] = "/ops/iso/copied-canary.json"
+            copied_canary["summary_sha256"] = "e" * 64
+            evidence["canary_summaries"].append(copied_canary)
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "reused-canary-receipts.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.canary_receipt_path_reused", codes)
+            self.assertIn("evidence.canary_receipt_digest_reused", codes)
+
+    def test_receipt_summary_kind_lists_must_be_unique(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+            receipt_summary["receipt_kind"].append("iso-audit-notary")
+            refresh_digest(receipt_summary)
+            archive = evidence["receipt_verification"]
+            archive["receipt_kind"].append("iso-audit-notary")
+            refresh_digest(archive)
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "duplicate-receipt-kinds.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_kind_entry_mismatch", codes)
+            self.assertIn("evidence.archive_receipt_kind_entry_mismatch", codes)
+
+    def test_receipt_entry_kinds_must_be_supported(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            def nested(value, parts):
+                for part in parts:
+                    value = value[part]
+                return value
+
+            cases = (
+                (
+                    "canary",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    "evidence.receipt_kind_entry_mismatch",
+                ),
+                (
+                    "archive",
+                    ("receipt_verification",),
+                    "evidence.archive_receipt_kind_entry_mismatch",
+                ),
+            )
+            for name, path_parts, code in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = nested(evidence, path_parts)
+                    receipt_summary["receipts"][0]["receipt_kind"] = "diagnostic-receipt"
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"unsupported-{name}-receipt-kind.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
 
     def test_weak_archive_receipt_policy_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:

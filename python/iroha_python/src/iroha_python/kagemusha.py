@@ -34,6 +34,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
+KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN = (
     "iroha:kagemusha:v1:recursive-spend-transition-profile"
 )
@@ -76,6 +77,7 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
     "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES",
     "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES",
+    "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN",
@@ -549,6 +551,10 @@ def _prove_verified_recursive_aggregation_proof_bundle(
 
 def _call_native_archive_method(name: str, *archives: bytes) -> bytes:
     result = _native_method(name)(*archives)
+    return _require_kagemusha_native_output(name, result)
+
+
+def _require_kagemusha_native_output(name: str, result: object) -> bytes:
     if result is None:
         raise RuntimeError(f"{name} returned no output")
     if isinstance(result, str):
@@ -556,6 +562,8 @@ def _call_native_archive_method(name: str, *archives: bytes) -> bytes:
     output = bytes(result)
     if not output:
         raise RuntimeError(f"{name} returned empty output")
+    if len(output) > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES:
+        raise RuntimeError(f"{name} returned oversized output")
     return output
 
 
@@ -633,15 +641,7 @@ def _call_recursive_spend_method(name: str, request_archive: BytesLike) -> bytes
             f"{name} requires a compiled iroha_python._crypto extension "
             "with recursive Kagemusha support"
         )
-    result = method(request)
-    if result is None:
-        raise RuntimeError(f"{name} returned no output")
-    if isinstance(result, str):
-        raise RuntimeError(f"{name} returned text instead of Norito bytes")
-    output = bytes(result)
-    if not output:
-        raise RuntimeError(f"{name} returned empty output")
-    return output
+    return _require_kagemusha_native_output(name, method(request))
 
 
 def _call_recursive_spend_multi_archive_method(name: str, *archives: bytes) -> bytes:
@@ -653,12 +653,4 @@ def _call_recursive_spend_multi_archive_method(name: str, *archives: bytes) -> b
             f"{name} requires a compiled iroha_python._crypto extension "
             "with recursive Kagemusha support"
         )
-    result = method(*archives)
-    if result is None:
-        raise RuntimeError(f"{name} returned no output")
-    if isinstance(result, str):
-        raise RuntimeError(f"{name} returned text instead of Norito bytes")
-    output = bytes(result)
-    if not output:
-        raise RuntimeError(f"{name} returned empty output")
-    return output
+    return _require_kagemusha_native_output(name, method(*archives))

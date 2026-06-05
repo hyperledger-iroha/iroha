@@ -166,11 +166,28 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   adapter for the exported preimages. It verifies the anchor digest, embedded
   audit-index digest, top-level `index_sha256`, digest-addressed anchor
   filename, local `messages.index.json` equality, and record-count consistency
-  before posting to HTTPS endpoints; local HTTP is rejected unless explicitly
+  before posting to HTTPS endpoints, requires non-empty anchors to expose
+  `store_dir/messages` record sources by default, and verifies each indexed
+  persisted record body against its `record_sha256` plus row metadata before
+  network delivery; local
+  HTTP is rejected unless explicitly
   enabled for tests, endpoint URLs must not contain credentials, params, query
-  strings, fragments, or control characters, duplicate publication endpoints
-  are rejected before network delivery, and every publish attempt writes a
+  strings, fragments, surrounding or embedded whitespace, or control
+  characters, and malformed/default ports plus non-canonical hosts are
+  rejected along with invalid DNS labels, percent-escaped hosts, numeric-host
+  spoofing, traversal, encoded-separator, encoded-percent, percent-encoded
+  control/space bytes, malformed percent escapes, backslash, and embedded
+  semicolon path smuggling, duplicate publication endpoints are rejected before
+  network delivery, bearer-token files must be regular non-symlink bounded
+  exact UTF-8 with no surrounding whitespace, embedded whitespace, or control
+  characters, and
+  the export directory plus export inputs (`latest.notary.json`, the
+  digest-addressed anchor peer, and `messages.index.json`) must be
+  non-symlink regular directories/files before every publish attempt writes a
   bounded receipt without persisting bearer-token material.
+  Receipt output directories and receipt leaves are preflighted before
+  publication, reject symlink or non-regular targets, and receipts are written
+  through no-follow file opens where the platform supports them.
 - Hardened durable ISO bridge reload so missing, malformed, or mismatched
   persisted-record digests fail closed and do not rebuild message status or
   replay indexes.
@@ -212,20 +229,50 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 - Added `fixtures/iso20022/xsd/fixture_manifest.json` plus
   `scripts/iso_xsd_fixture_verify.py`, an offline manifest preflight that binds
   checked-in XSDs to checked-in XML fixtures, verifies schema target namespaces
-  and `Document` payload roots, verifies XML fixture namespaces and payload
-  roots, enforces canonical lowercase ISO message definition ids and path
-  containment for schema/fixture entries, rejects copied XML fixtures with
+  and unambiguous `Document` payload roots with exactly one top-level
+  `Document` element whose type is exactly the local `Document` type, one
+  referenced `Document` complex type, one direct `Document` sequence, and one
+  direct payload element with exact `name`/`type` attributes, no `ref`
+  indirection, a local unprefixed type, and exactly one matching local payload
+  complex type containing exactly one direct `xs:sequence`, rejects XSD
+  composition (`xs:import`, `xs:include`, `xs:redefine`, `xs:override`) and
+  foreign-namespace direct children under the schema, `Document`, and payload
+  structures, and requires schema roots to declare exactly
+  `elementFormDefault` and `targetNamespace` without external schema-location
+  hints or other root attributes,
+  verifies XML fixture namespaces and payload
+  roots, requires fixture `Document` and immediate payload roots to be
+  attribute-free, rejects DTD/entity declarations before parsing schemas or XML fixtures,
+  parses and hashes each manifest/schema/fixture input from the same checked
+  byte buffer,
+  enforces canonical lowercase ISO message definition ids and path
+  containment for schema/fixture entries, rejects backslash, empty, dot, or
+  forbidden parent-segment manifest paths, rejects copied XML fixtures with
   duplicate fixture SHA-256 values, optionally validates schema-backed XML
   fixtures against their checked-in XSDs with `xmllint --nonet`, optionally
   parses the embedded default rail profile catalog and records which concrete
   advertised message versions are schema-backed, emits digest-bound summaries,
   records manifest, schema, fixture, profile source-file, and embedded catalog
-  JSON SHA-256 provenance, requires each checked-in XSD to carry canonical
+  JSON SHA-256 provenance, requires exactly one active Rust
+  `DEFAULT_PROFILES_JSON` raw-string declaration and ignores spoofed matches in
+  comments or unrelated strings, requires each checked-in XSD to carry canonical
   repository, commit, source path, SPDX license, and source SHA-256 provenance
   that matches the checked-in bytes, rejects XSDs that contain known restricted
-  Standards Editor redistribution terms, rejects duplicate or malformed profile
-  catalog profile/message/direction/version entries, and makes missing-XSD
-  fixture coverage explicit. All
+  Standards Editor redistribution terms, rejects duplicate, malformed, or
+  unknown-key profile catalog profile/message/direction/version entries, and
+  allows only the exact message-family alias or concrete message definition
+  ids in catalog `versions` lists so mistyped aliases cannot bypass
+  schema-backed checks, and validates optional runtime catalog fields when
+  present: runtime-required rails, embedded-signature policies, and
+  structured-address modes; optional trust/revocation pins; required reference
+  datasets; booleans; supplementary-data caps; business-service requirements;
+  and amount minor-unit rows. Current and legacy trust-pin aliases cannot
+  overlap, trusted and revoked certificate pins cannot overlap, CRL/OCSP
+  material must be bounded canonical base64 containing complete DER SEQUENCE
+  envelopes, revocation flags must carry corresponding material, and
+  `require-verified` catalog profiles must carry at least one public-key or
+  X.509 trust pin. It also makes missing-XSD fixture coverage explicit.
+  All
   checked-in XSDs now have standalone XML fixtures and pass
   `--validate-xml-schema`, so `--require-fixture-for-schema` passes; the
   schema-backed strict flags still intentionally fail until the remaining
@@ -238,31 +285,74 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `payload_sha256`; the adapter verifies those values before posting to the
   matching Torii ISO endpoint, rejects plaintext HTTP unless explicitly enabled
   for local tests, rejects Torii base URLs with credentials, params, query
-  strings, fragments, or control characters, keeps explicit `--message` paths
-  inside the declared inbox, requires an explicit profile by default, rejects
-  legacy `colr.007` collateral drops unless `--allow-legacy-colr007` is set for
-  local diagnostics, and writes bounded local receipts for successful and
-  failed submissions.
+  strings, fragments, surrounding or embedded whitespace, or control
+  characters, malformed/default ports, non-canonical hosts, invalid host labels
+  or numeric-host spoofing, percent-encoded control/space bytes, malformed
+  percent escapes, and smuggled URL paths, keeps explicit `--message` paths
+  inside the declared inbox, requires an explicit
+  profile by default, rejects sidecar `profile` and `rail_message_id` values
+  with surrounding whitespace, embedded whitespace, or control characters,
+  rejects legacy `colr.007`
+  collateral drops unless `--allow-legacy-colr007` is set for local diagnostics,
+  requires bearer-token files to be regular non-symlink bounded exact UTF-8
+  with no surrounding whitespace, embedded whitespace, or control characters,
+  and writes bounded local receipts for successful and failed submissions
+  without persisting token material. XML payload and sidecar inputs must be
+  real files in the drop area:
+  symlinked XML payloads or sidecar JSON files are rejected before network
+  delivery. Receipt output directories and receipt leaves are preflighted before
+  Torii submission, reject symlink or non-regular targets, and are written
+  through no-follow file opens where available. The inbox directory and both
+  discovered and explicit `--message` XML leaves preserve symlink boundaries so
+  symlinked gateway inputs fail before network delivery.
 - Added `scripts/iso_operator_receipt_verify.py`, a read-only canary verifier
   for rail/notary adapter receipts. It recomputes receipt digests, requires
   successful 2xx receipts by default, rejects plaintext HTTP evidence unless
   explicitly enabled for local tests, rejects receipt endpoint URLs with
-  credentials, params, query strings, fragments, malformed hosts, or control
-  characters, detects leaked authorization/token material, can cross-check
-  referenced XML or notary-anchor source files, rejects legacy `colr.007` rail
-  source files unless `--allow-legacy-colr007` is set for local diagnostics, and
-  rejects repeated receipt paths or copied receipts with duplicate
-  `receipt_sha256` values before emitting a digest-bound verifier summary with
-  per-receipt file paths, `receipt_sha256` values, and policy flags.
+  credentials, params, query strings, fragments, malformed hosts, surrounding
+  or embedded whitespace, control characters, malformed/default ports, or
+  non-canonical host spelling, invalid host labels, percent-escaped hosts,
+  numeric-host spoofing, plus path traversal, encoded path separators,
+  encoded-percent path segments, or percent-encoded control/space bytes,
+  detects leaked authorization/token
+  material, closes the raw receipt schemas for each receipt kind plus notary
+  anchor/audit-index source schemas, including nested audit records, binds
+  audit record filenames to `sha256(message_id).json`, binds each indexed
+  `record_sha256` to the persisted `store_dir/messages` body when source files
+  are required or locally available, rejects row/source metadata drift and
+  persisted-state-derived `pacs002_code` drift, binds recorded endpoint digests
+  to the recorded endpoint URLs, requires
+  timezone-aware adapter timestamps that do not require trimming, enforces
+  `ok`/`status_code` consistency, validates bounded response metadata, can
+  cross-check referenced XML, rail sidecar, or notary-anchor source files,
+  requires rail sidecars to match the adapter's `xml_path + .json` convention,
+  requires notary `anchor_path` values to keep the `latest.notary.json` or
+  digest-addressed `anchors/<index_sha256>.notary.json` shape even when source
+  files are not required,
+  rejects raw notary `anchor_path` values, raw rail receipt `message_type`,
+  `xml_path`, and `sidecar_path` values, plus receipt and source-sidecar rail
+  `profile`/`rail_message_id` values when they carry surrounding whitespace or
+  embedded whitespace or control characters, replays digest-addressed notary-anchor and
+  `messages.index.json` checks while rejecting symlinked or non-regular notary
+  anchor/index peers and rail XML/sidecar files, rejects legacy `colr.007` rail
+  source files unless `--allow-legacy-colr007` is set for local diagnostics,
+  rejects symlinked receipt archive directories before discovery, and rejects
+  repeated receipt paths or copied receipts with duplicate `receipt_sha256`
+  values before emitting a
+  digest-bound verifier summary with per-receipt file paths, `receipt_sha256`
+  values, and policy flags.
 - Added `scripts/iso_operator_canary.py`, a strict JSON-runbook runner that
   executes the rail file-drop adapter, audit notary adapter, and receipt
   verifier as subprocesses. It requires explicit provider/environment labels,
-  rejects unknown runbook keys, rejects control characters in runbook strings,
-  keeps relative paths inside the runbook directory, rejects endpoint URLs with
-  credentials, params, query strings, or fragments, rejects duplicate endpoint
-  lists and duplicate receipt inputs, redacts bearer-token file arguments in
-  its summary, verifies generated receipts by default, and writes a single
-  bounded summary JSON for operator evidence archives. `--plan-only`
+  rejects unknown runbook keys, rejects surrounding whitespace and control
+  characters in runbook strings, keeps relative paths inside the runbook
+  directory, rejects endpoint URLs with credentials, params, query strings, or
+  fragments, rejects duplicate endpoint lists and duplicate receipt inputs,
+  redacts bearer-token file arguments in its summary, verifies generated
+  receipts by default, and writes a single bounded summary JSON for operator
+  evidence archives. Summary output paths are preflighted before subprocess
+  stages, reject symlink or non-regular targets, and are written through
+  no-follow file opens where available. `--plan-only`
   validates runbooks and prints redacted child commands without contacting Torii
   or notary endpoints.
 - The ISO operator scripts reject duplicate JSON object keys before semantic
@@ -270,35 +360,57 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   receipts, trust bundles, XSD manifests, evidence summaries, readiness
   summaries, receipt-verifier JSON embedded in canary stdout, and direct
   archive receipt-verifier stdout. This prevents shadowed keys from changing
-  the release-evidence meaning after digest or policy checks.
+  the release-evidence meaning after digest or policy checks. Canary runbooks,
+  trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
+  schema files, and XML fixtures must also be regular non-symlink files before
+  digest, provenance, or policy checks run; those inputs are opened through
+  no-follow file descriptors where available so the read uses the same regular
+  file that was checked. Operator receipt, summary, and emitted
+  profile-override output paths also reject symlink or non-regular targets
+  before writing.
 - Added `scripts/iso_operator_evidence_verify.py`, an offline production
   evidence gate for archived canary and trust-bundle summaries. It recomputes
-  summary digests, requires successful rail/notary/verify stages by default,
+  summary digests, requires exact expected provider/environment CLI context,
+  requires successful rail/notary/verify stages by default,
   requires the verify stage to carry digest-bound receipt-verifier JSON with
   rail and notary receipt kinds plus per-receipt digests, rejects plan-only or
   dry-run canaries, plaintext-HTTP overrides, default-profile fallbacks,
   legacy `colr.007` local overrides, unredacted bearer-token paths,
-  non-canonical compact receipt paths with control characters, dot or parent
-  traversal segments, or non-`*.receipt.json` leaves, secret-looking output,
-  non-canonical canary runbook `config_path` values with control characters,
-  traversal segments, or non-JSON leaves,
-  control-bearing provider, stage, receipt-kind, or trust-profile identity
-  strings, unknown raw canary, receipt-verifier, or trust-bundle summary fields,
+  non-canonical compact receipt paths with control characters, surrounding
+  whitespace, dot or parent traversal segments, or non-`*.receipt.json` leaves,
+  secret-looking output, non-canonical canary runbook `config_path` values with
+  control characters, surrounding whitespace, traversal segments, or non-JSON
+  leaves, control-bearing or whitespace-padded provider, stage, receipt-kind,
+  or trust-profile identity strings, unknown raw canary, receipt-verifier, or
+  trust-bundle summary fields,
   smuggled trust-source URLs, missing/malformed/future
-  trust-source retrieval timestamps, missing/malformed/future trust-summary
-  `verified_at` timestamps, smuggled child command endpoint URLs, local-only
-  child command flags in either `--flag` or `--flag=value` form, unsupported
-  child command flags outside the expected rail/notary/receipt verifier CLI
-  surfaces, control characters in executed or plan-only child command arrays,
-  non-canonical rail/notary `receipt_dir` values with control characters or
-  traversal segments, rail/notary `receipt_dir` values that do not match the
-  child command's single `--receipt-dir`, verify-stage commands that omit the
-  rail/notary receipt directories generated by non-dry-run stages,
+	  trust-source retrieval timestamps, missing/malformed/future or padded
+	  trust-summary `verified_at` timestamps, smuggled child command endpoint URLs
+	  including invalid hosts and percent-escape smuggling, local-only
+  child command flags in either `--flag` or `--flag=value` form, including the
+  notary adapter's `--allow-missing-record-sources` diagnostic override,
+  unsupported child command flags outside the expected rail/notary/receipt
+  verifier CLI surfaces, control characters or surrounding whitespace in executed or
+  plan-only child command arrays,
+  non-canonical rail/notary `receipt_dir` values with control characters,
+  surrounding whitespace, or traversal segments, rail/notary `receipt_dir`
+  values that do not match the child command's single `--receipt-dir`,
+  verify-stage commands that omit the rail/notary receipt directories generated by non-dry-run stages,
   synthetic trust DER, and record-only trust policy before an archive is treated
-  as production evidence.
+  as production evidence. For archived trust-bundle summaries, it preserves the
+  bundle-level `bundle_sha256`, rejects duplicate bundle digests independently
+  from duplicate profile IDs, requires emitted profile overrides to match the
+  top-level profile id, rail, and signature policy, rechecks override pin/OID
+  and CRL/OCSP material counts against the verifier's material summary, binds
+  CRL/OCSP override DER back to recorded summary digests and byte lengths,
+  rejects malformed policy OIDs or non-canonical, oversized, or non-SEQUENCE
+  CRL/OCSP base64, and fails closed on same-count trusted/revoked pin overlap
+  attacks.
 - Added `scripts/iso_production_readiness.py`, an offline release-readiness
   rollup for digest-bound XSD and operator evidence summaries. It requires
-  strict schema-backed/fixture-backed XSD proof, production evidence policies,
+  exact provider/environment CLI context, strict schema-backed/fixture-backed
+  XSD proof with canonical fixture schema references and reviewed-gap reason
+  strings, production evidence policies,
   per-canary explicit-policy proof, full rail/notary/verify canary evidence,
   digest-bound direct receipt-archive
   verification with per-receipt digests, rail/notary receipt kinds, no legacy
@@ -314,9 +426,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   X.509 certificates, X.509 CRLs, and OCSPResponse wrappers, duplicate and
   contradictory trust/revocation material, required CRL/OCSP material, HTTPS
   provenance without credentials, params, query strings, fragments, malformed
-  bracket syntax, control characters, or local/private IP literals,
-  timezone-aware non-future retrieval timestamps, unique DER labels per
-  material class, and rejects secret-looking fields before emitting Torii
+  bracket syntax, control characters, or local/private IP literals, requires
+  provenance URL and timezone-aware non-future retrieval timestamp fields before
+  emitting a trust summary, rejects repeated input paths, copied bundles, and
+  duplicate profile IDs, emits and de-duplicates bundle-level `bundle_sha256`
+  values, enforces unique DER labels per material class, and rejects
+  secret-looking fields before emitting Torii
   profile trust overrides.
 - Added checked-in trust-bundle templates under
   `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
@@ -348,14 +463,17 @@ python3 scripts/iso_operator_canary.py \
 
 The JSON runbook is intentionally strict. It must label `provider` and
 `environment`, configure at least one of `rail` or `notary`, and enables receipt
-verification by default. Relative paths are resolved from the runbook location
-and must stay under that directory; use absolute paths for explicitly external
-operator directories. Endpoint URLs must not contain embedded credentials,
+  verification by default. Relative paths are resolved from the runbook location
+  with their parent directories canonicalized and their final path leaf
+  preserved for child script boundary checks; they must stay under that
+  directory. Use absolute paths for explicitly external operator directories.
+Endpoint URLs must not contain embedded credentials,
 params, query strings, or fragments. Bearer-token files are runtime-only inputs
 passed through to child scripts; the runner never reads token contents and
 redacts token-file arguments in the summary. Production canaries should use
 `--require-explicit-policy`, which requires every runbook policy boolean to be
-present and records that proof in the summary for the evidence gate. Checked-in
+present and records that proof in the summary for the evidence gate; regression
+coverage removes each rail, notary, and verifier policy boolean in turn. Checked-in
 templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst, and securities CSD
 live-profile families live under
 `fixtures/iso20022/operator_canary/`; copy them into an operator runbook area
@@ -409,7 +527,22 @@ emitted-profile wiring, and require `--allow-synthetic-der`.
 Synthetic-template validation is summary-only:
 `--allow-synthetic-der` cannot be combined with `--emit-profile-json`. Replace
 templates with the current rail PKI package before production use and omit that
-flag before emitting profile overrides.
+flag before emitting profile overrides:
+
+```bash
+python3 scripts/iso_trust_bundle_verify.py \
+  --bundle run/iso/provider-swift-cbpr-plus-trust-bundle.json \
+  --summary-out run/iso/swift-cbpr-plus-trust-summary.json \
+  --emit-profile-json run/iso/swift-cbpr-plus-profile-overrides.json
+```
+
+Production evidence requires the trust summary to prove both
+`profile_json_emittable=true` and `profile_json_emitted=true`; a summary that
+could emit profile overrides but did not write them is local-audit evidence only.
+When profile overrides are emitted, the trust summary is written only after the
+profile JSON file write succeeds and carries `profile_json_sha256` for the exact
+emitted body. The evidence gate recomputes that digest from the archived
+`profile_overrides` before accepting the trust summary.
 
 ## Production Evidence Gate
 
@@ -436,8 +569,13 @@ evidence before an archive can be accepted and recorded in the digest-bound
 evidence policy. It must also name explicit freshness budgets for canary
 `finished_at`, trust-summary `verified_at`, and trust-source `retrieved_at`
 timestamps; digest-correct stale archive inputs are rejected before archival.
-Accepted trust profiles preserve their compact source URL and `retrieved_at`
-timestamp for the final readiness rollup.
+Accepted trust profiles preserve their compact `bundle_sha256`, source URL,
+`retrieved_at` timestamp, revoked-certificate pin count, required
+certificate-policy OID count, and compact trust-anchor/revoked/CRL/OCSP DER
+proof digests and byte lengths for the final readiness rollup. The compact trust
+summary also preserves `profile_json_sha256` so release evidence names the exact
+profile override body produced by the trust preflight; the evidence gate
+recomputes it from the archived profile override objects before archival.
 Repeated canary/trust summary paths or copied summaries with the same
 `summary_sha256` are malformed input. By default it requires
 digest-bound, successful canary summaries with rail, notary, and
@@ -445,23 +583,33 @@ receipt-verify stages;
 requires the canary summary to prove it was generated with
 `--require-explicit-policy`;
 requires the receipt-verify stage output to be digest-bound and contain
-positive receipt counts, both rail/notary receipt kinds, and per-receipt
-`receipt_sha256` entries with unique receipt paths and unique receipt digests,
-with explicit boolean receipt policy fields rather than omitted defaults;
+positive receipt counts, duplicate-free rail/notary receipt-kind lists, and
+per-receipt `receipt_sha256` entries with unique receipt paths and unique
+receipt digests, with explicit boolean receipt policy fields rather than
+omitted defaults;
+requires direct receipt archive verification from `--receipt` or `--receipt-dir`
+before emitting an evidence summary, and requires that direct archive's
+`receipt_sha256` entries cover every canary receipt-summary digest with the same
+receipt kind;
 rejects plan-only, dry-run, insecure-HTTP,
 default-profile, failed-receipt, legacy `colr.007`, and missing-source-file
 evidence; requires trust summaries produced without synthetic DER, record-only
 policy, insecure provenance overrides, or malformed/future trust-source
-retrieval timestamps, with trust-summary policy booleans present explicitly;
+retrieval timestamps, with trust-summary policy booleans present explicitly and
+with profile override JSON actually emitted;
 requires archived trust profile overrides to carry explicit CRL/OCSP revocation
-policy booleans and unique profile IDs; and scans archived commands/output for
-obvious secret leakage.
+policy booleans, unique profile IDs, unique bundle digests, matching
+profile/rail/policy override identities, canonical OIDs, bounded canonical
+base64 DER SEQUENCE blobs, override material counts, and CRL/OCSP DER digests
+and byte lengths that agree with the trust-bundle verifier summary; and scans
+archived commands/output for obvious secret leakage.
 Plan-only diagnostic archives must still record each planned stage's `dry_run`
 boolean. Bearer-token file arguments must be redacted whether represented as
 `--bearer-token-file <path>` or `--bearer-token-file=<path>`. The `--allow-*`
-flags, including
-`--allow-legacy-colr007`, are for local test audits only and should not be
-present in production evidence archives.
+flags, including `--allow-legacy-colr007`,
+`--allow-missing-record-sources`, `--allow-canary-stage-receipts-only`, and
+`--allow-profile-json-not-emitted`, are for local test audits only and should not
+be present in production evidence archives.
 
 ## Production Readiness Rollup
 
@@ -495,43 +643,61 @@ The rollup also rechecks the digest-bound provider/environment and freshness
 policy recorded by the evidence gate, rejects archive freshness budgets that
 are weaker than the final release budgets, revalidates each compact trust
 profile's source URL and `retrieved_at` timestamp, rejects stale or smuggled
-trust source provenance, rejects repeated XSD/evidence
+  trust source provenance including raw-whitespace and malformed-port URL
+  smuggling plus non-canonical host spelling, invalid host labels, percent-host
+  and percent-path smuggling, numeric-host spoofing, and path traversal, rejects repeated XSD/evidence
 summary paths or copied summaries with the same `summary_sha256`, and rechecks
 digest-bound XSD `schemas[]` and
 `fixtures[]` arrays for count consistency, unique schema and fixture evidence
 digests, canonical relative schema paths whose filenames match
-`message_def_id`, fixture paths that remain relative forward-slash XML leaves,
+`message_def_id`, fixture paths that remain relative forward-slash XML paths
+without empty, dot, or non-leading parent segments,
 schema-backed/missing-schema consistency, and schema-backed fixture XML
 schema-validation proof. It also rechecks profile-catalog source digests,
-version coverage counts, and missing-version entries, plus skipped
-family-version shape and profile catalog count consistency, rejects unknown XSD
-summary fields across strict flags, schema/fixture/gap/profile-catalog entries,
+version coverage counts, canonical profile ids, ISO family message types,
+allowed directions, message-definition family binding, and missing-version
+entries, plus skipped family-version shape and profile catalog count
+consistency, rejects unknown XSD summary fields across strict flags,
+schema/fixture/gap/profile-catalog entries,
+and the XSD preflight rejects unknown keys in source profile/message catalog
+entries before such fields can reach the summary,
 recomputes `profile_catalog.missing_schema_versions`, and cross-checks
 schema-only flags and reviewed reasons against the schema/fixture relationship.
 Reviewed `missing_schema_fixtures` and `schema_only_entries` must also match the
 recomputed exact path, `message_def_id`, and reason tuples.
 It blocks summaries that do not prove `--require-profile-schema-backed-versions`. The
-rollup requires the evidence summary to include direct receipt archive
-verification from `--receipt` or `--receipt-dir`, not only the canary stage's
-captured verifier stdout. That archive verification summary must carry its own
+rollup rechecks the direct receipt archive verification emitted by the evidence
+gate from `--receipt` or `--receipt-dir`, not only the canary stage's captured
+verifier stdout, and blocks digest-correct evidence summaries whose direct
+archive receipt digests no longer cover the canary receipt-summary digests or
+whose direct archive carries receipt digests that no canary references, or whose
+canary entries relabel the archived receipt kind. Distinct canary summaries must
+not reuse compact receipt paths or receipt digests. That
+archive verification summary must carry its own
 `summary_sha256`, production policy flags, and a `receipts[]` list binding each
-unique canonical `*.receipt.json` path to its unique `receipt_sha256`. XSD
+unique canonical `*.receipt.json` path to its unique `receipt_sha256` and one
+of the supported rail/notary receipt evidence kinds. XSD
 strict-mode flags, evidence-level production policy flags, and nested
 receipt-summary policy flags must all be present as booleans; evidence `ok`,
 canary `plan_only`, and
 per-canary `require_explicit_policy` status fields are also required booleans.
 Trust-summary policy flags are enforced by the evidence gate before the rollup
 accepts an archive, and the rollup independently rechecks compact trust-profile
-CRL/OCSP revocation booleans, material counts, and `verified_bundles`
-profile-count binding, while duplicated compact trust-profile IDs are
-production blockers. The rollup requires at least one XSD summary and at least
+`bundle_sha256`, CRL/OCSP revocation booleans, material counts, revoked and
+certificate-policy counts, compact DER proof shape and count binding, and
+`verified_bundles` profile-count binding. Compact trust summaries must also
+retain `profile_json_emitted=true`, `profile_json_emittable=true`, and a
+lowercase `profile_json_sha256`; false values, missing or malformed profile JSON
+digests, duplicated compact trust-profile IDs, or duplicated bundle digests are
+production blockers.
+The rollup requires at least one XSD summary and at least
 one evidence summary, and compact canary and trust summary entries must also
-retain control-free, traversal-free source paths and canonical lowercase
+retain control-free, trim-free, traversal-free source paths and canonical lowercase
 `summary_sha256` pointers. Compact canary entries also retain the validated
-runbook `config_path`, which must remain control-free, traversal-free, and point
+runbook `config_path`, which must remain control-free, trim-free, traversal-free, and point
 to a `.json` file. Compact provider/environment, stage, receipt-kind,
-and trust-profile identity strings also reject control characters before
-trimming. Unknown compact fields are malformed across evidence policy, canary,
+and trust-profile identity strings also reject control characters and
+surrounding whitespace instead of being trimmed. Unknown compact fields are malformed across evidence policy, canary,
 stage-window, receipt-summary, receipt-entry, trust-summary, and trust-profile
 objects. Compact trust summaries must retain timezone-aware, non-future
 `verified_at` timestamps for the original trust-bundle preflight. Omitted inputs,

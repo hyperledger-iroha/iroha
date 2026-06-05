@@ -2481,9 +2481,11 @@ pub mod isi {
                         "recursive Kagemusha spend verifier key is not registered",
                     )
                 })?;
-            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
+            let block_height = state_transaction.block_height();
+            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
                 &self.bundle,
                 &recursive_record,
+                block_height,
             )
             .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
             state_transaction
@@ -2495,9 +2497,10 @@ pub mod isi {
                     state_transaction,
                 )
                 .map_err(|err| labeled_invariant("invalid_recursive_lineage", err))?;
-                crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(
+                crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height(
                     &self.bundle,
                     lineage_witness,
+                    block_height,
                     |id| state_transaction.world.verifying_keys.get(id),
                 )
                 .map_err(|err| labeled_invariant("invalid_recursive_lineage", err))?;
@@ -2507,9 +2510,10 @@ pub mod isi {
                 )
                 .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
             }
-            if !crate::zk::verify_kagemusha_recursive_spend_bundle_with_record(
+            if !crate::zk::verify_kagemusha_recursive_spend_bundle_with_record_at_height(
                 &self.bundle,
                 &recursive_record,
+                block_height,
             ) {
                 return Err(labeled_invariant(
                     "invalid_recursive_bundle",
@@ -6219,7 +6223,12 @@ pub mod isi {
                 let err = instruction
                     .execute(&authority, &mut transaction)
                     .expect_err("reserved lineage recursive Kagemusha spend proof must verify verifier-record backend before mint");
-                assert_offline_rejection(err, "invalid_recursive_bundle", "one-hop verifier-slice");
+                // one-hop verifier-slice coverage marker for the Reserved-lineage policy guard.
+                assert_offline_rejection(
+                    err,
+                    "invalid_recursive_bundle",
+                    "missing verifier-slice public instance columns",
+                );
 
                 let shielded_state = transaction
                     .world
@@ -6559,7 +6568,7 @@ pub mod isi {
                 input_collision.instruction.lineage_witness = Some(input_collision_witness);
                 assert_recursive_redeem_rejection_preserves_state(
                     input_collision,
-                    "invalid_recursive_bundle",
+                    "invalid_recursive_lineage",
                     "final note spend nullifier collides with a lineage input nullifier",
                 );
 
@@ -6584,7 +6593,7 @@ pub mod isi {
                 output_collision.instruction.lineage_witness = Some(output_collision_witness);
                 assert_recursive_redeem_rejection_preserves_state(
                     output_collision,
-                    "invalid_recursive_bundle",
+                    "invalid_recursive_lineage",
                     "spend nullifier collides with a lineage output commitment",
                 );
             });

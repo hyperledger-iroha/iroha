@@ -117,6 +117,189 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(receipt["status_code"], 202)
             self.assertTrue(receipt_digest_matches(receipt))
 
+    def test_bearer_token_file_adds_authorization_without_persisting_token(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            token_file = inbox / "token.txt"
+            token_file.write_text("rail-token-123", encoding="utf-8")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(token_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 0, stderr)
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(
+                requests[0]["headers"]["Authorization"], "Bearer rail-token-123"
+            )
+            receipts = list((inbox / "receipts").glob("*.receipt.json"))
+            self.assertEqual(len(receipts), 1)
+            self.assertNotIn("rail-token-123", receipts[0].read_text(encoding="utf-8"))
+
+    def test_malformed_bearer_token_file_is_rejected_before_network_delivery(self):
+        cases = [
+            ("empty", b"", "empty"),
+            ("padded", b" rail-token", "surrounding whitespace"),
+            ("newline", b"rail-token\n", "surrounding whitespace"),
+            ("embedded-space", b"rail token", "must not contain whitespace"),
+            ("control", b"rail-token\x7f", "must not contain control characters"),
+            ("non-utf8", b"rail-token\xff", "not UTF-8"),
+            (
+                "oversized",
+                b"a" * (ADAPTER.MAX_BEARER_TOKEN_BYTES + 1),
+                "exceeds",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            for name, token_bytes, message in cases:
+                with self.subTest(name=name):
+                    token_file = inbox / f"{name}.token"
+                    token_file.write_bytes(token_bytes)
+                    with capture_server() as (base_url, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                                "--bearer-token-file",
+                                str(token_file),
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+
+    def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            token_target = inbox / "token-target.txt"
+            token_target.write_text("rail-token-123", encoding="utf-8")
+            symlink_token = inbox / "symlink-token.txt"
+            try:
+                symlink_token.symlink_to(token_target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            directory_token = inbox / "token-dir"
+            directory_token.mkdir()
+            cases = [
+                (symlink_token, "must not be a symlink"),
+                (directory_token, "must be a regular file"),
+            ]
+            for token_file, message in cases:
+                with self.subTest(token_file=token_file.name):
+                    with capture_server() as (base_url, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                                "--bearer-token-file",
+                                str(token_file),
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+
+    def test_symlinked_receipt_output_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            receipt_target_dir = inbox / "receipt-target"
+            receipt_target_dir.mkdir()
+            receipt_dir = inbox / "receipt-link"
+            try:
+                receipt_dir.symlink_to(receipt_target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
+            receipt_dir.unlink()
+            receipt_dir.mkdir()
+            receipt = receipt_dir / f"{ADAPTER.sha256_hex(SAMPLE_XML)}.receipt.json"
+            target = inbox / "receipt-target.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            try:
+                receipt.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_inbox_dir_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_inbox = root / "inbox-target"
+            target_inbox.mkdir()
+            write_message(target_inbox)
+            inbox = root / "inbox-link"
+            try:
+                inbox.symlink_to(target_inbox, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
     def test_colr012_routes_to_standard_collateral_endpoint(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -202,6 +385,38 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 0, stderr)
             self.assertEqual(len(requests), 1)
 
+    def test_explicit_symlinked_message_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            outside_xml = inbox / "outside.xml"
+            outside_xml.write_bytes(xml_path.read_bytes())
+            (inbox / "outside.xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            xml_path.unlink()
+            try:
+                xml_path.symlink_to(outside_xml)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--message",
+                        xml_path.name,
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
     def test_single_message_path_must_stay_under_inbox(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -226,6 +441,96 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("--message path", stderr)
             self.assertEqual(requests, [])
+
+    def test_symlinked_message_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            outside = root / "outside"
+            inbox.mkdir()
+            outside.mkdir()
+            outside_xml, _outside_sidecar = write_message(outside)
+            symlink_xml = inbox / "rail-status.xml"
+            try:
+                symlink_xml.symlink_to(outside_xml)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            sidecar = {
+                "message_type": "pacs.002",
+                "profile": "swift-cbpr-plus",
+                "payload_sha256": ADAPTER.sha256_hex(SAMPLE_XML),
+                "rail_message_id": "rail-drop-1",
+            }
+            (inbox / "rail-status.xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_symlinked_sidecar_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            outside = root / "outside"
+            inbox.mkdir()
+            outside.mkdir()
+            _xml_path, _sidecar = write_message(inbox)
+            outside_xml, _outside_sidecar = write_message(outside)
+            sidecar_path = inbox / "rail-status.xml.json"
+            sidecar_path.unlink()
+            try:
+                sidecar_path.symlink_to(outside_xml.with_suffix(outside_xml.suffix + ".json"))
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_directory_sidecar_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, _sidecar = write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            sidecar_path.unlink()
+            sidecar_path.mkdir()
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must be a regular file", stderr)
 
     def test_digest_mismatch_rejects_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -274,6 +579,70 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("duplicate key", stderr)
 
+    def test_sidecar_header_strings_must_not_require_trimming(self):
+        cases = [
+            (
+                "profile whitespace",
+                "profile",
+                " swift-cbpr-plus",
+                "profile must not have surrounding whitespace",
+            ),
+            (
+                "profile control",
+                "profile",
+                "swift\ncbpr-plus",
+                "profile must not contain control characters",
+            ),
+            (
+                "profile embedded whitespace",
+                "profile",
+                "swift cbpr-plus",
+                "profile must not contain whitespace",
+            ),
+            (
+                "rail message whitespace",
+                "rail_message_id",
+                "rail-drop-1 ",
+                "rail_message_id must not have surrounding whitespace",
+            ),
+            (
+                "rail message control",
+                "rail_message_id",
+                "rail\n1",
+                "rail_message_id must not contain control characters",
+            ),
+            (
+                "rail message embedded whitespace",
+                "rail_message_id",
+                "rail drop 1",
+                "rail_message_id must not contain whitespace",
+            ),
+        ]
+        for label, field, value, message in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    _xml_path, sidecar = write_message(inbox)
+                    sidecar[field] = value
+                    (inbox / "rail-status.xml.json").write_text(
+                        json.dumps(sidecar),
+                        encoding="utf-8",
+                    )
+                    with capture_server() as (base_url, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+
     def test_profile_is_required_for_live_rail_submission_by_default(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -310,6 +679,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
     def test_torii_url_smuggling_variants_are_rejected_before_network_delivery(self):
         cases = [
+            (" https://torii.example", False),
+            ("https://torii.example ", False),
             ("https://user:pass@torii.example", False),
             ("https://torii.example/base;debug", False),
             ("https://torii.example?token=abc", False),
@@ -317,8 +688,33 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("https:///v1", False),
             ("https://[::1", False),
             ("https://torii.example/iso\nbridge", False),
+            ("https://torii.example/iso bridge", False),
+            ("https://torii.example:abc", False),
+            ("https://torii.example:99999", False),
+            ("https://torii.example:443", False),
+            ("https://Torii.example", False),
+            ("https://torii.example.", False),
+            ("https://torii..example", False),
+            ("https://-torii.example", False),
+            ("https://torii-.example", False),
+            ("https://torii._tcp.example", False),
+            ("https://torii.example%2einvalid", False),
+            ("https://123.000.000.001", False),
+            ("https://torii.example/../base", False),
+            ("https://torii.example/%2e%2e/base", False),
+            ("https://torii.example/base%2fv1", False),
+            ("https://torii.example/base%252fv1", False),
+            ("https://torii.example/base;debug/v1", False),
+            (r"https://torii.example/base\v1", False),
+            ("https://torii.example/base%20v1", False),
+            ("https://torii.example/base%00v1", False),
+            ("https://torii.example/base%7fv1", False),
+            ("https://torii.example/base%zzv1", False),
+            ("http://127.0.0.1 ", True),
             ("http://user:pass@127.0.0.1", True),
             ("http://127.0.0.1?token=abc", True),
+            ("http://127.0.0.1:80", True),
+            ("http://127.000.000.001", True),
         ]
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)

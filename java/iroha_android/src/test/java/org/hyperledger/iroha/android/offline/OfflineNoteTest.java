@@ -888,6 +888,17 @@ public final class OfflineNoteTest {
           "native output guard reports empty output");
     }
 
+    try {
+      KagemushaCompactPaymentTokenProver.requireNativeOutput(
+          new byte[KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1],
+          "native test");
+      throw new AssertionError("native output guard must reject oversized output");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains("returned oversized output"),
+          "native output guard reports oversized output");
+    }
+
     final byte[] output = new byte[] {0x01, 0x02};
     assertTrue(
         Arrays.equals(

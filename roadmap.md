@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-04
+Last updated: 2026-06-05
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -712,13 +712,21 @@ and completed history lives in [`status.md`](./status.md).
   lifecycle XML. An offline XSD/XML fixture-manifest preflight now pins checked-in
   schema target namespaces, `Document` payload roots, fixture namespaces, and
   reviewed missing-schema exceptions, while rejecting copied XML fixtures with
-  duplicate fixture SHA-256 values and optionally validating schema-backed XML
-  fixtures against their checked-in XSDs with `xmllint --nonet`; it also
+  duplicate fixture SHA-256 values, non-canonical schema/fixture path segments,
+  and optionally validating schema-backed XML fixtures against their checked-in
+  XSDs with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
   every checked-in XSD, rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
-  schema-backed. All checked-in XSDs now
+  schema-backed while rejecting unknown profile/message catalog keys before
+  release evidence is emitted; catalog `versions` lists can skip schema-backed
+  checks only for the exact message-family alias, not arbitrary strings, and
+  runtime-required catalog fields are required while optional catalog fields are
+  shape-checked when present, including fail-closed trust/revocation pin overlap
+  and bounded CRL/OCSP DER-sequence material checks.
+  All checked-in
+  XSDs now
   have standalone XML fixtures that pass XML schema validation, and remaining
   MDR/XSD work is locating redistributable official packages and making the
   strict schema-backed and profile-version release flags pass. The legacy
@@ -736,59 +744,126 @@ and completed history lives in [`status.md`](./status.md).
   tamper-evident audit index exposed through the
   `GET /v1/iso20022/audit/messages` route, with config-backed age/count
   retention/compaction, an `audit_export_dir` manifest/notary-preimage spool,
-  and an operator adapter that verifies and publishes those preimages to clean
-  duplicate-free HTTPS archival/notary endpoints with local receipts; a
+	  and an operator adapter that verifies and publishes those preimages to clean
+	  raw-whitespace-free, canonical-host/label/port/path,
+	  percent-smuggling-free, duplicate-free HTTPS archival/notary endpoints with
+	  regular non-symlink bounded exact runtime bearer-token files, symlink-free
+	  rail drop roots and inputs including explicit message leaves,
+	  regular non-symlink notary export roots/source files, and local receipts that do
+	  not persist token material while preflighting receipt output
+	  directories/leaves before publication or Torii submission, rejecting
+	  symlinked outputs, and using no-follow output opens where available; a
   read-only receipt verifier now gates those receipts for canary use and emits
-  a digest-bound summary with per-receipt `receipt_sha256` entries, and a
-  strict JSON-runbook canary runner rejects duplicate endpoint and receipt
-  inputs before executing the rail/notary/verify path with one bounded summary.
+  a digest-bound summary with per-receipt `receipt_sha256` entries while
+  closing raw receipt and notary source schemas including nested audit records,
+	  audit record filename/message-id bindings, endpoint-digest bindings,
+	  timestamp/status consistency, bounded response
+	  metadata, canonical receipt endpoint,
+	  timestamp, notary anchor-path, and whitespace-free rail metadata identifiers,
+	  rail sidecar source bindings, notary anchor-path shape checks even when
+	  source files are not required, notary anchor/index source bindings that
+	  require regular non-symlink files, notary adapter publication that requires
+	  `store_dir/messages` for non-empty anchors by default, persisted notary
+	  record-source bindings from each index row's `record_sha256` to
+	  `store_dir/messages`, production evidence rejection of the adapter's
+	  local `--allow-missing-record-sources` diagnostic override, and
+	  symlink-free receipt archive directories,
+	  and a strict JSON-runbook canary runner rejects
+  whitespace-padded or control-bearing runbook strings and duplicate endpoint
+  and receipt inputs before executing the rail/notary/verify path with one
+  bounded summary.
   The operator scripts reject duplicate JSON object keys across runbooks,
   sidecars, anchors/indexes, receipts, trust bundles, XSD manifests, evidence
   summaries, readiness summaries, embedded receipt-verifier stdout, and direct
   archive receipt-verifier stdout before semantic validation, so shadowed keys
-  cannot rewrite release evidence.
+  cannot rewrite release evidence. Those gates also reject symlinked or
+  non-regular canary runbooks, trust bundles, evidence/readiness summaries, XSD
+  manifests, profile catalogs, schema files, and XML fixtures before digest,
+  provenance, or policy checks run, opening those inputs through no-follow file
+  descriptors where available, and reject symlinked receipt, summary, and
+  emitted profile-override outputs before writing them. Canary summary outputs
+  are preflighted before subprocess stages, and canary relative paths preserve
+  final leaves after parent containment checks so child scripts can still reject
+  symlinked leaves.
   An offline
-  evidence gate now requires explicit expected provider/environment context,
+  evidence gate now requires exact expected provider/environment context,
   records that context in its digest-bound policy, recomputes
   canary/trust/receipt summary digests, rejects repeated or copied
   canary/trust summaries, rejects non-canonical or duplicate receipt paths or
-  receipt digests, rejects duplicate archived trust profile IDs, and rejects
-  plan-only, dry-run, control-bearing child-command entries,
+  receipt digests, rejects duplicate archived trust profile IDs and bundle
+  digests, and rejects
+  plan-only, dry-run, control-bearing or whitespace-padded child-command entries,
   non-canonical or command-mismatched rail/notary receipt directories,
   verify commands that omit generated rail/notary receipt directories,
-  insecure-HTTP, default-profile, secret-leaking,
-  smuggled-URL, non-canonical canary runbook config paths, unknown upstream
-  summary fields, synthetic-trust, record-only, or receipt-verifier-output-free
-  evidence before archival, and requires
-  trust-summary and receipt-summary
-  policy booleans plus trust revocation booleans/counts and plan-only status
-  booleans to be present explicitly so omissions cannot become production
-  defaults. Canary summaries must also prove the runner used
-  `--require-explicit-policy`. The evidence gate requires explicit freshness
-  budgets for canary, trust-summary, and trust-source evidence before archival,
-  preserves compact trust source URL/retrieval provenance for release review,
+	  insecure-HTTP, default-profile, secret-leaking,
+	  smuggled, raw-whitespace-bearing, malformed/default-port,
+	  non-canonical-host, invalid-label, percent-escape, numeric-host-spoofed, or
+	  traversal-bearing URLs,
+	  non-canonical canary runbook config paths, unknown upstream summary fields,
+	  synthetic-trust, record-only, or receipt-verifier-output-free evidence before
+	  archival, and requires trust-summary and receipt-summary policy booleans,
+	  trust profile JSON emission booleans plus a digest recomputed from archived
+	  profile overrides, trust revocation booleans/counts, bundle SHA-256 values,
+	  duplicate-free supported receipt-kind lists and compact receipt entry kinds,
+	  exact direct-archive receipt digest binding to canary summaries, no copied
+	  receipt paths or digests reused across canary summaries,
+	  and plan-only status booleans to be
+	  present explicitly so omissions cannot become production defaults. Archived
+	  profile overrides must also keep
+  matching profile/rail/policy identities, canonical policy OIDs and CRL/OCSP
+  bounded canonical base64 DER SEQUENCEs, material-count agreement, CRL/OCSP DER
+  digest/byte-length agreement, and non-overlapping trusted/revoked pins.
+  Canary summaries must also prove the runner used
+	  `--require-explicit-policy`. The evidence gate requires explicit freshness
+	  budgets for canary, trust-summary, and trust-source evidence plus direct
+	  receipt archive verification covering canary receipt digests and receipt
+	  kinds before archival, preserves compact trust bundle SHA-256, source URL/retrieval
+	  provenance, revoked-certificate pin counts, certificate-policy OID counts,
+	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
+	  for release review,
   and the aggregate readiness gate rechecks that proof plus the evidence policy
-  context, requires explicit freshness budgets for
-  XSD/evidence/canary/trust/trust-source timestamps, blocks stale digest-correct
-  summaries and archive freshness policies weaker than the final release
-  budgets, rejects stale or smuggled compact trust source provenance, and
-  rechecks compact CRL/OCSP revocation posture and trust
-  profile-count binding, while rejecting repeated or copied
+	  context, requires explicit freshness budgets for
+	  XSD/evidence/canary/trust/trust-source timestamps, blocks stale
+	  digest-correct summaries and archive freshness policies weaker than the final
+		  release budgets, rejects stale or smuggled compact trust source provenance
+		  including invalid host labels, numeric-host spoofing, and percent-escape
+		  smuggling, and
+  rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
+	  posture, direct archive/canary receipt digest/kind binding, and trust
+	  profile-count binding, while rejecting repeated or copied
   XSD/evidence and compact canary/trust summaries, requiring compact
-  canary/trust source paths to be control-free and traversal-free, requiring
+  canary/trust source paths to be control-free, trim-free, and traversal-free, requiring
   compact canary runbook config paths to remain traversal-free JSON pointers,
   requiring summary digests, rejecting duplicate receipt paths or receipt digests,
   rejecting non-canonical compact receipt paths, rejecting duplicate compact
-  trust profile IDs, rejecting control-bearing compact identity strings,
+  trust profile IDs or bundle digests, rejecting control-bearing or whitespace-padded
+  compact identity strings,
   rejecting unknown compact evidence fields,
   rechecking XSD schema/fixture summary arrays for count, digest, and
-  schema-path/message-id, fixture-path, and schema-reference consistency,
+  schema-path/message-id, fixture-path segment canonicality, canonical fixture
+  schema-reference strings, and schema-reference consistency,
+  rejecting DTD/entity declarations before schema or fixture XML parsing,
+  rejecting ambiguous schema `Document` declarations or prefixed `Document`
+  type spoofing, rejecting payload `ref` indirection, weakened payload
+  occurrence attributes, prefixed payload types, and missing or duplicate
+  payload complex types or payload complex types without exactly one direct
+  sequence, rejecting XSD composition and foreign-namespace direct children in
+  schema/`Document`/payload structures, rejecting schema roots with attributes
+  beyond `elementFormDefault` and `targetNamespace`, rejecting fixture
+  `Document`/payload root attributes, binding parsed XML and summary digests to
+  the same checked bytes,
   requiring XML schema-validation proof for every
   schema-backed fixture, rejecting unknown XSD summary fields, recomputing
   schema-only flags/reasons and reviewed gap lists from the schema/fixture
-  relationship, requiring profile-catalog source and embedded JSON
-  digest provenance plus duplicate-free profile/message/direction/version shape
-  and schema-backed proof for advertised concrete message versions, recomputing
+  relationship while rejecting padded or control-bearing reviewed reason
+  strings, requiring profile-catalog source and embedded JSON
+  digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
+  raw-string declaration plus duplicate-free profile/message/direction/version shape
+  with unknown source catalog keys rejected by the XSD preflight and
+  runtime catalog-field shapes checked before summary emission, rechecking
+  canonical profile ids, ISO family message types, allowed directions, and
+  message-definition family binding in consumed summaries, and schema-backed
+  proof for advertised concrete message versions, recomputing
   profile-catalog missing-version lists, and
   requiring timezone-aware non-future XSD/evidence/trust verification
   timestamps and ordered canary and non-overlapping per-stage start/finish
@@ -825,8 +900,9 @@ and completed history lives in [`status.md`](./status.md).
   for X.509 chains, explicit certificate revocation pins, configured and
   signature-scoped embedded CRL/OCSP signer revocation checks evaluated against verified XAdES
   `SigningTime` or BAH `CreDt` rather than local wall clock, plus an offline
-  trust-bundle verifier with semantic DER-shape checks, clean provenance URL
-  and retrieval-time validation, duplicate-label rejection, and profile-family
+  trust-bundle verifier with semantic DER-shape checks, required clean
+  provenance URL and retrieval-time fields, duplicate-label rejection, and
+  repeated-path/copied-bundle/duplicate-profile rejection plus profile-family
   templates for operator PKI preflight. The templates are schema/CI scaffolding
   only, require an explicit synthetic-template flag, and cannot emit profile
   overrides; remaining trust work is replacing them with official rail packages

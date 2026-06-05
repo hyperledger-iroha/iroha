@@ -24793,12 +24793,30 @@ fn compute_vk_set_hash_from_statuses(
         iroha_data_model::confidential::ConfidentialStatus,
     >,
 ) -> Option<[u8; 32]> {
+    compute_vk_set_hash_from_statuses_at_height(world, statuses, None)
+}
+
+fn compute_vk_set_hash_from_statuses_at_height(
+    world: &impl WorldReadOnly,
+    statuses: &std::collections::BTreeMap<
+        iroha_data_model::proof::VerifyingKeyId,
+        iroha_data_model::confidential::ConfidentialStatus,
+    >,
+    height: Option<u64>,
+) -> Option<[u8; 32]> {
     use iroha_data_model::confidential::ConfidentialStatus;
 
     let mut entries: Vec<_> = world
         .verifying_keys()
         .iter()
-        .filter(|(id, _)| matches!(statuses.get(*id), Some(ConfidentialStatus::Active)))
+        .filter(|(id, rec)| {
+            let status = statuses.get(*id).copied().unwrap_or(rec.status);
+            if let Some(height) = height {
+                params_effective(status, rec.activation_height, rec.withdraw_height, height)
+            } else {
+                matches!(status, ConfidentialStatus::Active)
+            }
+        })
         .collect();
 
     if entries.is_empty() {
@@ -24860,6 +24878,17 @@ pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
         .map(|(id, rec)| (id.clone(), rec.status))
         .collect::<std::collections::BTreeMap<_, _>>();
     compute_vk_set_hash_from_statuses(world, &statuses)
+}
+
+/// Compute a deterministic hash of verifying-key entries effective at `height`.
+#[must_use]
+pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) -> Option<[u8; 32]> {
+    let statuses = world
+        .verifying_keys()
+        .iter()
+        .map(|(id, rec)| (id.clone(), rec.status))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    compute_vk_set_hash_from_statuses_at_height(world, &statuses, Some(height))
 }
 
 /// Build the default ZK configuration used before node configuration is applied.
@@ -26762,7 +26791,7 @@ pub fn compute_confidential_feature_digest(
         zk_config.registry_max_delta_per_block,
     );
 
-    let vk_hash = compute_vk_set_hash_from_statuses(world, &vk_statuses);
+    let vk_hash = compute_vk_set_hash_from_statuses_at_height(world, &vk_statuses, Some(height));
 
     let poseidon_params_id = zk_config.poseidon_params_id.and_then(|raw| {
         let key = iroha_data_model::confidential::ConfidentialParamsId::new(raw);
@@ -54383,6 +54412,55 @@ mod tests {
 
         let digest_at_activation = compute_confidential_feature_digest(view.world(), &view.zk, 5);
         assert!(digest_at_activation.vk_set_hash.is_some());
+    }
+
+    #[test]
+    fn confidential_digest_excludes_active_vk_outside_height_window() {
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            proof::{VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
+
+        let mut world = World::new();
+        let id = VerifyingKeyId::new("halo2/ipa", "vk_windowed_active");
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            "circuit_windowed_active",
+            None,
+            "core",
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x21; 32],
+            [0x42; 32],
+        );
+        record.status = ConfidentialStatus::Active;
+        record.activation_height = Some(5);
+        record.withdraw_height = Some(8);
+        record.gas_schedule_id = Some("sched_windowed_active".into());
+        record.public_inputs_schema_hash = [0x63; 32];
+        world.verifying_keys.insert(id.clone(), record.clone());
+        world
+            .verifying_keys_by_circuit
+            .insert((record.circuit_id.clone(), record.version), id);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+        let view = state.view();
+
+        assert_eq!(compute_vk_set_hash_at_height(view.world(), 4), None);
+        assert!(compute_vk_set_hash_at_height(view.world(), 5).is_some());
+        assert_eq!(compute_vk_set_hash_at_height(view.world(), 8), None);
+
+        let digest_before = compute_confidential_feature_digest(view.world(), &view.zk, 4);
+        assert_eq!(digest_before.vk_set_hash, None);
+
+        let digest_active = compute_confidential_feature_digest(view.world(), &view.zk, 5);
+        assert!(digest_active.vk_set_hash.is_some());
+
+        let digest_withdrawn = compute_confidential_feature_digest(view.world(), &view.zk, 8);
+        assert_eq!(digest_withdrawn.vk_set_hash, None);
     }
 
     #[test]

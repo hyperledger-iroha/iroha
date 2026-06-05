@@ -24,8 +24,12 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import hashlib
+import ipaddress
 import json
+import os
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -121,14 +125,95 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _load_json(path: Path) -> Any:
+def _read_regular_file(path: Path) -> bytes:
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-        )
+        mode = path.lstat().st_mode
     except FileNotFoundError as error:
         raise CanaryError(f"{path} does not exist") from error
+    if stat.S_ISLNK(mode):
+        raise CanaryError(f"{path} must not be a symlink")
+    if not stat.S_ISREG(mode):
+        raise CanaryError(f"{path} must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise CanaryError(f"{path} must be a regular file")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except FileNotFoundError as error:
+        raise CanaryError(f"{path} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise CanaryError(f"{path} must not be a symlink") from error
+        raise CanaryError(f"cannot open {path} for reading: {error.strerror}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _ensure_text_output_target(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise CanaryError(f"{path.parent} must be a directory") from error
+    parent_mode = path.parent.lstat().st_mode
+    if stat.S_ISLNK(parent_mode):
+        raise CanaryError(f"{path.parent} must not be a symlink")
+    if not stat.S_ISDIR(parent_mode):
+        raise CanaryError(f"{path.parent} must be a directory")
+    if path.exists() or path.is_symlink():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise CanaryError(f"{path} must not be a symlink")
+        if not stat.S_ISREG(mode):
+            raise CanaryError(f"{path} must be a regular file")
+
+
+def _write_text_output(path: Path, text: str) -> None:
+    _ensure_text_output_target(path)
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, parent_flags | nofollow)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise CanaryError(f"{path.parent} must not be a symlink") from error
+        raise CanaryError(f"{path.parent} must be a directory") from error
+
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise CanaryError(f"{path} must not be a symlink") from error
+            raise CanaryError(f"cannot open {path} for writing: {error.strerror}") from error
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise CanaryError(f"{path} must be a regular file")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        raw = _read_regular_file(path)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CanaryError(f"{path} is not UTF-8 JSON") from error
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise CanaryError(f"{path} is not valid JSON: {error}") from error
 
@@ -160,9 +245,10 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise CanaryError(f"{label}.{key} must be a non-empty string")
-    result = raw.strip()
-    _reject_control_chars(result, f"{label}.{key}")
-    return result
+    _reject_control_chars(raw, f"{label}.{key}")
+    if raw != raw.strip():
+        raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
 
 
 def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
@@ -171,9 +257,10 @@ def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
         return None
     if not isinstance(raw, str) or not raw.strip():
         raise CanaryError(f"{label}.{key} must be a non-empty string when provided")
-    result = raw.strip()
-    _reject_control_chars(result, f"{label}.{key}")
-    return result
+    _reject_control_chars(raw, f"{label}.{key}")
+    if raw != raw.strip():
+        raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
 
 
 def _reject_control_chars(value: str, label: str) -> None:
@@ -235,9 +322,12 @@ def _string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
     for offset, item in enumerate(raw):
         if not isinstance(item, str) or not item.strip():
             raise CanaryError(f"{label}.{key}[{offset}] must be a non-empty string")
-        value = item.strip()
-        _reject_control_chars(value, f"{label}.{key}[{offset}]")
-        result.append(value)
+        _reject_control_chars(item, f"{label}.{key}[{offset}]")
+        if item != item.strip():
+            raise CanaryError(
+                f"{label}.{key}[{offset}] must not have surrounding whitespace"
+            )
+        result.append(item)
     _reject_duplicate_strings(result, f"{label}.{key}")
     return result
 
@@ -263,10 +353,12 @@ def _path_from_config(config_dir: Path, raw: str, label: str) -> Path:
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
-    resolved = (config_dir / path).resolve()
-    if not resolved.is_relative_to(config_dir.resolve()):
+    candidate = config_dir / path
+    resolved_parent = candidate.parent.resolve()
+    root = config_dir.resolve()
+    if not resolved_parent.is_relative_to(root):
         raise CanaryError(f"{label} relative paths must stay under {config_dir.resolve()}")
-    return resolved
+    return resolved_parent / candidate.name
 
 
 def _validate_endpoint_url(
@@ -275,15 +367,102 @@ def _validate_endpoint_url(
     *,
     allow_insecure_http: bool,
 ) -> None:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        raise CanaryError(f"{label} must not contain control characters")
+    _reject_url_percent_encoding_smuggling(url, label)
+    if any(ch.isspace() for ch in url):
+        raise CanaryError(f"{label} must not contain whitespace")
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" and not (parsed.scheme == "http" and allow_insecure_http):
         raise CanaryError(f"{label} must use HTTPS")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise CanaryError(f"{label} has invalid port: {error}") from error
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        raise CanaryError(f"{label} must not explicitly specify the default port")
     if not parsed.netloc or parsed.hostname is None:
         raise CanaryError(f"{label} must include a host")
     if parsed.username is not None or parsed.password is not None:
         raise CanaryError(f"{label} must not contain credentials")
+    raw_host = _raw_url_host(parsed)
+    if "%" in raw_host:
+        raise CanaryError(f"{label} host must not contain percent escapes")
+    if raw_host != raw_host.lower():
+        raise CanaryError(f"{label} host must be lowercase")
+    if raw_host.endswith("."):
+        raise CanaryError(f"{label} host must not end with a dot")
+    _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise CanaryError(f"{label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, label)
+
+
+def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket != -1:
+            return netloc[1:bracket]
+    return netloc.rsplit(":", 1)[0]
+
+
+def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
+    index = 0
+    while True:
+        index = url.find("%", index)
+        if index == -1:
+            return
+        token = url[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise CanaryError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise CanaryError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        index += 3
+
+
+def _validate_host_labels(raw_host: str, label: str) -> None:
+    try:
+        ipaddress.ip_address(raw_host)
+        return
+    except ValueError:
+        pass
+    if ":" in raw_host:
+        raise CanaryError(f"{label} host must be a valid IP address")
+    labels = raw_host.split(".")
+    if any(not part for part in labels):
+        raise CanaryError(f"{label} host must not contain empty labels")
+    if all(part.isdigit() for part in labels):
+        raise CanaryError(f"{label} numeric host labels must be a valid IP address")
+    for part in labels:
+        if len(part) > 63:
+            raise CanaryError(f"{label} host labels must be at most 63 characters")
+        if part.startswith("-") or part.endswith("-"):
+            raise CanaryError(f"{label} host labels must not start or end with hyphen")
+        if not all(("a" <= ch <= "z") or ch.isdigit() or ch == "-" for ch in part):
+            raise CanaryError(
+                f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
+            )
+
+
+def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
+    path = parsed.path
+    if "\\" in path:
+        raise CanaryError(f"{label} path must use forward slashes")
+    if ";" in path:
+        raise CanaryError(f"{label} path must not contain semicolon parameters")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise CanaryError(f"{label} path must not contain dot segments")
+    lowered = path.lower()
+    if any(token in lowered for token in ("%2e", "%2f", "%5c")):
+        raise CanaryError(f"{label} path must not contain encoded dot or separator characters")
+    if "%25" in lowered:
+        raise CanaryError(f"{label} path must not contain encoded percent characters")
 
 
 def _script(name: str) -> str:
@@ -341,7 +520,7 @@ def _build_rail_stage(
     receipt_dir = (
         _path_from_config(config_dir, receipt_dir_raw, "rail.receipt_dir")
         if receipt_dir_raw is not None
-        else (inbox_dir / "receipts").resolve()
+        else inbox_dir / "receipts"
     )
     bearer_raw = _optional_string(rail, "bearer_token_file", "rail")
     bearer_token_file = (
@@ -426,7 +605,7 @@ def _build_notary_stage(
     receipt_dir = (
         _path_from_config(config_dir, receipt_dir_raw, "notary.receipt_dir")
         if receipt_dir_raw is not None
-        else (export_dir / "receipts").resolve()
+        else export_dir / "receipts"
     )
     bearer_raw = _optional_string(notary, "bearer_token_file", "notary")
     bearer_token_file = (
@@ -705,15 +884,18 @@ def build_stage_plans(
 
 
 def run(args: argparse.Namespace) -> int:
-    config_path = args.config.resolve()
+    config_path = args.config
     config = _require_object(_load_json(config_path), "config")
+    resolved_config_path = config_path.resolve()
     provider, environment, stages, verify_config = build_stage_plans(
-        config_path,
+        resolved_config_path,
         config,
         require_explicit_policy=args.require_explicit_policy,
     )
     if args.output_limit_bytes <= 0:
         raise CanaryError("--output-limit-bytes must be positive")
+    if args.summary_out is not None:
+        _ensure_text_output_target(args.summary_out)
 
     started_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     if args.plan_only:
@@ -723,7 +905,7 @@ def run(args: argparse.Namespace) -> int:
             if stage.receipt_dir is not None and not stage.dry_run
         ]
         verify_stage = _build_verify_stage(
-            config_path.resolve().parent,
+            resolved_config_path.parent,
             verify_config,
             stage_receipt_dirs,
             prior_failure=False,
@@ -735,7 +917,7 @@ def run(args: argparse.Namespace) -> int:
         summary: dict[str, Any] = {
             "provider": provider,
             "environment": environment,
-            "config_path": str(config_path),
+            "config_path": str(resolved_config_path),
             "started_at": started_at,
             "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
             "ok": True,
@@ -748,8 +930,7 @@ def run(args: argparse.Namespace) -> int:
         summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
         text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
         if args.summary_out is not None:
-            args.summary_out.parent.mkdir(parents=True, exist_ok=True)
-            args.summary_out.write_text(text, encoding="utf-8")
+            _write_text_output(args.summary_out, text)
         print(text, end="")
         return 0
 
@@ -765,7 +946,7 @@ def run(args: argparse.Namespace) -> int:
             prior_failure = True
 
     verify_stage = _build_verify_stage(
-        config_path.resolve().parent,
+        resolved_config_path.parent,
         verify_config,
         stage_receipt_dirs,
         prior_failure=prior_failure,
@@ -783,7 +964,7 @@ def run(args: argparse.Namespace) -> int:
     summary: dict[str, Any] = {
         "provider": provider,
         "environment": environment,
-        "config_path": str(config_path),
+        "config_path": str(resolved_config_path),
         "started_at": started_at,
         "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "ok": not prior_failure,
@@ -796,8 +977,7 @@ def run(args: argparse.Namespace) -> int:
     summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        args.summary_out.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_out.write_text(text, encoding="utf-8")
+        _write_text_output(args.summary_out, text)
     print(text, end="")
     return 0 if summary["ok"] else 1
 

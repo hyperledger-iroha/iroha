@@ -370,7 +370,8 @@ pub fn can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
 /// This combines the current proving capability with the previous-proof
 /// circuit transition rule. Semantic previous proofs must continue with
 /// semantic append output; Reserved-lineage append output is valid only after a
-/// previous Reserved-lineage proof once the witnessless append circuit is wired.
+/// previous Reserved-lineage proof and while the previous hop is inside the
+/// witnessless append cap.
 #[must_use]
 pub fn can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
     previous_proof_circuit_id: &str,
@@ -2310,6 +2311,14 @@ mod model {
         /// compatibility.
         #[norito(default)]
         pub lineage_proving_key_archive: Option<Vec<u8>>,
+        /// Optional chain height used for verifier-record activation windows.
+        ///
+        /// When set, native bridge entrypoints enforce all record-backed proof
+        /// checks at this exact height. When omitted, legacy callers remain
+        /// decodable but fail closed for verifier records that declare
+        /// activation or withdrawal windows.
+        #[norito(default)]
+        pub block_height: Option<u64>,
     }
 
     /// Bridge request for appending one offline hop to recursive Kagemusha cash.
@@ -2368,6 +2377,10 @@ mod model {
         /// generation. Semantic append requests leave it empty.
         #[norito(default)]
         pub lineage_proving_key_archive: Option<Vec<u8>>,
+        /// Optional chain height used for current-hop and previous recursive
+        /// verifier-record activation windows.
+        #[norito(default)]
+        pub block_height: Option<u64>,
     }
 
     /// Full record-backed lineage witness for online recursive spend redemption.
@@ -2418,10 +2431,13 @@ mod model {
         /// and must leave this empty. Reserved-lineage bundles must provide the
         /// active lineage verifier record so offline receivers can verify the
         /// constant-size D2D proof before accepting or re-spending the note.
-        /// This field is defaulted and kept last so legacy ABI-6 semantic
-        /// verify archives decode as `None`.
+        /// This field is defaulted so legacy ABI-6 semantic verify archives
+        /// decode as `None`.
         #[norito(default)]
         pub lineage_verifier_record: Option<VerifyingKeyRecord>,
+        /// Optional chain height used for lineage verifier-record activation windows.
+        #[norito(default)]
+        pub block_height: Option<u64>,
     }
 
     /// Bridge verification result for recursive Kagemusha spend bundles.
@@ -2484,10 +2500,14 @@ mod model {
         /// their record-backed lineage witness contains Reserved-lineage proofs
         /// that native hosts must verify before serializing an online redeem
         /// instruction.
-        /// This field is defaulted and kept last so legacy ABI-6 semantic redeem
-        /// archives decode as `None`.
+        /// This field is defaulted so legacy ABI-6 semantic redeem archives
+        /// decode as `None`.
         #[norito(default)]
         pub lineage_verifier_record: Option<VerifyingKeyRecord>,
+        /// Optional chain height used for wallet-side bridge verification of
+        /// lineage witnesses and reserved-lineage final proofs.
+        #[norito(default)]
+        pub block_height: Option<u64>,
     }
 
     /// One private hop folded into a compact Kagemusha payment token.
@@ -6319,6 +6339,7 @@ impl KagemushaRecursiveSpendInitRequestV1 {
             current_note,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         request.validate_public_binding()?;
         Ok(request)
@@ -6446,6 +6467,7 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
             previous_recursive_proof_open_envelopes_archive,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         request.validate_public_binding()?;
         Ok(request)
@@ -6617,6 +6639,7 @@ impl KagemushaRecursiveSpendVerifyRequestV1 {
         let request = Self {
             bundle,
             lineage_verifier_record,
+            block_height: None,
         };
         request.validate_public_binding()?;
         Ok(request)
@@ -8069,6 +8092,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
             redeem_proof,
             lineage_witness,
             lineage_verifier_record,
+            block_height: None,
         };
         request.validate_public_binding()?;
         Ok(request)
@@ -8640,7 +8664,9 @@ mod offline_note_tests {
         clippy::type_complexity
     )]
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use sha2::{Digest as _, Sha256};
 
     use super::*;
     use crate::{asset::AssetDefinitionId, confidential::ConfidentialStatus, domain::DomainId};
@@ -8667,6 +8693,131 @@ mod offline_note_tests {
 
     fn fixed_hash(label: &[u8]) -> [u8; Hash::LENGTH] {
         Hash::new(label).into()
+    }
+
+    fn shared_recursive_spend_archive_entry_json(
+        name: &str,
+        operation: &str,
+        norito_type: &str,
+        bytes: &[u8],
+    ) -> String {
+        let sha256_hex = hex::encode(Sha256::digest(bytes));
+        format!(
+            concat!(
+                "    {{\n",
+                "      \"name\": \"{name}\",\n",
+                "      \"operation\": \"{operation}\",\n",
+                "      \"norito_type\": \"{norito_type}\",\n",
+                "      \"byte_len\": {byte_len},\n",
+                "      \"sha256_hex\": \"{sha256_hex}\",\n",
+                "      \"bytes_base64\": \"{bytes_base64}\"\n",
+                "    }}"
+            ),
+            name = name,
+            operation = operation,
+            norito_type = norito_type,
+            byte_len = bytes.len(),
+            sha256_hex = sha256_hex,
+            bytes_base64 = BASE64_STANDARD.encode(bytes),
+        )
+    }
+
+    fn shared_recursive_spend_request_archive_fields_json() -> &'static str {
+        concat!(
+            "  \"request_archive_fields\": [\n",
+            "    {\n",
+            "      \"norito_type\": \"KagemushaRecursiveSpendInitRequestV1\",\n",
+            "      \"fields\": [\n",
+            "        {\"name\": \"record_bundle\", \"type\": \"KagemushaVerifiedFoldRecordBundle\", \"norito_default\": false},\n",
+            "        {\"name\": \"pallas_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": false},\n",
+            "        {\"name\": \"current_note\", \"type\": \"KagemushaSpendableNoteDescriptorV1\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": true},\n",
+            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": true},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "      ]\n",
+            "    },\n",
+            "    {\n",
+            "      \"norito_type\": \"KagemushaRecursiveSpendAppendRequestV1\",\n",
+            "      \"fields\": [\n",
+            "        {\"name\": \"previous_bundle\", \"type\": \"KagemushaRecursiveSpendBundleV1\", \"norito_default\": false},\n",
+            "        {\"name\": \"record_bundle\", \"type\": \"KagemushaVerifiedFoldRecordBundle\", \"norito_default\": false},\n",
+            "        {\"name\": \"pallas_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": false},\n",
+            "        {\"name\": \"current_note\", \"type\": \"KagemushaSpendableNoteDescriptorV1\", \"norito_default\": false},\n",
+            "        {\"name\": \"output_proof_circuit_id\", \"type\": \"String\", \"norito_default\": true},\n",
+            "        {\"name\": \"previous_lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
+            "        {\"name\": \"previous_recursive_proof_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": true},\n",
+            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": true},\n",
+            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": true},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "      ]\n",
+            "    },\n",
+            "    {\n",
+            "      \"norito_type\": \"KagemushaRecursiveSpendVerifyRequestV1\",\n",
+            "      \"fields\": [\n",
+            "        {\"name\": \"bundle\", \"type\": \"KagemushaRecursiveSpendBundleV1\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "      ]\n",
+            "    },\n",
+            "    {\n",
+            "      \"norito_type\": \"KagemushaRecursiveSpendRedeemRequestV1\",\n",
+            "      \"fields\": [\n",
+            "        {\"name\": \"bundle\", \"type\": \"KagemushaRecursiveSpendBundleV1\", \"norito_default\": false},\n",
+            "        {\"name\": \"recipient\", \"type\": \"AccountId\", \"norito_default\": false},\n",
+            "        {\"name\": \"public_amount\", \"type\": \"u128\", \"norito_default\": false},\n",
+            "        {\"name\": \"redeem_proof\", \"type\": \"ProofAttachment\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_witness\", \"type\": \"Option<KagemushaRecursiveSpendLineageWitnessV1>\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "      ]\n",
+            "    }\n",
+            "  ]"
+        )
+    }
+
+    fn shared_recursive_spend_archive_fixture_json(
+        archives: &[(&str, &str, &str, &[u8])],
+    ) -> String {
+        let request_archive_fields = shared_recursive_spend_request_archive_fields_json();
+        let entries = archives
+            .iter()
+            .map(|(name, operation, norito_type, bytes)| {
+                shared_recursive_spend_archive_entry_json(name, operation, norito_type, bytes)
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!(
+            concat!(
+                "{{\n",
+                "  \"schema\": \"iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1\",\n",
+                "  \"fixture_kind\": \"norito_archives\",\n",
+                "  \"bridge_abi_version\": 6,\n",
+                "{request_archive_fields},\n",
+                "  \"archives\": [\n",
+                "{entries}\n",
+                "  ]\n",
+                "}}\n"
+            ),
+            request_archive_fields = request_archive_fields,
+            entries = entries,
+        )
+    }
+
+    fn assert_shared_recursive_spend_abi6_archive_fixture_matches(
+        archives: &[(&str, &str, &str, &[u8])],
+    ) {
+        let generated = shared_recursive_spend_archive_fixture_json(archives);
+        if std::env::var_os("KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI6_ARCHIVES").is_some() {
+            println!("{generated}");
+            return;
+        }
+        let committed =
+            include_str!("../../../../fixtures/kagemusha_recursive_spend_abi6/archives.json");
+        assert_eq!(
+            committed, generated,
+            "shared recursive spend ABI-6 Norito archive fixtures drifted; rerun with \
+             KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI6_ARCHIVES=1 to regenerate"
+        );
     }
 
     fn kagemusha_recursive_verifier_preflight_for_evidence(
@@ -9972,6 +10123,13 @@ mod offline_note_tests {
         );
         assert!(
             can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                1
+            ),
+            "append-specific Reserved-lineage id can prove the two-hop append output"
+        );
+        assert!(
+            can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 - 1
             )
@@ -10025,6 +10183,22 @@ mod offline_note_tests {
                 1
             ),
             "Reserved-lineage previous proofs can select Reserved-lineage output inside the cap"
+        );
+        assert!(
+            can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                1
+            ),
+            "one-hop Reserved-lineage proofs can select the append-specific Reserved-lineage output"
+        );
+        assert!(
+            can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                2
+            ),
+            "append Reserved-lineage proofs can keep selecting append-specific Reserved-lineage output"
         );
         assert!(
             !can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -14768,6 +14942,7 @@ mod offline_note_tests {
             redeem_proof: redeem_proof.clone(),
             lineage_witness: None,
             lineage_verifier_record: None,
+            block_height: None,
         };
         valid
             .validate_public_binding()
@@ -15344,6 +15519,7 @@ mod offline_note_tests {
             redeem_proof: redeem_proof.clone(),
             lineage_witness: None,
             lineage_verifier_record: None,
+            block_height: None,
         };
         assert!(matches!(
             wrong_amount.validate_public_binding(),
@@ -15435,6 +15611,7 @@ mod offline_note_tests {
             redeem_proof,
             lineage_witness: None,
             lineage_verifier_record: None,
+            block_height: None,
         };
         assert!(matches!(
             zero_amount.validate_public_binding(),
@@ -16436,82 +16613,271 @@ mod offline_note_tests {
 
     #[test]
     fn kagemusha_recursive_spend_bridge_abi_archives_roundtrip() {
-        let record_bundle = kagemusha_verified_fold_record_bundle_fixture();
         let chain_id: ChainId = "kagemusha-recursive-spend-abi-chain"
             .parse()
             .expect("chain id");
         let asset = kagemusha_asset("kgm-recursive-abi");
         let root0 = fixed_hash(b"kagemusha-recursive-spend-abi-root-0");
         let root1 = fixed_hash(b"kagemusha-recursive-spend-abi-root-1");
-        let step = kagemusha_step(root0, root1, 0x32, 0x74, b"recursive-spend-abi-hop");
-        let current_note = KagemushaSpendableNoteDescriptorV1 {
-            note_commitment: step.output_commitments[0],
+        let root2 = fixed_hash(b"kagemusha-recursive-spend-abi-root-2");
+
+        let step0 = kagemusha_step(root0, root1, 0x32, 0x74, b"recursive-spend-abi-hop-0");
+        let note0 = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: step0.output_commitments[0],
             spend_nullifier: fixed_hash(b"kagemusha-recursive-spend-abi-nullifier"),
             amount: Numeric::new(7, 0),
         };
-        let evidence = kagemusha_recursive_spend_one_hop_evidence(
+        let evidence0 = kagemusha_recursive_spend_one_hop_evidence(
             &chain_id,
             &asset,
-            step,
+            step0.clone(),
             b"recursive-spend-abi-witness-hop",
         );
-        let accumulator =
-            kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &current_note)
+        let accumulator0 =
+            kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence0, &note0)
                 .expect("recursive spend ABI accumulator");
-        let bundle = kagemusha_recursive_spend_bundle(accumulator);
-        let pallas_open_envelopes_archive = vec![0xE1, 0xE2, 0xE3];
-
-        let init = KagemushaRecursiveSpendInitRequestV1 {
-            record_bundle: record_bundle.clone(),
-            pallas_open_envelopes_archive: pallas_open_envelopes_archive.clone(),
-            current_note: current_note.clone(),
-            lineage_verifier_key: None,
-            lineage_proving_key_archive: None,
-        };
+        let bundle0 = kagemusha_recursive_spend_bundle(accumulator0);
+        let init_record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
+            chain_id.clone(),
+            asset.clone(),
+            &step0,
+            "kagemusha-recursive-spend-abi-hop-0",
+            b"recursive-spend-abi-proof-hop-0",
+        );
+        let init_pallas_open_envelopes_archive =
+            kagemusha_recursive_spend_lineage_pallas_open_envelope_archive(
+                &init_record_bundle,
+                0x41,
+            );
+        let mut init = KagemushaRecursiveSpendInitRequestV1::new(
+            init_record_bundle.clone(),
+            init_pallas_open_envelopes_archive.clone(),
+            note0.clone(),
+        )
+        .expect("ABI init request validates before proving");
+        init.lineage_verifier_key = Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]));
+        init.lineage_proving_key_archive = Some(vec![0xE8; 64]);
+        init.validate_public_binding()
+            .expect("ABI init request accepts Reserved-lineage key material");
         let init_bytes = to_bytes(&init).expect("encode recursive spend init request");
         let decoded_init: KagemushaRecursiveSpendInitRequestV1 =
             norito::decode_from_bytes(&init_bytes).expect("decode recursive spend init request");
         assert_eq!(decoded_init, init);
 
-        let lineage_verifier_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]);
-        let mut lineage_verifier_record = VerifyingKeyRecord::new_with_owner(
-            7,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-            Some("kagemusha-recursive-spend-abi".to_owned()),
-            KAGEMUSHA_VERIFIER_NAMESPACE,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
-            kagemusha_verifying_key_commitment(&lineage_verifier_key),
-        );
-        lineage_verifier_record.status = ConfidentialStatus::Active;
-        lineage_verifier_record.vk_len =
-            u32::try_from(lineage_verifier_key.bytes.len()).expect("lineage vk length fits");
-        lineage_verifier_record.max_proof_bytes = 4096;
-        lineage_verifier_record.key = Some(lineage_verifier_key);
-        let mut lineage_bundle = bundle.clone();
-        lineage_bundle.recursive_proof = kagemusha_recursive_spend_lineage_proof(
-            &lineage_bundle.accumulator,
-            b"kagemusha-recursive-spend-abi-lineage-scalar",
-        );
-        let append = KagemushaRecursiveSpendAppendRequestV1 {
-            previous_bundle: lineage_bundle.clone(),
-            record_bundle: record_bundle.clone(),
-            pallas_open_envelopes_archive: pallas_open_envelopes_archive.clone(),
-            current_note: current_note.clone(),
-            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                .to_owned(),
-            previous_lineage_verifier_record: Some(lineage_verifier_record.clone()),
-            previous_recursive_proof_open_envelopes_archive:
-                kagemusha_recursive_spend_pallas_open_envelope_archive(0xC4),
-            lineage_verifier_key: Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64])),
-            lineage_proving_key_archive: Some(vec![0xA8; 64]),
+        #[derive(Encode)]
+        struct LegacyKagemushaRecursiveSpendInitRequestV1 {
+            record_bundle: KagemushaVerifiedFoldRecordBundle,
+            pallas_open_envelopes_archive: Vec<u8>,
+            current_note: KagemushaSpendableNoteDescriptorV1,
+        }
+
+        let legacy_init = LegacyKagemushaRecursiveSpendInitRequestV1 {
+            record_bundle: init_record_bundle.clone(),
+            pallas_open_envelopes_archive: init_pallas_open_envelopes_archive.clone(),
+            current_note: note0.clone(),
         };
+        let mut legacy_init_bytes =
+            to_bytes(&legacy_init).expect("encode legacy recursive spend init request");
+        let init_request_schema =
+            <KagemushaRecursiveSpendInitRequestV1 as norito::NoritoSerialize>::schema_hash();
+        legacy_init_bytes[6..22].copy_from_slice(&init_request_schema);
+        let decoded_legacy_init: KagemushaRecursiveSpendInitRequestV1 =
+            norito::decode_from_bytes(&legacy_init_bytes)
+                .expect("decode legacy recursive spend init request with defaults");
+        assert_eq!(decoded_legacy_init.record_bundle, legacy_init.record_bundle);
+        assert_eq!(
+            decoded_legacy_init.pallas_open_envelopes_archive,
+            legacy_init.pallas_open_envelopes_archive
+        );
+        assert_eq!(decoded_legacy_init.current_note, legacy_init.current_note);
+        assert!(decoded_legacy_init.lineage_verifier_key.is_none());
+        assert!(decoded_legacy_init.lineage_proving_key_archive.is_none());
+        assert!(decoded_legacy_init.block_height.is_none());
+
+        let transition_profile_init =
+            kagemusha_recursive_spend_transition_profile_from_initial_evidence(&evidence0, &note0)
+                .expect("initial transition profile");
+        let transition_profile_init_bytes =
+            to_bytes(&transition_profile_init).expect("encode initial transition profile");
+        let decoded_transition_profile_init: KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(&transition_profile_init_bytes)
+                .expect("decode initial transition profile");
+        assert_eq!(decoded_transition_profile_init, transition_profile_init);
+
+        let mut init_lineage_bundle = bundle0.clone();
+        init_lineage_bundle.recursive_proof = kagemusha_recursive_spend_lineage_proof(
+            &init_lineage_bundle.accumulator,
+            b"kagemusha-recursive-spend-abi-lineage-one-hop-scalar",
+        );
+        init_lineage_bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.into();
+        attach_recursive_spend_open_verify_envelope(
+            &mut init_lineage_bundle,
+            b"kagemusha-recursive-spend-abi-lineage-one-hop-vk",
+        );
+        init_lineage_bundle
+            .validate_public_input_binding()
+            .expect("one-hop Reserved-lineage bundle binds public inputs");
+        let witness0 =
+            kagemusha_recursive_spend_lineage_witness_from_init_result(&init, &init_lineage_bundle)
+                .expect("initial lineage witness");
+        let witness0_bytes = to_bytes(&witness0).expect("encode initial lineage witness");
+        let decoded_witness0: KagemushaRecursiveSpendLineageWitnessV1 =
+            norito::decode_from_bytes(&witness0_bytes).expect("decode initial lineage witness");
+        assert_eq!(decoded_witness0, witness0);
+
+        let mut previous_lineage_verifier_record =
+            kagemusha_recursive_spend_active_lineage_verifier_record();
+        previous_lineage_verifier_record.circuit_id = init_lineage_bundle
+            .recursive_proof
+            .verifier_key_id
+            .name
+            .clone();
+        let previous_recursive_proof_open_envelopes_archive =
+            kagemusha_recursive_spend_previous_proof_open_envelope_archive(
+                &init_lineage_bundle,
+                0x71,
+            );
+
+        let mut step1 = kagemusha_step(root1, root2, 0x60, 0x80, b"recursive-spend-abi-hop-1");
+        step1.input_nullifiers = vec![note0.spend_nullifier];
+        let note1 = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: step1.output_commitments[1],
+            spend_nullifier: fixed_hash(b"kagemusha-recursive-spend-abi-nullifier-1"),
+            amount: Numeric::new(7, 0),
+        };
+        let evidence1 = kagemusha_recursive_spend_one_hop_evidence(
+            &chain_id,
+            &asset,
+            step1.clone(),
+            b"recursive-spend-abi-witness-hop-1",
+        );
+        let append_record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
+            chain_id.clone(),
+            asset.clone(),
+            &step1,
+            "kagemusha-recursive-spend-abi-hop-1",
+            b"recursive-spend-abi-proof-hop-1",
+        );
+        let append_pallas_open_envelopes_archive =
+            kagemusha_recursive_spend_lineage_pallas_open_envelope_archive(
+                &append_record_bundle,
+                0x51,
+            );
+        let mut append =
+            KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                init_lineage_bundle.clone(),
+                Some(previous_lineage_verifier_record.clone()),
+                previous_recursive_proof_open_envelopes_archive.clone(),
+                append_record_bundle.clone(),
+                append_pallas_open_envelopes_archive.clone(),
+                note1.clone(),
+            )
+            .expect("ABI Reserved-lineage append request validates before proving");
+        append.lineage_verifier_key =
+            Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]));
+        append.lineage_proving_key_archive = Some(vec![0xA8; 64]);
+        append
+            .validate_public_binding()
+            .expect("ABI append request accepts Reserved-lineage key material");
         let append_bytes = to_bytes(&append).expect("encode recursive spend append request");
         let decoded_append: KagemushaRecursiveSpendAppendRequestV1 =
             norito::decode_from_bytes(&append_bytes)
                 .expect("decode recursive spend append request");
         assert_eq!(decoded_append, append);
+
+        let previous_recursive_proof_open_envelopes_archive_digest =
+            kagemusha_recursive_previous_proof_open_envelopes_archive_digest(
+                &previous_recursive_proof_open_envelopes_archive,
+            )
+            .expect("previous proof opening archive digest");
+        let append_opening_preflight_contract =
+            KagemushaRecursiveSpendLineageAppendOpeningPreflightV1::new(
+                kagemusha_recursive_verifier_preflight_for_evidence(
+                    &evidence1,
+                    fixed_hash(b"kagemusha-recursive-spend-abi-previous-opening"),
+                ),
+                kagemusha_recursive_verifier_preflight_for_evidence(
+                    &evidence1,
+                    evidence1.verifier_witness_batch_digest,
+                ),
+                kagemusha_recursive_spend_accumulator_digest(&init_lineage_bundle.accumulator)
+                    .expect("previous accumulator digest"),
+                kagemusha_recursive_spend_proof_artifact_digest(
+                    &init_lineage_bundle.recursive_proof,
+                )
+                .expect("previous proof artifact digest"),
+                previous_recursive_proof_open_envelopes_archive_digest,
+                evidence1.aggregation_statement.steps[0].proof_hash,
+            )
+            .expect("append opening preflight contract");
+        let transition_profile_append =
+            kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract(
+                &init_lineage_bundle.accumulator,
+                &init_lineage_bundle.recursive_proof,
+                &previous_recursive_proof_open_envelopes_archive,
+                append_opening_preflight_contract.clone(),
+                &evidence1,
+                &note1,
+            )
+            .expect("append transition profile");
+        let transition_profile_append_bytes =
+            to_bytes(&transition_profile_append).expect("encode append transition profile");
+        let decoded_transition_profile_append: KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(&transition_profile_append_bytes)
+                .expect("decode append transition profile");
+        assert_eq!(decoded_transition_profile_append, transition_profile_append);
+
+        let append_boundary =
+            kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile(
+                &transition_profile_append,
+            )
+            .expect("append boundary");
+        let append_boundary_bytes = to_bytes(&append_boundary).expect("encode append boundary");
+        let decoded_append_boundary: KagemushaRecursiveSpendLineageAppendBoundaryV1 =
+            norito::decode_from_bytes(&append_boundary_bytes).expect("decode append boundary");
+        assert_eq!(decoded_append_boundary, append_boundary);
+
+        let accumulator1 =
+            kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract(
+                &init_lineage_bundle.accumulator,
+                &init_lineage_bundle.recursive_proof,
+                &previous_recursive_proof_open_envelopes_archive,
+                append_opening_preflight_contract,
+                &evidence1,
+                &note1,
+            )
+            .expect("append accumulator");
+        let mut append_recursive_proof = kagemusha_recursive_spend_lineage_proof(
+            &accumulator1,
+            b"kagemusha-recursive-spend-abi-lineage-append-scalar",
+        );
+        append_recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.into();
+        let mut appended_bundle = KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator1,
+            recursive_proof: append_recursive_proof,
+        };
+        attach_recursive_spend_open_verify_envelope(
+            &mut appended_bundle,
+            b"kagemusha-recursive-spend-abi-lineage-append-vk",
+        );
+        appended_bundle
+            .validate_public_input_binding()
+            .expect("append Reserved-lineage bundle binds public inputs");
+        let appended_bundle_bytes =
+            to_bytes(&appended_bundle).expect("encode appended bundle fixture");
+        let witness1 = kagemusha_recursive_spend_lineage_witness_append_result(
+            &witness0,
+            &append,
+            &appended_bundle,
+        )
+        .expect("append lineage witness");
+        let witness1_bytes = to_bytes(&witness1).expect("encode append lineage witness");
+        let decoded_witness1: KagemushaRecursiveSpendLineageWitnessV1 =
+            norito::decode_from_bytes(&witness1_bytes).expect("decode append lineage witness");
+        assert_eq!(decoded_witness1, witness1);
 
         #[derive(Encode)]
         struct LegacyKagemushaRecursiveSpendAppendRequestV1 {
@@ -16522,10 +16888,10 @@ mod offline_note_tests {
         }
 
         let legacy_append = LegacyKagemushaRecursiveSpendAppendRequestV1 {
-            previous_bundle: bundle.clone(),
-            record_bundle: record_bundle.clone(),
-            pallas_open_envelopes_archive,
-            current_note: current_note.clone(),
+            previous_bundle: bundle0.clone(),
+            record_bundle: init_record_bundle.clone(),
+            pallas_open_envelopes_archive: init_pallas_open_envelopes_archive,
+            current_note: note0.clone(),
         };
         let mut legacy_append_bytes =
             to_bytes(&legacy_append).expect("encode legacy recursive spend append request");
@@ -16568,10 +16934,16 @@ mod offline_note_tests {
         );
         assert!(decoded_legacy_append.lineage_verifier_key.is_none());
         assert!(decoded_legacy_append.lineage_proving_key_archive.is_none());
+        assert!(decoded_legacy_append.block_height.is_none());
 
+        let mut final_lineage_verifier_record =
+            kagemusha_recursive_spend_active_lineage_verifier_record();
+        final_lineage_verifier_record.circuit_id =
+            appended_bundle.recursive_proof.verifier_key_id.name.clone();
         let verify = KagemushaRecursiveSpendVerifyRequestV1 {
-            bundle: lineage_bundle,
-            lineage_verifier_record: Some(lineage_verifier_record),
+            bundle: appended_bundle.clone(),
+            lineage_verifier_record: Some(final_lineage_verifier_record.clone()),
+            block_height: Some(14),
         };
         let verify_bytes = to_bytes(&verify).expect("encode recursive spend verify request");
         let decoded_verify: KagemushaRecursiveSpendVerifyRequestV1 =
@@ -16585,7 +16957,7 @@ mod offline_note_tests {
         }
 
         let legacy_verify = LegacyKagemushaRecursiveSpendVerifyRequestV1 {
-            bundle: bundle.clone(),
+            bundle: bundle0.clone(),
         };
         let mut legacy_verify_bytes =
             to_bytes(&legacy_verify).expect("encode legacy recursive spend verify request");
@@ -16597,12 +16969,13 @@ mod offline_note_tests {
                 .expect("decode legacy recursive spend verify request with default verifier");
         assert_eq!(decoded_legacy_verify.bundle, legacy_verify.bundle);
         assert!(decoded_legacy_verify.lineage_verifier_record.is_none());
+        assert!(decoded_legacy_verify.block_height.is_none());
 
         let verify_result = KagemushaRecursiveSpendVerifyResultV1 {
             valid: false,
-            hop_count: bundle.accumulator.hop_count,
+            hop_count: appended_bundle.accumulator.hop_count,
             encoded_bytes: u32::try_from(
-                bundle
+                appended_bundle
                     .norito_encoded_len()
                     .expect("recursive spend bundle encoded length"),
             )
@@ -16628,19 +17001,157 @@ mod offline_note_tests {
             VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-abi-redeem"),
         );
         redeem_proof.vk_commitment = Some(fixed_hash(b"kagemusha-recursive-spend-abi-redeem-vk"));
-        let redeem = KagemushaRecursiveSpendRedeemRequestV1 {
-            bundle,
-            recipient: sample_account(0xAB, "offline"),
-            public_amount: 7,
-            redeem_proof,
-            lineage_witness: None,
-            lineage_verifier_record: None,
-        };
+        let recipient = sample_account(0xAB, "offline");
+        let redeem = KagemushaRecursiveSpendRedeemRequestV1::new_with_lineage_witness(
+            appended_bundle.clone(),
+            recipient.clone(),
+            7,
+            redeem_proof.clone(),
+            Some(witness1.clone()),
+            Some(final_lineage_verifier_record),
+        )
+        .expect("ABI redeem request validates with lineage witness");
         let redeem_bytes = to_bytes(&redeem).expect("encode recursive spend redeem request");
         let decoded_redeem: KagemushaRecursiveSpendRedeemRequestV1 =
             norito::decode_from_bytes(&redeem_bytes)
                 .expect("decode recursive spend redeem request");
         assert_eq!(decoded_redeem, redeem);
+
+        #[derive(Encode)]
+        struct LegacyKagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: KagemushaRecursiveSpendBundleV1,
+            recipient: AccountId,
+            public_amount: u128,
+            redeem_proof: ProofAttachment,
+            lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        }
+
+        let legacy_redeem = LegacyKagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: appended_bundle.clone(),
+            recipient: recipient.clone(),
+            public_amount: 7,
+            redeem_proof: redeem_proof.clone(),
+            lineage_witness: None,
+        };
+        let mut legacy_redeem_bytes =
+            to_bytes(&legacy_redeem).expect("encode legacy recursive spend redeem request");
+        let redeem_request_schema =
+            <KagemushaRecursiveSpendRedeemRequestV1 as norito::NoritoSerialize>::schema_hash();
+        legacy_redeem_bytes[6..22].copy_from_slice(&redeem_request_schema);
+        let decoded_legacy_redeem: KagemushaRecursiveSpendRedeemRequestV1 =
+            norito::decode_from_bytes(&legacy_redeem_bytes)
+                .expect("decode legacy recursive spend redeem request with defaults");
+        assert_eq!(decoded_legacy_redeem.bundle, legacy_redeem.bundle);
+        assert_eq!(decoded_legacy_redeem.recipient, legacy_redeem.recipient);
+        assert_eq!(
+            decoded_legacy_redeem.public_amount,
+            legacy_redeem.public_amount
+        );
+        assert_eq!(
+            decoded_legacy_redeem.redeem_proof,
+            legacy_redeem.redeem_proof
+        );
+        assert_eq!(
+            decoded_legacy_redeem.lineage_witness,
+            legacy_redeem.lineage_witness
+        );
+        assert!(decoded_legacy_redeem.lineage_verifier_record.is_none());
+        assert!(decoded_legacy_redeem.block_height.is_none());
+        let redeem_instruction =
+            crate::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
+                appended_bundle,
+                recipient,
+                7,
+                redeem_proof,
+                Some(witness1),
+            );
+        let redeem_instruction_bytes =
+            to_bytes(&redeem_instruction).expect("encode recursive spend redeem instruction");
+        let decoded_redeem_instruction: crate::isi::offline::RedeemKagemushaRecursive =
+            norito::decode_from_bytes(&redeem_instruction_bytes)
+                .expect("decode recursive spend redeem instruction");
+        assert_eq!(decoded_redeem_instruction, redeem_instruction);
+
+        assert_shared_recursive_spend_abi6_archive_fixture_matches(&[
+            (
+                "init_request",
+                "init",
+                "KagemushaRecursiveSpendInitRequestV1",
+                &init_bytes,
+            ),
+            (
+                "init_bundle",
+                "init",
+                "KagemushaRecursiveSpendBundleV1",
+                &to_bytes(&init_lineage_bundle).expect("encode init lineage bundle fixture"),
+            ),
+            (
+                "transition_profile_init",
+                "transition_profile_init",
+                "KagemushaRecursiveSpendTransitionProfileV1",
+                &transition_profile_init_bytes,
+            ),
+            (
+                "append_request",
+                "append",
+                "KagemushaRecursiveSpendAppendRequestV1",
+                &append_bytes,
+            ),
+            (
+                "append_bundle",
+                "append",
+                "KagemushaRecursiveSpendBundleV1",
+                &appended_bundle_bytes,
+            ),
+            (
+                "transition_profile_append",
+                "transition_profile_append",
+                "KagemushaRecursiveSpendTransitionProfileV1",
+                &transition_profile_append_bytes,
+            ),
+            (
+                "lineage_append_boundary",
+                "lineage_append_boundary",
+                "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+                &append_boundary_bytes,
+            ),
+            (
+                "lineage_witness_from_init_result",
+                "lineage_witness_from_init_result",
+                "KagemushaRecursiveSpendLineageWitnessV1",
+                &witness0_bytes,
+            ),
+            (
+                "lineage_witness_append_result",
+                "lineage_witness_append_result",
+                "KagemushaRecursiveSpendLineageWitnessV1",
+                &witness1_bytes,
+            ),
+            (
+                "verify_request",
+                "verify",
+                "KagemushaRecursiveSpendVerifyRequestV1",
+                &verify_bytes,
+            ),
+            (
+                "verify_result",
+                "verify",
+                "KagemushaRecursiveSpendVerifyResultV1",
+                &verify_result_bytes,
+            ),
+            (
+                "redeem_request",
+                "redeem",
+                "KagemushaRecursiveSpendRedeemRequestV1",
+                &redeem_bytes,
+            ),
+            (
+                "redeem_instruction",
+                "redeem",
+                "RedeemKagemushaRecursive",
+                &redeem_instruction_bytes,
+            ),
+        ]);
     }
 
     #[test]

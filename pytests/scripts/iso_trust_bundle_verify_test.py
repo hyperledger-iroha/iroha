@@ -183,13 +183,122 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(bundle_summary["material"]["x509_trust_anchor_pin_count"], 1)
             self.assertEqual(bundle_summary["material"]["revoked_certificate_pin_count"], 1)
             self.assertNotIn("der_base64", json.dumps(bundle_summary["x509_trust_anchors"]))
-            emitted = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile_text = profile_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                summary["profile_json_sha256"],
+                VERIFIER.sha256_hex(profile_text.encode("utf-8")),
+            )
+            emitted = json.loads(profile_text)
             self.assertEqual(
                 emitted[0]["x509_trust_anchor_sha256_pins"],
                 [der_digest(CERT_ONE_B64)],
             )
             self.assertEqual(emitted[0]["x509_require_crl_revocation_check"], True)
             self.assertEqual(emitted[0]["x509_require_ocsp_revocation_check"], True)
+
+    def test_symlinked_bundle_is_rejected_before_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = write_bundle(root, valid_bundle())
+            bundle = root / "symlinked-trust-bundle.json"
+            try:
+                bundle.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(bundle)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_directory_bundle_is_rejected_before_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            bundle = Path(raw_root) / "bundle-dir"
+            bundle.mkdir()
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(bundle)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must be a regular file", stderr)
+
+    def test_symlinked_output_files_are_rejected(self):
+        cases = (
+            ("summary", "--summary-out"),
+            ("profile", "--emit-profile-json"),
+        )
+        for name, flag in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+                    target = root / f"{name}-target.json"
+                    target.write_text("untouched\n", encoding="utf-8")
+                    output_path = root / f"{name}-link.json"
+                    try:
+                        output_path.symlink_to(target)
+                    except OSError as error:
+                        self.skipTest(f"symlink creation unavailable: {error}")
+
+                    rc, stdout, stderr = run_verify(
+                        ["--bundle", str(path), flag, str(output_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be a symlink", stderr)
+                    self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_profile_output_failure_does_not_emit_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = write_bundle(root, valid_bundle())
+            summary_path = root / "summary.json"
+            target = root / "profile-target.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            profile_path = root / "profile-link.json"
+            try:
+                profile_path.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(path),
+                    "--summary-out",
+                    str(summary_path),
+                    "--emit-profile-json",
+                    str(profile_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertFalse(summary_path.exists())
+            self.assertIn("must not be a symlink", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_summary_and_profile_outputs_must_be_distinct(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = write_bundle(root, valid_bundle())
+            output_path = root / "same-output.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(path),
+                    "--summary-out",
+                    str(output_path),
+                    "--emit-profile-json",
+                    str(output_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertFalse(output_path.exists())
+            self.assertIn("must be different paths", stderr)
 
     def test_revocation_policy_flags_are_required(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -221,6 +330,37 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
 
+    def test_duplicate_bundle_inputs_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            original = write_bundle(root, valid_bundle())
+
+            rc, _stdout, stderr = run_verify(
+                ["--bundle", str(original), "--bundle", str(original)]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--bundle[1] duplicates --bundle[0]", stderr)
+
+            copied_dir = root / "copied"
+            copied_dir.mkdir()
+            copied = write_bundle(copied_dir, valid_bundle())
+            rc, _stdout, stderr = run_verify(
+                ["--bundle", str(original), "--bundle", str(copied)]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("bundle_sha256 duplicates", stderr)
+
+            same_profile_dir = root / "same-profile"
+            same_profile_dir.mkdir()
+            same_profile = valid_bundle()
+            same_profile["source"]["version"] = "2026-Q3"
+            same_profile_path = write_bundle(same_profile_dir, same_profile)
+            rc, _stdout, stderr = run_verify(
+                ["--bundle", str(original), "--bundle", str(same_profile_path)]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("profile_id duplicates", stderr)
+
     def test_declared_der_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -232,6 +372,64 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("does not match der_base64", stderr)
+
+    def test_json_strings_must_not_require_trimming(self):
+        cases = (
+            (
+                "profile-id",
+                lambda bundle: bundle.__setitem__("profile_id", " swift-cbpr-plus"),
+                "profile_id must not have surrounding whitespace",
+            ),
+            (
+                "source-version",
+                lambda bundle: bundle["source"].__setitem__("version", "2026-Q2 "),
+                "source.version must not have surrounding whitespace",
+            ),
+            (
+                "public-pin",
+                lambda bundle: bundle.__setitem__(
+                    "signature_public_key_sha256_pins",
+                    ["1" * 64 + " "],
+                ),
+                "signature_public_key_sha256_pins[0] must not have surrounding whitespace",
+            ),
+            (
+                "policy-oid",
+                lambda bundle: bundle["x509_required_certificate_policy_oids"].__setitem__(
+                    0,
+                    " 1.3.6.1.4.1.55555.1",
+                ),
+                "x509_required_certificate_policy_oids[0] must not have surrounding whitespace",
+            ),
+            (
+                "der-base64",
+                lambda bundle: bundle["x509_crls"][0].__setitem__(
+                    "der_base64",
+                    CRL_B64 + " ",
+                ),
+                "x509_crls[0].der_base64 must not have surrounding whitespace",
+            ),
+            (
+                "der-digest",
+                lambda bundle: bundle["x509_crls"][0].__setitem__(
+                    "sha256",
+                    der_digest(CRL_B64) + " ",
+                ),
+                "x509_crls[0].sha256 must not have surrounding whitespace",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_noncanonical_pin_and_all_zero_pin_are_rejected(self):
         for pin in ["A" * 64, "0" * 64]:
@@ -375,12 +573,53 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 0,
             )
 
+    def test_source_provenance_is_required(self):
+        cases = [
+            (lambda bundle: bundle.pop("source"), ".source is required"),
+            (lambda bundle: bundle.update({"source": {}}), ".source.retrieved_at"),
+            (lambda bundle: bundle["source"].pop("retrieved_at"), ".source.retrieved_at"),
+            (lambda bundle: bundle["source"].pop("url"), ".source.url"),
+        ]
+        for mutate, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_source_url_rejects_credentials_query_fragment_and_local_addresses(self):
         cases = [
             ("https://user:pass@pki.example.invalid/swift-cbpr-plus", "credentials"),
             ("https://pki.example.invalid/swift-cbpr-plus?token=abc", "params, query, or fragment"),
             ("https://pki.example.invalid/swift-cbpr-plus#bundle", "params, query, or fragment"),
             ("https://pki.example.invalid/swift-cbpr-plus\nX-Token: abc", "ASCII control"),
+            ("https://pki.example.invalid/swift cbpr plus", "must not contain whitespace"),
+            ("https://pki.example.invalid:abc/swift-cbpr-plus", "invalid port"),
+            ("https://pki.example.invalid:99999/swift-cbpr-plus", "invalid port"),
+            ("https://pki.example.invalid:443/swift-cbpr-plus", "default port"),
+            ("https://PKI.example.invalid/swift-cbpr-plus", "host must be lowercase"),
+            ("https://pki.example.invalid./swift-cbpr-plus", "host must not end with a dot"),
+            ("https://pki..example.invalid/swift-cbpr-plus", "host must not contain empty labels"),
+            ("https://-pki.example.invalid/swift-cbpr-plus", "host labels must not start or end with hyphen"),
+            ("https://pki._tcp.example.invalid/swift-cbpr-plus", "host labels must use lowercase ASCII letters, digits, or hyphens"),
+            ("https://pki.example%2einvalid/swift-cbpr-plus", "host must not contain percent escapes"),
+            ("https://123.000.000.001/swift-cbpr-plus", "numeric host labels must be a valid IP address"),
+            ("https://pki.example.invalid/../swift-cbpr-plus", "path must not contain dot segments"),
+            ("https://pki.example.invalid/%2e%2e/swift-cbpr-plus", "path must not contain encoded dot or separator characters"),
+            ("https://pki.example.invalid/swift%2fcbpr-plus", "path must not contain encoded dot or separator characters"),
+            ("https://pki.example.invalid/swift%252fcbpr-plus", "path must not contain encoded percent characters"),
+            ("https://pki.example.invalid/sources;debug/swift-cbpr-plus", "path must not contain semicolon parameters"),
+            (r"https://pki.example.invalid/sources\swift-cbpr-plus", "path must use forward slashes"),
+            ("https://pki.example.invalid/swift%20cbpr-plus", "percent-encoded control or space characters"),
+            ("https://pki.example.invalid/swift%00cbpr-plus", "percent-encoded control or space characters"),
+            ("https://pki.example.invalid/swift%7fcbpr-plus", "percent-encoded control or space characters"),
+            ("https://pki.example.invalid/swift%zzcbpr-plus", "malformed percent escapes"),
             ("https://[::1", "malformed"),
             ("https:///swift-cbpr-plus", "include a host"),
             ("https://localhost/swift-cbpr-plus", "localhost"),
@@ -488,6 +727,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertTrue(summary["allow_synthetic_der"])
             self.assertFalse(summary["profile_json_emittable"])
             self.assertFalse(summary["profile_json_emitted"])
+            self.assertIsNone(summary["profile_json_sha256"])
 
     def test_synthetic_der_cannot_emit_profile_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -536,6 +776,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertEqual(summary["verified_bundles"], len(templates))
         self.assertTrue(summary["allow_synthetic_der"])
         self.assertFalse(summary["profile_json_emittable"])
+        self.assertFalse(summary["profile_json_emitted"])
+        self.assertIsNone(summary["profile_json_sha256"])
         self.assertEqual(
             sorted(bundle["profile_id"] for bundle in summary["bundles"]),
                 [

@@ -704,8 +704,9 @@ helpers expose that defaulting rule for wallet-side preflight. The
 `recursivePreviousProofOpenEnvelopesRequiredCountV1` and
 `recursivePreviousProofOpenEnvelopesMaxBytes` expose the exactly-one-envelope
 cardinality rule and native 8 MiB pre-decode cap for that archive.
-Native Kagemusha prover wrappers reject empty native result archives instead of
-treating them as successful proof material.
+Native Kagemusha prover wrappers reject empty native result archives and native
+outputs larger than 64 MiB instead of treating them as successful proof
+material.
 
 ### Native privacy bridge
 

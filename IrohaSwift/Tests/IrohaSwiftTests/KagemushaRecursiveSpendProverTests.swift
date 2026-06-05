@@ -14,6 +14,213 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
     }
 
+    func testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface() throws {
+        let manifest = try Self.sharedRecursiveSpendManifest()
+        XCTAssertEqual(
+            manifest["schema"] as? String,
+            "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
+        )
+        XCTAssertEqual(manifest["bridge_abi_version"] as? Int, KagemushaRecursiveSpendProver.requiredBridgeAbiVersion)
+
+        let circuitIds = try XCTUnwrap(manifest["proof_circuit_ids"] as? [String: Any])
+        XCTAssertEqual(
+            circuitIds["recursive_aggregation"] as? String,
+            KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
+        )
+        XCTAssertEqual(
+            circuitIds["reserved_lineage"] as? String,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1
+        )
+        XCTAssertEqual(
+            circuitIds["reserved_lineage_one_hop"] as? String,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1
+        )
+        XCTAssertEqual(
+            circuitIds["reserved_lineage_append"] as? String,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+        )
+
+        let limits = try XCTUnwrap(manifest["limits"] as? [String: Any])
+        XCTAssertEqual(limits["compact_token_max_hops"] as? Int, KagemushaRecursiveSpendProver.compactTokenMaxHops)
+        XCTAssertEqual(
+            limits["reserved_lineage_witnessless_max_hops"] as? Int,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1
+        )
+        XCTAssertEqual(
+            limits["previous_proof_open_envelopes_required_count"] as? Int,
+            KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesRequiredCountV1
+        )
+        XCTAssertEqual(
+            limits["previous_proof_open_envelopes_max_bytes"] as? Int,
+            KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesMaxBytes
+        )
+        XCTAssertEqual(
+            limits["pallas_open_envelope_max_transcript_label_bytes"] as? Int,
+            KagemushaRecursiveSpendProver.recursivePallasOpenEnvelopeMaxTranscriptLabelBytes
+        )
+        XCTAssertEqual(limits["native_archive_max_bytes"] as? Int, KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)
+
+        let domains = try XCTUnwrap(manifest["domains"] as? [String: Any])
+        XCTAssertEqual(
+            domains["transition_profile"] as? String,
+            KagemushaRecursiveSpendProver.recursiveSpendTransitionProfileDomain
+        )
+        XCTAssertEqual(
+            domains["lineage_append_boundary_final_note_binding"] as? String,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1
+        )
+
+        let operations = try XCTUnwrap(manifest["operations"] as? [[String: Any]])
+        XCTAssertEqual(manifest["operation_count"] as? Int, operations.count)
+        XCTAssertEqual(operations.count, 9)
+        XCTAssertEqual(
+            Set(operations.compactMap { $0["symbol"] as? String }),
+            Set<String>([
+                "connect_norito_kagemusha_recursive_spend_init",
+                "connect_norito_kagemusha_recursive_spend_append",
+                "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+                "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+                "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+                "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+                "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+                "connect_norito_kagemusha_recursive_spend_verify",
+                "connect_norito_kagemusha_recursive_spend_redeem"
+            ])
+        )
+        let appendWitness = try XCTUnwrap(operations.first { $0["name"] as? String == "lineage_witness_append_result" })
+        XCTAssertEqual((appendWitness["input_archives"] as? [String])?.count, 3)
+        XCTAssertEqual(appendWitness["output_archive"] as? String, "KagemushaRecursiveSpendLineageWitnessV1")
+
+        let payloadBenchmarks = try XCTUnwrap(manifest["payload_benchmarks"] as? [String: Any])
+        XCTAssertEqual(payloadBenchmarks["semantic_payload_bytes"] as? Int, 1751)
+        XCTAssertEqual(payloadBenchmarks["reserved_lineage_payload_bytes"] as? Int, 3847)
+        XCTAssertEqual(payloadBenchmarks["reserved_lineage_transition_profile_bytes"] as? Int, 2817)
+
+        let archiveFixture = try Self.sharedRecursiveSpendArchives()
+        XCTAssertEqual(
+            archiveFixture["schema"] as? String,
+            "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"
+        )
+        let archives = try XCTUnwrap(archiveFixture["archives"] as? [[String: Any]])
+        XCTAssertEqual(archives.count, 13)
+        XCTAssertEqual(
+            Set(archives.compactMap { $0["name"] as? String }),
+            Set<String>([
+                "init_request",
+                "init_bundle",
+                "transition_profile_init",
+                "append_request",
+                "append_bundle",
+                "transition_profile_append",
+                "lineage_append_boundary",
+                "lineage_witness_from_init_result",
+                "lineage_witness_append_result",
+                "verify_request",
+                "verify_result",
+                "redeem_request",
+                "redeem_instruction"
+            ])
+        )
+        let requestArchiveFields = try XCTUnwrap(archiveFixture["request_archive_fields"] as? [[String: Any]])
+        let fieldsByType = Dictionary(
+            uniqueKeysWithValues: requestArchiveFields.compactMap { entry -> (String, [String])? in
+                guard
+                    let type = entry["norito_type"] as? String,
+                    let fields = entry["fields"] as? [[String: Any]]
+                else {
+                    return nil
+                }
+                return (type, fields.compactMap { $0["name"] as? String })
+            }
+        )
+        XCTAssertEqual(
+            Set(fieldsByType.keys),
+            Set([
+                "KagemushaRecursiveSpendInitRequestV1",
+                "KagemushaRecursiveSpendAppendRequestV1",
+                "KagemushaRecursiveSpendVerifyRequestV1",
+                "KagemushaRecursiveSpendRedeemRequestV1"
+            ])
+        )
+        XCTAssertEqual(
+            fieldsByType["KagemushaRecursiveSpendInitRequestV1"],
+            [
+                "record_bundle",
+                "pallas_open_envelopes_archive",
+                "current_note",
+                "lineage_verifier_key",
+                "lineage_proving_key_archive",
+                "block_height"
+            ]
+        )
+        XCTAssertEqual(
+            fieldsByType["KagemushaRecursiveSpendAppendRequestV1"],
+            [
+                "previous_bundle",
+                "record_bundle",
+                "pallas_open_envelopes_archive",
+                "current_note",
+                "output_proof_circuit_id",
+                "previous_lineage_verifier_record",
+                "previous_recursive_proof_open_envelopes_archive",
+                "lineage_verifier_key",
+                "lineage_proving_key_archive",
+                "block_height"
+            ]
+        )
+        XCTAssertEqual(
+            fieldsByType["KagemushaRecursiveSpendVerifyRequestV1"],
+            ["bundle", "lineage_verifier_record", "block_height"]
+        )
+        XCTAssertEqual(
+            fieldsByType["KagemushaRecursiveSpendRedeemRequestV1"],
+            [
+                "bundle",
+                "recipient",
+                "public_amount",
+                "redeem_proof",
+                "lineage_witness",
+                "lineage_verifier_record",
+                "block_height"
+            ]
+        )
+        let redeemArchive = try XCTUnwrap(archives.first { $0["name"] as? String == "redeem_request" })
+        XCTAssertEqual(redeemArchive["operation"] as? String, "redeem")
+        XCTAssertEqual(redeemArchive["norito_type"] as? String, "KagemushaRecursiveSpendRedeemRequestV1")
+        XCTAssertGreaterThan(redeemArchive["byte_len"] as? Int ?? 0, 0)
+        XCTAssertEqual((redeemArchive["sha256_hex"] as? String)?.count, 64)
+        let redeemInstructionArchive = try XCTUnwrap(archives.first { $0["name"] as? String == "redeem_instruction" })
+        XCTAssertEqual(redeemInstructionArchive["norito_type"] as? String, "RedeemKagemushaRecursive")
+
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 1),
+            circuitIds["reserved_lineage_append"] as? String
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 63),
+            circuitIds["reserved_lineage_append"] as? String
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 64),
+            circuitIds["recursive_aggregation"] as? String
+        )
+        XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 0))
+        XCTAssertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 63))
+        XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 64))
+        XCTAssertTrue(
+            KagemushaRecursiveSpendProver.canRedeemWitnessless(
+                circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+                hopCount: 2
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.canRedeemWitnessless(
+                circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1,
+                hopCount: 65
+            )
+        )
+    }
+
     func testExportsStableCircuitIds() {
         XCTAssertEqual(KagemushaRecursiveSpendProver.requiredBridgeAbiVersion, 6)
         XCTAssertEqual(
@@ -47,6 +254,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.recursivePallasOpenEnvelopeMaxTranscriptLabelBytes,
             128
         )
+        XCTAssertEqual(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 64 * 1024 * 1024)
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.recursiveSpendTransitionProfileDomain,
             "iroha:kagemusha:v1:recursive-spend-transition-profile"
@@ -577,6 +785,22 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedNativeOutput() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendProver.call(
+                requestArchive: Data([0x01]),
+                bridgeAvailable: true
+            ) { _ in
+                Data(
+                    repeating: 0x7f,
+                    count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+                )
+            }
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .oversizedNativeOutput)
+        }
+    }
+
     func testNilNativeOutputIsBridgeUnavailable() {
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
@@ -699,5 +923,33 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
         }
+    }
+
+    private static func sharedRecursiveSpendManifest() throws -> [String: Any] {
+        try sharedRecursiveSpendFixture(named: "manifest.json")
+    }
+
+    private static func sharedRecursiveSpendArchives() throws -> [String: Any] {
+        try sharedRecursiveSpendFixture(named: "archives.json")
+    }
+
+    private static func sharedRecursiveSpendFixture(named fileName: String) throws -> [String: Any] {
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            let candidate = directory
+                .appendingPathComponent("fixtures")
+                .appendingPathComponent("kagemusha_recursive_spend_abi6")
+                .appendingPathComponent(fileName)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let data = try Data(contentsOf: candidate)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+            directory.deleteLastPathComponent()
+        }
+        throw NSError(
+            domain: "KagemushaRecursiveSpendProverTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "missing shared recursive spend ABI-6 fixture \(fileName)"]
+        )
     }
 }

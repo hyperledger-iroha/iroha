@@ -3443,6 +3443,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn evaluation_key_bundle_rejects_adversarial_rotation_and_bootstrap_metadata() {
         let material = evaluation_key_adversarial_material();
         let duplicate_rotation = BfvEvaluationKeyBundle {

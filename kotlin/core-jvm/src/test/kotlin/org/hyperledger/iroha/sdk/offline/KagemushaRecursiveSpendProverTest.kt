@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -488,6 +491,147 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun sharedRecursiveSpendAbi6FixtureMatchesSdkSurface() {
+        val manifest = sharedRecursiveSpendManifest()
+        assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"")
+        assertContains(
+            manifest,
+            "\"bridge_abi_version\": ${KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION}",
+        )
+        assertContains(manifest, "\"operation_count\": 9")
+        assertContains(
+            manifest,
+            "\"recursive_aggregation\": \"${KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1}\"",
+        )
+        assertContains(
+            manifest,
+            "\"reserved_lineage\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1}\"",
+        )
+        assertContains(
+            manifest,
+            "\"reserved_lineage_one_hop\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1}\"",
+        )
+        assertContains(
+            manifest,
+            "\"reserved_lineage_append\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1}\"",
+        )
+        assertContains(
+            manifest,
+            "\"compact_token_max_hops\": ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}",
+        )
+        assertContains(
+            manifest,
+            "\"reserved_lineage_witnessless_max_hops\": ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}",
+        )
+        assertContains(
+            manifest,
+            "\"previous_proof_open_envelopes_required_count\": ${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1}",
+        )
+        assertContains(
+            manifest,
+            "\"previous_proof_open_envelopes_max_bytes\": ${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES}",
+        )
+        assertContains(
+            manifest,
+            "\"pallas_open_envelope_max_transcript_label_bytes\": ${KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES}",
+        )
+        assertContains(manifest, "\"native_archive_max_bytes\": 67108864")
+        assertContains(
+            manifest,
+            "\"transition_profile\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN}\"",
+        )
+        assertContains(
+            manifest,
+            "\"lineage_append_boundary_final_note_binding\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1}\"",
+        )
+        for (symbol in listOf(
+            "connect_norito_kagemusha_recursive_spend_init",
+            "connect_norito_kagemusha_recursive_spend_append",
+            "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+            "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+            "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+            "connect_norito_kagemusha_recursive_spend_verify",
+            "connect_norito_kagemusha_recursive_spend_redeem",
+        )) {
+            assertContains(manifest, "\"symbol\": \"$symbol\"")
+        }
+        assertContains(manifest, "\"reserved_lineage_payload_bytes\": 3847")
+        assertContains(manifest, "\"reserved_lineage_transition_profile_bytes\": 2817")
+        val archives = sharedRecursiveSpendFixture("archives.json")
+        assertContains(
+            archives,
+            "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1\"",
+        )
+        for (archiveName in listOf(
+            "init_request",
+            "init_bundle",
+            "transition_profile_init",
+            "append_request",
+            "append_bundle",
+            "transition_profile_append",
+            "lineage_append_boundary",
+            "lineage_witness_from_init_result",
+            "lineage_witness_append_result",
+            "verify_request",
+            "verify_result",
+            "redeem_request",
+            "redeem_instruction",
+        )) {
+            assertContains(archives, "\"name\": \"$archiveName\"")
+        }
+        assertContains(archives, "\"operation\": \"redeem\"")
+        assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendRedeemRequestV1\"")
+        assertContains(archives, "\"norito_type\": \"RedeemKagemushaRecursive\"")
+        assertContains(archives, "\"request_archive_fields\"")
+        assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendInitRequestV1\"")
+        assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendAppendRequestV1\"")
+        assertContains(archives, "\"name\": \"lineage_verifier_key\"")
+        assertContains(archives, "\"name\": \"lineage_proving_key_archive\"")
+        assertContains(archives, "\"name\": \"previous_recursive_proof_open_envelopes_archive\"")
+        assertContains(archives, "\"name\": \"lineage_verifier_record\"")
+        assertContains(archives, "\"name\": \"lineage_witness\"")
+        assertContains(archives, "\"name\": \"block_height\"")
+        assertContains(
+            archives,
+            "\"sha256_hex\": \"b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2\"",
+        )
+        assertContains(
+            archives,
+            "\"sha256_hex\": \"a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e\"",
+        )
+
+        assertEquals(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(1),
+        )
+        assertEquals(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(63),
+        )
+        assertEquals(
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(64),
+        )
+        assertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(0))
+        assertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(63))
+        assertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(64))
+        assertTrue(
+            KagemushaRecursiveSpendProver.canRedeemWitnessless(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                2,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.canRedeemWitnessless(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                65,
+            ),
+        )
+    }
+
+    @Test
     fun rejectsEmptyArchivesBeforeNativeDispatch() {
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.initSpend(ByteArray(0))
@@ -637,7 +781,38 @@ class KagemushaRecursiveSpendProverTest {
         }
         assertTrue(empty.message.orEmpty().contains("native redeem returned empty output"))
 
+        val oversized = assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
+                "redeem",
+            )
+        }
+        assertTrue(oversized.message.orEmpty().contains("native redeem returned oversized output"))
+
         val output = byteArrayOf(0x01, 0x02)
         assertTrue(output === KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem"))
+    }
+
+    private fun sharedRecursiveSpendManifest(): String {
+        return sharedRecursiveSpendFixture("manifest.json")
+    }
+
+    private fun sharedRecursiveSpendFixture(fileName: String): String {
+        var directory: Path? = Paths.get("").toAbsolutePath()
+        while (directory != null) {
+            val candidate = directory.resolve("fixtures/kagemusha_recursive_spend_abi6").resolve(fileName)
+            if (Files.isRegularFile(candidate)) {
+                return String(Files.readAllBytes(candidate), Charsets.UTF_8)
+            }
+            directory = directory.parent
+        }
+        error("missing shared recursive spend ABI-6 fixture $fileName")
+    }
+
+    private fun assertContains(
+        text: String,
+        needle: String,
+    ) {
+        assertTrue(text.contains(needle), "missing shared fixture marker: $needle")
     }
 }

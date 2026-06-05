@@ -78,6 +78,8 @@ archives for fixture generation and circuit preflight.
 `LineageAppendBoundary(...)` derives the compact append-boundary Norito archive
 from a full append transition profile with native opening preflight material;
 the C# SDK treats the result as opaque verifier material.
+Native Kagemusha bridge outputs are rejected if they are empty, null, or larger
+than 64 MiB before the wrapper copies them into managed memory.
 The append-boundary digest uses the public
 `RecursiveSpendLineageAppendBoundaryDomainV1` domain, plus
 `RecursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1` and

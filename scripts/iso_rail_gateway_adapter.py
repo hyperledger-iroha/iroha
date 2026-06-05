@@ -22,8 +22,12 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import hashlib
+import ipaddress
 import json
+import os
+import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -35,6 +39,7 @@ from typing import Any
 
 DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
+MAX_BEARER_TOKEN_BYTES = 8192
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
 LEGACY_MESSAGE_TYPES = {"colr.007"}
@@ -110,14 +115,126 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _load_json(path: Path) -> Any:
+def _read_regular_file(path: Path) -> bytes:
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-        )
+        metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
+    if stat.S_ISLNK(metadata.st_mode):
+        raise AdapterError(f"{path} must not be a symlink")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise AdapterError(f"{path} must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise AdapterError(f"{path} must be a regular file")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except FileNotFoundError as error:
+        raise AdapterError(f"{path} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise AdapterError(f"{path} must not be a symlink") from error
+        raise AdapterError(f"cannot open {path} for reading: {error.strerror}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _ensure_input_directory(path: Path, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise AdapterError(f"{label} {path} does not exist") from error
+    if stat.S_ISLNK(metadata.st_mode):
+        raise AdapterError(f"{label} {path} must not be a symlink")
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise AdapterError(f"{label} {path} must be a directory")
+
+
+def _ensure_output_directory(path: Path, label: str) -> None:
+    if path.exists() or path.is_symlink():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise AdapterError(f"{label} {path} must not be a symlink")
+        if not stat.S_ISDIR(mode):
+            raise AdapterError(f"{label} {path} must be a directory")
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    mode = path.lstat().st_mode
+    if stat.S_ISLNK(mode):
+        raise AdapterError(f"{label} {path} must not be a symlink")
+    if not stat.S_ISDIR(mode):
+        raise AdapterError(f"{label} {path} must be a directory")
+
+
+def _ensure_output_file_target(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise AdapterError(f"{path} must not be a symlink")
+        if not stat.S_ISREG(mode):
+            raise AdapterError(f"{path} must be a regular file")
+
+
+def _write_text_output(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise AdapterError(f"{path.parent} must be a directory") from error
+    parent_mode = path.parent.lstat().st_mode
+    if stat.S_ISLNK(parent_mode):
+        raise AdapterError(f"{path.parent} must not be a symlink")
+    if not stat.S_ISDIR(parent_mode):
+        raise AdapterError(f"{path.parent} must be a directory")
+    _ensure_output_file_target(path)
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, parent_flags | nofollow)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise AdapterError(f"{path.parent} must not be a symlink") from error
+        raise AdapterError(f"{path.parent} must be a directory") from error
+
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise AdapterError(f"{path} must not be a symlink") from error
+            raise AdapterError(f"cannot open {path} for writing: {error.strerror}") from error
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise AdapterError(f"{path} must be a regular file")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _absolute_path_without_resolving_leaf(path: Path) -> Path:
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def _load_json(path: Path) -> Any:
+    raw = _read_regular_file(path)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AdapterError(f"{path} is not UTF-8 JSON") from error
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise AdapterError(f"{path} is not valid JSON: {error}") from error
 
@@ -126,14 +243,42 @@ def _bounded_read(path: Path, max_bytes: int) -> bytes:
     if max_bytes <= 0:
         raise AdapterError("max payload bytes must be positive")
     try:
-        size = path.stat().st_size
+        metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
+    if stat.S_ISLNK(metadata.st_mode):
+        raise AdapterError(f"{path} must not be a symlink")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise AdapterError(f"{path} must be a regular file")
+    size = metadata.st_size
     if size <= 0:
         raise AdapterError(f"{path} is empty")
     if size > max_bytes:
         raise AdapterError(f"{path} exceeds {max_bytes} byte payload limit")
-    return path.read_bytes()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AdapterError(f"{path} must be a regular file")
+        size = opened.st_size
+        if size <= 0:
+            raise AdapterError(f"{path} is empty")
+        if size > max_bytes:
+            raise AdapterError(f"{path} exceeds {max_bytes} byte payload limit")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except FileNotFoundError as error:
+        raise AdapterError(f"{path} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise AdapterError(f"{path} must not be a symlink") from error
+        raise AdapterError(f"cannot open {path} for reading: {error.strerror}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def verify_message_file(
@@ -178,13 +323,33 @@ def verify_message_file(
     elif not isinstance(profile, str) or not profile.strip():
         raise AdapterError(f"{sidecar_path} profile must be a non-empty string")
     else:
-        profile = profile.strip()
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in profile):
+            raise AdapterError(f"{sidecar_path} profile must not contain control characters")
+        if profile != profile.strip():
+            raise AdapterError(
+                f"{sidecar_path} profile must not have surrounding whitespace"
+            )
+        if any(ch.isspace() for ch in profile):
+            raise AdapterError(f"{sidecar_path} profile must not contain whitespace")
 
     rail_message_id = sidecar.get("rail_message_id")
     if rail_message_id is not None and (
         not isinstance(rail_message_id, str) or not rail_message_id.strip()
     ):
         raise AdapterError(f"{sidecar_path} rail_message_id must be a non-empty string")
+    if isinstance(rail_message_id, str):
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rail_message_id):
+            raise AdapterError(
+                f"{sidecar_path} rail_message_id must not contain control characters"
+            )
+        if rail_message_id != rail_message_id.strip():
+            raise AdapterError(
+                f"{sidecar_path} rail_message_id must not have surrounding whitespace"
+            )
+        if any(ch.isspace() for ch in rail_message_id):
+            raise AdapterError(
+                f"{sidecar_path} rail_message_id must not contain whitespace"
+            )
 
     return GatewayMessage(
         xml_path=xml_path,
@@ -193,7 +358,7 @@ def verify_message_file(
         payload_sha256=actual_sha256,
         message_type=message_type,
         profile=profile,
-        rail_message_id=rail_message_id.strip() if isinstance(rail_message_id, str) else None,
+        rail_message_id=rail_message_id if isinstance(rail_message_id, str) else None,
     )
 
 
@@ -211,15 +376,16 @@ def discover_messages(inbox_dir: Path) -> list[Path]:
 def resolve_message_paths(inbox_dir: Path, message: Path | None) -> list[Path]:
     """Resolve one explicit message or discover all messages under the inbox."""
 
-    inbox_dir = inbox_dir.resolve()
+    _ensure_input_directory(inbox_dir, "inbox_dir")
+    inbox_root = inbox_dir.resolve()
     if message is None:
         return discover_messages(inbox_dir)
     raw_message = message.expanduser()
     message_path = raw_message if raw_message.is_absolute() else inbox_dir / raw_message
-    resolved = message_path.resolve()
-    if not resolved.is_relative_to(inbox_dir):
-        raise AdapterError(f"--message path {message} must stay under --inbox-dir {inbox_dir}")
-    return [resolved]
+    resolved_parent = message_path.parent.resolve()
+    if not resolved_parent.is_relative_to(inbox_root):
+        raise AdapterError(f"--message path {message} must stay under --inbox-dir {inbox_root}")
+    return [resolved_parent / message_path.name]
 
 
 def _reject_url_control_chars(url: str, label: str) -> None:
@@ -227,8 +393,96 @@ def _reject_url_control_chars(url: str, label: str) -> None:
         raise AdapterError(f"{label} must not contain control characters")
 
 
+def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
+    index = 0
+    while True:
+        index = url.find("%", index)
+        if index == -1:
+            return
+        token = url[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise AdapterError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise AdapterError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        index += 3
+
+
+def _validate_url_port(parsed: urllib.parse.ParseResult, label: str) -> None:
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise AdapterError(f"{label} has invalid port: {error}") from error
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        raise AdapterError(f"{label} must not explicitly specify the default port")
+
+
+def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket != -1:
+            return netloc[1:bracket]
+    return netloc.rsplit(":", 1)[0]
+
+
+def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
+    raw_host = _raw_url_host(parsed)
+    if "%" in raw_host:
+        raise AdapterError(f"{label} host must not contain percent escapes")
+    if raw_host != raw_host.lower():
+        raise AdapterError(f"{label} host must be lowercase")
+    if raw_host.endswith("."):
+        raise AdapterError(f"{label} host must not end with a dot")
+    try:
+        ipaddress.ip_address(raw_host)
+        return
+    except ValueError:
+        pass
+    if ":" in raw_host:
+        raise AdapterError(f"{label} host must be a valid IP address")
+    labels = raw_host.split(".")
+    if any(not part for part in labels):
+        raise AdapterError(f"{label} host must not contain empty labels")
+    if all(part.isdigit() for part in labels):
+        raise AdapterError(f"{label} numeric host labels must be a valid IP address")
+    for part in labels:
+        if len(part) > 63:
+            raise AdapterError(f"{label} host labels must be at most 63 characters")
+        if part.startswith("-") or part.endswith("-"):
+            raise AdapterError(f"{label} host labels must not start or end with hyphen")
+        if not all(("a" <= ch <= "z") or ch.isdigit() or ch == "-" for ch in part):
+            raise AdapterError(
+                f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
+            )
+
+
+def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
+    path = parsed.path
+    if "\\" in path:
+        raise AdapterError(f"{label} path must use forward slashes")
+    if ";" in path:
+        raise AdapterError(f"{label} path must not contain semicolon parameters")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise AdapterError(f"{label} path must not contain dot segments")
+    lowered = path.lower()
+    if any(token in lowered for token in ("%2e", "%2f", "%5c")):
+        raise AdapterError(f"{label} path must not contain encoded dot or separator characters")
+    if "%25" in lowered:
+        raise AdapterError(f"{label} path must not contain encoded percent characters")
+
+
 def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
     _reject_url_control_chars(base_url, "Torii URL")
+    _reject_url_percent_encoding_smuggling(base_url, "Torii URL")
+    if base_url != base_url.strip():
+        raise AdapterError("Torii URL must not have surrounding whitespace")
+    if any(ch.isspace() for ch in base_url):
+        raise AdapterError("Torii URL must not contain whitespace")
     try:
         parsed = urllib.parse.urlparse(base_url)
         hostname = parsed.hostname
@@ -242,23 +496,38 @@ def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
                 f"refusing insecure HTTP Torii URL {base_url}; pass --allow-insecure-http for local tests"
             )
         raise AdapterError(f"Torii URL {base_url} must use http or https")
+    _validate_url_port(parsed, f"Torii URL {base_url}")
     if not parsed.netloc or hostname is None or not hostname.strip():
         raise AdapterError(f"Torii URL {base_url} must include a host")
     if parsed.username is not None or parsed.password is not None:
         raise AdapterError(f"Torii URL {base_url} must not contain credentials")
+    _validate_url_host(parsed, f"Torii URL {base_url}")
     if parsed.params or parsed.query or parsed.fragment:
         raise AdapterError(
             f"Torii URL {base_url} must not contain params, query, or fragment"
         )
+    _validate_url_path(parsed, f"Torii URL {base_url}")
     return base_url.rstrip("/")
 
 
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
-    token = path.read_text(encoding="utf-8").strip()
+    raw = _read_regular_file(path)
+    if len(raw) > MAX_BEARER_TOKEN_BYTES:
+        raise AdapterError(f"bearer token file {path} exceeds {MAX_BEARER_TOKEN_BYTES} bytes")
+    try:
+        token = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AdapterError(f"bearer token file {path} is not UTF-8") from error
     if not token:
         raise AdapterError(f"bearer token file {path} is empty")
+    if token != token.strip():
+        raise AdapterError(f"bearer token file {path} must not have surrounding whitespace")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in token):
+        raise AdapterError(f"bearer token file {path} must not contain control characters")
+    if any(ch.isspace() for ch in token):
+        raise AdapterError(f"bearer token file {path} must not contain whitespace")
     return token
 
 
@@ -368,17 +637,26 @@ def receipt_value(message: GatewayMessage, result: SubmitResult, endpoint_url: s
 def write_receipt(receipt_dir: Path, message: GatewayMessage, result: SubmitResult, endpoint_url: str) -> Path:
     """Write one submission receipt and return its path."""
 
-    receipt_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt = receipt_value(message, result, endpoint_url)
-    path = receipt_dir / f"{message.payload_sha256}.receipt.json"
-    path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    path = receipt_output_path(receipt_dir, message)
+    _write_text_output(path, json.dumps(receipt, indent=2) + "\n")
     return path
+
+
+def receipt_output_path(receipt_dir: Path, message: GatewayMessage) -> Path:
+    """Return the receipt path for one gateway message."""
+
+    return receipt_dir / f"{message.payload_sha256}.receipt.json"
 
 
 def run(args: argparse.Namespace) -> int:
     base_url = _validate_base_url(args.torii_base_url, args.allow_insecure_http)
-    inbox_dir = args.inbox_dir.resolve()
-    receipt_dir = (args.receipt_dir or inbox_dir / "receipts").resolve()
+    _ensure_input_directory(args.inbox_dir, "inbox_dir")
+    inbox_dir = args.inbox_dir
+    receipt_dir = _absolute_path_without_resolving_leaf(
+        args.receipt_dir or inbox_dir / "receipts"
+    )
     bearer_token = _load_bearer_token(args.bearer_token_file)
     paths = resolve_message_paths(inbox_dir, args.message)
     messages = [
@@ -400,6 +678,10 @@ def run(args: argparse.Namespace) -> int:
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
+
+    _ensure_output_directory(receipt_dir, "receipt_dir")
+    for message in messages:
+        _ensure_output_file_target(receipt_output_path(receipt_dir, message))
 
     failures = 0
     receipts: list[str] = []

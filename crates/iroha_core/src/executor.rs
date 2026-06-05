@@ -2726,19 +2726,29 @@ impl Executor {
             if let Some(ProofAttachmentList(list)) = transaction.attachments().cloned() {
                 // Canonicalize verification order for determinism
                 let mut list_sorted = list;
+                if list_sorted.is_empty() {
+                    return Err(ValidationFail::NotPermitted(
+                        "proof attachment list must not be empty".to_owned(),
+                    ));
+                }
                 list_sorted.sort_by(|a, b| {
                     let ah = crate::zk::hash_proof(&a.proof);
                     let bh = crate::zk::hash_proof(&b.proof);
                     (a.backend.as_str(), ah).cmp(&(b.backend.as_str(), bh))
                 });
-                for ProofAttachment {
-                    backend,
-                    proof,
-                    vk_ref,
-                    vk_commitment,
-                    ..
-                } in list_sorted.into_iter()
-                {
+                for attachment in list_sorted.into_iter() {
+                    if let Some((field, message)) = attachment.structural_error() {
+                        return Err(ValidationFail::NotPermitted(format!(
+                            "malformed proof attachment: {field} {message}"
+                        )));
+                    }
+                    let ProofAttachment {
+                        backend,
+                        proof,
+                        vk_ref,
+                        vk_commitment,
+                        ..
+                    } = attachment;
                     // Sanity: proof.backend should match attachment backend
                     if proof.backend != backend {
                         return Err(ValidationFail::NotPermitted(
@@ -2795,6 +2805,7 @@ impl Executor {
                     }
 
                     // Perform lightweight pre-verify (dedup + tag sanity).
+                    let block_height = state_transaction.block_height();
                     let (expected_commitment, vk_active) =
                         if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
                             if rec.backend.is_pending_production_backend() {
@@ -2810,7 +2821,7 @@ impl Executor {
                                     ));
                                 }
                             }
-                            (Some(rec.commitment), rec.is_active())
+                            (Some(rec.commitment), rec.is_active_at(block_height))
                         } else {
                             (vk_commitment, false)
                         };
@@ -6390,6 +6401,112 @@ mod tests {
 
     #[cfg(feature = "zk-preverify")]
     #[test]
+    fn preverify_attachments_enforce_verifying_key_height_window() {
+        use iroha_data_model::{
+            proof::{
+                ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
+                VerifyingKeyRecord,
+            },
+            transaction::{Executable, TransactionBuilder},
+            zk::{BackendTag, OpenVerifyEnvelope},
+        };
+        use iroha_schema::Ident;
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        fn execute_with_window(
+            activation_height: Option<u64>,
+            withdraw_height: Option<u64>,
+            block_height: u64,
+        ) -> Result<(), ValidationFail> {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let mut world = World::with([domain], [alice_account], []);
+
+            let backend: Ident = "halo2/ipa".parse().expect("backend ident");
+            let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
+            let vk_id = VerifyingKeyId::new(backend.clone(), "vk_height_window");
+            let vk_commitment = crate::zk::hash_vk(&vk);
+            let mut vk_record = VerifyingKeyRecord::new_with_owner(
+                1,
+                "height-window",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pasta",
+                [0xAA; 32],
+                vk_commitment,
+            );
+            vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+            vk_record.activation_height = activation_height;
+            vk_record.withdraw_height = withdraw_height;
+            vk_record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
+            vk_record.max_proof_bytes = 1024;
+            vk_record.key = Some(vk);
+            world.verifying_keys.insert(vk_id.clone(), vk_record);
+
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:height-window",
+                vk_commitment,
+                b"height-window-public-inputs".to_vec(),
+                vec![1u8, 2, 3],
+            );
+            let proof = ProofBox::new(
+                backend.clone(),
+                norito::to_bytes(&envelope).expect("encode preverify envelope"),
+            );
+            let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
+            attachment.vk_commitment = Some(vk_commitment);
+            let tx = TransactionBuilder::new("test-chain".parse().unwrap(), ALICE_ID.clone())
+                .with_executable(Executable::Instructions(Vec::new().into()))
+                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .sign(ALICE_KEYPAIR.private_key());
+
+            let state = State::new_with_chain(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+                ChainId::from("test-chain"),
+            );
+            let block_header = BlockHeader::new(
+                std::num::NonZeroU64::new(block_height).expect("nonzero block height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(block_header);
+            let mut state_tx = block.transaction();
+            let executor = super::Executor::Initial;
+            let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+            executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+        }
+
+        for (label, activation_height, withdraw_height, block_height) in [
+            ("future", Some(2), None, 1),
+            ("withdrawn", Some(1), Some(1), 1),
+            ("expired", Some(1), Some(2), 2),
+        ] {
+            let err = execute_with_window(activation_height, withdraw_height, block_height)
+                .expect_err("out-of-window verifying key must reject");
+            match err {
+                ValidationFail::NotPermitted(msg) => assert!(
+                    msg.contains("verifying key inactive"),
+                    "case {label}: unexpected error: {msg}"
+                ),
+                other => panic!("case {label}: unexpected error: {other:?}"),
+            }
+        }
+
+        execute_with_window(Some(1), Some(2), 1)
+            .expect("in-window active verifying key must preverify");
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
     fn preverify_attachments_reject_non_production_backend_labels_before_vk_lookup() {
         use iroha_data_model::{
             proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
@@ -6453,6 +6570,127 @@ mod tests {
                     );
                 }
                 other => panic!("unexpected error for {backend}: {other:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn preverify_attachments_reject_malformed_attachment_shapes_before_vk_lookup() {
+        use iroha_data_model::{
+            proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+            transaction::{Executable, TransactionBuilder},
+        };
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        let mut zero_vk_commitment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
+        );
+        zero_vk_commitment.vk_commitment = Some([0u8; 32]);
+
+        let mut zero_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
+        );
+        zero_envelope_hash.envelope_hash = Some([0u8; 32]);
+
+        let mut forged_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
+        );
+        let mut forged_hash: [u8; 32] =
+            iroha_crypto::Hash::new(&forged_envelope_hash.proof.bytes).into();
+        forged_hash[0] ^= 0x80;
+        forged_envelope_hash.envelope_hash = Some(forged_hash);
+
+        let cases = [
+            (
+                "empty-list",
+                ProofAttachmentList(Vec::new()),
+                "must not be empty",
+            ),
+            (
+                "proof-backend-mismatch",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
+                )]),
+                "proof.backend",
+            ),
+            (
+                "nonportable-vk-ref-name",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "VkPreverify"),
+                )]),
+                "vk_ref",
+            ),
+            (
+                "empty-proof-bytes",
+                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), Vec::new()),
+                    VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
+                )]),
+                "proof.bytes",
+            ),
+            (
+                "zero-vk-commitment",
+                ProofAttachmentList(vec![zero_vk_commitment]),
+                "vk_commitment",
+            ),
+            (
+                "zero-envelope-hash",
+                ProofAttachmentList(vec![zero_envelope_hash]),
+                "envelope_hash",
+            ),
+            (
+                "forged-envelope-hash",
+                ProofAttachmentList(vec![forged_envelope_hash]),
+                "envelope_hash",
+            ),
+        ];
+
+        for (label, attachments, expected_msg) in cases {
+            let tx = TransactionBuilder::new("test-chain".parse().unwrap(), ALICE_ID.clone())
+                .with_executable(Executable::Instructions(Vec::new().into()))
+                .with_attachments(attachments)
+                .sign(ALICE_KEYPAIR.private_key());
+
+            let mut state_tx = block.transaction();
+            let err = executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .expect_err("malformed proof attachment must fail before vk lookup");
+            match err {
+                ValidationFail::NotPermitted(msg) => {
+                    assert!(
+                        msg.contains(expected_msg),
+                        "case {label}: expected {expected_msg:?} in error message: {msg}"
+                    );
+                    assert!(
+                        !msg.contains("referenced verifying key missing"),
+                        "case {label}: malformed attachment shape must reject before vk lookup: {msg}"
+                    );
+                }
+                other => panic!("case {label}: unexpected error: {other:?}"),
             }
         }
     }

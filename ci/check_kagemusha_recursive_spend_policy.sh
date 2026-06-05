@@ -5,6 +5,9 @@ ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_POLICY_ROOT:-$(cd "$(dirname "${BASH_SOURC
 MODE="${1:-}"
 
 python3 - "$ROOT_DIR" "$MODE" <<'PY'
+import base64
+import hashlib
+import json
 import re
 import sys
 from fnmatch import fnmatchcase
@@ -24,6 +27,158 @@ DOC_PATHS = (
     "javascript/iroha_js/README.md",
     "python/iroha_python/README.md",
 )
+
+SHARED_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi6/manifest.json"
+SHARED_ARCHIVE_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi6/archives.json"
+
+SHARED_FIXTURE_COVERAGE = {
+    SHARED_FIXTURE_PATH: (
+        '"schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"',
+        '"archive_fixture"',
+        "archives.json",
+        '"operation_count": 9',
+        '"connect_norito_kagemusha_recursive_spend_init"',
+        '"connect_norito_kagemusha_recursive_spend_append"',
+        '"connect_norito_kagemusha_recursive_spend_transition_profile_init"',
+        '"connect_norito_kagemusha_recursive_spend_transition_profile_append"',
+        '"connect_norito_kagemusha_recursive_spend_lineage_append_boundary"',
+        '"connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result"',
+        '"connect_norito_kagemusha_recursive_spend_lineage_witness_append_result"',
+        '"connect_norito_kagemusha_recursive_spend_verify"',
+        '"connect_norito_kagemusha_recursive_spend_redeem"',
+        '"reserved_lineage_payload_bytes": 3847',
+        '"reserved_lineage_transition_profile_bytes": 2817',
+    ),
+    SHARED_ARCHIVE_FIXTURE_PATH: (
+        '"schema": "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"',
+        '"init_request"',
+        '"append_request"',
+        '"transition_profile_init"',
+        '"transition_profile_append"',
+        '"append_bundle"',
+        '"lineage_append_boundary"',
+        '"lineage_witness_from_init_result"',
+        '"lineage_witness_append_result"',
+        '"verify_request"',
+        '"verify_result"',
+        '"redeem_request"',
+        '"redeem_instruction"',
+        '"request_archive_fields"',
+        '"lineage_verifier_key"',
+        '"lineage_proving_key_archive"',
+        '"previous_recursive_proof_open_envelopes_archive"',
+        '"lineage_verifier_record"',
+        '"lineage_witness"',
+        '"block_height"',
+        '"KagemushaRecursiveSpendRedeemRequestV1"',
+        '"RedeemKagemushaRecursive"',
+        '"sha256_hex": "b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2"',
+        '"sha256_hex": "a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e"',
+    ),
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
+        "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
+        "fixtures",
+        "kagemusha_recursive_spend_abi6",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        "operation_count",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+        "lineage_witness",
+    ),
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+        "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
+        "kagemusha_recursive_spend_abi6",
+        "manifest.json",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        "operation_count",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+        "lineage_witness",
+    ),
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
+        "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
+        "kagemusha_recursive_spend_abi6",
+        "manifest.json",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        "operation_count",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+        "lineage_witness",
+    ),
+    "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+        "sharedRecursiveSpendManifest",
+        "fixtures/kagemusha_recursive_spend_abi6/manifest.json",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        "manifest.operation_count, 9",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+    ),
+    "python/iroha_python/tests/kagemusha_test.py": (
+        "test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface",
+        "kagemusha_recursive_spend_abi6",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        'manifest["operation_count"] == 9',
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+    ),
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+        "RecursiveSpendSharedAbi6FixtureMatchesSdkSurface",
+        "kagemusha_recursive_spend_abi6",
+        "archives.json",
+        "archive_fixtures",
+        "redeem_request",
+        "redeem_instruction",
+        "lineage_append_boundary",
+        'root.GetProperty("operation_count").GetInt32()',
+        "connect_norito_kagemusha_recursive_spend_redeem",
+        "reserved_lineage_payload_bytes",
+        "request_archive_fields",
+        "lineage_verifier_key",
+        "lineage_proving_key_archive",
+        "previous_recursive_proof_open_envelopes_archive",
+        "lineage_witness",
+    ),
+}
 
 ADVERSARIAL_COVERAGE = {
     "crates/iroha_data_model/src/offline/mod.rs": (
@@ -598,6 +753,96 @@ SDK_APPEND_CAP_BINDING_COVERAGE = {
     ),
 }
 
+NATIVE_OUTPUT_CAP_COVERAGE = {
+    "crates/connect_norito_bridge/src/lib.rs": (
+        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;",
+        "fn kagemusha_archive_out_of_bounds(len: usize) -> bool",
+        "len == 0 || len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        "unsafe fn write_kagemusha_archive_bridge",
+        "clear_bridge_output(out_ptr, out_len);",
+        "write_kagemusha_archive_bridge(out_bundle_ptr, out_bundle_len, &archive)",
+        "fn kagemusha_native_archive_writer_rejects_empty_and_oversized_outputs",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1",
+    ),
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
+        "case oversizedNativeOutput",
+        "public static let nativeArchiveMaxBytes = 64 * 1024 * 1024",
+        "guard archive.count <= nativeArchiveMaxBytes else",
+    ),
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
+        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 64 * 1024 * 1024",
+        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1",
+        ".oversizedNativeOutput",
+    ),
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java": (
+        "public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "output.length > NATIVE_ARCHIVE_MAX_BYTES",
+        "returned oversized output",
+    ),
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+        "KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1",
+        "native redeem returned oversized output",
+    ),
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt": (
+        "const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024",
+        "output.size <= NATIVE_ARCHIVE_MAX_BYTES",
+        "returned oversized output",
+    ),
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
+        "KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1",
+        "native redeem returned oversized output",
+    ),
+    "javascript/iroha_js/src/crypto.js": (
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        "returned oversized output",
+    ),
+    "javascript/iroha_js/dist/crypto.js": (
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        "returned oversized output",
+    ),
+    "javascript/iroha_js/src/crypto.browser.js": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+    ),
+    "javascript/iroha_js/dist/crypto.browser.js": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+    ),
+    "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1",
+        "native kagemushaRecursiveSpendRedeem returned oversized output",
+    ),
+    "javascript/iroha_js/test/package_dist.test.js": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        "64 * 1024 * 1024",
+    ),
+    "python/iroha_python/src/iroha_python/kagemusha.py": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+        '"KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"',
+        "len(output) > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        "returned oversized output",
+    ),
+    "python/iroha_python/src/iroha_python/__init__.py": (
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+    ),
+    "python/iroha_python/tests/kagemusha_test.py": (
+        "kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024",
+        "monkeypatch.setattr(kagemusha, \"KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES\", 2)",
+        "returned oversized output",
+    ),
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
+        "public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;",
+        "rawLength > NativeArchiveMaxBytes",
+        "returned oversized output",
+    ),
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+        "KagemushaRecursiveSpendNative.NativeArchiveMaxBytes",
+        "KagemushaRecursiveSpendNative.NativeArchiveMaxBytes + 1UL",
+        "oversized output",
+    ),
+}
+
 RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
     "crates/iroha_data_model/src/offline/mod.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
@@ -612,8 +857,13 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID",
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
         "kagemusha_recursive_spend_lineage_append_vk_record",
+        "derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive",
+        "derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+        "lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs",
+        "kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen",
         "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids",
         '"halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1"',
         '"halo2/pasta/kagemusha-recursive-spend-lineage-append-v1"',
@@ -743,12 +993,15 @@ PAYLOAD_BENCH_SOURCE_COVERAGE = {
 }
 WORKFLOW_REQUIRED_PATHS = (
     WORKFLOW_PATH,
+    SHARED_FIXTURE_PATH,
     *CI_GUARD_PATHS,
     *PAYLOAD_BENCH_REQUIRED_PATHS,
     *DOC_PATHS,
+    *SHARED_FIXTURE_COVERAGE.keys(),
     *ADVERSARIAL_COVERAGE.keys(),
     *SDK_HELPER_EDGE_COVERAGE.keys(),
     *SDK_APPEND_CAP_BINDING_COVERAGE.keys(),
+    *NATIVE_OUTPUT_CAP_COVERAGE.keys(),
     *RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE.keys(),
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
 )
@@ -818,6 +1071,18 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "SDK append cap constant-binding negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-append-cap-binding",
+    ),
+    (
+        "native output cap negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap",
+    ),
+    (
+        "shared ABI-6 fixture manifest negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-fixture-manifest",
+    ),
+    (
+        "shared ABI-6 archive fixture negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-archive-fixture",
     ),
     (
         "data-model append cap request-boundary negative control",
@@ -1223,12 +1488,13 @@ def check_core_redeem_execution_order():
         "let redeem_nullifiers =",
         "resolve_kagemusha_unshield_verifier(",
         "ensure_kagemusha_recursive_redeem_public_inputs(",
-        "crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(",
+        "let block_height = state_transaction.block_height();",
+        "crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record_at_height(",
         "register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())",
         "ensure_kagemusha_recursive_lineage_verifier_records_registered(",
-        "crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(",
+        "crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height(",
         "crate::zk::ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(",
-        "crate::zk::verify_kagemusha_recursive_spend_bundle_with_record(",
+        "crate::zk::verify_kagemusha_recursive_spend_bundle_with_record_at_height(",
         "state_transaction.register_nullifiers(redeem_nullifiers.len())",
         "state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())",
         "crate::zk::verify_backend_with_timing_checked(",
@@ -1478,6 +1744,194 @@ def require_normalized_needles(coverage, missing_message):
                 fail(f"{relative} {missing_message}: {needle}")
 
 
+def shared_fixture_manifest():
+    try:
+        return json.loads(read(SHARED_FIXTURE_PATH))
+    except json.JSONDecodeError as error:
+        fail(f"{SHARED_FIXTURE_PATH} is not valid JSON: {error}")
+
+
+def shared_archive_fixture_manifest():
+    try:
+        return json.loads(read(SHARED_ARCHIVE_FIXTURE_PATH))
+    except json.JSONDecodeError as error:
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} is not valid JSON: {error}")
+
+
+def check_shared_fixture_manifest():
+    manifest = shared_fixture_manifest()
+    expected_symbols = {
+        "connect_norito_kagemusha_recursive_spend_init",
+        "connect_norito_kagemusha_recursive_spend_append",
+        "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+        "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+        "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+        "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+        "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+        "connect_norito_kagemusha_recursive_spend_verify",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+    }
+    if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1":
+        fail(f"{SHARED_FIXTURE_PATH} has the wrong schema")
+    if manifest.get("bridge_abi_version") != 6:
+        fail(f"{SHARED_FIXTURE_PATH} must pin bridge ABI 6")
+    archive_fixture = manifest.get("archive_fixture", {})
+    if archive_fixture.get("path") != SHARED_ARCHIVE_FIXTURE_PATH:
+        fail(f"{SHARED_FIXTURE_PATH} must link the shared ABI-6 archive fixture")
+    if (
+        archive_fixture.get("schema")
+        != "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"
+    ):
+        fail(f"{SHARED_FIXTURE_PATH} must pin the shared ABI-6 archive schema")
+    operations = manifest.get("operations")
+    if not isinstance(operations, list):
+        fail(f"{SHARED_FIXTURE_PATH} must contain an operations list")
+    if manifest.get("operation_count") != len(operations) or len(operations) != 9:
+        fail(f"{SHARED_FIXTURE_PATH} must contain exactly nine ABI-6 operations")
+    symbols = {operation.get("symbol") for operation in operations if isinstance(operation, dict)}
+    if symbols != expected_symbols:
+        fail(f"{SHARED_FIXTURE_PATH} ABI-6 operation symbols drifted")
+    append_witness = next(
+        (
+            operation
+            for operation in operations
+            if isinstance(operation, dict)
+            and operation.get("name") == "lineage_witness_append_result"
+        ),
+        None,
+    )
+    if append_witness is None:
+        fail(f"{SHARED_FIXTURE_PATH} is missing the append lineage witness operation")
+    if append_witness.get("input_archives") != [
+        "KagemushaRecursiveSpendLineageWitnessV1",
+        "KagemushaRecursiveSpendAppendRequestV1",
+        "KagemushaRecursiveSpendBundleV1",
+    ]:
+        fail(f"{SHARED_FIXTURE_PATH} append lineage witness inputs drifted")
+
+    proof_circuit_ids = manifest.get("proof_circuit_ids", {})
+    for key, expected in (
+        ("recursive_aggregation", "kagemusha-recursive-aggregation-v1"),
+        ("reserved_lineage", "kagemusha-recursive-spend-lineage-v1"),
+        ("reserved_lineage_one_hop", "kagemusha-recursive-spend-lineage-onehop-v1"),
+        ("reserved_lineage_append", "kagemusha-recursive-spend-lineage-append-v1"),
+    ):
+        if proof_circuit_ids.get(key) != expected:
+            fail(f"{SHARED_FIXTURE_PATH} circuit id {key} drifted")
+
+    limits = manifest.get("limits", {})
+    expected_limits = {
+        "compact_token_max_hops": 64,
+        "reserved_lineage_witnessless_max_hops": 64,
+        "previous_proof_open_envelopes_required_count": 1,
+        "previous_proof_open_envelopes_max_bytes": 8 * 1024 * 1024,
+        "pallas_open_envelope_max_transcript_label_bytes": 128,
+        "native_archive_max_bytes": 64 * 1024 * 1024,
+    }
+    for key, expected in expected_limits.items():
+        if limits.get(key) != expected:
+            fail(f"{SHARED_FIXTURE_PATH} limit {key} drifted")
+
+    domains = manifest.get("domains", {})
+    for key, expected in (
+        ("transition_profile", "iroha:kagemusha:v1:recursive-spend-transition-profile"),
+        (
+            "lineage_append_boundary_final_note_binding",
+            "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
+        ),
+    ):
+        if domains.get(key) != expected:
+            fail(f"{SHARED_FIXTURE_PATH} domain {key} drifted")
+
+    benchmarks = manifest.get("payload_benchmarks", {})
+    for key, expected in (
+        ("semantic_payload_bytes", 1751),
+        ("semantic_payload_max_bytes", 2048),
+        ("semantic_transition_profile_bytes", 2094),
+        ("semantic_transition_profile_max_bytes", 3072),
+        ("reserved_lineage_payload_bytes", 3847),
+        ("reserved_lineage_payload_max_bytes", 8192),
+        ("reserved_lineage_transition_profile_bytes", 2817),
+        ("reserved_lineage_transition_profile_max_bytes", 4096),
+    ):
+        if benchmarks.get(key) != expected:
+            fail(f"{SHARED_FIXTURE_PATH} payload benchmark {key} drifted")
+
+    if benchmarks.get("hops") != [1, 2, 3, 5, 8, 13, 21, 34, 55, 64]:
+        fail(f"{SHARED_FIXTURE_PATH} benchmark hop series drifted")
+
+    require_normalized_needles(
+        SHARED_FIXTURE_COVERAGE,
+        "is missing shared recursive spend ABI-6 fixture coverage",
+    )
+
+
+def check_shared_archive_fixture_manifest():
+    manifest = shared_archive_fixture_manifest()
+    if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1":
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} has the wrong schema")
+    if manifest.get("bridge_abi_version") != 6:
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} must pin bridge ABI 6")
+    archives = manifest.get("archives")
+    if not isinstance(archives, list):
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} must contain an archives list")
+    expected = {
+        "init_request": ("init", "KagemushaRecursiveSpendInitRequestV1"),
+        "init_bundle": ("init", "KagemushaRecursiveSpendBundleV1"),
+        "transition_profile_init": (
+            "transition_profile_init",
+            "KagemushaRecursiveSpendTransitionProfileV1",
+        ),
+        "append_request": ("append", "KagemushaRecursiveSpendAppendRequestV1"),
+        "append_bundle": ("append", "KagemushaRecursiveSpendBundleV1"),
+        "transition_profile_append": (
+            "transition_profile_append",
+            "KagemushaRecursiveSpendTransitionProfileV1",
+        ),
+        "lineage_append_boundary": (
+            "lineage_append_boundary",
+            "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+        ),
+        "lineage_witness_from_init_result": (
+            "lineage_witness_from_init_result",
+            "KagemushaRecursiveSpendLineageWitnessV1",
+        ),
+        "lineage_witness_append_result": (
+            "lineage_witness_append_result",
+            "KagemushaRecursiveSpendLineageWitnessV1",
+        ),
+        "verify_request": ("verify", "KagemushaRecursiveSpendVerifyRequestV1"),
+        "verify_result": ("verify", "KagemushaRecursiveSpendVerifyResultV1"),
+        "redeem_request": ("redeem", "KagemushaRecursiveSpendRedeemRequestV1"),
+        "redeem_instruction": ("redeem", "RedeemKagemushaRecursive"),
+    }
+    by_name = {
+        archive.get("name"): archive
+        for archive in archives
+        if isinstance(archive, dict)
+    }
+    if set(by_name) != set(expected):
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} archive names drifted")
+    for name, (operation, norito_type) in expected.items():
+        archive = by_name[name]
+        if archive.get("operation") != operation:
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} operation for {name} drifted")
+        if archive.get("norito_type") != norito_type:
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} Norito type for {name} drifted")
+        payload_b64 = archive.get("bytes_base64")
+        if not isinstance(payload_b64, str) or not payload_b64:
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} {name} is missing bytes_base64")
+        try:
+            payload = base64.b64decode(payload_b64, validate=True)
+        except ValueError as error:
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} {name} has invalid base64: {error}")
+        if archive.get("byte_len") != len(payload):
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} byte_len for {name} does not match bytes")
+        sha256_hex = archive.get("sha256_hex")
+        if sha256_hex != hashlib.sha256(payload).hexdigest():
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} sha256 for {name} does not match bytes")
+
+
 def check_adversarial_coverage():
     require_needles(
         ADVERSARIAL_COVERAGE,
@@ -1496,6 +1950,13 @@ def check_sdk_append_cap_binding_coverage():
     require_normalized_needles(
         SDK_APPEND_CAP_BINDING_COVERAGE,
         "is missing SDK Reserved-lineage append cap constant binding",
+    )
+
+
+def check_native_output_cap_coverage():
+    require_normalized_needles(
+        NATIVE_OUTPUT_CAP_COVERAGE,
+        "is missing native Kagemusha output cap coverage",
     )
 
 
@@ -1531,9 +1992,12 @@ def run_checks():
     check_core_redeem_execution_order()
     check_rust_reserved_lineage_policy()
     check_docs_reserved_lineage_policy()
+    check_shared_fixture_manifest()
+    check_shared_archive_fixture_manifest()
     check_adversarial_coverage()
     check_sdk_helper_edge_coverage()
     check_sdk_append_cap_binding_coverage()
+    check_native_output_cap_coverage()
     check_reserved_lineage_profile_split_coverage()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
@@ -1680,6 +2144,59 @@ if mode == "--negative-control-sdk-append-cap-binding":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK append cap binding drift was not detected")
+
+if mode == "--negative-control-native-output-cap":
+    target = "javascript/iroha_js/src/crypto.js"
+    source = read(target)
+    mutated = source.replace(
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024;",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate native output cap coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected native Kagemusha output cap drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: native output cap drift was not detected")
+
+if mode == "--negative-control-shared-fixture-manifest":
+    target = SHARED_FIXTURE_PATH
+    source = read(target)
+    mutated = source.replace('"operation_count": 9', '"operation_count": 8', 1)
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate shared fixture manifest")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected shared recursive spend ABI-6 fixture drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared fixture manifest drift was not detected")
+
+if mode == "--negative-control-shared-archive-fixture":
+    target = SHARED_ARCHIVE_FIXTURE_PATH
+    source = read(target)
+    mutated = source.replace(
+        '"sha256_hex": "b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2"',
+        '"sha256_hex": "003b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2"',
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate shared archive fixture")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected shared recursive spend ABI-6 archive drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: shared archive fixture drift was not detected")
 
 if mode == "--negative-control-data-model-append-cap-boundary":
     target = "crates/iroha_data_model/src/offline/mod.rs"

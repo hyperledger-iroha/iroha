@@ -23,9 +23,12 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import errno
 import hashlib
 import ipaddress
 import json
+import os
+import stat
 import sys
 import urllib.parse
 from dataclasses import dataclass
@@ -100,14 +103,93 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _load_json(path: Path) -> Any:
+def _read_regular_file(path: Path) -> bytes:
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-        )
+        mode = path.lstat().st_mode
     except FileNotFoundError as error:
         raise TrustBundleError(f"{path} does not exist") from error
+    if stat.S_ISLNK(mode):
+        raise TrustBundleError(f"{path} must not be a symlink")
+    if not stat.S_ISREG(mode):
+        raise TrustBundleError(f"{path} must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise TrustBundleError(f"{path} must be a regular file")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except FileNotFoundError as error:
+        raise TrustBundleError(f"{path} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise TrustBundleError(f"{path} must not be a symlink") from error
+        raise TrustBundleError(f"cannot open {path} for reading: {error.strerror}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _write_text_output(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise TrustBundleError(f"{path.parent} must be a directory") from error
+    parent_mode = path.parent.lstat().st_mode
+    if stat.S_ISLNK(parent_mode):
+        raise TrustBundleError(f"{path.parent} must not be a symlink")
+    if not stat.S_ISDIR(parent_mode):
+        raise TrustBundleError(f"{path.parent} must be a directory")
+    if path.exists() or path.is_symlink():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise TrustBundleError(f"{path} must not be a symlink")
+        if not stat.S_ISREG(mode):
+            raise TrustBundleError(f"{path} must be a regular file")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, parent_flags | nofollow)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise TrustBundleError(f"{path.parent} must not be a symlink") from error
+        raise TrustBundleError(f"{path.parent} must be a directory") from error
+
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise TrustBundleError(f"{path} must not be a symlink") from error
+            raise TrustBundleError(
+                f"cannot open {path} for writing: {error.strerror}"
+            ) from error
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise TrustBundleError(f"{path} must be a regular file")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        raw = _read_regular_file(path)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise TrustBundleError(f"{path} is not UTF-8 JSON") from error
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise TrustBundleError(f"{path} is not valid JSON: {error}") from error
 
@@ -159,12 +241,31 @@ def _reject_ascii_control(value: str, label: str) -> None:
         raise TrustBundleError(f"{label} must not contain ASCII control characters")
 
 
+def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
+    index = 0
+    while True:
+        index = url.find("%", index)
+        if index == -1:
+            return
+        token = url[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise TrustBundleError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise TrustBundleError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        index += 3
+
+
 def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string")
     _reject_ascii_control(raw, f"{label}.{key}")
-    return raw.strip()
+    if raw != raw.strip():
+        raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
 
 
 def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None:
@@ -174,7 +275,9 @@ def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
     _reject_ascii_control(raw, f"{label}.{key}")
-    return raw.strip()
+    if raw != raw.strip():
+        raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
 
 
 def _required_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
@@ -209,7 +312,9 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     for offset, item in enumerate(raw):
         if not isinstance(item, str):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a SHA-256 string")
-        digest = _validate_sha256(item.strip(), f"{label}.{key}[{offset}]")
+        if item != item.strip():
+            raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+        digest = _validate_sha256(item, f"{label}.{key}[{offset}]")
         if digest in seen:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256 {digest}")
         seen.add(digest)
@@ -226,7 +331,9 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     for offset, item in enumerate(raw):
         if not isinstance(item, str):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
-        value = item.strip()
+        if item != item.strip():
+            raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+        value = item
         if not _valid_oid(value):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
         if value in seen:
@@ -458,7 +565,11 @@ def _der_objects(
         if declared_digest is not None:
             if not isinstance(declared_digest, str):
                 raise TrustBundleError(f"{label}.{key}[{offset}].sha256 must be a string")
-            if _validate_sha256(declared_digest.strip(), f"{label}.{key}[{offset}].sha256") != digest:
+            if declared_digest != declared_digest.strip():
+                raise TrustBundleError(
+                    f"{label}.{key}[{offset}].sha256 must not have surrounding whitespace"
+                )
+            if _validate_sha256(declared_digest, f"{label}.{key}[{offset}].sha256") != digest:
                 raise TrustBundleError(f"{label}.{key}[{offset}].sha256 does not match der_base64")
         if digest in seen:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates DER SHA-256 {digest}")
@@ -475,10 +586,14 @@ def _der_objects(
     return entries, base64_values
 
 
-def _source(bundle: dict[str, Any], label: str, allow_insecure_source_url: bool) -> dict[str, Any] | None:
+def _source(
+    bundle: dict[str, Any],
+    label: str,
+    allow_insecure_source_url: bool,
+) -> dict[str, Any]:
     raw = bundle.get("source")
     if raw is None:
-        return None
+        raise TrustBundleError(f"{label}.source is required")
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
     normalized: dict[str, Any] = {}
@@ -486,18 +601,16 @@ def _source(bundle: dict[str, Any], label: str, allow_insecure_source_url: bool)
         value = _optional_string(source, key, f"{label}.source")
         if value is not None:
             normalized[key] = value
-    retrieved_at = _optional_string(source, "retrieved_at", f"{label}.source")
-    if retrieved_at is not None:
-        _validate_retrieved_at(retrieved_at, f"{label}.source.retrieved_at")
-        normalized["retrieved_at"] = retrieved_at
-    url = _optional_string(source, "url", f"{label}.source")
-    if url is not None:
-        _validate_source_url(
-            url,
-            f"{label}.source.url",
-            allow_insecure_source_url=allow_insecure_source_url,
-        )
-        normalized["url"] = url
+    retrieved_at = _required_string(source, "retrieved_at", f"{label}.source")
+    _validate_retrieved_at(retrieved_at, f"{label}.source.retrieved_at")
+    normalized["retrieved_at"] = retrieved_at
+    url = _required_string(source, "url", f"{label}.source")
+    _validate_source_url(
+        url,
+        f"{label}.source.url",
+        allow_insecure_source_url=allow_insecure_source_url,
+    )
+    normalized["url"] = url
     return normalized
 
 
@@ -521,6 +634,9 @@ def _validate_source_url(
     allow_insecure_source_url: bool,
 ) -> None:
     _reject_ascii_control(url, label)
+    _reject_url_percent_encoding_smuggling(url, label)
+    if any(ch.isspace() for ch in url):
+        raise TrustBundleError(f"{label} must not contain whitespace")
     try:
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
@@ -528,12 +644,29 @@ def _validate_source_url(
         raise TrustBundleError(f"{label} is malformed") from error
     if parsed.scheme != "https" and not (parsed.scheme == "http" and allow_insecure_source_url):
         raise TrustBundleError(f"{label} must use HTTPS")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise TrustBundleError(f"{label} has invalid port: {error}") from error
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        raise TrustBundleError(f"{label} must not explicitly specify the default port")
     if not parsed.netloc or hostname is None:
         raise TrustBundleError(f"{label} must include a host")
     if parsed.username is not None or parsed.password is not None:
         raise TrustBundleError(f"{label} must not contain credentials")
+    raw_host = _raw_url_host(parsed)
+    if "%" in raw_host:
+        raise TrustBundleError(f"{label} host must not contain percent escapes")
+    if raw_host != raw_host.lower():
+        raise TrustBundleError(f"{label} host must be lowercase")
+    if raw_host.endswith("."):
+        raise TrustBundleError(f"{label} host must not end with a dot")
+    _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise TrustBundleError(f"{label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, label)
     hostname = hostname.strip().lower()
     if not hostname:
         raise TrustBundleError(f"{label} must include a host")
@@ -546,6 +679,54 @@ def _validate_source_url(
             return
         if not address.is_global:
             raise TrustBundleError(f"{label} must not use local, private, or reserved IP addresses")
+
+
+def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket != -1:
+            return netloc[1:bracket]
+    return netloc.rsplit(":", 1)[0]
+
+
+def _validate_host_labels(raw_host: str, label: str) -> None:
+    try:
+        ipaddress.ip_address(raw_host)
+        return
+    except ValueError:
+        pass
+    if ":" in raw_host:
+        raise TrustBundleError(f"{label} host must be a valid IP address")
+    labels = raw_host.split(".")
+    if any(not part for part in labels):
+        raise TrustBundleError(f"{label} host must not contain empty labels")
+    if all(part.isdigit() for part in labels):
+        raise TrustBundleError(f"{label} numeric host labels must be a valid IP address")
+    for part in labels:
+        if len(part) > 63:
+            raise TrustBundleError(f"{label} host labels must be at most 63 characters")
+        if part.startswith("-") or part.endswith("-"):
+            raise TrustBundleError(f"{label} host labels must not start or end with hyphen")
+        if not all(("a" <= ch <= "z") or ch.isdigit() or ch == "-" for ch in part):
+            raise TrustBundleError(
+                f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
+            )
+
+
+def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
+    path = parsed.path
+    if "\\" in path:
+        raise TrustBundleError(f"{label} path must use forward slashes")
+    if ";" in path:
+        raise TrustBundleError(f"{label} path must not contain semicolon parameters")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise TrustBundleError(f"{label} path must not contain dot segments")
+    lowered = path.lower()
+    if any(token in lowered for token in ("%2e", "%2f", "%5c")):
+        raise TrustBundleError(f"{label} path must not contain encoded dot or separator characters")
+    if "%25" in lowered:
+        raise TrustBundleError(f"{label} path must not contain encoded percent characters")
 
 
 def _merge_unique(values: list[str], additions: list[str], label: str) -> list[str]:
@@ -563,6 +744,33 @@ def _reject_overlap(left: list[str], right: list[str], label: str) -> None:
     overlap = sorted(set(left) & set(right))
     if overlap:
         raise TrustBundleError(f"{label} contains conflicting SHA-256 {overlap[0]}")
+
+
+def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, path in enumerate(paths):
+        key = str(path)
+        if key in seen:
+            raise TrustBundleError(
+                f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}"
+            )
+        seen[key] = offset
+
+
+def _reject_duplicate_summary_field(
+    summaries: list[dict[str, Any]],
+    field: str,
+    label: str,
+) -> None:
+    seen: dict[str, int] = {}
+    for offset, summary in enumerate(summaries):
+        value = summary[field]
+        if value in seen:
+            raise TrustBundleError(
+                f"{label}[{offset}].{field} duplicates "
+                f"{label}[{seen[value]}].{field}: {value}"
+            )
+        seen[value] = offset
 
 
 def verify_bundle(
@@ -733,15 +941,31 @@ def run(args: argparse.Namespace) -> int:
             "--allow-synthetic-der cannot be combined with --emit-profile-json; "
             "replace template DER with real rail material before emitting profile overrides"
         )
+    if (
+        args.summary_out is not None
+        and args.emit_profile_json is not None
+        and args.summary_out.resolve() == args.emit_profile_json.resolve()
+    ):
+        raise TrustBundleError("--summary-out and --emit-profile-json must be different paths")
+    bundle_paths = list(args.bundle)
+    _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
     summaries = [
         verify_bundle(
-            path.resolve(),
+            path,
             allow_record_only=args.allow_record_only,
             allow_insecure_source_url=args.allow_insecure_source_url,
             allow_synthetic_der=args.allow_synthetic_der,
         )
-        for path in args.bundle
+        for path in bundle_paths
     ]
+    _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
+    _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
+    profile_text = None
+    profile_json_sha256 = None
+    if args.emit_profile_json is not None:
+        profile_config = [summary["profile_overrides"] for summary in summaries]
+        profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
+        profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
     output: dict[str, Any] = {
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "verified_bundles": len(summaries),
@@ -750,22 +974,16 @@ def run(args: argparse.Namespace) -> int:
         "allow_synthetic_der": args.allow_synthetic_der,
         "profile_json_emitted": args.emit_profile_json is not None,
         "profile_json_emittable": not args.allow_synthetic_der,
+        "profile_json_sha256": profile_json_sha256,
         "bundles": summaries,
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+    if profile_text is not None:
+        _write_text_output(args.emit_profile_json, profile_text)
     if args.summary_out is not None:
-        args.summary_out.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_out.write_text(text, encoding="utf-8")
+        _write_text_output(args.summary_out, text)
     print(text, end="")
-
-    if args.emit_profile_json is not None:
-        profile_config = [summary["profile_overrides"] for summary in summaries]
-        args.emit_profile_json.parent.mkdir(parents=True, exist_ok=True)
-        args.emit_profile_json.write_text(
-            json.dumps(profile_config, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
     return 0
 
 

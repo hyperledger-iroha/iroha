@@ -51,6 +51,7 @@ public static class KagemushaRecursiveSpendNative
     public const int RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1;
     public const int RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024;
     public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;
+    public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;
     public const string RecursiveSpendTransitionProfileDomain =
         "iroha:kagemusha:v1:recursive-spend-transition-profile";
     public const string RecursiveSpendTransitionProfileDigestDomain =
@@ -468,7 +469,12 @@ public static class KagemushaRecursiveSpendNative
         var shouldFree = outPtr != IntPtr.Zero;
         try
         {
-            var length = checked((int)outLen.ToUInt64());
+            var rawLength = outLen.ToUInt64();
+            if (rawLength > NativeArchiveMaxBytes)
+            {
+                throw new InvalidOperationException($"{symbol} returned oversized output.");
+            }
+            var length = (int)rawLength;
             if (length == 0)
             {
                 throw new InvalidOperationException($"{symbol} returned empty output.");

@@ -1,6 +1,910 @@
 # Status
 
-Last updated: 2026-06-04
+Last updated: 2026-06-05
+
+## 2026-06-05 Kagemusha recursive spend transition-profile request height tests
+
+- Added C FFI, Python native, and JS host regressions for recursive spend
+  transition-profile init and append request archives carrying windowed
+  current-hop verifier records.
+- The new tests prove height-unbound requests fail closed, future and withdrawn
+  heights reject as inactive, and an exact in-window `block_height` produces
+  the expected init or append transition profile.
+- Hardened existing append transition-profile test fixtures so mutated
+  previous accumulators always preserve a real root transition before
+  recomputing recursive public inputs.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge kagemusha_recursive_spend_transition_profile_ --lib -- --test-threads=1`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_python_rs kagemusha_recursive_spend_transition_profile_ --lib -- --test-threads=1`
+    (`3` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host kagemusha_recursive_spend_transition_profile_ --lib -- --test-threads=1`
+    (`3` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend SDK/native request height bridge
+
+- Added optional defaulted `block_height` to recursive spend init, append,
+  verify, and redeem Norito request archives so SDK/native callers can bind
+  verifier-record activity checks to an exact chain height without breaking
+  legacy archives.
+- Routed C FFI, Python native, and JS host recursive spend init, append,
+  transition-profile, verify, and redeem entrypoints through height-aware Rust
+  proof/verification APIs when `block_height` is present; legacy callers retain
+  fail-closed no-height behavior for windowed verifier records.
+- Added C bridge, Python native, and JS host regressions covering no-height,
+  future, in-window, and withdrawn Reserved-lineage verifier records at the
+  request archive boundary.
+- Extended ABI compatibility coverage for legacy init, append, verify, and
+  redeem request prefixes, then regenerated the shared recursive spend ABI-6
+  archive fixture.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge kagemusha_recursive_spend_verify_ffi_enforces_request_block_height --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_python_rs kagemusha_recursive_spend_verify_python_function_enforces_request_block_height --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host kagemusha_recursive_spend_verify_enforces_request_block_height --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend init record-bundle height gate
+
+- Added height-aware recursive spend init builders for record-bundle plus
+  Pallas open-envelope archives, including Reserved-lineage runtime-keygen and
+  packaged-key entrypoints.
+- Routed init evidence derivation through the shared optional-height
+  verifier-record guard, so existing no-height callers fail closed for
+  windowed hop verifier records while chain-height-aware callers can prove
+  exactly in-window records.
+- Added a fast init regression covering no-height, future, in-window, and
+  withdrawn hop verifier-record windows before recursive proof generation.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_spend_init_record_bundle_enforces_height_window_before_proving --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive aggregation Pallas height wrappers
+
+- Added height-aware record-backed recursive aggregation evidence wrappers for
+  native Pallas batches, proof-derived Pallas open envelopes, and archived
+  Pallas open envelopes.
+- Added matching height-aware recursive aggregation proof-bundle builders for
+  bundle-with-records and serializable record-bundle entrypoints.
+- Routed the Pallas batch and open-envelope evidence paths through the shared
+  optional-height verifier-record guard, preserving fail-closed no-height
+  behavior for windowed hop verifier records while allowing exact in-window
+  evidence derivation.
+- Extended the Pallas open-envelope evidence regression to cover no-height,
+  future, in-window, withdrawn, and archive-at-height verifier-record cases.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_open_envelopes_accepts_active_records --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend append previous-record height gate
+
+- Added height-aware recursive spend append builders:
+  `prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height`
+  and
+  `prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive_at_height`.
+- Routed previous Reserved-lineage proof checks through the shared
+  optional-height verifier-record guard, while keeping existing append APIs
+  fail-closed when the previous lineage verifier record has activation or
+  withdrawal windows and no chain height is supplied.
+- Tightened append diagnostics so previous Reserved-lineage bundle
+  preverification propagates exact activity/binding errors before falling back
+  to the generic backend proof verification failure.
+- Added a fast synthetic append regression proving no-height, future, and
+  withdrawn previous lineage records reject before current-hop archive parsing
+  or backend verification, while an in-window record reaches backend proof
+  rejection.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_spend_append_previous_lineage_record_enforces_height_window_before_backend --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend chain-height admission gate
+
+- Added height-aware record-backed recursive spend lineage APIs:
+  `verify_kagemusha_recursive_spend_lineage_witness_with_record_at_height`,
+  `verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height`,
+  `verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_height`,
+  and `kagemusha_recursive_spend_verify_result_with_lineage_record_at_height`.
+- Routed lineage witness replay and final record-backed recursive spend proof
+  verification through the same optional-height verifier-record activity guard,
+  so height-unbound callers still fail closed for windowed records while
+  chain-height-aware callers can verify in-window records.
+- Hardened `RedeemKagemushaRecursive` execution to evaluate recursive spend
+  verifier records at `state_transaction.block_height()` for preverify,
+  lineage witness replay, and final proof verification.
+- Added a fast Reserved-lineage verify-result regression proving no-height,
+  future, and withdrawn verifier records fail with activity diagnostics before
+  backend verification, while an in-window synthetic record reaches the normal
+  backend proof rejection path.
+- Validation:
+  - Cleared generated `target/debug/incremental` after the first focused Cargo
+    test failed during linking with `No space left on device`; this freed local
+    build-cache space only.
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_enforces_height_window_before_decoding --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_spend_lineage_verify_result_enforces_height_window_before_backend --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend record preverify height-window gate
+
+- Hardened `preverify_kagemusha_recursive_spend_bundle_with_record` so
+  height-unbound callers fail closed when semantic or Reserved-lineage verifier
+  records carry `activation_height` or `withdraw_height`.
+- Added `preverify_kagemusha_recursive_spend_bundle_with_record_at_height` and
+  `verify_kagemusha_recursive_spend_bundle_with_record_at_height` for exact
+  chain-height-aware recursive spend verification.
+- Added a fast synthetic recursive-spend regression proving height-unbound,
+  future, and withdrawn records fail before backend verification, while an
+  in-window verifier record passes preverify with a canonical OpenVerify
+  envelope fixture.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_enforces_height_window_before_decoding --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive aggregation record preverify height-window gate
+
+- Added a shared error-returning Kagemusha verifier-record activity guard for
+  record-backed proof preverify paths.
+- Hardened
+  `preverify_kagemusha_recursive_aggregation_proof_bundle_with_record` so
+  height-unbound callers fail closed on verifier records carrying
+  `activation_height` or `withdraw_height`.
+- Added
+  `preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height`
+  and
+  `verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height`
+  for exact chain-height-aware recursive aggregation verification.
+- Extended the recursive aggregation registry-mismatch test with windowed,
+  future, withdrawn-at-boundary, expired, and in-window verifier-record cases.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_recursive_aggregation_proof_record_preverify_rejects_registry_mismatches --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha compact-token record verifier height-window gate
+
+- Hardened `verify_kagemusha_compact_payment_token_with_record` so a
+  height-unbound caller fails closed when the verifier record carries
+  `activation_height` or `withdraw_height`.
+- Added `verify_kagemusha_compact_payment_token_with_record_at_height`, which
+  evaluates the folded verifier record with `VerifyingKeyRecord::is_active_at`
+  before proof decoding or backend verification.
+- Added a lightweight malformed-proof regression proving height-unbound,
+  future, and withdrawn folded verifier records are rejected before the compact
+  token proof can be decoded; kept the existing wrong-curve predecode guard
+  passing.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_compact_payment_token_record_verifier_enforces_height_window_before_decoding --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_compact_payment_token_record_verifier_rejects_wrong_curve_before_decoding --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Confidential VK-set digest height-window gate
+
+- Hardened `compute_confidential_feature_digest` so `vk_set_hash` uses the
+  same height-effective predicate already used for Pedersen and Poseidon
+  registry parameters.
+- Added `compute_vk_set_hash_at_height` for callers that need the deterministic
+  verifier-key set hash at an exact block height, while preserving the existing
+  status-only helper for legacy/unheighted callers.
+- Added a regression proving an `Active` verifier key with a future
+  `activation_height` is excluded before activation, included in-window, and
+  excluded at `withdraw_height`; the existing projected activation test still
+  passes.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core confidential_digest_excludes_active_vk_outside_height_window --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core confidential_digest_respects_activation_height --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha verifier-record height-window gate
+
+- Hardened record-backed Kagemusha fold verification so verifier records with
+  `activation_height` or `withdraw_height` fail closed unless the caller uses an
+  explicit chain-height-aware entrypoint.
+- Added height-aware folded-public-input and recursive-evidence wrappers, plus
+  compact-token prover wrappers that verify hop records at a supplied block
+  height before proof/evidence construction.
+- Added adversarial tests for height-unbound windowed records, future records,
+  withdrawn-at-boundary records, and expired records; in-window records are
+  accepted through both direct record slices and serializable record bundles.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_rejects_records_and_tampered_hops --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Privacy verifier-key height-window preverify gate
+
+- Added `VerifyingKeyRecord::is_active_at(height)` so verifier-key activity
+  applies both governance status and the exact height window
+  `activation_height <= height < withdraw_height`.
+- Hardened executor proof-attachment preverify to evaluate verifier-key
+  activity at the transaction block height before invoking the shared ZK
+  preverify primitive.
+- Added data-model and executor regression coverage proving future, withdrawn,
+  and expired verifier-key records fail closed as `verifying key inactive`,
+  while an in-window record verifies successfully.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model verifying_key_record_active_at_respects_height_window --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features zk-preverify preverify_attachments_enforce_verifying_key_height_window --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile or Python bytecode drift. A separate
+  `connect_norito_bridge` Cargo test was active during validation and was not
+  interrupted.
+
+## 2026-06-05 ISO evidence artifact gates
+
+- Hardened `scripts/iso_operator_evidence_verify.py` so production trust evidence
+  must prove the trust-bundle verifier actually emitted profile override JSON.
+  The gate now requires `profile_json_emitted=true` and
+  `profile_json_emittable=true` by default, requires lowercase
+  `profile_json_sha256` for emitted profile override bodies, recomputes that
+  digest from the archived `profile_overrides`, preserves those fields in the
+  compact evidence summary, and only accepts a missing emitted profile artifact
+  with the diagnostic `--allow-profile-json-not-emitted` override.
+- Hardened `scripts/iso_operator_evidence_verify.py` so production evidence now
+  requires direct receipt archive verification from `--receipt` or
+  `--receipt-dir` by default, and requires the direct archive's
+  `receipt_sha256` entries to cover every canary receipt-summary digest with the
+  same receipt kind. Receipt summaries must also carry duplicate-free
+  `receipt_kind` lists. Summary-only canary-stage receipt evidence requires the
+  local `--allow-canary-stage-receipts-only` override, which is recorded in the
+  digest-bound evidence policy.
+- Hardened `scripts/iso_operator_receipt_verify.py` so notary `anchor_path`
+  metadata must keep the `latest.notary.json` or digest-addressed
+  `anchors/<index_sha256>.notary.json` shape before the verifier considers
+  whether source files are required. Source-missing diagnostic runs can no
+  longer summarize receipts that point at malformed missing notary anchors.
+- Hardened `scripts/iso_audit_notary_adapter.py` and
+  `scripts/iso_operator_receipt_verify.py` so digest-correct notary source
+  anchors and audit indexes fail closed on unknown top-level fields before
+  publication or receipt source re-verification.
+- Hardened nested notary audit index records so digest-correct source evidence
+  now rejects unknown record fields, malformed required strings, malformed
+  timestamp fields, and non-canonical payload hashes before publication or
+  receipt source re-verification. Audit record filenames must also match the
+  Torii producer contract, `sha256(message_id).json`, so digest-correct indexes
+  cannot point records at spoofed filenames.
+- Hardened persisted notary record-source verification so available
+  `store_dir/messages/<sha256(message_id)>.json` bodies must carry a valid
+  `record_sha256` and match the audit-index row before publication or receipt
+  source re-verification. The notary adapter now requires `store_dir/messages`
+  record sources for non-empty anchors by default and only permits source-less
+  anchor-only publication with the diagnostic `--allow-missing-record-sources`
+  override. The evidence verifier explicitly rejects archived notary child
+  commands that contain that local diagnostic flag, so source-less anchors
+  cannot be promoted into production evidence. Receipt verification with
+  `--require-source-files` now requires `store_dir` for non-empty notary indexes
+  and rejects missing record files, internally digest-correct source/body
+  mismatches, metadata row drift, and persisted-state-derived `pacs002_code`
+  drift.
+- Hardened `scripts/iso_trust_bundle_verify.py` so `--emit-profile-json` writes
+  the profile override JSON before any summary is emitted, rejects
+  `--summary-out` and `--emit-profile-json` pointing at the same path, and records
+  `profile_json_sha256` for the exact emitted body. A failed profile write now
+  leaves no digest-bound summary file or stdout summary claiming emission.
+- Hardened `scripts/iso_production_readiness.py` so
+  `allow_profile_json_not_emitted=true` is a non-production evidence policy
+  blocker and compact trust summaries with `profile_json_emitted=false` or
+  `profile_json_emittable=false` block the release rollup. Compact trust
+  summaries with missing, malformed, or smuggled profile JSON digests are
+  malformed input. The rollup also treats
+  `allow_canary_stage_receipts_only=true` as non-production unless the local
+  readiness diagnostic flag explicitly permits stage-only receipt evidence, and
+  blocks digest-correct but unbound evidence with
+  `evidence.archive_receipt_missing_canary_digest` when direct archive receipt
+  digests no longer cover canary receipt-summary digests,
+  `evidence.archive_receipt_unreferenced_digest` when the direct archive
+  contains unrelated receipt digests that no canary references, or
+  `evidence.archive_receipt_canary_kind_mismatch` when the canary summary
+  relabels a covered archive receipt digest to a different kind. Duplicate
+  receipt-kind lists now block both canary-stage and direct archive summaries,
+  and each compact `receipts[].receipt_kind` entry must be one of the supported
+  rail/notary receipt evidence kinds. Evidence aggregation and readiness now
+  reject copied receipt paths or receipt digests reused across distinct canary
+  summaries, so one canary receipt cannot inflate multiple archived canaries.
+  The readiness regression now flips every flag in the production-false evidence
+  policy set so newly added local overrides must produce blocker codes, and the
+  malformed-policy regression derives missing-field cases from the full evidence
+  policy schema. The canary explicit-policy regression now removes each rail,
+  notary, and verifier policy boolean in turn under `--require-explicit-policy`.
+  The readiness XSD-summary parser also revalidates canonical profile ids, ISO
+  family message types, allowed directions, message-definition family binding,
+  and skipped family aliases before accepting digest-correct profile-catalog
+  evidence.
+- Hardened `scripts/iso_xsd_fixture_verify.py` so the profile-catalog source
+  parser accepts exactly one active Rust `DEFAULT_PROFILES_JSON` raw-string
+  declaration and ignores spoofed matches in comments or unrelated strings.
+  Duplicate active declarations now fail closed before an XSD/profile summary
+  can be emitted.
+- Hardened `scripts/iso_xsd_fixture_verify.py` so checked-in XSD schemas and
+  XML fixtures reject DTD/entity declarations before XML parsing. This keeps
+  fixture evidence deterministic and prevents entity-expansion or external-DTD
+  semantics from entering the schema/fixture summary path.
+- Hardened `scripts/iso_xsd_fixture_verify.py` so XSD `Document` declarations
+  are unambiguous before summary emission: exactly one top-level `Document`
+  element whose type is exactly the local `Document` type, one referenced
+  `Document` complex type, one direct `Document` sequence, and one direct
+  payload element with exact `name`/`type` attributes are required. Duplicate
+  schema declarations, prefixed `Document` type spoofing, extra `Document`
+  particles, payload `ref` indirection, weakened payload occurrence attributes,
+  prefixed payload types, and missing or duplicate payload complex types can no
+  longer be summarized by whichever declaration appears first. Payload complex
+  types must also contain exactly one direct `xs:sequence`, so empty, duplicate,
+  or mixed-particle payload roots fail closed before summary emission. XSD
+  schema composition (`xs:import`, `xs:include`, `xs:redefine`, `xs:override`)
+  and foreign-namespace direct children under `xs:schema`, the `Document`
+  complex type, the `Document` sequence, or the payload complex type are now
+  rejected before release evidence can depend on an unpinned external schema or
+  ignored namespace-smuggled declarations. Schema roots must declare exactly
+  `elementFormDefault` and `targetNamespace`, so root-level
+  `attributeFormDefault`, `xsi:schemaLocation`, or other unexpected attributes
+  cannot weaken or redirect fixture evidence. Checked XML fixture `Document`
+  and immediate payload roots must also be attribute-free, preventing
+  fixture-local schema-location hints, `xsi:type`, `xml:lang`, or similar
+  root-scope metadata from entering digest-bound fixture summaries. Manifest,
+  schema, and fixture summaries now parse and hash the same single checked byte
+  buffer per file, so restricted-term checks, XML parsing, and emitted
+  SHA-256 evidence cannot drift across separate file reads.
+- Updated the ISO operator runbook, roadmap, and detailed backlog to require
+  production trust-bundle preflight with `--emit-profile-json`; synthetic
+  checked-in templates remain summary-only and cannot satisfy production evidence.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`133` tests passed)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (`94` tests passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`20` tests passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`190` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`265` tests passed)
+
+## 2026-06-05 Privacy proof attachment envelope-hash binding gate
+
+- Hardened `ProofAttachment::structural_error()` so an optional
+  `envelope_hash` must equal `Hash::new(proof.bytes)` rather than merely being
+  nonzero. This aligns generic attachment admission with the existing
+  IVM/offline/Kagemusha convention for binding proof-envelope metadata to the
+  submitted envelope bytes.
+- The rule is enforced at Norito decode, JSON decode, transaction admission,
+  and executor preverify shape checks because all of those paths now share the
+  same structural predicate.
+- Added positive coverage for matching envelope hashes and adversarial coverage
+  for forged nonzero envelope hashes in the data model, transaction admission,
+  and executor preverify path. Zero envelope hashes still fail with the
+  zero-specific structural error.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model proof_attachment --lib -- --test-threads=1`
+    (`25` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core malformed_proof_attachments_rejected_at_transaction_admission --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features zk-preverify preverify_attachments_reject_malformed_attachment_shapes_before_vk_lookup --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile drift. A separate release build for
+  `python/iroha_python/iroha_python_rs` was active and was not interrupted.
+
+## 2026-06-05 Privacy preverify verifier-key backend binding gate
+
+- Hardened the shared ZK preverify primitive so an inline verifier key, when
+  supplied, must carry the same backend label as the proof before hash,
+  OpenVerify envelope, or dedup checks can succeed.
+- Closed the hash-only bypass where a caller could construct an OpenVerify
+  envelope and expected commitment from a verifier key whose backend label did
+  not match the proof backend and still reach preverify acceptance.
+- Added adversarial coverage proving the wrong-backend key path fails as
+  `VerifyingKeyMismatch` without poisoning the dedup cache, while the canonical
+  bound proof/key path still accepts afterward.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core failed_preverify_attempts_do_not_poison_dedup_cache --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core preverify_rejects_noncanonical_envelope_metadata_before_dedup --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile drift. A separate release build for
+  `python/iroha_python/iroha_python_rs` and the pre-existing
+  `cargo test -p iroha_core kagemusha_recursive_redeem --lib -- --test-threads=1`
+  run were active and were not interrupted.
+
+## 2026-06-05 Privacy preverify binding primitive gate
+
+- Hardened the shared ZK preverify primitive so every accepted backend path now
+  requires both supplied and expected verifier-key commitments to be present,
+  nonzero, and equal before OpenVerify metadata parsing can pass and before the
+  proof enters the batch dedup cache.
+- Missing commitment material now fails as `VerifyingKeyMissing`; zero or
+  mismatched commitment material fails as `VerifyingKeyMismatch`. Unsupported,
+  pending, trusted-setup, developer-only, and production-claim backend labels
+  still reject before the binding gate and do not poison dedup.
+- Updated direct preverify and state-wrapper coverage to use canonical
+  OpenVerify envelopes instead of synthetic accepted tags, and added
+  adversarial missing, zero, mismatch, duplicate, budget, malformed-envelope,
+  and unsupported-backend regression coverage.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core failed_preverify_attempts_do_not_poison_dedup_cache --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core preverify_rejects_noncanonical_envelope_metadata_before_dedup --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features "zk-preverify zk-tests" budget_exceeded_for_large_input_vs_budget --test zk_preverify_budget -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features "zk-preverify zk-tests" preverify_state_wrapper_requires_bound_commitments_and_dedups --test zk_dedup -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features "zk-tests halo2-dev-tests" preverify_basic --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core preverify_rejects_unknown_and_pending_production_backends_before_dedup --lib -- --test-threads=1`
+    (`1` passed)
+- Hygiene checks passed with no lockfile drift. A pre-existing
+  `cargo test -p iroha_core kagemusha_recursive_redeem --lib -- --test-threads=1`
+  run was still active and was not interrupted.
+
+## 2026-06-05 ISO operator input canonicality hardening
+
+- Tightened `scripts/iso_operator_canary.py` so provider/environment labels,
+  rail/notary path and endpoint fields, bearer-token path fields, and explicit
+  verify receipt inputs fail closed when they require trimming. Runbook strings
+  still reject control characters, but are now preserved exactly instead of
+  silently normalizing surrounding whitespace.
+- Tightened the operator adapters so audit-notary `--endpoint` values and rail
+  gateway `--torii-base-url` values reject surrounding or embedded whitespace
+  plus malformed, out-of-range, or explicit-default ports and non-canonical
+  hosts, including invalid DNS labels, percent-escaped hosts, and numeric-host
+  spoofing, and path traversal, encoded path separators, encoded percent signs,
+  or percent-encoded control/space bytes before any network delivery. Rail
+  sidecar `profile` and `rail_message_id` values also reject surrounding
+  whitespace, embedded whitespace, and control characters before they can become
+  outbound headers. Audit-notary and rail bearer-token files are now regular
+  non-symlink, bounded exact UTF-8 runtime inputs: empty, padded, whitespace-bearing,
+  control-bearing, non-UTF-8, or oversized token files fail before network
+  delivery, and receipts still do not persist token material. Rail file-drop XML
+  payloads and sidecar JSON files now also reject symlinks, and XML payloads
+  must be regular files before a sidecar/payload pair can be submitted.
+  Audit-notary export inputs now apply the same source-file boundary:
+  `latest.notary.json`, the digest-addressed anchor peer, and exported
+  `messages.index.json` must be regular non-symlink files before publication.
+- Tightened `scripts/iso_operator_receipt_verify.py` so archived receipt
+  endpoint URLs, receipt rail `profile`/`rail_message_id` values, and matching
+  source-sidecar rail metadata reject surrounding/embedded whitespace, malformed
+  or default endpoint ports, non-lowercase or trailing-dot hosts, or control
+  characters, plus path traversal, embedded semicolon path parameters, or
+  encoded path separators before evidence summaries can be emitted. Raw rail
+  receipt `message_type`, `xml_path`, and `sidecar_path` fields now follow the
+  same exact-string rule, receipt and source-sidecar `profile`/`rail_message_id`
+  values reject embedded whitespace as identifier smuggling, and audit-notary
+  `anchor_path` values and adapter timestamp strings reject padding or controls.
+  Receipt `error` strings reject padding or controls while retaining ordinary
+  free-text spaces. When source files are required, notary anchors/index peers
+  and rail XML/sidecar files also reject symlinks or non-regular files before
+  their digests and metadata are cross-checked. Receipt archive directories
+  supplied through `--receipt-dir` now reject symlinked paths before receipt
+  discovery.
+- Tightened `scripts/iso_operator_evidence_verify.py` and
+  `scripts/iso_production_readiness.py` so expected provider/environment CLI
+  context values are exact evidence-policy inputs instead of being trimmed.
+  Evidence timestamp parsing and archived canary child-command arrays now also
+  reject surrounding whitespace at the parser boundary, and evidence/readiness
+  trust-source URLs reject embedded whitespace, malformed/out-of-range ports,
+  explicit default HTTPS ports, non-lowercase hosts, trailing-dot hosts, invalid
+  DNS labels, percent-escaped hosts, and numeric-host spoofing, plus
+  dot-segment, semicolon-parameter, backslash, percent-encoded dot/separator,
+  encoded-percent, and percent-encoded control/space path smuggling before URL
+  parsing.
+- Tightened the readiness rollup's XSD summary checks so fixture `schema`
+  references are revalidated as canonical schema paths, fixture paths reject
+  empty or dot segments and non-leading parent segments while preserving the
+  current parent-relative checked-in layout, and reviewed
+  `schema_only_reason` / `missing_schema_reason` strings reject surrounding
+  whitespace or control characters instead of being trimmed before comparison.
+- Tightened `scripts/iso_xsd_fixture_verify.py` so manifest schema paths reject
+  backslashes, controls, empty/dot/parent segments, fixture paths reject
+  backslashes, controls, non-XML leaves, empty/dot segments, and non-leading
+  parent segments, and malformed paths fail before a digest-bound XSD summary
+  can be emitted.
+- Tightened the remaining operator/offline file loaders so canary runbook
+  configs, trust bundles, evidence summaries, readiness summaries, XSD
+  manifests, profile catalogs, schema files, and XML fixtures must be regular
+  non-symlink files before digest, provenance, or policy validation. XSD
+  manifest relative-path containment now resolves parent directories for
+  containment but preserves the leaf path for the regular-file boundary check.
+- Tightened ISO input reads so every regular-file loader now opens the checked
+  file through a no-follow descriptor where available and reads from that
+  descriptor, including adapter bearer-token/source files, canary configs,
+  receipt/source files, trust bundles, evidence/readiness summaries, XSD
+  manifests, profile catalogs, schema files, XML fixtures, and rail bounded XML
+  payload reads.
+- Tightened operator output paths so audit-notary and rail receipt directories
+  and receipt leaves are preflighted before publication/Torii submission and
+  reject symlink or non-regular targets before writing. Canary `--summary-out`
+  paths are preflighted before subprocess stages, and trust-bundle, evidence,
+  XSD, and readiness `--summary-out` paths plus trust `--emit-profile-json`
+  paths reject symlink or non-regular targets. These outputs now write through
+  no-follow file opens where the platform supports them.
+- Tightened adapter and canary path boundaries so audit-notary `--export-dir`
+  and rail `--inbox-dir` reject symlinked roots before discovery, explicit rail
+  `--message` paths preserve the leaf for the regular-file/symlink check, and
+  canary relative runbook paths canonicalize parent directories while
+  preserving final leaves for child script file-boundary checks. Default canary
+  rail/notary receipt directories are no longer resolved through a symlink leaf
+  before being passed to the child adapters.
+- Added adversarial coverage for whitespace-padded canary runbook strings,
+  whitespace-smuggled notary/Torii URLs, embedded-whitespace endpoint URLs, and
+  rail sidecar header strings with surrounding whitespace or embedded control
+  characters. Receipt-verifier coverage now also includes whitespace-smuggled
+  receipt endpoint URLs plus embedded-whitespace receipt endpoint URLs,
+  padded or control-bearing rail metadata in both receipts and source sidecars,
+  padded/control-bearing raw rail receipt path/message fields, padded or
+  control-bearing notary anchor paths and adapter timestamps, and padded or
+  control-bearing receipt error strings. Evidence/readiness coverage now also
+  includes padded provider/environment CLI context, padded trust/canary/stage
+  timestamps, and embedded-whitespace trust-source URLs, plus
+  padded/control-bearing XSD reviewed-gap reason strings and malformed fixture
+  schema references and non-canonical fixture paths in digest-correct readiness
+  inputs, plus padded executed and plan-only canary child-command arguments.
+  Trust-bundle coverage now also rejects embedded-whitespace source URLs before
+  emitting summaries, plus invalid, out-of-range, or explicit-default source
+  URL ports, non-canonical source hosts, invalid source host labels, percent
+  escapes in source hosts, numeric-host spoofing, percent-encoded
+  control/space bytes, malformed percent escapes, encoded-percent path
+  smuggling, and smuggled source URL paths. XSD preflight coverage now also
+  includes schema paths with backslashes, dot segments, empty segments, or
+  parent segments, plus non-XML, dot/empty-segment, and non-leading-parent
+  fixture paths. Adapter coverage now also proves valid bearer-token files
+  produce `Authorization` headers without receipt persistence, malformed,
+  symlinked, or directory-backed token files fail before network delivery, rail
+  `profile` / `rail_message_id` identifiers reject embedded whitespace in live
+  sidecars, source sidecars, and archived receipts, and symlinked rail
+  XML/sidecar files are rejected before network delivery. Audit/receipt
+  coverage now also rejects symlinked
+  `latest.notary.json`, digest-addressed anchor peers, exported audit indexes,
+  receipt source indexes, rail XML payloads, and rail sidecars before
+  publication or evidence summaries can proceed. Loader coverage now also
+  rejects symlinked or directory-backed canary configs, trust bundles,
+  canary/trust evidence summaries, XSD/evidence readiness summaries, XSD
+  manifests, schema files, XML fixtures, and profile catalogs, plus symlinked
+  direct receipt archive directories before receipt discovery. Output coverage
+  now rejects symlinked audit/rail receipt directories and receipt leaves before
+  network delivery, plus symlinked canary/trust/evidence/XSD/readiness summary
+  outputs and emitted trust profile JSON outputs without overwriting their
+  targets. Path-boundary coverage now also rejects symlinked audit export roots
+  and rail inbox roots before network delivery, rejects explicit symlinked rail
+  `--message` leaves, and proves canary relative receipt-dir symlink leaves
+  reach the child adapter instead of being resolved away.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test`
+    (35 tests)
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (16 tests)
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (106 tests)
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (50 tests)
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (57 tests)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (73 tests)
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
+    (16 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (28 tests)
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test`
+    (70 tests)
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (172 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test`
+    (31 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_canary_test`
+    (55 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_receipt_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (232 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_receipt_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (203 tests)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --require-fixture-for-schema --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-summary.json`
+    (passed; `11` fixtures, `6` schema-backed and schema-validated fixtures,
+    `55` checked profile versions, `26` schema-backed profile versions, `29`
+    missing profile schema versions)
+  - `for f in fixtures/iso20022/operator_canary/*.json; do python3 scripts/iso_operator_canary.py --config "$f" --plan-only --require-explicit-policy --summary-out "/tmp/iroha-iso-canary-$(basename "$f").summary.json" >/tmp/iroha-iso-canary-template.stdout || exit $?; done`
+  - `for f in fixtures/iso20022/trust_bundles/*.json; do python3 scripts/iso_trust_bundle_verify.py --bundle "$f" --allow-synthetic-der --summary-out "/tmp/iroha-iso-trust-$(basename "$f").summary.json" >/tmp/iroha-iso-trust-template.stdout || exit $?; done`
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (221 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (211 tests)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (232 tests)
+
+## 2026-06-05 ISO profile catalog evidence hardening
+
+- Tightened `scripts/iso_xsd_fixture_verify.py` so the embedded ISO default
+  profile catalog fails closed on unknown profile-level or message-profile
+  keys before a digest-bound XSD/profile summary can be emitted. This prevents
+  unreviewed catalog metadata from being hidden in `DEFAULT_PROFILES_JSON`
+  while the release evidence records only schema-backed version coverage.
+- The profile catalog verifier now also allows skipped family aliases only when
+  a `versions[]` entry exactly equals its `message_type`, and rejects duplicate
+  family aliases. Typo-like family strings can no longer bypass the concrete
+  message-version schema-backed checks.
+- Optional runtime catalog fields are now shape-checked when present:
+  reference dataset ids, canonical nonzero trust pins, certificate-policy OIDs,
+  trusted/revoked pin overlap, revocation booleans, bounded canonical CRL/OCSP
+  DER-sequence material fields, CRL/OCSP material presence when revocation is
+  required, `require-verified` trust-pin presence, business-service lists,
+  AppHdr/business-service dependency flags, positive supplementary-data caps,
+  and duplicate-free uppercase ISO 4217 amount minor-unit rows.
+  Runtime-required rail, embedded-signature policy, and structured-address mode
+  fields are now required by the preflight before an XSD/profile summary can be
+  emitted.
+- Added adversarial XSD verifier coverage for unknown profile and
+  message-profile catalog keys, wrong family aliases, and duplicate family
+  aliases, plus missing or malformed rail/policy/address-mode fields and
+  malformed dataset/trust-pin/OID/boolean/CRL/OCSP base64 or DER-envelope
+  trust-material/business-service/supplementary-data/minor-unit fields alongside
+  the existing duplicate profile, duplicate profile/message/direction,
+  malformed direction, malformed family, and empty-version checks.
+- Re-ran the checked-in manifest/profile summary path; it still records `55`
+  advertised concrete profile versions, `26` schema-backed versions, `29`
+  missing profile schema versions, and `9` reviewed family aliases after the
+  stricter key validation.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (16 tests)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --require-fixture-for-schema --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-summary.json`
+    (passed; `55` checked, `26` schema-backed, `29` missing, `9` family aliases)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (56 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (193 tests)
+
+## 2026-06-05 ISO trust provenance hardening
+
+- Tightened `scripts/iso_trust_bundle_verify.py` so every trust bundle must
+  carry a `source` object with both a clean source `url` and a timezone-aware,
+  non-future `retrieved_at` timestamp before a trust summary can be emitted.
+  Optional source `authority` and `version` are still normalized when present.
+- The trust-bundle verifier now rejects repeated `--bundle` paths, copied
+  bundles with duplicate `bundle_sha256`, and multiple bundles targeting the
+  same `profile_id` before emitting a summary or profile override JSON.
+- The evidence and readiness gates now preserve each trust bundle's
+  `bundle_sha256` in compact trust profiles, reject duplicate bundle digests
+  independently from duplicate profile IDs, re-emit revoked-certificate and
+  certificate-policy material counts, and carry compact trust-anchor,
+  revoked-certificate, CRL, and OCSP DER proof digests and byte lengths for the
+  final rollup.
+- The evidence gate also revalidates emitted `profile_overrides` against the
+  material summary: override `id`, `rail`, and signature policy must match the
+  top-level bundle, public-key/X.509/revoked pin counts must agree with
+  material counts, required certificate-policy OIDs must remain canonical and
+  duplicate-free, trust-anchor/revoked DER summary digests must be present in
+  the matching override pin lists, CRL/OCSP override DER must be complete
+  SEQUENCE envelopes that match the summary digest and byte-length records, and
+  trusted vs revoked pin lists cannot overlap.
+- Updated evidence-gate coverage so missing-source archived trust summaries are
+  now forged after a valid verifier run, preserving the downstream fail-closed
+  guard while the upstream verifier rejects missing provenance directly.
+- Added adversarial trust-bundle coverage for omitted source objects, empty
+  source objects, missing source URL, missing source retrieval timestamp,
+  repeated input paths, copied bundle JSON, and duplicate profile IDs across
+  distinct bundles, plus whitespace-padded trust-bundle identity, source,
+  pin/OID, and DER fields that previously could be normalized by trimming.
+  Evidence/readiness adversarial coverage now also covers
+  missing, malformed, and duplicate `bundle_sha256` values, forged profile
+  override identity/policy fields, mismatched override material counts,
+  malformed policy OIDs, malformed, oversized, or non-DER-sequence CRL/OCSP
+  base64, same-count CRL/OCSP DER digest or byte-length drift, unknown DER
+  summary fields, missing, malformed, duplicated, or count-drifted compact DER
+  proof fields, whitespace-padded compact evidence strings, paths, receipt
+  kinds, profile overrides, and trust-source fields, and same-count trust-pin
+  overlap attacks.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (24 tests)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (130 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (193 tests)
+
+## 2026-06-05 ISO raw receipt schema hardening
+
+- Closed the raw operator receipt schemas in
+  `scripts/iso_operator_receipt_verify.py` for the `iso-audit-notary` and
+  `iso-rail-gateway` receipt kinds. Digest-correct receipts now fail closed on
+  unknown fields instead of carrying unreviewed archive metadata into the
+  verifier summary.
+- Raw receipt verification now also binds `endpoint_sha256` to the recorded
+  endpoint/endpoint URL, requires timezone-aware adapter timestamps, enforces
+  `ok`/`status_code` consistency, rejects successful receipts that still record
+  an error, and validates bounded response metadata so previews cannot appear
+  without a response digest or carry bearer-token material.
+- Rail receipt source verification now binds `sidecar_path` to the adapter's
+  `xml_path + .json` sidecar convention and, when the sidecar is present or
+  source files are required, cross-checks sidecar payload digest, message type,
+  profile, and rail message id against the receipt.
+- Notary receipt source verification now mirrors the audit-notary adapter's
+  anchor checks: `latest.notary.json` must have a matching digest-addressed
+  peer when source files are required, `anchors/*.notary.json` must be named by
+  the embedded `index_sha256`, and the anchor's embedded audit index must match
+  `messages.index.json`.
+- Updated evidence archive fixture rewriting so production-looking HTTPS
+  receipt URLs recompute their endpoint digests before direct archive
+  re-verification.
+- Added adversarial receipt verifier coverage for unknown fields with valid
+  receipt digests, endpoint digest mismatch, inconsistent status booleans,
+  success/error mismatch, malformed response digest/preview combinations,
+  bearer-token response previews, oversized previews, and timezone-less receipt
+  timestamps. Sidecar coverage now also rejects missing source sidecars,
+  sidecar message-type drift, unknown sidecar keys, and digest-correct receipt
+  path swaps to a copied sidecar. Notary coverage rejects missing or divergent
+  digest-addressed anchor peers, exported audit-index drift, and digest-correct
+  receipt path swaps to incorrectly named anchor files.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (14 tests)
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test`
+    (60 tests)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (183 tests)
+
+## 2026-06-05 Privacy proof attachment executor preverify gate
+
+- Extended the shared proof-attachment structural predicate into the executor
+  ZK preverify path so direct `execute_transaction` callers cannot bypass the
+  data-model and transaction-admission guards before verifier-key lookup.
+- Executor preverify now rejects empty proof-attachment lists, backend
+  mismatches, non-portable verifier-key references, empty proof bytes, all-zero
+  verifier-key commitments, and all-zero envelope hashes before backend
+  classification, VK lookup, deduplication, or preverification.
+- Added adversarial executor coverage proving malformed attachment shapes fail
+  before a missing verifier-key reference can be reported.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features zk-preverify preverify_attachments_reject_malformed_attachment_shapes_before_vk_lookup --lib -- --test-threads=1`
+    (`1` passed)
+
+## 2026-06-05 Privacy proof attachment transaction admission gate
+
+- Extended the shared proof-attachment canonicality predicate into transaction
+  acceptance so Rust-side constructors and SDK paths cannot bypass the Norito
+  and JSON shape gate by attaching malformed `ProofAttachment` values directly
+  to a signed transaction.
+- Transaction admission now rejects empty proof-attachment lists, backend
+  mismatches, non-portable verifier-key references, empty proof bytes, all-zero
+  verifier-key commitments, and all-zero envelope hashes before attachment
+  byte accounting or executor preverification.
+- Added adversarial transaction admission coverage for empty lists,
+  mismatched proof backends, uppercase verifier-key names, empty proof bytes,
+  zero `vk_commitment`, and zero `envelope_hash`.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model proof_attachment --lib -- --test-threads=1`
+    (`23` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core malformed_proof_attachments_rejected_at_transaction_admission --lib -- --test-threads=1`
+    (`1` passed; waited for pre-existing Cargo lock)
+
+## 2026-06-04 Privacy proof attachment shape canonicality gate
+
+- Hardened `ProofAttachment` Norito and JSON ingestion so attached proof
+  references now require the shared portable verifier-key registry grammar
+  instead of accepting uppercase, format/control, or otherwise non-portable
+  `vk_ref` fields that would only fail later in executor/host admission.
+- Proof attachments now fail closed on empty proof byte payloads before they
+  can enter registry-backed proof lists through data-model decoding.
+- Optional attachment binding metadata now rejects all-zero
+  `vk_commitment` and all-zero `envelope_hash` values at the data-model
+  boundary while preserving omitted metadata as `None`.
+- Added adversarial Norito and JSON coverage for non-portable backend/name
+  references, empty proof bytes, zero verifier-key commitments, and zero
+  envelope hashes.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model proof_attachment --lib -- --test-threads=1`
+    (`23` passed)
+
+## 2026-06-04 Privacy verifier-key record metadata canonicality gate
+
+- Hardened IVM verifier-key registry activation so active records must carry a
+  portable `namespace`, optional `owner_manifest_id`, optional
+  `gas_schedule_id`, and bounded content-address metadata/VK byte pointers
+  before they can be installed into the host snapshot.
+- Added a verifier-key metadata/VK byte pointer guard for `ipfs://...`,
+  `cid:...`, or bare content paths with ASCII segment characters, while
+  rejecting whitespace padding, control/format/non-ASCII bytes, backslashes,
+  query/fragment/credentialed URL forms, traversal, repeated slash, empty
+  bodies, and oversized pointers.
+- Closed invalid activation windows by rejecting records where
+  `withdraw_height <= activation_height` before registry activation.
+- Added adversarial `set_verifying_keys` coverage for malformed namespace,
+  owner, gas-schedule, metadata URI, VK bytes URI, oversized URI, and invalid
+  activation-window cases.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core set_verifying_keys_rejects --lib -- --test-threads=1`
+    (`10` passed; waited for pre-existing Cargo lock)
+
+## 2026-06-04 Privacy verifier-key binding material nonzero gate
+
+- Hardened IVM verifier-key registry activation so active records must carry a
+  nonzero verifier-key commitment and nonzero public-input schema hash before
+  they can be installed into the host snapshot.
+- Closed the keyless-record bypass where records without stored VK bytes could
+  otherwise skip the existing stored-key hash/commitment check while carrying a
+  zero verifier-key commitment.
+- Added adversarial host coverage for keyless zero-commitment records,
+  stored-key zero-schema-hash records, and records with both zero commitment
+  and zero schema hash.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core set_verifying_keys_rejects --lib -- --test-threads=1`
+    (`9` passed; waited for pre-existing Cargo lock)
+
+## 2026-06-04 Privacy verifier-key registry-id canonicality gate
+
+- Added a bounded portable verifier-key registry ID predicate in the data model
+  for backend/name components before active verifier-key snapshots are trusted
+  by IVM host verification.
+- Hardened IVM verifier-key registry activation so `set_verifying_keys`
+  rejects malformed registry IDs, unsupported registry backend labels, and
+  registry backend tags that disagree with the verifier-key record backend tag,
+  even when stored VK bytes carry an otherwise valid backend label.
+- Added adversarial data-model and host registry coverage for blank,
+  uppercase, control/format, traversal, dot-segment, hidden-segment,
+  delimiter-adjacent, backslash, double-colon backend alias, oversized
+  registry fields, and Halo2/STARK registry-tag mismatch cases.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model verifying_key_id_portable_registry_id_predicate_is_fail_closed --lib -- --test-threads=1`
+    (`1` passed; waited for pre-existing Cargo lock)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core set_verifying_keys_rejects --lib -- --test-threads=1`
+    (`8` passed; waited for pre-existing Cargo lock)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core enforce_zk_envelope_rejects_shared_open_verify_shape_failures --lib -- --test-threads=1`
+    (`1` passed; waited for pre-existing Cargo lock)
+
+## 2026-06-04 Privacy verifier-key record circuit-id canonicality gate
+
+- Promoted the shared portable `OpenVerify` circuit-id predicate to the public
+  data-model boundary and tightened it to reject delimiter-adjacent path forms
+  such as `/:`, `:/`, `/.`, `./`, `:.`, and `.:`, while preserving the
+  existing `halo2/ipa::...` backend alias grammar.
+- Hardened IVM verifier-key registry activation so
+  `set_verifying_keys` rejects malformed or oversized verifier-key record
+  circuit IDs before any record can become active.
+- Added adversarial data-model and host registry coverage for uppercase,
+  control/format, traversal, dot-segment, hidden-segment, delimiter-adjacent,
+  backslash, and oversized circuit IDs.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model open_verify_envelope --lib -- --test-threads=1`
+    (`6` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core set_verifying_keys_rejects_malformed_circuit_ids --lib -- --test-threads=1`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core enforce_zk_envelope_rejects_shared_open_verify_shape_failures --lib -- --test-threads=1`
+    (`1` passed)
 
 ## 2026-06-04 Privacy OpenVerify circuit-id admission gate
 
@@ -529,11 +1433,11 @@ Last updated: 2026-06-04
   `message_def_id`, and reviewed reason so forged XSD gap metadata cannot
   satisfy readiness.
 - Digest-bound XSD `schemas[].path` values are now rechecked as canonical
-  relative forward-slash `.xsd` paths with no dot or parent segments, and the
-  filename must match the schema `message_def_id`.
+  relative forward-slash `.xsd` paths with no empty, dot, or parent segments,
+  and the filename must match the schema `message_def_id`.
 - Digest-bound XSD `fixtures[].path` values now reject backslashes, absolute
-  paths, and non-`.xml` leaves while preserving the current parent-relative
-  checked-in fixture layout.
+  paths, empty or dot segments, and non-`.xml` leaves while preserving the
+  current parent-relative checked-in fixture layout.
 - The IVM pacs.002 field aliases now accept the standard
   `TxInfAndSts/StsRsnInf/AddtlInf[*]` path as `AddtlInf[*]`, preserving the
   status free-text field after making the fixture XSD-valid.
@@ -4171,10 +5075,11 @@ Last updated: 2026-06-04
 - Hardened archived trust evidence binding so the evidence gate now also
   requires trust-summary policy fields (`allow_synthetic_der`,
   `allow_record_only`, `allow_insecure_source_url`, and
-  `profile_json_emittable`) to be present as booleans before accepting a
-  digest-correct trust archive. Archived trust profile overrides must also
-  retain explicit CRL/OCSP revocation-policy booleans, and plan-only diagnostic
-  canary summaries must retain each planned stage's `dry_run` boolean.
+  `profile_json_emitted` / `profile_json_emittable`) plus
+  `profile_json_sha256` when emitted before accepting a digest-correct trust
+  archive. Archived trust profile overrides must also retain explicit CRL/OCSP
+  revocation-policy booleans, and plan-only diagnostic canary summaries must
+  retain each planned stage's `dry_run` boolean.
 - Hardened operator canary runbook policy provenance: `iso_operator_canary.py`
   now supports `--require-explicit-policy`, which requires every runbook policy
   boolean to be explicit and records that proof in the summary. The production
@@ -4182,8 +5087,9 @@ Last updated: 2026-06-04
   generated without it.
 - Hardened the XSD/XML fixture manifest preflight so schema and fixture entries
   must use canonical lowercase ISO message definition ids, checked-in schema
-  paths must remain under the XSD manifest tree, and XML fixture paths remain
-  contained under `fixtures/iso20022/`.
+  paths must remain under the XSD manifest tree without parent segments, and
+  XML fixture paths remain contained under `fixtures/iso20022/` without empty,
+  dot, or non-leading parent segments.
 - Added standalone XML fixtures for every checked-in payment XSD
   (`pacs.008.001.08`, `pacs.009.001.08`, `pacs.002.001.10`,
   `pacs.004.001.10`, and `camt.056.001.08`). The XSD preflight now reports no

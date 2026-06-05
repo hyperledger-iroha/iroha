@@ -22,11 +22,16 @@ Safety:
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
+import errno
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -40,6 +45,9 @@ REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
+MAX_TRUST_DER_BLOBS = 8
+MAX_TRUST_DER_BYTES = 1024 * 1024
+MAX_TRUST_DER_BASE64_CHARS = ((MAX_TRUST_DER_BYTES + 2) // 3) * 4
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 EXPECTED_STAGE_SCRIPTS = {
@@ -81,6 +89,9 @@ EXPECTED_STAGE_FLAGS = {
         "--receipt-dir",
         "--require-source-files",
     },
+}
+LOCAL_DIAGNOSTIC_STAGE_FLAGS = {
+    "notary": {"--allow-missing-record-sources"},
 }
 COMMAND_URL_FLAGS = {"--endpoint", "--torii-base-url"}
 CANARY_SUMMARY_KEYS = {
@@ -143,6 +154,7 @@ TRUST_SUMMARY_KEYS = {
     "allow_synthetic_der",
     "profile_json_emitted",
     "profile_json_emittable",
+    "profile_json_sha256",
     "bundles",
     SUMMARY_DIGEST_FIELD,
 }
@@ -185,6 +197,7 @@ TRUST_PROFILE_OVERRIDE_KEYS = {
     "x509_require_ocsp_revocation_check",
     "x509_ocsp_response_der_base64",
 }
+TRUST_DER_SUMMARY_KEYS = {"label", "sha256", "byte_len"}
 
 SECRET_KEY_FRAGMENTS = (
     "authorization",
@@ -224,14 +237,91 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _load_json(path: Path) -> Any:
+def _read_regular_file(path: Path) -> bytes:
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-        )
+        mode = path.lstat().st_mode
     except FileNotFoundError as error:
         raise EvidenceError(f"{path} does not exist") from error
+    if stat.S_ISLNK(mode):
+        raise EvidenceError(f"{path} must not be a symlink")
+    if not stat.S_ISREG(mode):
+        raise EvidenceError(f"{path} must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise EvidenceError(f"{path} must be a regular file")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except FileNotFoundError as error:
+        raise EvidenceError(f"{path} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise EvidenceError(f"{path} must not be a symlink") from error
+        raise EvidenceError(f"cannot open {path} for reading: {error.strerror}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _write_text_output(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise EvidenceError(f"{path.parent} must be a directory") from error
+    parent_mode = path.parent.lstat().st_mode
+    if stat.S_ISLNK(parent_mode):
+        raise EvidenceError(f"{path.parent} must not be a symlink")
+    if not stat.S_ISDIR(parent_mode):
+        raise EvidenceError(f"{path.parent} must be a directory")
+    if path.exists() or path.is_symlink():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise EvidenceError(f"{path} must not be a symlink")
+        if not stat.S_ISREG(mode):
+            raise EvidenceError(f"{path} must be a regular file")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, parent_flags | nofollow)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise EvidenceError(f"{path.parent} must not be a symlink") from error
+        raise EvidenceError(f"{path.parent} must be a directory") from error
+
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise EvidenceError(f"{path} must not be a symlink") from error
+            raise EvidenceError(f"cannot open {path} for writing: {error.strerror}") from error
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise EvidenceError(f"{path} must be a regular file")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        raw = _read_regular_file(path)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"{path} is not UTF-8 JSON") from error
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{path} is not valid JSON: {error}") from error
 
@@ -269,7 +359,9 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
         raise EvidenceError(f"{label}.{key} must be a non-empty string")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label}.{key} must not contain control characters")
-    return raw.strip()
+    if raw != raw.strip():
+        raise EvidenceError(f"{label}.{key} must not have surrounding whitespace")
+    return raw
 
 
 def _required_cli_string(value: str | None, label: str) -> str:
@@ -277,7 +369,9 @@ def _required_cli_string(value: str | None, label: str) -> str:
         raise EvidenceError(f"provide {label}")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise EvidenceError(f"{label} must not contain control characters")
-    return value.strip()
+    if value != value.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
+    return value
 
 
 def _required_positive_cli_int(value: int | None, label: str) -> int:
@@ -349,9 +443,265 @@ def _is_lower_sha256(value: Any) -> bool:
     )
 
 
+def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    raw = value.get(key)
+    if not _is_lower_sha256(raw):
+        raise EvidenceError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    return raw
+
+
+def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[str]:
+    items = _require_list(value.get(key), f"{label}.{key}")
+    result: list[str] = []
+    seen: dict[str, int] = {}
+    for offset, item in enumerate(items):
+        if not _is_lower_sha256(item):
+            raise EvidenceError(f"{label}.{key}[{offset}] must be a canonical SHA-256")
+        if item in seen:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]: {item}"
+            )
+        seen[item] = offset
+        result.append(item)
+    return result
+
+
+def _required_clean_string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
+    items = _require_list(value.get(key), f"{label}.{key}")
+    result: list[str] = []
+    for offset, item in enumerate(items):
+        if not isinstance(item, str) or not item.strip():
+            raise EvidenceError(f"{label}.{key}[{offset}] must be a non-empty string")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
+            raise EvidenceError(f"{label}.{key}[{offset}] must not contain control characters")
+        if item != item.strip():
+            raise EvidenceError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+        result.append(item)
+    return result
+
+
+def _valid_oid(value: str) -> bool:
+    parts = value.split(".")
+    if len(parts) < 2:
+        return False
+    for part in parts:
+        if not part or not part.isascii() or not part.isdecimal():
+            return False
+        if len(part) > 1 and part.startswith("0"):
+            return False
+    first = int(parts[0])
+    if first > 2:
+        return False
+    if first < 2 and int(parts[1]) > 39:
+        return False
+    return True
+
+
+def _required_oid_list(value: dict[str, Any], key: str, label: str) -> list[str]:
+    items = _required_clean_string_list(value, key, label)
+    result: list[str] = []
+    seen: dict[str, int] = {}
+    for offset, item in enumerate(items):
+        if not _valid_oid(item):
+            raise EvidenceError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
+        if item in seen:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]: {item}"
+            )
+        seen[item] = offset
+        result.append(item)
+    return result
+
+
+def _required_canonical_base64_list(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+) -> list[str]:
+    items = _required_clean_string_list(value, key, label)
+    if len(items) > MAX_TRUST_DER_BLOBS:
+        raise EvidenceError(
+            f"{label}.{key} must not contain more than {MAX_TRUST_DER_BLOBS} entries"
+        )
+    result: list[str] = []
+    seen: dict[str, int] = {}
+    for offset, item in enumerate(items):
+        if len(item) > MAX_TRUST_DER_BASE64_CHARS:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] must decode to no more than "
+                f"{MAX_TRUST_DER_BYTES} bytes"
+            )
+        try:
+            decoded = base64.b64decode(item, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise EvidenceError(f"{label}.{key}[{offset}] must be canonical base64") from error
+        if not decoded:
+            raise EvidenceError(f"{label}.{key}[{offset}] must be non-empty base64")
+        if len(decoded) > MAX_TRUST_DER_BYTES:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] must decode to no more than "
+                f"{MAX_TRUST_DER_BYTES} bytes"
+            )
+        _require_der_sequence(decoded, f"{label}.{key}[{offset}]")
+        canonical = base64.b64encode(decoded).decode("ascii")
+        if canonical != item:
+            raise EvidenceError(f"{label}.{key}[{offset}] must be canonical padded base64")
+        if canonical in seen:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[canonical]}]"
+            )
+        seen[canonical] = offset
+        result.append(canonical)
+    return result
+
+
+def _require_der_sequence(value: bytes, label: str) -> None:
+    if not value or value[0] != 0x30:
+        raise EvidenceError(f"{label} must be a DER SEQUENCE")
+    if len(value) < 2:
+        raise EvidenceError(f"{label} has truncated DER length")
+
+    first_length = value[1]
+    header_len = 2
+    if first_length < 0x80:
+        content_len = first_length
+    else:
+        length_octets = first_length & 0x7F
+        if length_octets == 0 or length_octets > 4:
+            raise EvidenceError(f"{label} has invalid DER length")
+        if len(value) < 2 + length_octets:
+            raise EvidenceError(f"{label} has truncated DER length")
+        length_bytes = value[2 : 2 + length_octets]
+        if length_bytes[0] == 0:
+            raise EvidenceError(f"{label} has non-minimal DER length")
+        content_len = int.from_bytes(length_bytes, "big")
+        if content_len < 0x80:
+            raise EvidenceError(f"{label} has non-minimal DER length")
+        header_len += length_octets
+
+    if header_len + content_len != len(value):
+        raise EvidenceError(
+            f"{label} DER length does not consume the whole value"
+        )
+
+
+def _required_der_summary_entries(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+) -> dict[str, int]:
+    items = _require_list(bundle.get(key), f"{label}.{key}")
+    if len(items) > MAX_TRUST_DER_BLOBS:
+        raise EvidenceError(
+            f"{label}.{key} must not contain more than {MAX_TRUST_DER_BLOBS} entries"
+        )
+    result: dict[str, int] = {}
+    seen_labels: dict[str, int] = {}
+    for offset, raw_entry in enumerate(items):
+        entry_label = f"{label}.{key}[{offset}]"
+        entry = _require_object(raw_entry, entry_label)
+        _reject_unknown_keys(entry, TRUST_DER_SUMMARY_KEYS, entry_label)
+        raw_label = entry.get("label")
+        if raw_label is not None:
+            if not isinstance(raw_label, str) or not raw_label.strip():
+                raise EvidenceError(
+                    f"{entry_label}.label must be a non-empty string when provided"
+                )
+            if raw_label != raw_label.strip():
+                raise EvidenceError(f"{entry_label}.label must not have surrounding whitespace")
+            if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw_label):
+                raise EvidenceError(f"{entry_label}.label must not contain control characters")
+            if len(raw_label) > 128:
+                raise EvidenceError(f"{entry_label}.label must be no longer than 128 characters")
+            if raw_label in seen_labels:
+                raise EvidenceError(
+                    f"{entry_label}.label duplicates {label}.{key}[{seen_labels[raw_label]}].label"
+                )
+            seen_labels[raw_label] = offset
+        digest = entry.get("sha256")
+        if not _is_lower_sha256(digest):
+            raise EvidenceError(f"{entry_label}.sha256 must be a canonical SHA-256")
+        if digest in result:
+            raise EvidenceError(
+                f"{entry_label}.sha256 duplicates DER SHA-256 {digest}"
+            )
+        byte_len = _required_nonnegative_int(entry, "byte_len", entry_label)
+        if byte_len == 0 or byte_len > MAX_TRUST_DER_BYTES:
+            raise EvidenceError(
+                f"{entry_label}.byte_len must be positive and no more than "
+                f"{MAX_TRUST_DER_BYTES}"
+            )
+        result[digest] = byte_len
+    return result
+
+
+def _canonical_base64_der_entries(values: list[str]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for item in values:
+        der = base64.b64decode(item, validate=True)
+        result[sha256_hex(der)] = len(der)
+    return result
+
+
+def _require_summary_digests_in_pins(
+    entries: dict[str, int],
+    pins: list[str],
+    summary_label: str,
+    pins_label: str,
+) -> None:
+    missing = sorted(set(entries) - set(pins))
+    if missing:
+        raise EvidenceError(
+            f"{summary_label} contains DER SHA-256 {missing[0]} missing from {pins_label}"
+        )
+
+
+def _require_override_der_matches_summary(
+    values: list[str],
+    entries: dict[str, int],
+    override_label: str,
+    summary_label: str,
+) -> None:
+    override_entries = _canonical_base64_der_entries(values)
+    extra = sorted(set(override_entries) - set(entries))
+    if extra:
+        raise EvidenceError(
+            f"{override_label} contains DER SHA-256 {extra[0]} not recorded in {summary_label}"
+        )
+    missing = sorted(set(entries) - set(override_entries))
+    if missing:
+        raise EvidenceError(
+            f"{summary_label} contains DER SHA-256 {missing[0]} missing from {override_label}"
+        )
+    for digest, byte_len in override_entries.items():
+        if entries[digest] != byte_len:
+            raise EvidenceError(
+                f"{summary_label} byte_len does not match {override_label} "
+                f"for DER SHA-256 {digest}"
+            )
+
+
+def _compact_der_entries(entries: dict[str, int]) -> list[dict[str, int | str]]:
+    return [
+        {
+            "sha256": digest,
+            "byte_len": entries[digest],
+        }
+        for digest in sorted(entries)
+    ]
+
+
+def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> None:
+    overlap = sorted(set(first) & set(second))
+    if overlap:
+        raise EvidenceError(f"{label} contains overlapping SHA-256 pin {overlap[0]}")
+
+
 def _validate_receipt_path(raw: str, label: str) -> str:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
@@ -363,6 +713,8 @@ def _validate_receipt_path(raw: str, label: str) -> str:
 def _validate_config_path(raw: str, label: str) -> str:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
@@ -376,10 +728,12 @@ def _validate_artifact_path(raw: str, label: str) -> str:
         raise EvidenceError(f"{label} must be a non-empty path")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
-    return raw.strip()
+    return raw
 
 
 def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
@@ -432,8 +786,26 @@ def _verify_receipt_verifier_summary(
         receipt_obj.get("receipt_kind"),
         f"{label}.receipt_kind",
     )
-    if not receipt_kind or not all(isinstance(item, str) for item in receipt_kind):
+    if not receipt_kind:
         raise EvidenceError(f"{label}.receipt_kind must contain strings")
+    seen_receipt_kinds: dict[str, int] = {}
+    for offset, item in enumerate(receipt_kind):
+        if not isinstance(item, str) or not item.strip():
+            raise EvidenceError(f"{label}.receipt_kind must contain strings")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
+            raise EvidenceError(
+                f"{label}.receipt_kind[{offset}] must not contain control characters"
+            )
+        if item != item.strip():
+            raise EvidenceError(
+                f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
+            )
+        if item in seen_receipt_kinds:
+            raise EvidenceError(
+                f"{label}.receipt_kind[{offset}] duplicates "
+                f"{label}.receipt_kind[{seen_receipt_kinds[item]}]: {item}"
+            )
+        seen_receipt_kinds[item] = offset
     receipt_kind_set = set(receipt_kind)
     if args.allow_partial_canary:
         if not (receipt_kind_set & REQUIRED_RECEIPT_KINDS):
@@ -611,6 +983,10 @@ def _check_command_policy(
             raise EvidenceError(
                 f"{label}.command[{offset}] must not contain control characters"
             )
+        if item != item.strip():
+            raise EvidenceError(
+                f"{label}.command[{offset}] must not have surrounding whitespace"
+            )
     _check_redacted_bearer_files(command, label)
     if _command_has_flag(command, "--dry-run") and not allow_dry_run:
         raise EvidenceError(f"{label} used --dry-run")
@@ -639,10 +1015,16 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
     allowed = EXPECTED_STAGE_FLAGS.get(stage_name)
     if allowed is None:
         raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+    local_only = LOCAL_DIAGNOSTIC_STAGE_FLAGS.get(stage_name, set())
     for offset, item in enumerate(command):
         if not item.startswith("--"):
             continue
         flag = item.split("=", 1)[0]
+        if flag in local_only:
+            raise EvidenceError(
+                f"{label}.command[{offset}] uses local diagnostic flag {flag!r}; "
+                "production evidence must include persisted source records"
+            )
         if flag not in allowed:
             raise EvidenceError(f"{label}.command[{offset}] uses unsupported flag {flag!r}")
 
@@ -939,6 +1321,9 @@ def _check_clean_http_url(
 ) -> None:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
         raise EvidenceError(f"{label} must not contain control characters")
+    _reject_url_percent_encoding_smuggling(url, label)
+    if any(ch.isspace() for ch in url):
+        raise EvidenceError(f"{label} must not contain whitespace")
     try:
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
@@ -950,12 +1335,29 @@ def _check_clean_http_url(
         if parsed.scheme == "http":
             raise EvidenceError(f"{label} uses insecure HTTP URL")
         raise EvidenceError(f"{label} must use HTTPS URL")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise EvidenceError(f"{label} has invalid port: {error}") from error
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        raise EvidenceError(f"{label} must not explicitly specify the default port")
     if not parsed.netloc or hostname is None or not hostname.strip():
         raise EvidenceError(f"{label} must include a host")
     if parsed.username is not None or parsed.password is not None:
         raise EvidenceError(f"{label} must not contain credentials")
+    raw_host = _raw_url_host(parsed)
+    if "%" in raw_host:
+        raise EvidenceError(f"{label} host must not contain percent escapes")
+    if raw_host != raw_host.lower():
+        raise EvidenceError(f"{label} host must be lowercase")
+    if raw_host.endswith("."):
+        raise EvidenceError(f"{label} host must not end with a dot")
+    _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise EvidenceError(f"{label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, label)
     hostname = hostname.strip().lower()
     if reject_local_hosts and not allow_insecure_http:
         if hostname == "localhost" or hostname.endswith(".localhost"):
@@ -966,6 +1368,71 @@ def _check_clean_http_url(
             return
         if not address.is_global:
             raise EvidenceError(f"{label} must not use local, private, or reserved IP addresses")
+
+
+def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket != -1:
+            return netloc[1:bracket]
+    return netloc.rsplit(":", 1)[0]
+
+
+def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
+    index = 0
+    while True:
+        index = url.find("%", index)
+        if index == -1:
+            return
+        token = url[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise EvidenceError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise EvidenceError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        index += 3
+
+
+def _validate_host_labels(raw_host: str, label: str) -> None:
+    try:
+        ipaddress.ip_address(raw_host)
+        return
+    except ValueError:
+        pass
+    if ":" in raw_host:
+        raise EvidenceError(f"{label} host must be a valid IP address")
+    labels = raw_host.split(".")
+    if any(not part for part in labels):
+        raise EvidenceError(f"{label} host must not contain empty labels")
+    if all(part.isdigit() for part in labels):
+        raise EvidenceError(f"{label} numeric host labels must be a valid IP address")
+    for part in labels:
+        if len(part) > 63:
+            raise EvidenceError(f"{label} host labels must be at most 63 characters")
+        if part.startswith("-") or part.endswith("-"):
+            raise EvidenceError(f"{label} host labels must not start or end with hyphen")
+        if not all(("a" <= ch <= "z") or ch.isdigit() or ch == "-" for ch in part):
+            raise EvidenceError(
+                f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
+            )
+
+
+def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
+    path = parsed.path
+    if "\\" in path:
+        raise EvidenceError(f"{label} path must use forward slashes")
+    if ";" in path:
+        raise EvidenceError(f"{label} path must not contain semicolon parameters")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise EvidenceError(f"{label} path must not contain dot segments")
+    lowered = path.lower()
+    if any(token in lowered for token in ("%2e", "%2f", "%5c")):
+        raise EvidenceError(f"{label} path must not contain encoded dot or separator characters")
+    if "%25" in lowered:
+        raise EvidenceError(f"{label} path must not contain encoded percent characters")
 
 
 def _check_https_url(url: str, label: str, *, allow_insecure_http: bool) -> None:
@@ -982,9 +1449,11 @@ def _parse_timestamp(value: Any, label: str) -> dt.datetime:
         raise EvidenceError(f"{label} must be recorded")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise EvidenceError(f"{label} must not contain control characters")
-    text = value.strip()
-    if not text:
+    if not value.strip():
         raise EvidenceError(f"{label} must be recorded")
+    if value != value.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
+    text = value
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         parsed = dt.datetime.fromisoformat(normalized)
@@ -1025,6 +1494,9 @@ def _check_trust_bundle(
         raise EvidenceError(f"{label}.embedded_signature_policy is {policy!r}")
 
     source_summary: dict[str, str] | None = None
+    bundle_sha256 = bundle.get("bundle_sha256")
+    if not _is_lower_sha256(bundle_sha256):
+        raise EvidenceError(f"{label}.bundle_sha256 must be a canonical SHA-256")
     source = bundle.get("source")
     if source is None:
         if not args.allow_missing_trust_source:
@@ -1035,7 +1507,10 @@ def _check_trust_bundle(
         url = source_obj.get("url")
         if not isinstance(url, str) or not url.strip():
             raise EvidenceError(f"{label}.source.url must be recorded")
-        url = url.strip()
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+            raise EvidenceError(f"{label}.source.url must not contain control characters")
+        if url != url.strip():
+            raise EvidenceError(f"{label}.source.url must not have surrounding whitespace")
         _check_https_url(
             url,
             f"{label}.source.url",
@@ -1044,7 +1519,16 @@ def _check_trust_bundle(
         retrieved_at = source_obj.get("retrieved_at")
         if not isinstance(retrieved_at, str):
             raise EvidenceError(f"{label}.source.retrieved_at must be recorded")
-        retrieved_at = retrieved_at.strip()
+        if not retrieved_at.strip():
+            raise EvidenceError(f"{label}.source.retrieved_at must be recorded")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in retrieved_at):
+            raise EvidenceError(
+                f"{label}.source.retrieved_at must not contain control characters"
+            )
+        if retrieved_at != retrieved_at.strip():
+            raise EvidenceError(
+                f"{label}.source.retrieved_at must not have surrounding whitespace"
+            )
         _check_retrieved_at(
             retrieved_at,
             f"{label}.source.retrieved_at",
@@ -1067,8 +1551,31 @@ def _check_trust_bundle(
         "x509_trust_anchor_pin_count",
         f"{label}.material",
     )
+    revoked_pin_count = _required_nonnegative_int(
+        material,
+        "revoked_certificate_pin_count",
+        f"{label}.material",
+    )
     if signature_pin_count + x509_anchor_pin_count == 0:
         raise EvidenceError(f"{label} has no signature public-key or X.509 trust pins")
+    trust_anchor_der_entries = _required_der_summary_entries(
+        bundle,
+        "x509_trust_anchors",
+        label,
+    )
+    if len(trust_anchor_der_entries) > x509_anchor_pin_count:
+        raise EvidenceError(
+            f"{label}.x509_trust_anchors length exceeds material X.509 trust-anchor pin count"
+        )
+    revoked_der_entries = _required_der_summary_entries(
+        bundle,
+        "revoked_certificates",
+        label,
+    )
+    if len(revoked_der_entries) > revoked_pin_count:
+        raise EvidenceError(
+            f"{label}.revoked_certificates length exceeds material revoked-certificate pin count"
+        )
 
     profile_overrides = _require_object(
         bundle.get("profile_overrides"),
@@ -1079,6 +1586,107 @@ def _check_trust_bundle(
         TRUST_PROFILE_OVERRIDE_KEYS,
         f"{label}.profile_overrides",
     )
+    override_id = _required_string(
+        profile_overrides,
+        "id",
+        f"{label}.profile_overrides",
+    )
+    if override_id != profile_id:
+        raise EvidenceError(f"{label}.profile_overrides.id does not match profile_id")
+    override_rail = _required_string(
+        profile_overrides,
+        "rail",
+        f"{label}.profile_overrides",
+    )
+    if override_rail != rail:
+        raise EvidenceError(f"{label}.profile_overrides.rail does not match rail")
+    override_policy = _required_string(
+        profile_overrides,
+        "embedded_signature_policy",
+        f"{label}.profile_overrides",
+    )
+    if override_policy != policy:
+        raise EvidenceError(
+            f"{label}.profile_overrides.embedded_signature_policy does not match embedded_signature_policy"
+        )
+    override_public_pins = _required_sha256_list(
+        profile_overrides,
+        "signature_public_key_sha256_pins",
+        f"{label}.profile_overrides",
+    )
+    override_legacy_public_pins = _required_sha256_list(
+        profile_overrides,
+        "trusted_public_key_sha256",
+        f"{label}.profile_overrides",
+    )
+    _reject_sha256_overlap(
+        override_public_pins,
+        override_legacy_public_pins,
+        f"{label}.profile_overrides.signature_public_key_sha256_pins/trusted_public_key_sha256",
+    )
+    if len(override_public_pins) + len(override_legacy_public_pins) != signature_pin_count:
+        raise EvidenceError(
+            f"{label}.profile_overrides public-key pin count does not match material"
+        )
+    override_anchor_pins = _required_sha256_list(
+        profile_overrides,
+        "x509_trust_anchor_sha256_pins",
+        f"{label}.profile_overrides",
+    )
+    override_legacy_anchor_pins = _required_sha256_list(
+        profile_overrides,
+        "trusted_certificate_sha256",
+        f"{label}.profile_overrides",
+    )
+    _reject_sha256_overlap(
+        override_anchor_pins,
+        override_legacy_anchor_pins,
+        f"{label}.profile_overrides.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
+    )
+    if len(override_anchor_pins) + len(override_legacy_anchor_pins) != x509_anchor_pin_count:
+        raise EvidenceError(
+            f"{label}.profile_overrides X.509 trust-anchor pin count does not match material"
+        )
+    override_revoked_pins = _required_sha256_list(
+        profile_overrides,
+        "revoked_certificate_sha256",
+        f"{label}.profile_overrides",
+    )
+    if len(override_revoked_pins) != revoked_pin_count:
+        raise EvidenceError(
+            f"{label}.profile_overrides revoked-certificate pin count does not match material"
+        )
+    _reject_sha256_overlap(
+        override_anchor_pins + override_legacy_anchor_pins,
+        override_revoked_pins,
+        f"{label}.profile_overrides trusted/revoked certificate pins",
+    )
+    _require_summary_digests_in_pins(
+        trust_anchor_der_entries,
+        override_anchor_pins + override_legacy_anchor_pins,
+        f"{label}.x509_trust_anchors",
+        f"{label}.profile_overrides X.509 trust-anchor pins",
+    )
+    _require_summary_digests_in_pins(
+        revoked_der_entries,
+        override_revoked_pins,
+        f"{label}.revoked_certificates",
+        f"{label}.profile_overrides.revoked_certificate_sha256",
+    )
+    policy_oids = _required_oid_list(
+        profile_overrides,
+        "x509_required_certificate_policy_oids",
+        f"{label}.profile_overrides",
+    )
+    policy_oid_count = _required_nonnegative_int(
+        material,
+        "x509_required_certificate_policy_oid_count",
+        f"{label}.material",
+    )
+    if len(policy_oids) != policy_oid_count:
+        raise EvidenceError(
+            f"{label}.profile_overrides certificate-policy OID count does not match material"
+        )
     crl_required = _required_bool(
         profile_overrides,
         "x509_require_crl_revocation_check",
@@ -1103,19 +1711,66 @@ def _check_trust_bundle(
         raise EvidenceError(f"{label} requires CRL revocation checking but has no CRLs")
     if ocsp_required and x509_ocsp_response_count == 0:
         raise EvidenceError(f"{label} requires OCSP revocation checking but has no OCSP responses")
+    crl_der_entries = _required_der_summary_entries(
+        bundle,
+        "x509_crls",
+        label,
+    )
+    if len(crl_der_entries) != x509_crl_count:
+        raise EvidenceError(f"{label}.x509_crls length does not match material")
+    ocsp_der_entries = _required_der_summary_entries(
+        bundle,
+        "x509_ocsp_responses",
+        label,
+    )
+    if len(ocsp_der_entries) != x509_ocsp_response_count:
+        raise EvidenceError(f"{label}.x509_ocsp_responses length does not match material")
+    crl_der = _required_canonical_base64_list(
+        profile_overrides,
+        "x509_crl_der_base64",
+        f"{label}.profile_overrides",
+    )
+    if len(crl_der) != x509_crl_count:
+        raise EvidenceError(f"{label}.profile_overrides CRL DER count does not match material")
+    _require_override_der_matches_summary(
+        crl_der,
+        crl_der_entries,
+        f"{label}.profile_overrides.x509_crl_der_base64",
+        f"{label}.x509_crls",
+    )
+    ocsp_der = _required_canonical_base64_list(
+        profile_overrides,
+        "x509_ocsp_response_der_base64",
+        f"{label}.profile_overrides",
+    )
+    if len(ocsp_der) != x509_ocsp_response_count:
+        raise EvidenceError(f"{label}.profile_overrides OCSP DER count does not match material")
+    _require_override_der_matches_summary(
+        ocsp_der,
+        ocsp_der_entries,
+        f"{label}.profile_overrides.x509_ocsp_response_der_base64",
+        f"{label}.x509_ocsp_responses",
+    )
 
     return {
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
+        "bundle_sha256": bundle_sha256,
         "source": source_summary,
         "embedded_signature_policy": policy,
         "signature_public_key_pin_count": signature_pin_count,
         "x509_trust_anchor_pin_count": x509_anchor_pin_count,
+        "x509_trust_anchor_der": _compact_der_entries(trust_anchor_der_entries),
+        "revoked_certificate_pin_count": revoked_pin_count,
+        "revoked_certificate_der": _compact_der_entries(revoked_der_entries),
+        "x509_required_certificate_policy_oid_count": policy_oid_count,
         "x509_require_crl_revocation_check": crl_required,
         "x509_crl_count": x509_crl_count,
+        "x509_crl_der": _compact_der_entries(crl_der_entries),
         "x509_require_ocsp_revocation_check": ocsp_required,
         "x509_ocsp_response_count": x509_ocsp_response_count,
+        "x509_ocsp_response_der": _compact_der_entries(ocsp_der_entries),
     }
 
 
@@ -1136,7 +1791,16 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     allow_synthetic_der = _required_bool(summary, "allow_synthetic_der", str(path))
     allow_record_only = _required_bool(summary, "allow_record_only", str(path))
     allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", str(path))
+    profile_json_emitted = _required_bool(summary, "profile_json_emitted", str(path))
     profile_json_emittable = _required_bool(summary, "profile_json_emittable", str(path))
+    if profile_json_emitted:
+        profile_json_sha256 = _required_sha256(summary, "profile_json_sha256", str(path))
+    else:
+        if "profile_json_sha256" not in summary:
+            raise EvidenceError(f"{path}.profile_json_sha256 must be null when profile JSON was not emitted")
+        if summary["profile_json_sha256"] is not None:
+            raise EvidenceError(f"{path}.profile_json_sha256 must be null when profile JSON was not emitted")
+        profile_json_sha256 = None
     if allow_synthetic_der and not args.allow_synthetic_trust:
         raise EvidenceError(f"{path} was verified with --allow-synthetic-der")
     if allow_record_only and not args.allow_record_only_trust:
@@ -1145,6 +1809,8 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         raise EvidenceError(f"{path} was verified with --allow-insecure-source-url")
     if not profile_json_emittable and not args.allow_synthetic_trust:
         raise EvidenceError(f"{path} cannot emit production profile JSON")
+    if not profile_json_emitted and not args.allow_profile_json_not_emitted:
+        raise EvidenceError(f"{path} did not emit profile JSON")
 
     verified_bundles = summary.get("verified_bundles")
     if isinstance(verified_bundles, bool) or not isinstance(verified_bundles, int) or verified_bundles <= 0:
@@ -1152,15 +1818,28 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     bundles = _require_list(summary.get("bundles"), f"{path}.bundles")
     if len(bundles) != verified_bundles:
         raise EvidenceError(f"{path}.bundles length does not match verified_bundles")
+    bundle_objects = [
+        _require_object(bundle, f"{path}.bundles[{offset}]")
+        for offset, bundle in enumerate(bundles)
+    ]
     bundle_summaries = [
         _check_trust_bundle(
-            _require_object(bundle, f"{path}.bundles[{offset}]"),
+            bundle,
             f"{path}.bundles[{offset}]",
             args,
         )
-        for offset, bundle in enumerate(bundles)
+        for offset, bundle in enumerate(bundle_objects)
     ]
+    if profile_json_emitted:
+        profile_config = [bundle["profile_overrides"] for bundle in bundle_objects]
+        expected_profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
+        expected_profile_sha256 = sha256_hex(expected_profile_text.encode("utf-8"))
+        if profile_json_sha256 != expected_profile_sha256:
+            raise EvidenceError(
+                f"{path}.profile_json_sha256 does not match archived profile_overrides"
+            )
     seen_profile_ids: dict[str, int] = {}
+    seen_bundle_digests: dict[str, int] = {}
     for offset, bundle in enumerate(bundle_summaries):
         profile_id = bundle["profile_id"]
         if profile_id in seen_profile_ids:
@@ -1169,10 +1848,21 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
                 f"{path}.bundles[{seen_profile_ids[profile_id]}].profile_id: {profile_id}"
             )
         seen_profile_ids[profile_id] = offset
+        bundle_sha256 = bundle["bundle_sha256"]
+        if bundle_sha256 in seen_bundle_digests:
+            raise EvidenceError(
+                f"{path}.bundles[{offset}].bundle_sha256 duplicates "
+                f"{path}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256: "
+                f"{bundle_sha256}"
+            )
+        seen_bundle_digests[bundle_sha256] = offset
     return {
         "path": str(path),
         "verified_at": verified_at_raw,
         "verified_bundles": verified_bundles,
+        "profile_json_emitted": profile_json_emitted,
+        "profile_json_emittable": profile_json_emittable,
+        "profile_json_sha256": profile_json_sha256,
         "profiles": bundle_summaries,
         "summary_sha256": digest,
     }
@@ -1218,6 +1908,80 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
     return _verify_receipt_verifier_summary(receipt_obj, "receipt verifier summary", args)
 
 
+def _verify_direct_receipts_cover_canaries(
+    canaries: list[dict[str, Any]],
+    receipt_summary: dict[str, Any],
+) -> None:
+    """Require direct receipt archive verification to match canary receipt digests."""
+
+    direct_receipt_kinds_by_digest = {
+        receipt["receipt_sha256"]: receipt["receipt_kind"]
+        for receipt in receipt_summary["receipts"]
+    }
+    canary_receipt_kinds_by_digest: dict[str, str] = {}
+    for canary_offset, canary in enumerate(canaries):
+        canary_receipt_summary = canary.get("receipt_summary")
+        if canary_receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(canary_receipt_summary["receipts"]):
+            receipt_sha256 = receipt["receipt_sha256"]
+            canary_receipt_kinds_by_digest[receipt_sha256] = receipt["receipt_kind"]
+            direct_kind = direct_receipt_kinds_by_digest.get(receipt_sha256)
+            if direct_kind is None:
+                raise EvidenceError(
+                    "direct receipt archive verification does not include "
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].receipt_sha256 {receipt_sha256}"
+                )
+            if direct_kind != receipt["receipt_kind"]:
+                raise EvidenceError(
+                    "direct receipt archive verification binds "
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
+                    f"receipt_kind {direct_kind!r}, not {receipt['receipt_kind']!r}"
+                )
+    for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+        receipt_sha256 = receipt["receipt_sha256"]
+        if receipt_sha256 not in canary_receipt_kinds_by_digest:
+            raise EvidenceError(
+                "direct receipt archive verification includes unreferenced "
+                f"receipt_verification.receipts[{receipt_offset}].receipt_sha256 "
+                f"{receipt_sha256}"
+            )
+
+
+def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
+    """Reject receipt path or digest reuse across distinct canary summaries."""
+
+    seen_paths: dict[str, tuple[int, int]] = {}
+    seen_digests: dict[str, tuple[int, int]] = {}
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_path = receipt["path"]
+            if receipt_path in seen_paths:
+                first_canary, first_receipt = seen_paths[receipt_path]
+                raise EvidenceError(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].path duplicates "
+                    f"canary_summaries[{first_canary}].receipt_summary.receipts"
+                    f"[{first_receipt}].path: {receipt_path}"
+                )
+            seen_paths[receipt_path] = (canary_offset, receipt_offset)
+            receipt_sha256 = receipt["receipt_sha256"]
+            if receipt_sha256 in seen_digests:
+                first_canary, first_receipt = seen_digests[receipt_sha256]
+                raise EvidenceError(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].receipt_sha256 duplicates "
+                    f"canary_summaries[{first_canary}].receipt_summary.receipts"
+                    f"[{first_receipt}].receipt_sha256: {receipt_sha256}"
+                )
+            seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
+
+
 def run(args: argparse.Namespace) -> int:
     if not args.canary_summary:
         raise EvidenceError("provide at least one --canary-summary")
@@ -1238,16 +2002,23 @@ def run(args: argparse.Namespace) -> int:
         "--max-trust-source-age-days",
     )
 
-    canary_paths = [path.resolve() for path in args.canary_summary]
-    trust_paths = [path.resolve() for path in args.trust_summary]
-    _reject_duplicate_paths(canary_paths, "--canary-summary")
-    _reject_duplicate_paths(trust_paths, "--trust-summary")
+    canary_paths = list(args.canary_summary)
+    trust_paths = list(args.trust_summary)
+    _reject_duplicate_paths([path.resolve() for path in canary_paths], "--canary-summary")
+    _reject_duplicate_paths([path.resolve() for path in trust_paths], "--trust-summary")
 
     canaries = [verify_canary_summary(path, args) for path in canary_paths]
     trusts = [verify_trust_summary(path, args) for path in trust_paths]
     _reject_duplicate_summary_digests(canaries, "canary_summaries")
     _reject_duplicate_summary_digests(trusts, "trust_summaries")
+    _reject_cross_canary_receipt_reuse(canaries)
     receipt_summary = verify_receipts(args)
+    if receipt_summary is None and not args.allow_canary_stage_receipts_only:
+        raise EvidenceError(
+            "provide --receipt or --receipt-dir for direct receipt archive verification"
+        )
+    if receipt_summary is not None:
+        _verify_direct_receipts_cover_canaries(canaries, receipt_summary)
 
     output: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
@@ -1266,10 +2037,12 @@ def run(args: argparse.Namespace) -> int:
             "allow_default_profile": args.allow_default_profile,
             "allow_failed_receipts": args.allow_failed_receipts,
             "allow_partial_canary": args.allow_partial_canary,
+            "allow_canary_stage_receipts_only": args.allow_canary_stage_receipts_only,
             "allow_receipt_source_missing": args.allow_receipt_source_missing,
             "allow_record_only_trust": args.allow_record_only_trust,
             "allow_synthetic_trust": args.allow_synthetic_trust,
             "allow_missing_trust_source": args.allow_missing_trust_source,
+            "allow_profile_json_not_emitted": args.allow_profile_json_not_emitted,
             "max_canary_age_days": args.max_canary_age_days,
             "max_trust_age_days": args.max_trust_age_days,
             "max_trust_source_age_days": args.max_trust_source_age_days,
@@ -1278,8 +2051,7 @@ def run(args: argparse.Namespace) -> int:
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        args.summary_out.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_out.write_text(text, encoding="utf-8")
+        _write_text_output(args.summary_out, text)
     print(text, end="")
     return 0
 
@@ -1380,6 +2152,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow canaries with only rail or only notary plus verify.",
     )
     parser.add_argument(
+        "--allow-canary-stage-receipts-only",
+        action="store_true",
+        help="Allow summaries without direct receipt archive verification for local audits.",
+    )
+    parser.add_argument(
         "--allow-receipt-source-missing",
         action="store_true",
         help="Do not require receipt verifier commands to use --require-source-files.",
@@ -1398,6 +2175,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-missing-trust-source",
         action="store_true",
         help="Allow trust bundle summaries without provenance source metadata.",
+    )
+    parser.add_argument(
+        "--allow-profile-json-not-emitted",
+        action="store_true",
+        help="Allow trust summaries that did not emit profile override JSON for local audits.",
     )
     return parser
 

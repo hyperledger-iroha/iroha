@@ -15,6 +15,7 @@ on:
       - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_js_sdk.sh"
       - "ci/check_kagemusha_recursive_spend_payload_bench.sh"
+      - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "crates/iroha_data_model/Cargo.toml"
       - "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs"
       - "crates/iroha_data_model/src/offline/**"
@@ -31,6 +32,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
@@ -257,6 +259,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-hop-edges
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-hop-edges
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-append-cap-binding
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-fixture-manifest
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-archive-fixture
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split

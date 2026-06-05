@@ -857,6 +857,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = tru
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
+export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
   "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =
@@ -1049,6 +1050,9 @@ function kagemushaRecursiveSpendOutputToBuffer(result, operation) {
   const output = Buffer.from(result);
   if (output.length === 0) {
     throw new Error(`native ${operation} returned empty output`);
+  }
+  if (output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES) {
+    throw new Error(`native ${operation} returned oversized output`);
   }
   return output;
 }

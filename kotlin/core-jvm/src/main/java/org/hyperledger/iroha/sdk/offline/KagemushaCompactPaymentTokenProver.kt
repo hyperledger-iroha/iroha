@@ -4,6 +4,7 @@ package org.hyperledger.iroha.sdk.offline
 class KagemushaCompactPaymentTokenProver private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
+        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -62,6 +63,7 @@ class KagemushaCompactPaymentTokenProver private constructor() {
         internal fun requireNativeOutput(output: ByteArray?, label: String): ByteArray {
             check(output != null) { "$label returned no output" }
             check(output.isNotEmpty()) { "$label returned empty output" }
+            check(output.size <= NATIVE_ARCHIVE_MAX_BYTES) { "$label returned oversized output" }
             return output
         }
 

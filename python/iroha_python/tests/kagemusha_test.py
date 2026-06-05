@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
+from pathlib import Path
+
 import pytest
 
 from iroha_python import kagemusha
@@ -20,6 +24,24 @@ RECURSIVE_SPEND_METHODS = (
     "kagemusha_recursive_spend_redeem",
 )
 MALFORMED_PROBE_ARCHIVE = b"\x00"
+
+
+def _shared_recursive_spend_manifest() -> dict[str, object]:
+    return _shared_recursive_spend_fixture("manifest.json")
+
+
+def _shared_recursive_spend_archives() -> dict[str, object]:
+    return _shared_recursive_spend_fixture("archives.json")
+
+
+def _shared_recursive_spend_fixture(file_name: str) -> dict[str, object]:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "kagemusha_recursive_spend_abi6"
+        / file_name
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _is_malformed_probe_archive(value: bytes) -> bool:
@@ -237,6 +259,215 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     ]
 
 
+def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
+    manifest = _shared_recursive_spend_manifest()
+    assert manifest["schema"] == "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
+    assert (
+        manifest["bridge_abi_version"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
+    )
+    assert manifest["operation_count"] == 9
+
+    operations = manifest["operations"]
+    assert isinstance(operations, list)
+    assert len(operations) == manifest["operation_count"]
+    assert {operation["symbol"] for operation in operations} == {
+        "connect_norito_kagemusha_recursive_spend_init",
+        "connect_norito_kagemusha_recursive_spend_append",
+        "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+        "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+        "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+        "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+        "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+        "connect_norito_kagemusha_recursive_spend_verify",
+        "connect_norito_kagemusha_recursive_spend_redeem",
+    }
+    append_witness = next(
+        operation
+        for operation in operations
+        if operation["name"] == "lineage_witness_append_result"
+    )
+    assert append_witness["input_archives"] == [
+        "KagemushaRecursiveSpendLineageWitnessV1",
+        "KagemushaRecursiveSpendAppendRequestV1",
+        "KagemushaRecursiveSpendBundleV1",
+    ]
+    assert append_witness["output_archive"] == "KagemushaRecursiveSpendLineageWitnessV1"
+
+    circuit_ids = manifest["proof_circuit_ids"]
+    assert isinstance(circuit_ids, dict)
+    assert (
+        circuit_ids["recursive_aggregation"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    )
+    assert (
+        circuit_ids["reserved_lineage"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+    )
+    assert (
+        circuit_ids["reserved_lineage_one_hop"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    )
+    assert (
+        circuit_ids["reserved_lineage_append"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    )
+
+    limits = manifest["limits"]
+    assert isinstance(limits, dict)
+    assert limits["compact_token_max_hops"] == kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+    assert (
+        limits["reserved_lineage_witnessless_max_hops"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+    )
+    assert (
+        limits["previous_proof_open_envelopes_required_count"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
+    )
+    assert (
+        limits["previous_proof_open_envelopes_max_bytes"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
+    )
+    assert (
+        limits["pallas_open_envelope_max_transcript_label_bytes"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+    )
+    assert limits["native_archive_max_bytes"] == kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+
+    domains = manifest["domains"]
+    assert isinstance(domains, dict)
+    assert (
+        domains["transition_profile"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN
+    )
+    assert (
+        domains["lineage_append_boundary_final_note_binding"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1
+    )
+
+    benchmarks = manifest["payload_benchmarks"]
+    assert isinstance(benchmarks, dict)
+    assert benchmarks["semantic_payload_bytes"] == 1751
+    assert benchmarks["reserved_lineage_payload_bytes"] == 3847
+    assert benchmarks["reserved_lineage_transition_profile_bytes"] == 2817
+
+    archive_fixture = _shared_recursive_spend_archives()
+    assert (
+        archive_fixture["schema"]
+        == "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"
+    )
+    archives = archive_fixture["archives"]
+    assert isinstance(archives, list)
+    assert {archive["name"] for archive in archives} == {
+        "init_request",
+        "init_bundle",
+        "transition_profile_init",
+        "append_request",
+        "append_bundle",
+        "transition_profile_append",
+        "lineage_append_boundary",
+        "lineage_witness_from_init_result",
+        "lineage_witness_append_result",
+        "verify_request",
+        "verify_result",
+        "redeem_request",
+        "redeem_instruction",
+    }
+    request_archive_fields = archive_fixture["request_archive_fields"]
+    assert isinstance(request_archive_fields, list)
+    request_fields_by_type = {
+        entry["norito_type"]: entry["fields"] for entry in request_archive_fields
+    }
+    expected_request_fields = {
+        "KagemushaRecursiveSpendInitRequestV1": [
+            "record_bundle",
+            "pallas_open_envelopes_archive",
+            "current_note",
+            "lineage_verifier_key",
+            "lineage_proving_key_archive",
+            "block_height",
+        ],
+        "KagemushaRecursiveSpendAppendRequestV1": [
+            "previous_bundle",
+            "record_bundle",
+            "pallas_open_envelopes_archive",
+            "current_note",
+            "output_proof_circuit_id",
+            "previous_lineage_verifier_record",
+            "previous_recursive_proof_open_envelopes_archive",
+            "lineage_verifier_key",
+            "lineage_proving_key_archive",
+            "block_height",
+        ],
+        "KagemushaRecursiveSpendVerifyRequestV1": [
+            "bundle",
+            "lineage_verifier_record",
+            "block_height",
+        ],
+        "KagemushaRecursiveSpendRedeemRequestV1": [
+            "bundle",
+            "recipient",
+            "public_amount",
+            "redeem_proof",
+            "lineage_witness",
+            "lineage_verifier_record",
+            "block_height",
+        ],
+    }
+    assert set(request_fields_by_type) == set(expected_request_fields)
+    for request_type, expected_fields in expected_request_fields.items():
+        fields = request_fields_by_type[request_type]
+        assert [field["name"] for field in fields] == expected_fields
+        block_height = next(field for field in fields if field["name"] == "block_height")
+        assert block_height["type"] == "Option<u64>"
+        assert block_height["norito_default"] is True
+        assert block_height["semantics"] == "verifier_record_activation_height"
+
+    redeem_archive = next(
+        archive for archive in archives if archive["name"] == "redeem_request"
+    )
+    assert redeem_archive["operation"] == "redeem"
+    assert redeem_archive["norito_type"] == "KagemushaRecursiveSpendRedeemRequestV1"
+    assert (
+        redeem_archive["sha256_hex"]
+        == "b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2"
+    )
+    assert redeem_archive["byte_len"] > 0
+    assert len(base64.b64decode(redeem_archive["bytes_base64"])) > 0
+    redeem_instruction_archive = next(
+        archive for archive in archives if archive["name"] == "redeem_instruction"
+    )
+    assert redeem_instruction_archive["norito_type"] == "RedeemKagemushaRecursive"
+    assert (
+        redeem_instruction_archive["sha256_hex"]
+        == "a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e"
+    )
+
+    assert (
+        kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(1)
+        == circuit_ids["reserved_lineage_append"]
+    )
+    assert (
+        kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(63)
+        == circuit_ids["reserved_lineage_append"]
+    )
+    assert (
+        kagemusha.preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(64)
+        == circuit_ids["recursive_aggregation"]
+    )
+    assert not kagemusha.can_append_kagemusha_recursive_spend_witnessless_lineage(0)
+    assert kagemusha.can_append_kagemusha_recursive_spend_witnessless_lineage(63)
+    assert not kagemusha.can_append_kagemusha_recursive_spend_witnessless_lineage(64)
+    assert kagemusha.can_redeem_kagemusha_recursive_spend_witnessless(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        2,
+    )
+    assert not kagemusha.can_redeem_kagemusha_recursive_spend_witnessless(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        65,
+    )
+
+
 def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -302,6 +533,8 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
         == 128
     )
+    assert kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024
+    assert "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES" in kagemusha.__all__
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN
         == "iroha:kagemusha:v1:recursive-spend-transition-profile"
@@ -879,6 +1112,33 @@ def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
             b"request",
             b"bundle",
         )
+
+
+def test_recursive_kagemusha_helpers_reject_oversized_native_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+
+    def oversized_one(archive: bytes) -> bytes:
+        native._reject_probe("oversized one", archive)
+        return b"abc"
+
+    def oversized_two(first: bytes, second: bytes) -> bytes:
+        native._reject_probe("oversized two", first, second)
+        return b"abc"
+
+    monkeypatch.setattr(kagemusha, "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES", 2)
+    native.kagemusha_prove_verified_compact_payment_token_with_records = oversized_one
+    setattr(native, RECURSIVE_AGGREGATION_METHOD, oversized_two)
+    native.kagemusha_recursive_spend_redeem = oversized_one
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    with pytest.raises(RuntimeError, match="returned oversized output"):
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"record")
+    with pytest.raises(RuntimeError, match="returned oversized output"):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(b"record", b"pallas")
+    with pytest.raises(RuntimeError, match="returned oversized output"):
+        kagemusha.kagemusha_recursive_spend_redeem(b"request")
 
 
 def test_recursive_kagemusha_helpers_reject_missing_native_outputs(

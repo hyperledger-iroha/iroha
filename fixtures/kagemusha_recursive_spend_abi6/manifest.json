@@ -1,0 +1,202 @@
+{
+  "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+  "fixture_kind": "metadata_contract",
+  "archive_fixture": {
+    "path": "fixtures/kagemusha_recursive_spend_abi6/archives.json",
+    "schema": "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"
+  },
+  "bridge_abi_version": 6,
+  "operation_count": 9,
+  "proof_circuit_ids": {
+    "recursive_aggregation": "kagemusha-recursive-aggregation-v1",
+    "reserved_lineage": "kagemusha-recursive-spend-lineage-v1",
+    "reserved_lineage_one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
+    "reserved_lineage_append": "kagemusha-recursive-spend-lineage-append-v1"
+  },
+  "limits": {
+    "compact_token_max_hops": 64,
+    "reserved_lineage_witnessless_max_hops": 64,
+    "previous_proof_open_envelopes_required_count": 1,
+    "previous_proof_open_envelopes_max_bytes": 8388608,
+    "pallas_open_envelope_max_transcript_label_bytes": 128,
+    "native_archive_max_bytes": 67108864
+  },
+  "domains": {
+    "transition_profile": "iroha:kagemusha:v1:recursive-spend-transition-profile",
+    "transition_profile_digest": "iroha:kagemusha:v1:recursive-spend-transition-profile-digest",
+    "transition_profile_binding_digest": "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest",
+    "lineage_append_openings_preflight": "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1",
+    "lineage_append_boundary": "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1",
+    "lineage_append_boundary_chain_asset_binding": "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1",
+    "lineage_append_boundary_final_note_binding": "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
+  },
+  "modes": {
+    "preferred_when_recursive_available": "recursive_spend_v1",
+    "fallback_when_recursive_unavailable": "checked_prefold_v1"
+  },
+  "operations": [
+    {
+      "name": "init",
+      "symbol": "connect_norito_kagemusha_recursive_spend_init",
+      "input_archives": ["KagemushaRecursiveSpendInitRequestV1"],
+      "output_archive": "KagemushaRecursiveSpendBundleV1",
+      "output_kind": "bundle"
+    },
+    {
+      "name": "append",
+      "symbol": "connect_norito_kagemusha_recursive_spend_append",
+      "input_archives": ["KagemushaRecursiveSpendAppendRequestV1"],
+      "output_archive": "KagemushaRecursiveSpendBundleV1",
+      "output_kind": "bundle"
+    },
+    {
+      "name": "transition_profile_init",
+      "symbol": "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+      "input_archives": ["KagemushaRecursiveSpendInitRequestV1"],
+      "output_archive": "KagemushaRecursiveSpendTransitionProfileV1",
+      "output_kind": "transition_profile"
+    },
+    {
+      "name": "transition_profile_append",
+      "symbol": "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+      "input_archives": ["KagemushaRecursiveSpendAppendRequestV1"],
+      "output_archive": "KagemushaRecursiveSpendTransitionProfileV1",
+      "output_kind": "transition_profile"
+    },
+    {
+      "name": "lineage_append_boundary",
+      "symbol": "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+      "input_archives": ["KagemushaRecursiveSpendTransitionProfileV1"],
+      "output_archive": "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+      "output_kind": "append_boundary"
+    },
+    {
+      "name": "lineage_witness_from_init_result",
+      "symbol": "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+      "input_archives": [
+        "KagemushaRecursiveSpendInitRequestV1",
+        "KagemushaRecursiveSpendBundleV1"
+      ],
+      "output_archive": "KagemushaRecursiveSpendLineageWitnessV1",
+      "output_kind": "lineage_witness"
+    },
+    {
+      "name": "lineage_witness_append_result",
+      "symbol": "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+      "input_archives": [
+        "KagemushaRecursiveSpendLineageWitnessV1",
+        "KagemushaRecursiveSpendAppendRequestV1",
+        "KagemushaRecursiveSpendBundleV1"
+      ],
+      "output_archive": "KagemushaRecursiveSpendLineageWitnessV1",
+      "output_kind": "lineage_witness"
+    },
+    {
+      "name": "verify",
+      "symbol": "connect_norito_kagemusha_recursive_spend_verify",
+      "input_archives": ["KagemushaRecursiveSpendVerifyRequestV1"],
+      "output_archive": "KagemushaRecursiveSpendVerifyResultV1",
+      "output_kind": "verify_result"
+    },
+    {
+      "name": "redeem",
+      "symbol": "connect_norito_kagemusha_recursive_spend_redeem",
+      "input_archives": ["KagemushaRecursiveSpendRedeemRequestV1"],
+      "output_archive": "RedeemKagemushaRecursive",
+      "output_kind": "instruction"
+    }
+  ],
+  "hop_policy": {
+    "preferred_append_output": [
+      {
+        "previous_hop_count": 1,
+        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1"
+      },
+      {
+        "previous_hop_count": 63,
+        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1"
+      },
+      {
+        "previous_hop_count": 64,
+        "circuit_id": "kagemusha-recursive-aggregation-v1"
+      },
+      {
+        "previous_hop_count": 0,
+        "circuit_id": "kagemusha-recursive-aggregation-v1"
+      }
+    ],
+    "append_witnessless": [
+      {
+        "previous_hop_count": 0,
+        "allowed": false
+      },
+      {
+        "previous_hop_count": 1,
+        "allowed": true
+      },
+      {
+        "previous_hop_count": 63,
+        "allowed": true
+      },
+      {
+        "previous_hop_count": 64,
+        "allowed": false
+      }
+    ],
+    "redeem_witnessless": [
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+        "hop_count": 1,
+        "allowed": true,
+        "requires_lineage_witness": false
+      },
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+        "hop_count": 1,
+        "allowed": true,
+        "requires_lineage_witness": false
+      },
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+        "hop_count": 2,
+        "allowed": true,
+        "requires_lineage_witness": false
+      },
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+        "hop_count": 64,
+        "allowed": true,
+        "requires_lineage_witness": false
+      },
+      {
+        "circuit_id": "kagemusha-recursive-aggregation-v1",
+        "hop_count": 1,
+        "allowed": false,
+        "requires_lineage_witness": true
+      },
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+        "hop_count": 0,
+        "allowed": false,
+        "requires_lineage_witness": true
+      },
+      {
+        "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+        "hop_count": 65,
+        "allowed": false,
+        "requires_lineage_witness": true
+      }
+    ]
+  },
+  "payload_benchmarks": {
+    "hops": [1, 2, 3, 5, 8, 13, 21, 34, 55, 64],
+    "semantic_payload_bytes": 1751,
+    "semantic_payload_max_bytes": 2048,
+    "semantic_transition_profile_bytes": 2094,
+    "semantic_transition_profile_max_bytes": 3072,
+    "reserved_lineage_payload_bytes": 3847,
+    "reserved_lineage_payload_max_bytes": 8192,
+    "reserved_lineage_transition_profile_bytes": 2817,
+    "reserved_lineage_transition_profile_max_bytes": 4096
+  }
+}

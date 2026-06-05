@@ -91,6 +91,14 @@ impl BridgeStateReadOnly for SparseBridgeState {
             .map(|(_, block)| Arc::clone(block))
     }
 
+    fn bridge_commit_qc_for_block(
+        &self,
+        _height: u64,
+        _block_hash: HashOf<BlockHeader>,
+    ) -> Option<Qc> {
+        None
+    }
+
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
         self.pops
             .iter()

@@ -23,6 +23,8 @@ use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
 const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
 const MAX_LEN_PREFIXED_FIELD_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum byte length for portable verifier-key registry id fields.
+pub const VERIFYING_KEY_ID_MAX_FIELD_BYTES: usize = 256;
 
 /// Read a length‑prefixed field produced by Norito struct serializers.
 fn take_len_prefixed_slice<'a>(
@@ -221,6 +223,21 @@ impl VerifyingKeyId {
             name: name.into(),
         }
     }
+
+    /// Returns true when both id components use bounded portable registry syntax.
+    #[must_use]
+    pub fn is_portable_registry_id(&self) -> bool {
+        verifying_key_id_field_is_portable(self.backend.as_str())
+            && verifying_key_id_field_is_portable(&self.name)
+    }
+}
+
+/// Returns true when a verifier-key registry id component is bounded and portable.
+#[must_use]
+pub fn verifying_key_id_field_is_portable(field: &str) -> bool {
+    !field.is_empty()
+        && field.len() <= VERIFYING_KEY_ID_MAX_FIELD_BYTES
+        && crate::zk::open_verify_circuit_id_is_portable(field)
 }
 
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyId {
@@ -357,6 +374,18 @@ impl VerifyingKeyRecord {
     pub fn is_active(&self) -> bool {
         self.status.is_active()
     }
+
+    /// Returns true if the record is permitted for verification at `height`.
+    #[must_use]
+    pub fn is_active_at(&self, height: u64) -> bool {
+        self.is_active()
+            && self
+                .activation_height
+                .is_none_or(|activation| height >= activation)
+            && self
+                .withdraw_height
+                .is_none_or(|withdraw| height < withdraw)
+    }
 }
 
 /// Attachment of a zero-knowledge proof to a transaction.
@@ -418,15 +447,49 @@ impl ProofAttachment {
         }
     }
 
-    fn field_content_error(&self) -> Option<&'static str> {
+    /// Return the first structural field error for this attachment, if any.
+    ///
+    /// This predicate is intentionally pure and layout-neutral so Norito
+    /// decoding, JSON decoding, transaction admission, and SDK callers can
+    /// enforce the same canonical attachment shape without changing the wire
+    /// format.
+    #[must_use]
+    pub fn structural_error(&self) -> Option<(&'static str, &'static str)> {
+        if let Some(field) = self.backend_consistency_error() {
+            Some((field, "must match attachment backend"))
+        } else {
+            self.field_content_error()
+        }
+    }
+
+    fn field_content_error(&self) -> Option<(&'static str, &'static str)> {
         if self.backend.as_str().trim().is_empty() {
-            Some("backend")
+            Some(("backend", "must be non-empty"))
         } else if self.proof.backend.as_str().trim().is_empty() {
-            Some("proof.backend")
+            Some(("proof.backend", "must be non-empty"))
         } else if self.vk_ref.backend.as_str().trim().is_empty() {
-            Some("vk_ref.backend")
+            Some(("vk_ref.backend", "must be non-empty"))
         } else if self.vk_ref.name.trim().is_empty() {
-            Some("vk_ref.name")
+            Some(("vk_ref.name", "must be non-empty"))
+        } else if !self.vk_ref.is_portable_registry_id() {
+            Some(("vk_ref", "must use portable registry syntax"))
+        } else if self.proof.bytes.is_empty() {
+            Some(("proof.bytes", "must be non-empty"))
+        } else if self
+            .vk_commitment
+            .is_some_and(|commitment| commitment.iter().all(|byte| *byte == 0))
+        {
+            Some(("vk_commitment", "must be non-zero"))
+        } else if self
+            .envelope_hash
+            .is_some_and(|hash| hash.iter().all(|byte| *byte == 0))
+        {
+            Some(("envelope_hash", "must be non-zero"))
+        } else if self.envelope_hash.is_some_and(|hash| {
+            let expected: [u8; 32] = iroha_crypto::Hash::new(&self.proof.bytes).into();
+            hash != expected
+        }) {
+            Some(("envelope_hash", "must match proof bytes"))
         } else {
             None
         }
@@ -575,10 +638,10 @@ impl norito::json::JsonDeserialize for ProofAttachment {
             envelope_hash: proof_attachment_json_optional_fixed_bytes(object, "envelope_hash")?,
             lane_privacy,
         };
-        if let Some(field) = attachment.field_content_error() {
+        if let Some((field, message)) = attachment.structural_error() {
             return Err(norito::json::Error::InvalidField {
                 field: field.into(),
-                message: "must be non-empty".into(),
+                message: message.into(),
             });
         }
         Ok(attachment)
@@ -730,13 +793,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
             envelope_hash,
             lane_privacy,
         };
-        if let Some(field) = attachment.backend_consistency_error() {
-            return Err(ncore::Error::Message(format!(
-                "{field} must match attachment backend"
-            )));
-        }
-        if let Some(field) = attachment.field_content_error() {
-            return Err(ncore::Error::Message(format!("{field} must be non-empty")));
+        if let Some((field, message)) = attachment.structural_error() {
+            return Err(ncore::Error::Message(format!("{field} {message}")));
         }
 
         Ok((attachment, offset))
@@ -999,6 +1057,20 @@ mod tests {
         encoded.extend_from_slice(&field);
     }
 
+    fn proof_bytes_hash(bytes: &[u8]) -> [u8; 32] {
+        iroha_crypto::Hash::new(bytes).into()
+    }
+
+    #[cfg(feature = "json")]
+    fn hash_json(hash: &[u8; 32]) -> String {
+        let body = hash
+            .iter()
+            .map(|byte| byte.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{body}]")
+    }
+
     #[test]
     fn proof_attachment_list_roundtrip_bare() {
         let mut attachment = ProofAttachment::new_ref(
@@ -1065,6 +1137,55 @@ mod tests {
     }
 
     #[test]
+    fn verifying_key_id_portable_registry_id_predicate_is_fail_closed() {
+        for (backend, name) in [
+            ("halo2/ipa", "vk_transfer"),
+            ("halo2/ipa", "halo2/ipa::transfer_v1"),
+            ("stark/fri/sha256-goldilocks", "zk_ace.v1"),
+            ("stark/fri/sha256_goldilocks.v1", "zk-ace-pq-v0"),
+        ] {
+            let id = VerifyingKeyId::new(backend, name);
+            assert!(
+                id.is_portable_registry_id(),
+                "portable verifier-key id `{backend}` / `{name}` must be accepted"
+            );
+        }
+
+        for (label, backend, name) in [
+            ("blank-backend", " ", "vk_transfer"),
+            ("blank-name", "halo2/ipa", " "),
+            ("uppercase-backend", "Halo2/ipa", "vk_transfer"),
+            ("uppercase-name", "halo2/ipa", "VkTransfer"),
+            ("control-backend", "halo2/ipa\nforged", "vk_transfer"),
+            ("control-name", "halo2/ipa", "vk\nforged"),
+            ("zero-width-backend", "halo2/ipa\u{200B}", "vk_transfer"),
+            ("zero-width-name", "halo2/ipa", "vk\u{200B}transfer"),
+            ("path-traversal-backend", "halo2/ipa/../vk", "vk_transfer"),
+            ("path-traversal-name", "halo2/ipa", "vk/../transfer"),
+            ("dot-segment-backend", "halo2/ipa/./vk", "vk_transfer"),
+            ("dot-segment-name", "halo2/ipa", "vk/./transfer"),
+            ("hidden-backend", "halo2/.ipa", "vk_transfer"),
+            ("hidden-name", "halo2/ipa", ".vk_transfer"),
+            ("slash-colon-backend", "halo2/ipa/:vk", "vk_transfer"),
+            ("colon-slash-name", "halo2/ipa", "vk:/transfer"),
+            ("backslash-backend", "halo2\\ipa", "vk_transfer"),
+            ("backslash-name", "halo2/ipa", "vk\\transfer"),
+            ("leading-delimiter-name", "halo2/ipa", "-vk_transfer"),
+            ("trailing-delimiter-name", "halo2/ipa", "vk_transfer_"),
+        ] {
+            let id = VerifyingKeyId::new(backend, name);
+            assert!(
+                !id.is_portable_registry_id(),
+                "case {label} must reject verifier-key id `{backend}` / `{name}`"
+            );
+        }
+
+        let oversized = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
+        assert!(!VerifyingKeyId::new("halo2/ipa", oversized.as_str()).is_portable_registry_id());
+        assert!(!VerifyingKeyId::new(oversized.as_str(), "vk_transfer").is_portable_registry_id());
+    }
+
+    #[test]
     fn vk_record_roundtrip() {
         let rec = VerifyingKeyRecord {
             version: 1,
@@ -1114,6 +1235,31 @@ mod tests {
     }
 
     #[test]
+    fn verifying_key_record_active_at_respects_height_window() {
+        let mut rec = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:height-window",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            [0xAA; 32],
+            [0xBB; 32],
+        );
+        rec.status = ConfidentialStatus::Active;
+        assert!(rec.is_active_at(1));
+
+        rec.activation_height = Some(2);
+        assert!(!rec.is_active_at(1));
+        assert!(rec.is_active_at(2));
+
+        rec.withdraw_height = Some(4);
+        assert!(rec.is_active_at(3));
+        assert!(!rec.is_active_at(4));
+
+        rec.status = ConfidentialStatus::Proposed;
+        assert!(!rec.is_active_at(3));
+    }
+
+    #[test]
     fn proof_attachment_roundtrip() {
         let p = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
         let id = VerifyingKeyId::new("halo2/ipa", "vk_1");
@@ -1123,6 +1269,22 @@ mod tests {
         let dec: ProofAttachment = norito::core::NoritoDeserialize::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.vk_ref.name.as_str(), "vk_1");
+    }
+
+    #[test]
+    fn proof_attachment_decode_accepts_matching_envelope_hash() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+        let mut attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            proof.clone(),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        );
+        attachment.envelope_hash = Some(proof_bytes_hash(&proof.bytes));
+
+        let encoded = norito::to_bytes(&attachment).expect("encode attachment");
+        let decoded = norito::decode_from_bytes::<ProofAttachment>(&encoded)
+            .expect("matching envelope hash must decode");
+        assert_eq!(decoded.envelope_hash, attachment.envelope_hash);
     }
 
     #[test]
@@ -1273,6 +1435,80 @@ mod tests {
     }
 
     #[test]
+    fn proof_attachment_decode_rejects_nonportable_refs_empty_proofs_and_zero_hashes() {
+        let mut zero_vk_commitment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        );
+        zero_vk_commitment.vk_commitment = Some([0u8; 32]);
+
+        let mut zero_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        );
+        zero_envelope_hash.envelope_hash = Some([0u8; 32]);
+
+        let mut forged_envelope_hash = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        );
+        let mut forged_hash = proof_bytes_hash(&forged_envelope_hash.proof.bytes);
+        forged_hash[0] ^= 0x80;
+        forged_envelope_hash.envelope_hash = Some(forged_hash);
+
+        let cases = [
+            (
+                ProofAttachment::new_ref(
+                    "Halo2/ipa".into(),
+                    ProofBox::new("Halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("Halo2/ipa", "vk_1"),
+                ),
+                "vk_ref",
+            ),
+            (
+                ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "Vk_1"),
+                ),
+                "vk_ref",
+            ),
+            (
+                ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                    VerifyingKeyId::new("halo2/ipa", "vk_1\u{200B}"),
+                ),
+                "vk_ref",
+            ),
+            (
+                ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    ProofBox::new("halo2/ipa".into(), Vec::new()),
+                    VerifyingKeyId::new("halo2/ipa", "vk_1"),
+                ),
+                "proof.bytes",
+            ),
+            (zero_vk_commitment, "vk_commitment"),
+            (zero_envelope_hash, "envelope_hash"),
+            (forged_envelope_hash, "envelope_hash"),
+        ];
+
+        for (attachment, expected_field) in cases {
+            let encoded = norito::to_bytes(&attachment).expect("encode malformed attachment");
+            let err = norito::decode_from_bytes::<ProofAttachment>(&encoded)
+                .expect_err("malformed proof attachment must not decode");
+            assert!(
+                err.to_string().contains(expected_field),
+                "expected error to mention {expected_field}, got {err}"
+            );
+        }
+    }
+
+    #[test]
     fn proof_attachment_decode_rejects_backend_mismatches() {
         for (proof_backend, vk_backend, expected_field) in [
             ("stark/fri", "halo2/ipa", "proof.backend"),
@@ -1351,6 +1587,25 @@ mod tests {
             })
         );
         assert!(attachment.envelope_hash.is_none());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_accepts_matching_envelope_hash() {
+        let proof_bytes = [1u8, 2, 3];
+        let envelope_hash = proof_bytes_hash(&proof_bytes);
+        let envelope_hash_json = hash_json(&envelope_hash);
+        let json = format!(
+            r#"{{
+                "backend": "halo2/ipa",
+                "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
+                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
+                "envelope_hash": {envelope_hash_json}
+            }}"#
+        );
+        let attachment: ProofAttachment =
+            norito::json::from_str(&json).expect("matching envelope hash JSON");
+        assert_eq!(attachment.envelope_hash, Some(envelope_hash));
     }
 
     #[cfg(feature = "json")]
@@ -1514,6 +1769,86 @@ mod tests {
             assert!(
                 err.to_string().contains(expected_field),
                 "expected error to mention {expected_field}, got {err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_rejects_nonportable_refs_empty_proofs_and_zero_hashes() {
+        let zero_hash = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]";
+        let mut forged_hash = proof_bytes_hash(&[1, 2, 3]);
+        forged_hash[0] ^= 0x80;
+        let forged_hash = hash_json(&forged_hash);
+        let cases = [
+            (
+                r#"{
+                    "backend": "Halo2/ipa",
+                    "proof": { "backend": "Halo2/ipa", "bytes": [1, 2, 3] },
+                    "vk_ref": { "backend": "Halo2/ipa", "name": "vk_1" }
+                }"#
+                .to_owned(),
+                "vk_ref",
+            ),
+            (
+                r#"{
+                    "backend": "halo2/ipa",
+                    "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                    "vk_ref": { "backend": "halo2/ipa", "name": "Vk_1" }
+                }"#
+                .to_owned(),
+                "vk_ref",
+            ),
+            (
+                r#"{
+                    "backend": "halo2/ipa",
+                    "proof": { "backend": "halo2/ipa", "bytes": [] },
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                }"#
+                .to_owned(),
+                "proof.bytes",
+            ),
+            (
+                format!(
+                    r#"{{
+                        "backend": "halo2/ipa",
+                        "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
+                        "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
+                        "vk_commitment": {zero_hash}
+                    }}"#
+                ),
+                "vk_commitment",
+            ),
+            (
+                format!(
+                    r#"{{
+                        "backend": "halo2/ipa",
+                        "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
+                        "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
+                        "envelope_hash": {zero_hash}
+                    }}"#
+                ),
+                "envelope_hash",
+            ),
+            (
+                format!(
+                    r#"{{
+                        "backend": "halo2/ipa",
+                        "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
+                        "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
+                        "envelope_hash": {forged_hash}
+                    }}"#
+                ),
+                "envelope_hash",
+            ),
+        ];
+
+        for (json, expected_field) in cases {
+            let err = norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("malformed proof attachment JSON must be rejected");
+            assert!(
+                err.to_string().contains(expected_field),
+                "expected JSON error to mention {expected_field}, got {err}"
             );
         }
     }

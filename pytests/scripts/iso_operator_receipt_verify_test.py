@@ -45,7 +45,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             export_dir = root / "export"
             export_dir.mkdir()
-            audit_test.write_export(export_dir)
+            audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
             with audit_test.capture_server() as (endpoint, _requests):
                 self.assertEqual(
                     audit_test.run_main(
@@ -155,6 +159,32 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("receipt_sha256 duplicates", stderr)
 
+    def test_non_regular_receipt_dirs_are_rejected_before_discovery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_dir = root / "receipts"
+            receipt_dir.mkdir()
+            receipt_file = root / "receipt-dir-as-file"
+            receipt_file.write_text("not a directory\n", encoding="utf-8")
+            receipt_link = root / "receipt-dir-link"
+            try:
+                receipt_link.symlink_to(receipt_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            cases = [
+                (receipt_link, "must not be a symlink"),
+                (receipt_file, "is not a directory"),
+            ]
+            for path, message in cases:
+                with self.subTest(path=path.name):
+                    rc, _stdout, stderr = run_verify(
+                        ["--receipt-dir", str(path), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_duplicate_receipt_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             receipt = Path(raw_root) / "receipt.json"
@@ -166,6 +196,229 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+
+    def test_unknown_receipt_fields_are_rejected_even_with_valid_digest(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"operator_comment": "looks fine"}),
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("contains unknown keys: operator_comment", stderr)
+
+    def test_endpoint_digest_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"endpoint_sha256": "0" * 64}),
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("endpoint_sha256 does not match endpoint", stderr)
+
+    def test_rail_receipt_required_strings_must_not_require_trimming(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, _sidecar = rail_test.write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+            cases = [
+                (
+                    "message type whitespace",
+                    lambda body: body.update({"message_type": " pacs.002"}),
+                    "message_type must not have surrounding whitespace",
+                ),
+                (
+                    "message type control",
+                    lambda body: body.update({"message_type": "pacs\n002"}),
+                    "message_type must not contain control characters",
+                ),
+                (
+                    "xml path whitespace",
+                    lambda body: body.update({"xml_path": str(xml_path) + " "}),
+                    "xml_path must not have surrounding whitespace",
+                ),
+                (
+                    "xml path control",
+                    lambda body: body.update({"xml_path": str(xml_path) + "\n"}),
+                    "xml_path must not contain control characters",
+                ),
+                (
+                    "sidecar path whitespace",
+                    lambda body: body.update({"sidecar_path": " " + str(sidecar_path)}),
+                    "sidecar_path must not have surrounding whitespace",
+                ),
+                (
+                    "sidecar path control",
+                    lambda body: body.update({"sidecar_path": str(sidecar_path) + "\n"}),
+                    "sidecar_path must not contain control characters",
+                ),
+            ]
+
+            for label, mutate, expected in cases:
+                with self.subTest(label=label):
+                    receipt.write_bytes(original_receipt)
+                    rewrite_receipt(receipt, mutate)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+
+    def test_status_timestamp_and_response_metadata_are_consistent(self):
+        cases = [
+            (
+                "ok_status_mismatch",
+                lambda body: body.update({"ok": True, "status_code": 500}),
+                "ok does not match status_code",
+            ),
+            (
+                "success_error",
+                lambda body: body.update({"error": "HTTP 202"}),
+                "successful receipt must not record error",
+            ),
+            (
+                "success_error_whitespace",
+                lambda body: body.update({"error": " HTTP 202"}),
+                "error must not have surrounding whitespace",
+            ),
+            (
+                "success_error_control",
+                lambda body: body.update({"error": "HTTP\n202"}),
+                "error must not contain control characters",
+            ),
+            (
+                "preview_without_digest",
+                lambda body: body.update(
+                    {"response_body_sha256": None, "response_body_preview": "accepted"}
+                ),
+                "response_body_preview requires response_body_sha256",
+            ),
+            (
+                "bad_response_digest",
+                lambda body: body.update({"response_body_sha256": "not-a-digest"}),
+                "invalid response_body_sha256",
+            ),
+            (
+                "oversized_preview",
+                lambda body: body.update({"response_body_preview": "x" * 4097}),
+                "response_body_preview exceeds 4096 characters",
+            ),
+            (
+                "bearer_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "Authorization: Bearer abc"}
+                ),
+                "response_body_preview contains bearer-token material",
+            ),
+            (
+                "naive_timestamp",
+                lambda body: body.update({"submitted_at": "2026-06-05T00:00:00"}),
+                "submitted_at must include a timezone offset",
+            ),
+            (
+                "timestamp_whitespace",
+                lambda body: body.update({"submitted_at": body["submitted_at"] + " "}),
+                "submitted_at must not have surrounding whitespace",
+            ),
+            (
+                "timestamp_control",
+                lambda body: body.update({"submitted_at": body["submitted_at"] + "\n"}),
+                "submitted_at must not contain control characters",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
+
+            for name, mutate, expected in cases:
+                with self.subTest(name=name):
+                    receipt.write_bytes(original)
+                    rewrite_receipt(receipt, mutate)
+
+                    rc, _stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
 
     def test_tampered_receipt_digest_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -261,6 +514,726 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
 
+    def test_source_sidecar_mismatches_are_rejected_when_required(self):
+        def replace_with_symlink(path, target):
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            try:
+                path.symlink_to(target)
+            except OSError as error:
+                raise unittest.SkipTest(f"symlink creation unavailable: {error}") from error
+
+        def symlinked_xml(_receipt, sidecar_path):
+            xml_path = sidecar_path.with_suffix("")
+            copy = xml_path.with_name("rail-status.copy.xml")
+            copy.write_bytes(xml_path.read_bytes())
+            replace_with_symlink(xml_path, copy)
+
+        def symlinked_sidecar(_receipt, sidecar_path):
+            copy = sidecar_path.with_name("rail-status.copy.xml.json")
+            copy.write_bytes(sidecar_path.read_bytes())
+            replace_with_symlink(sidecar_path, copy)
+
+        cases = [
+            (
+                "missing_sidecar",
+                lambda receipt, sidecar_path: sidecar_path.unlink(),
+                "references missing sidecar_path",
+            ),
+            (
+                "message_type_mismatch",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "message_type": "pacs.008",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "message_type does not match source sidecar",
+            ),
+            (
+                "unknown_sidecar_key",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "operator_note": "accepted",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "contains unknown keys: operator_note",
+            ),
+            (
+                "profile_whitespace",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "profile": " swift-cbpr-plus",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "profile must not have surrounding whitespace",
+            ),
+            (
+                "profile_control",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "profile": "swift\ncbpr-plus",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "profile must not contain control characters",
+            ),
+            (
+                "profile_embedded_whitespace",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "profile": "swift cbpr-plus",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "profile must not contain whitespace",
+            ),
+            (
+                "rail_message_id_whitespace",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "rail-drop-1 ",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must not have surrounding whitespace",
+            ),
+            (
+                "rail_message_id_control",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "rail\n1",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must not contain control characters",
+            ),
+            (
+                "rail_message_id_embedded_whitespace",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "rail drop 1",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must not contain whitespace",
+            ),
+            (
+                "symlinked_xml",
+                symlinked_xml,
+                "must not be a symlink",
+            ),
+            (
+                "symlinked_sidecar",
+                symlinked_sidecar,
+                "must not be a symlink",
+            ),
+            (
+                "swapped_sidecar_path",
+                lambda receipt, sidecar_path: (
+                    sidecar_path.with_name("copied.xml.json").write_bytes(
+                        sidecar_path.read_bytes()
+                    ),
+                    rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {
+                                "sidecar_path": str(
+                                    sidecar_path.with_name("copied.xml.json")
+                                )
+                            }
+                        ),
+                    ),
+                ),
+                "sidecar_path must match xml_path sidecar",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, _sidecar = rail_test.write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+            original_sidecar = sidecar_path.read_bytes()
+
+            for name, mutate, expected in cases:
+                with self.subTest(name=name):
+                    copied_sidecar = sidecar_path.with_name("copied.xml.json")
+                    if copied_sidecar.exists():
+                        copied_sidecar.unlink()
+                    if xml_path.is_symlink():
+                        xml_path.unlink()
+                    if sidecar_path.is_symlink():
+                        sidecar_path.unlink()
+                    receipt.write_bytes(original_receipt)
+                    xml_path.write_bytes(rail_test.SAMPLE_XML)
+                    sidecar_path.write_bytes(original_sidecar)
+                    mutate(receipt, sidecar_path)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+
+    def test_rail_receipt_metadata_strings_must_not_require_trimming(self):
+        cases = [
+            (
+                "receipt profile whitespace",
+                lambda body: body.update({"profile": " swift-cbpr-plus"}),
+                "profile must not have surrounding whitespace",
+            ),
+            (
+                "receipt profile control",
+                lambda body: body.update({"profile": "swift\ncbpr-plus"}),
+                "profile must not contain control characters",
+            ),
+            (
+                "receipt profile embedded whitespace",
+                lambda body: body.update({"profile": "swift cbpr-plus"}),
+                "profile must not contain whitespace",
+            ),
+            (
+                "receipt rail message whitespace",
+                lambda body: body.update({"rail_message_id": "rail-drop-1 "}),
+                "rail_message_id must not have surrounding whitespace",
+            ),
+            (
+                "receipt rail message control",
+                lambda body: body.update({"rail_message_id": "rail\n1"}),
+                "rail_message_id must not contain control characters",
+            ),
+            (
+                "receipt rail message embedded whitespace",
+                lambda body: body.update({"rail_message_id": "rail drop 1"}),
+                "rail_message_id must not contain whitespace",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+
+            for label, mutate, expected in cases:
+                with self.subTest(label=label):
+                    receipt.write_bytes(original_receipt)
+                    rewrite_receipt(receipt, mutate)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+
+    def test_notary_anchor_source_mismatches_are_rejected_when_required(self):
+        def mismatched_index():
+            index = {
+                "version": 1,
+                "record_count": 1,
+                "records": [audit_test.sample_record("msg-2")],
+            }
+            return audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+
+        def replace_with_symlink(path, target):
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            try:
+                path.symlink_to(target)
+            except OSError as error:
+                raise unittest.SkipTest(f"symlink creation unavailable: {error}") from error
+
+        def symlinked_latest(_receipt, latest, _digest_anchor, _index_file):
+            copy = latest.with_name("latest.copy.notary.json")
+            copy.write_bytes(latest.read_bytes())
+            replace_with_symlink(latest, copy)
+
+        def symlinked_digest_peer(_receipt, _latest, digest_anchor, _index_file):
+            copy = digest_anchor.with_name("digest.copy.notary.json")
+            copy.write_bytes(digest_anchor.read_bytes())
+            replace_with_symlink(digest_anchor, copy)
+
+        def symlinked_index(_receipt, _latest, _digest_anchor, index_file):
+            copy = index_file.with_name("messages.index.copy.json")
+            copy.write_bytes(index_file.read_bytes())
+            replace_with_symlink(index_file, copy)
+
+        def unknown_anchor_field(receipt, latest, digest_anchor, _index_file):
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["operator_note"] = "accepted by phone"
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ]
+                    }
+                ),
+            )
+
+        def unknown_exported_index_field(_receipt, _latest, _digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["operator_note"] = "accepted by phone"
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+        def unknown_embedded_record_field(receipt, latest, digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["operator_note"] = "accepted by phone"
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                    }
+                ),
+            )
+
+        def malformed_exported_record_field(_receipt, _latest, _digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["updated_at_ms"] = -1
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+        def wrong_exported_record_filename(_receipt, _latest, _digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["filename"] = "msg-1.json"
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+        def record_source_path(latest):
+            store_dir = latest.parent.parent / "store"
+            return next((store_dir / audit_test.ADAPTER.RECORDS_DIR).glob("*.json"))
+
+        def missing_anchor_store_dir(receipt, latest, digest_anchor, _index_file):
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["store_dir"] = None
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ]
+                    }
+                ),
+            )
+
+        def missing_persisted_record_source(_receipt, latest, _digest_anchor, _index_file):
+            record_source_path(latest).unlink()
+
+        def digest_correct_record_source_mismatch(
+            _receipt,
+            latest,
+            _digest_anchor,
+            _index_file,
+        ):
+            record_path = record_source_path(latest)
+            source = json.loads(record_path.read_text(encoding="utf-8"))
+            source["transaction_hash"] = "d" * 64
+            source = audit_test.with_digest(
+                source,
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+            )
+            record_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+
+        def digest_correct_record_metadata_mismatch(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            record_path = record_source_path(latest)
+            source = json.loads(record_path.read_text(encoding="utf-8"))
+            source["metadata"]["message_type"] = "pacs.009"
+            source = audit_test.with_digest(
+                source,
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+            )
+            record_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["record_sha256"] = source[
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+            ]
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                    }
+                ),
+            )
+
+        cases = [
+            (
+                "missing_digest_peer",
+                lambda receipt, latest, digest_anchor, index_file: digest_anchor.unlink(),
+                "latest anchor has no digest-addressed peer",
+            ),
+            (
+                "different_digest_peer",
+                lambda receipt, latest, digest_anchor, index_file: digest_anchor.write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                ),
+                "latest anchor differs from digest-addressed peer",
+            ),
+            (
+                "symlinked_latest_anchor",
+                symlinked_latest,
+                "must not be a symlink",
+            ),
+            (
+                "symlinked_digest_peer",
+                symlinked_digest_peer,
+                "must not be a symlink",
+            ),
+            (
+                "symlinked_index",
+                symlinked_index,
+                "must not be a symlink",
+            ),
+            (
+                "exported_index_mismatch",
+                lambda receipt, latest, digest_anchor, index_file: index_file.write_text(
+                    json.dumps(mismatched_index(), indent=2) + "\n",
+                    encoding="utf-8",
+                ),
+                "embedded audit index differs",
+            ),
+            (
+                "unknown_anchor_field",
+                unknown_anchor_field,
+                "contains unknown keys: operator_note",
+            ),
+            (
+                "unknown_exported_index_field",
+                unknown_exported_index_field,
+                "contains unknown keys: operator_note",
+            ),
+            (
+                "unknown_embedded_record_field",
+                unknown_embedded_record_field,
+                "contains unknown keys: operator_note",
+            ),
+            (
+                "malformed_exported_record_field",
+                malformed_exported_record_field,
+                "updated_at_ms must be a non-negative integer",
+            ),
+            (
+                "wrong_exported_record_filename",
+                wrong_exported_record_filename,
+                "filename must be digest-addressed",
+            ),
+            (
+                "missing_anchor_store_dir",
+                missing_anchor_store_dir,
+                "store_dir is required to verify audit records",
+            ),
+            (
+                "missing_persisted_record_source",
+                missing_persisted_record_source,
+                "references missing audit record",
+            ),
+            (
+                "digest_correct_record_source_mismatch",
+                digest_correct_record_source_mismatch,
+                "record_sha256 does not match audit index record",
+            ),
+            (
+                "digest_correct_record_metadata_mismatch",
+                digest_correct_record_metadata_mismatch,
+                "metadata.message_type does not match audit index record",
+            ),
+            (
+                "wrong_anchor_filename",
+                lambda receipt, latest, digest_anchor, index_file: (
+                    digest_anchor.with_name("wrong.notary.json").write_bytes(
+                        latest.read_bytes()
+                    ),
+                    rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {
+                                "anchor_path": str(
+                                    digest_anchor.with_name("wrong.notary.json")
+                                )
+                            }
+                        ),
+                    ),
+                ),
+                "anchor_path filename must be digest-addressed",
+            ),
+            (
+                "anchor_path_whitespace",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"anchor_path": str(latest) + " "}),
+                ),
+                "anchor_path must not have surrounding whitespace",
+            ),
+            (
+                "anchor_path_control",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"anchor_path": str(latest) + "\n"}),
+                ),
+                "anchor_path must not contain control characters",
+            ),
+            (
+                "published_at_whitespace",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"published_at": body["published_at"] + " "}),
+                ),
+                "published_at must not have surrounding whitespace",
+            ),
+            (
+                "published_at_control",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"published_at": body["published_at"] + "\n"}),
+                ),
+                "published_at must not contain control characters",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+            index_file = export_dir / audit_test.ADAPTER.INDEX_FILE
+            original_receipt = receipt.read_bytes()
+            original_latest = latest.read_bytes()
+            original_digest_anchor = digest_anchor.read_bytes()
+            original_index = index_file.read_bytes()
+            store_dir = root / "store"
+            record_source = next((store_dir / audit_test.ADAPTER.RECORDS_DIR).glob("*.json"))
+            original_record_source = record_source.read_bytes()
+
+            for name, mutate, expected in cases:
+                with self.subTest(name=name):
+                    wrong_anchor = digest_anchor.with_name("wrong.notary.json")
+                    if wrong_anchor.exists():
+                        wrong_anchor.unlink()
+                    for path in (latest, digest_anchor, index_file):
+                        if path.is_symlink():
+                            path.unlink()
+                    if record_source.is_symlink():
+                        record_source.unlink()
+                    receipt.write_bytes(original_receipt)
+                    latest.write_bytes(original_latest)
+                    digest_anchor.write_bytes(original_digest_anchor)
+                    index_file.write_bytes(original_index)
+                    record_source.write_bytes(original_record_source)
+                    mutate(receipt, latest, digest_anchor, index_file)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+
+    def test_missing_notary_anchor_path_must_keep_digest_addressed_shape(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(export_dir)
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+            index_sha256 = digest_anchor.name.removesuffix(".notary.json")
+            cases = [
+                (
+                    export_dir / "missing.notary.json",
+                    "anchor_path must be latest.notary.json or anchors/<index_sha256>.notary.json",
+                ),
+                (
+                    export_dir / "anchors" / "wrong.notary.json",
+                    "anchor_path filename must be digest-addressed",
+                ),
+                (
+                    export_dir / "anchors" / f"{index_sha256}.json",
+                    "anchor_path filename must be digest-addressed",
+                ),
+            ]
+            for anchor_path, expected in cases:
+                with self.subTest(anchor_path=anchor_path.name):
+                    receipt.write_bytes(original_receipt)
+                    rewrite_receipt(
+                        receipt,
+                        lambda body, anchor_path=anchor_path: body.update(
+                            {"anchor_path": str(anchor_path)}
+                        ),
+                    )
+                    if anchor_path.exists():
+                        anchor_path.unlink()
+
+                    rc, _stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+
     def test_legacy_colr007_rail_receipts_require_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -334,6 +1307,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
     def test_smuggled_receipt_endpoint_urls_are_rejected(self):
         cases = [
+            ("notary", "endpoint", " https://notary.example/anchor", False),
+            ("notary", "endpoint", "https://notary.example/anchor ", False),
             ("notary", "endpoint", "https://user:pass@notary.example/anchor", False),
             ("notary", "endpoint", "https://notary.example/anchor;debug", False),
             ("notary", "endpoint", "https://notary.example/anchor?debug=true", False),
@@ -341,8 +1316,45 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("notary", "endpoint", "https:///anchor", False),
             ("notary", "endpoint", "https://[::1", False),
             ("notary", "endpoint", "https://notary.example/anc\nhor", False),
+            ("notary", "endpoint", "https://notary.example/iso anchor", False),
+            ("notary", "endpoint", "https://notary.example:abc/anchor", False),
+            ("notary", "endpoint", "https://notary.example:99999/anchor", False),
+            ("notary", "endpoint", "https://notary.example:443/anchor", False),
+            ("notary", "endpoint", "https://Notary.example/anchor", False),
+            ("notary", "endpoint", "https://notary.example./anchor", False),
+            ("notary", "endpoint", "https://notary..example/anchor", False),
+            ("notary", "endpoint", "https://-notary.example/anchor", False),
+            ("notary", "endpoint", "https://notary-.example/anchor", False),
+            ("notary", "endpoint", "https://notary._tcp.example/anchor", False),
+            ("notary", "endpoint", "https://notary.example%2einvalid/anchor", False),
+            ("notary", "endpoint", "https://123.000.000.001/anchor", False),
+            ("notary", "endpoint", "https://notary.example/../anchor", False),
+            ("notary", "endpoint", "https://notary.example/%2e%2e/anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%2fanchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%252fanchor", False),
+            ("notary", "endpoint", "https://notary.example/archive;debug/anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%20anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%00anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%7fanchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%zzanchor", False),
+            ("rail", "endpoint_url", "http://127.0.0.1/v1/iso20022 ", True),
             ("rail", "endpoint_url", "http://user:pass@127.0.0.1/v1/iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1/v1/iso20022?debug=true", True),
+            ("rail", "endpoint_url", "http://127.0.0.1/v1/iso20022 pacs008", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:abc/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:80/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://LocalHost:8080/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://localhost.:8080/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://local_host:8080/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://127.000.000.001:8080/v1/iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1/../iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1/%2e%2e/iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%2fiso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%252fiso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%20iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%00iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%zziso20022", True),
+            ("rail", "endpoint_url", r"http://127.0.0.1:8080/v1\iso20022", True),
         ]
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

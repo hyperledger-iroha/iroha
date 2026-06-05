@@ -1,11 +1,17 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 public final class KagemushaRecursiveSpendProverTest {
 
   private KagemushaRecursiveSpendProverTest() {}
 
   public static void main(final String[] args) {
     exposesStableModesAndCircuitIds();
+    sharedRecursiveSpendAbi6FixtureMatchesSdkSurface();
     rejectsEmptyArchivesBeforeNativeDispatch();
     nativeProbeRequiresAbiSixAndAllSymbols();
     rejectsNullAndEmptyNativeRedeemOutput();
@@ -257,6 +263,128 @@ public final class KagemushaRecursiveSpendProverTest {
         == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1;
   }
 
+  private static void sharedRecursiveSpendAbi6FixtureMatchesSdkSurface() {
+    final String manifest = sharedRecursiveSpendManifest();
+    assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"");
+    assertContains(
+        manifest,
+        "\"bridge_abi_version\": " + KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION);
+    assertContains(manifest, "\"operation_count\": 9");
+    assertContains(
+        manifest,
+        "\"recursive_aggregation\": \""
+            + KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            + "\"");
+    assertContains(
+        manifest,
+        "\"reserved_lineage\": \""
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            + "\"");
+    assertContains(
+        manifest,
+        "\"reserved_lineage_one_hop\": \""
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+            + "\"");
+    assertContains(
+        manifest,
+        "\"reserved_lineage_append\": \""
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            + "\"");
+    assertContains(manifest, "\"compact_token_max_hops\": " + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
+    assertContains(
+        manifest,
+        "\"reserved_lineage_witnessless_max_hops\": "
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
+    assertContains(
+        manifest,
+        "\"previous_proof_open_envelopes_required_count\": "
+            + KagemushaRecursiveSpendProver
+                .RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1);
+    assertContains(
+        manifest,
+        "\"previous_proof_open_envelopes_max_bytes\": "
+            + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES);
+    assertContains(
+        manifest,
+        "\"pallas_open_envelope_max_transcript_label_bytes\": "
+            + KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES);
+    assertContains(manifest, "\"native_archive_max_bytes\": 67108864");
+    assertContains(
+        manifest,
+        "\"transition_profile\": \""
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN
+            + "\"");
+    assertContains(
+        manifest,
+        "\"lineage_append_boundary_final_note_binding\": \""
+            + KagemushaRecursiveSpendProver
+                .RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1
+            + "\"");
+    for (final String symbol : new String[] {
+      "connect_norito_kagemusha_recursive_spend_init",
+      "connect_norito_kagemusha_recursive_spend_append",
+      "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+      "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+      "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+      "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+      "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+      "connect_norito_kagemusha_recursive_spend_verify",
+      "connect_norito_kagemusha_recursive_spend_redeem"
+    }) {
+      assertContains(manifest, "\"symbol\": \"" + symbol + "\"");
+    }
+    assertContains(manifest, "\"reserved_lineage_payload_bytes\": 3847");
+    assertContains(manifest, "\"reserved_lineage_transition_profile_bytes\": 2817");
+    final String archives = sharedRecursiveSpendFixture("archives.json");
+    assertContains(
+        archives,
+        "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1\"");
+    for (final String archiveName : new String[] {
+      "init_request",
+      "init_bundle",
+      "transition_profile_init",
+      "append_request",
+      "append_bundle",
+      "transition_profile_append",
+      "lineage_append_boundary",
+      "lineage_witness_from_init_result",
+      "lineage_witness_append_result",
+      "verify_request",
+      "verify_result",
+      "redeem_request",
+      "redeem_instruction"
+    }) {
+      assertContains(archives, "\"name\": \"" + archiveName + "\"");
+    }
+    assertContains(archives, "\"operation\": \"redeem\"");
+    assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendRedeemRequestV1\"");
+    assertContains(archives, "\"norito_type\": \"RedeemKagemushaRecursive\"");
+    assertContains(archives, "\"request_archive_fields\"");
+    assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendInitRequestV1\"");
+    assertContains(archives, "\"norito_type\": \"KagemushaRecursiveSpendAppendRequestV1\"");
+    assertContains(archives, "\"name\": \"lineage_verifier_key\"");
+    assertContains(archives, "\"name\": \"lineage_proving_key_archive\"");
+    assertContains(archives, "\"name\": \"previous_recursive_proof_open_envelopes_archive\"");
+    assertContains(archives, "\"name\": \"lineage_verifier_record\"");
+    assertContains(archives, "\"name\": \"lineage_witness\"");
+    assertContains(archives, "\"name\": \"block_height\"");
+    assertContains(archives, "\"sha256_hex\": \"b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2\"");
+    assertContains(archives, "\"sha256_hex\": \"a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e\"");
+    assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
+        KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(1));
+    assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
+        KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(63));
+    assert KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(
+        KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(64));
+    assert !KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(0);
+    assert KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(63);
+    assert !KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(64);
+    assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1, 2);
+    assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 65);
+  }
+
   private static void rejectsEmptyArchivesBeforeNativeDispatch() {
     assertThrows(() -> KagemushaRecursiveSpendProver.initSpend(new byte[0]));
     assertThrows(() -> KagemushaRecursiveSpendProver.appendSpend(new byte[0]));
@@ -358,8 +486,41 @@ public final class KagemushaRecursiveSpendProverTest {
     assertIllegalState(
         () -> KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(new byte[0], "redeem"),
         "native redeem returned empty output");
+    assertIllegalState(
+        () ->
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                new byte[KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1],
+                "redeem"),
+        "native redeem returned oversized output");
     final byte[] output = new byte[] {1, 2};
     assert KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem") == output;
+  }
+
+  private static String sharedRecursiveSpendManifest() {
+    return sharedRecursiveSpendFixture("manifest.json");
+  }
+
+  private static String sharedRecursiveSpendFixture(final String fileName) {
+    Path directory = Path.of("").toAbsolutePath();
+    while (directory != null) {
+      final Path candidate =
+          directory.resolve("fixtures/kagemusha_recursive_spend_abi6").resolve(fileName);
+      if (Files.isRegularFile(candidate)) {
+        try {
+          return Files.readString(candidate, StandardCharsets.UTF_8);
+        } catch (final IOException error) {
+          throw new AssertionError("failed to read shared recursive spend ABI-6 fixture", error);
+        }
+      }
+      directory = directory.getParent();
+    }
+    throw new AssertionError("missing shared recursive spend ABI-6 fixture " + fileName);
+  }
+
+  private static void assertContains(final String text, final String needle) {
+    if (!text.contains(needle)) {
+      throw new AssertionError("missing shared fixture marker: " + needle);
+    }
   }
 
   private static void assertThrows(final Runnable runnable) {

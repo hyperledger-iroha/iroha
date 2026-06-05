@@ -2327,15 +2327,28 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
                     "Kagemusha Reserved-lineage init requires lineage_proving_key_archive",
                 )
             })?;
-    let bundle =
-        iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
-            &request.record_bundle,
-            &request.pallas_open_envelopes_archive,
-            request.current_note,
-            lineage_verifier_key,
-            lineage_proving_key_archive,
-        )
-        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let bundle = match request.block_height {
+        Some(block_height) => {
+            iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                request.current_note,
+                lineage_verifier_key,
+                lineage_proving_key_archive,
+                block_height,
+            )
+        }
+        None => {
+            iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                request.current_note,
+                lineage_verifier_key,
+                lineage_proving_key_archive,
+            )
+        }
+    }
+    .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     encode_kagemusha_recursive_archive(
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
@@ -2395,19 +2408,36 @@ pub fn kagemusha_recursive_spend_append(request_archive: Uint8Array) -> napi::Re
             ));
         }
     };
-    let bundle =
-        iroha_core::zk::prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
-            &request.previous_bundle,
-            request.previous_lineage_verifier_record.as_ref(),
-            &request.previous_recursive_proof_open_envelopes_archive,
-            &request.record_bundle,
-            &request.pallas_open_envelopes_archive,
-            request.current_note,
-            output_proof_circuit_id.as_str(),
-            &vk_box,
-            lineage_proving_key_archive,
-        )
-        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let bundle = match request.block_height {
+        Some(block_height) => {
+            iroha_core::zk::prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &request.previous_bundle,
+                request.previous_lineage_verifier_record.as_ref(),
+                &request.previous_recursive_proof_open_envelopes_archive,
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                request.current_note,
+                output_proof_circuit_id.as_str(),
+                &vk_box,
+                lineage_proving_key_archive,
+                block_height,
+            )
+        }
+        None => {
+            iroha_core::zk::prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &request.previous_bundle,
+                request.previous_lineage_verifier_record.as_ref(),
+                &request.previous_recursive_proof_open_envelopes_archive,
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                request.current_note,
+                output_proof_circuit_id.as_str(),
+                &vk_box,
+                lineage_proving_key_archive,
+            )
+        }
+    }
+    .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     encode_kagemusha_recursive_archive(
         &bundle,
         "failed to encode Kagemusha recursive spend append bundle",
@@ -2427,12 +2457,22 @@ pub fn kagemusha_recursive_spend_transition_profile_init(
     request
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err.to_string()))?;
-    let evidence =
-        iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
-            &request.record_bundle,
-            &request.pallas_open_envelopes_archive,
-        )
-        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let evidence = match request.block_height {
+        Some(block_height) => {
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                block_height,
+            )
+        }
+        None => {
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+            )
+        }
+    }
+    .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     let profile =
         iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_from_initial_evidence(
             &evidence,
@@ -2458,12 +2498,22 @@ pub fn kagemusha_recursive_spend_transition_profile_append(
     request
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err.to_string()))?;
-    let evidence =
-        iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
-            &request.record_bundle,
-            &request.pallas_open_envelopes_archive,
-        )
-        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let evidence = match request.block_height {
+        Some(block_height) => {
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+                block_height,
+            )
+        }
+        None => {
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+            )
+        }
+    }
+    .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     let profile = if request
         .previous_recursive_proof_open_envelopes_archive
         .is_empty()
@@ -2601,10 +2651,19 @@ pub fn kagemusha_recursive_spend_lineage_witness_append_result(
 pub fn kagemusha_recursive_spend_verify(request_archive: Uint8Array) -> napi::Result<Buffer> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
         decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend verify")?;
-    let result = iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
-        &request.bundle,
-        request.lineage_verifier_record.as_ref(),
-    )
+    let result = match request.block_height {
+        Some(block_height) => {
+            iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+                &request.bundle,
+                request.lineage_verifier_record.as_ref(),
+                block_height,
+            )
+        }
+        None => iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
+            &request.bundle,
+            request.lineage_verifier_record.as_ref(),
+        ),
+    }
     .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     encode_kagemusha_recursive_archive(
         &result,
@@ -2636,19 +2695,32 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
                 let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
                     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
                 if let Some(record) = request.lineage_verifier_record.as_ref() {
-                    iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(
-                        &request.bundle,
-                        lineage_witness,
-                        |id| {
-                            if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
-                                && id.name == record.circuit_id
-                            {
-                                Some(record)
-                            } else {
-                                None
-                            }
-                        },
-                    )
+                    let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
+                        if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
+                            && id.name == record.circuit_id
+                        {
+                            Some(record)
+                        } else {
+                            None
+                        }
+                    };
+                    match request.block_height {
+                        Some(block_height) => {
+                            iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height(
+                                &request.bundle,
+                                lineage_witness,
+                                block_height,
+                                resolver,
+                            )
+                        }
+                        None => {
+                            iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(
+                                &request.bundle,
+                                lineage_witness,
+                                resolver,
+                            )
+                        }
+                    }
                     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
                     if !iroha_core::zk::verify_kagemusha_recursive_spend_bundle(
                         &request.bundle,
@@ -2679,20 +2751,34 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
                         "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record",
                     )
                 })?;
-                iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver(
-                    &request.bundle,
-                    lineage_witness,
-                    record,
-                    |id| {
-                        if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
-                            && id.name == record.circuit_id
-                        {
-                            Some(record)
-                        } else {
-                            None
-                        }
-                    },
-                )
+                let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
+                    if id.backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
+                        && id.name == record.circuit_id
+                    {
+                        Some(record)
+                    } else {
+                        None
+                    }
+                };
+                match request.block_height {
+                    Some(block_height) => {
+                        iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_height(
+                            &request.bundle,
+                            lineage_witness,
+                            record,
+                            block_height,
+                            resolver,
+                        )
+                    }
+                    None => {
+                        iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver(
+                            &request.bundle,
+                            lineage_witness,
+                            record,
+                            resolver,
+                        )
+                    }
+                }
                 .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
             }
             other => {
@@ -2718,15 +2804,34 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
                     "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record",
                 )
             })?;
-            iroha_core::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
-                &request.bundle,
-                record,
-            )
+            match request.block_height {
+                Some(block_height) => {
+                    iroha_core::zk::preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
+                        &request.bundle,
+                        record,
+                        block_height,
+                    )
+                }
+                None => iroha_core::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
+                    &request.bundle,
+                    record,
+                ),
+            }
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
-            if !iroha_core::zk::verify_kagemusha_recursive_spend_bundle_with_record(
-                &request.bundle,
-                record,
-            ) {
+            let verified = match request.block_height {
+                Some(block_height) => {
+                    iroha_core::zk::verify_kagemusha_recursive_spend_bundle_with_record_at_height(
+                        &request.bundle,
+                        record,
+                        block_height,
+                    )
+                }
+                None => iroha_core::zk::verify_kagemusha_recursive_spend_bundle_with_record(
+                    &request.bundle,
+                    record,
+                ),
+            };
+            if !verified {
                 return Err(napi::Error::new(
                     napi::Status::InvalidArg,
                     "reserved-lineage Kagemusha recursive spend proof did not verify",
@@ -15260,6 +15365,120 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_transition_profile_init_enforces_request_block_height() {
+        let mut base =
+            sample_kagemusha_recursive_spend_transition_profile_init_request_for_js_host();
+        window_first_recursive_spend_hop_record_for_js_host(&mut base.record_bundle);
+
+        let err = match kagemusha_recursive_spend_transition_profile_init(Uint8Array::from(
+            norito::to_bytes(&base).expect("encode no-height init transition request"),
+        )) {
+            Ok(_) => panic!("height-unbound current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("chain height"),
+            "unexpected no-height init transition error: {err}"
+        );
+
+        let mut future = base.clone();
+        future.block_height = Some(1);
+        let err = match kagemusha_recursive_spend_transition_profile_init(Uint8Array::from(
+            norito::to_bytes(&future).expect("encode future init transition request"),
+        )) {
+            Ok(_) => panic!("future current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("not active"),
+            "unexpected future init transition error: {err}"
+        );
+
+        let mut in_window = base.clone();
+        in_window.block_height = Some(2);
+        let profile_archive = kagemusha_recursive_spend_transition_profile_init(Uint8Array::from(
+            norito::to_bytes(&in_window).expect("encode in-window init transition request"),
+        ))
+        .expect("in-window current-hop record should build a transition profile");
+        let profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(profile_archive.as_ref())
+                .expect("decode JS host init transition profile");
+        assert_eq!(profile.hop_count, 1);
+
+        let mut withdrawn = base;
+        withdrawn.block_height = Some(4);
+        let err = match kagemusha_recursive_spend_transition_profile_init(Uint8Array::from(
+            norito::to_bytes(&withdrawn).expect("encode withdrawn init transition request"),
+        )) {
+            Ok(_) => panic!("withdrawn current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("not active"),
+            "unexpected withdrawn init transition error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_transition_profile_append_enforces_request_block_height() {
+        let mut base =
+            sample_kagemusha_recursive_spend_transition_profile_append_request_for_js_host();
+        window_first_recursive_spend_hop_record_for_js_host(&mut base.record_bundle);
+
+        let err = match kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+            norito::to_bytes(&base).expect("encode no-height append transition request"),
+        )) {
+            Ok(_) => panic!("height-unbound current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("chain height"),
+            "unexpected no-height append transition error: {err}"
+        );
+
+        let mut future = base.clone();
+        future.block_height = Some(1);
+        let err = match kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+            norito::to_bytes(&future).expect("encode future append transition request"),
+        )) {
+            Ok(_) => panic!("future current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("not active"),
+            "unexpected future append transition error: {err}"
+        );
+
+        let mut in_window = base.clone();
+        in_window.block_height = Some(2);
+        let profile_archive =
+            kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+                norito::to_bytes(&in_window).expect("encode in-window append transition request"),
+            ))
+            .expect("in-window current-hop record should build an append transition profile");
+        let profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(profile_archive.as_ref())
+                .expect("decode JS host append transition profile");
+        assert_eq!(
+            profile.hop_count,
+            in_window.previous_bundle.accumulator.hop_count + 1
+        );
+
+        let mut withdrawn = base;
+        withdrawn.block_height = Some(4);
+        let err = match kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+            norito::to_bytes(&withdrawn).expect("encode withdrawn append transition request"),
+        )) {
+            Ok(_) => panic!("withdrawn current-hop record must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("not active"),
+            "unexpected withdrawn append transition error: {err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_lineage_witness_host_helpers_reject_malformed_archives() {
         let err = match kagemusha_recursive_spend_lineage_witness_from_init_result(
             Uint8Array::from(vec![0x01, 0x02]),
@@ -15296,6 +15515,7 @@ mod tests {
         let request = iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 {
             bundle,
             lineage_verifier_record: None,
+            block_height: None,
         };
         let archive = norito::to_bytes(&request).expect("encode recursive spend verify request");
 
@@ -15319,6 +15539,7 @@ mod tests {
         let forged_request = iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 {
             bundle: request.bundle.clone(),
             lineage_verifier_record: Some(forged_record),
+            block_height: None,
         };
         let forged_archive =
             norito::to_bytes(&forged_request).expect("encode forged-lineage verify request");
@@ -15334,6 +15555,66 @@ mod tests {
             result.reason.contains("commitment mismatch"),
             "forged lineage verifier record was not rejected clearly: {}",
             result.reason
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_verify_enforces_request_block_height() {
+        fn verify_result(
+            request: &iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1,
+        ) -> iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
+            let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
+            let output = kagemusha_recursive_spend_verify(Uint8Array::from(archive))
+                .expect("verify function returns a diagnostic result archive");
+            norito::decode_from_bytes(output.as_ref()).expect("decode recursive spend result")
+        }
+
+        let mut record = sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host();
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+        let base = iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 {
+            bundle: sample_reserved_lineage_previous_bundle_for_js_host(),
+            lineage_verifier_record: Some(record),
+            block_height: None,
+        };
+
+        let no_height = verify_result(&base);
+        assert!(!no_height.valid);
+        assert!(!no_height.chain_admissible);
+        assert!(
+            no_height.reason.contains("chain height"),
+            "unexpected no-height reason: {}",
+            no_height.reason
+        );
+
+        let mut future = base.clone();
+        future.block_height = Some(1);
+        let future = verify_result(&future);
+        assert!(!future.valid);
+        assert!(
+            future.reason.contains("not active"),
+            "unexpected future-height reason: {}",
+            future.reason
+        );
+
+        let mut in_window = base.clone();
+        in_window.block_height = Some(2);
+        let in_window = verify_result(&in_window);
+        assert!(!in_window.valid);
+        assert!(
+            !in_window.reason.contains("chain height") && !in_window.reason.contains("not active"),
+            "in-window request must reach proof validation: {}",
+            in_window.reason
+        );
+
+        let mut withdrawn = base;
+        withdrawn.block_height = Some(4);
+        let withdrawn = verify_result(&withdrawn);
+        assert!(!withdrawn.valid);
+        assert!(
+            withdrawn.reason.contains("not active"),
+            "unexpected withdrawn-height reason: {}",
+            withdrawn.reason
         );
     }
 
@@ -15397,6 +15678,7 @@ mod tests {
                 .expect("encode forged JS host previous proof open archive"),
                 lineage_verifier_key: None,
                 lineage_proving_key_archive: None,
+                block_height: None,
             };
             let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
@@ -15575,6 +15857,7 @@ mod tests {
                 previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
                 lineage_verifier_key: None,
                 lineage_proving_key_archive: None,
+                block_height: None,
             };
             let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
@@ -15623,6 +15906,7 @@ mod tests {
             previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
@@ -15671,6 +15955,7 @@ mod tests {
             previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
@@ -15751,6 +16036,7 @@ mod tests {
             previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         request
             .validate_public_binding()
@@ -16458,6 +16744,118 @@ mod tests {
             .clone()
     }
 
+    fn sample_kagemusha_recursive_spend_transition_profile_init_request_for_js_host()
+    -> iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
+        let (record_bundle, pallas_open_envelopes_archive) =
+            sample_real_current_hop_record_bundle_for_js_host();
+        let step = record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("real current-hop record bundle has one hop");
+        let output_commitment = step.output_commitments[0];
+        iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
+            record_bundle,
+            pallas_open_envelopes_archive,
+            current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: output_commitment,
+                spend_nullifier: sample_hash(0xC8),
+                amount: Numeric::new(7, 0),
+            },
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
+            block_height: None,
+        }
+    }
+
+    fn sample_kagemusha_recursive_spend_transition_profile_append_request_for_js_host()
+    -> iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
+        let (record_bundle, pallas_open_envelopes_archive) =
+            sample_real_current_hop_record_bundle_for_js_host();
+        let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_open_envelopes_archive)
+                .expect("decode JS host real current-hop Pallas archive");
+        let evidence =
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+                &record_bundle,
+                &pallas_open_envelopes,
+            )
+            .expect("derive JS host real current-hop recursive aggregation evidence");
+        let step = record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("real current-hop record bundle has one hop");
+        let root_before = step.root_before;
+        let previous_note_nullifier = step.input_nullifiers[0];
+        let output_commitment = step.output_commitments[0];
+
+        let mut previous_bundle = sample_reserved_lineage_previous_bundle_for_js_host();
+        previous_bundle.accumulator.chain_id = record_bundle.bundle.chain_id.clone();
+        previous_bundle.accumulator.asset = record_bundle.bundle.asset.clone();
+        previous_bundle.accumulator.final_root = root_before;
+        previous_bundle.accumulator.current_note =
+            iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: sample_hash(0xC9),
+                spend_nullifier: previous_note_nullifier,
+                amount: Numeric::new(7, 0),
+            };
+        previous_bundle.accumulator.verifier_opening_len = evidence.verifier_opening_len;
+        previous_bundle.accumulator.verifier_params_fingerprint =
+            evidence.verifier_params_fingerprint;
+        previous_bundle
+            .accumulator
+            .fixed_window_table_schedule_digest = evidence.fixed_window_table_schedule_digest;
+        previous_bundle
+            .accumulator
+            .fixed_window_shared_table_manifest_digest =
+            evidence.fixed_window_shared_table_manifest_digest;
+        refresh_reserved_lineage_previous_bundle_public_inputs_for_js_host(&mut previous_bundle);
+        attach_recursive_spend_previous_proof_open_verify_envelope_for_js_host(
+            &mut previous_bundle,
+            sample_hash(0xCA),
+        );
+
+        let previous_proof_open_archive =
+            sample_previous_recursive_proof_open_envelopes_archive_for_js_host(&previous_bundle);
+        let request = iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
+            previous_bundle,
+            previous_lineage_verifier_record: Some(
+                sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host(),
+            ),
+            record_bundle,
+            pallas_open_envelopes_archive,
+            current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: output_commitment,
+                spend_nullifier: sample_hash(0xCB),
+                amount: Numeric::new(7, 0),
+            },
+            output_proof_circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+                    .to_owned(),
+            previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
+            block_height: None,
+        };
+        request
+            .validate_public_binding()
+            .expect("JS host append transition-profile request is well formed");
+        request
+    }
+
+    fn window_first_recursive_spend_hop_record_for_js_host(
+        record_bundle: &mut iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    ) {
+        let record = &mut record_bundle
+            .verifier_records
+            .first_mut()
+            .expect("sample record bundle has a verifier record")
+            .record;
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+    }
+
     fn sample_kagemusha_recursive_spend_init_request_for_js_host()
     -> iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
         let chain_id: iroha_data_model::ChainId =
@@ -16543,6 +16941,7 @@ mod tests {
             },
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         }
     }
 
@@ -16708,6 +17107,7 @@ mod tests {
             previous_recursive_proof_open_envelopes_archive,
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
+            block_height: None,
         };
         request
             .validate_public_binding()
@@ -16751,6 +17151,7 @@ mod tests {
             redeem_proof,
             lineage_witness: None,
             lineage_verifier_record: None,
+            block_height: None,
         }
     }
 

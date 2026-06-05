@@ -1,3 +1,7 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 using Hyperledger.Iroha.Offline;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -111,6 +115,9 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             128,
             KagemushaRecursiveSpendNative.RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes);
+        Assert.Equal(
+            64 * 1024 * 1024,
+            KagemushaRecursiveSpendNative.NativeArchiveMaxBytes);
         Assert.Equal(
             "iroha:kagemusha:v1:recursive-spend-transition-profile",
             KagemushaRecursiveSpendNative.RecursiveSpendTransitionProfileDomain);
@@ -357,6 +364,239 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendSharedAbi6FixtureMatchesSdkSurface()
+    {
+        using var manifest = LoadSharedRecursiveSpendManifest();
+        var root = manifest.RootElement;
+
+        Assert.Equal(
+            "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+            root.GetProperty("schema").GetString());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RequiredBridgeAbiVersion,
+            (uint)root.GetProperty("bridge_abi_version").GetInt32());
+        Assert.Equal(9, root.GetProperty("operation_count").GetInt32());
+
+        var circuitIds = root.GetProperty("proof_circuit_ids");
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+            circuitIds.GetProperty("recursive_aggregation").GetString());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            circuitIds.GetProperty("reserved_lineage").GetString());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            circuitIds.GetProperty("reserved_lineage_one_hop").GetString());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            circuitIds.GetProperty("reserved_lineage_append").GetString());
+
+        var limits = root.GetProperty("limits");
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.CompactTokenMaxHops,
+            (uint)limits.GetProperty("compact_token_max_hops").GetInt32());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1,
+            (uint)limits.GetProperty("reserved_lineage_witnessless_max_hops").GetInt32());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursivePreviousProofOpenEnvelopesRequiredCountV1,
+            limits.GetProperty("previous_proof_open_envelopes_required_count").GetInt32());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursivePreviousProofOpenEnvelopesMaxBytes,
+            limits.GetProperty("previous_proof_open_envelopes_max_bytes").GetInt32());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes,
+            limits.GetProperty("pallas_open_envelope_max_transcript_label_bytes").GetInt32());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.NativeArchiveMaxBytes,
+            limits.GetProperty("native_archive_max_bytes").GetInt32());
+
+        var domains = root.GetProperty("domains");
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendTransitionProfileDomain,
+            domains.GetProperty("transition_profile").GetString());
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1,
+            domains.GetProperty("lineage_append_boundary_final_note_binding").GetString());
+
+        var symbols = new HashSet<string>();
+        JsonElement appendWitness = default;
+        var operationCount = 0;
+        foreach (var operation in root.GetProperty("operations").EnumerateArray())
+        {
+            operationCount++;
+            symbols.Add(operation.GetProperty("symbol").GetString()!);
+            if (operation.GetProperty("name").GetString() == "lineage_witness_append_result")
+            {
+                appendWitness = operation;
+            }
+        }
+
+        Assert.Equal(root.GetProperty("operation_count").GetInt32(), operationCount);
+        Assert.True(symbols.SetEquals(new[]
+        {
+            "connect_norito_kagemusha_recursive_spend_init",
+            "connect_norito_kagemusha_recursive_spend_append",
+            "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+            "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+            "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+            "connect_norito_kagemusha_recursive_spend_verify",
+            "connect_norito_kagemusha_recursive_spend_redeem",
+        }));
+        Assert.Equal(
+            3,
+            appendWitness.GetProperty("input_archives").GetArrayLength());
+        Assert.Equal(
+            "KagemushaRecursiveSpendLineageWitnessV1",
+            appendWitness.GetProperty("output_archive").GetString());
+
+        var payloadBenchmarks = root.GetProperty("payload_benchmarks");
+        Assert.Equal(1751, payloadBenchmarks.GetProperty("semantic_payload_bytes").GetInt32());
+        Assert.Equal(3847, payloadBenchmarks.GetProperty("reserved_lineage_payload_bytes").GetInt32());
+        Assert.Equal(
+            2817,
+            payloadBenchmarks.GetProperty("reserved_lineage_transition_profile_bytes").GetInt32());
+
+        using var archiveFixture = LoadSharedRecursiveSpendArchives();
+        var archiveRoot = archiveFixture.RootElement;
+        Assert.Equal(
+            "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1",
+            archiveRoot.GetProperty("schema").GetString());
+        var archiveNames = new HashSet<string>();
+        JsonElement redeemArchive = default;
+        JsonElement redeemInstructionArchive = default;
+        foreach (var archive in archiveRoot.GetProperty("archives").EnumerateArray())
+        {
+            archiveNames.Add(archive.GetProperty("name").GetString()!);
+            if (archive.GetProperty("name").GetString() == "redeem_request")
+            {
+                redeemArchive = archive;
+            }
+            if (archive.GetProperty("name").GetString() == "redeem_instruction")
+            {
+                redeemInstructionArchive = archive;
+            }
+        }
+
+        Assert.True(archiveNames.SetEquals(new[]
+        {
+            "init_request",
+            "init_bundle",
+            "transition_profile_init",
+            "append_request",
+            "append_bundle",
+            "transition_profile_append",
+            "lineage_append_boundary",
+            "lineage_witness_from_init_result",
+            "lineage_witness_append_result",
+            "verify_request",
+            "verify_result",
+            "redeem_request",
+            "redeem_instruction",
+        }));
+        var requestFieldsByType = new Dictionary<string, string[]>();
+        foreach (var entry in archiveRoot.GetProperty("request_archive_fields").EnumerateArray())
+        {
+            requestFieldsByType.Add(
+                entry.GetProperty("norito_type").GetString()!,
+                entry.GetProperty("fields")
+                    .EnumerateArray()
+                    .Select(field => field.GetProperty("name").GetString()!)
+                    .ToArray());
+        }
+
+        Assert.True(requestFieldsByType.Keys.ToHashSet().SetEquals(new[]
+        {
+            "KagemushaRecursiveSpendInitRequestV1",
+            "KagemushaRecursiveSpendAppendRequestV1",
+            "KagemushaRecursiveSpendVerifyRequestV1",
+            "KagemushaRecursiveSpendRedeemRequestV1",
+        }));
+        Assert.Equal(
+            new[]
+            {
+                "record_bundle",
+                "pallas_open_envelopes_archive",
+                "current_note",
+                "lineage_verifier_key",
+                "lineage_proving_key_archive",
+                "block_height",
+            },
+            requestFieldsByType["KagemushaRecursiveSpendInitRequestV1"]);
+        Assert.Equal(
+            new[]
+            {
+                "previous_bundle",
+                "record_bundle",
+                "pallas_open_envelopes_archive",
+                "current_note",
+                "output_proof_circuit_id",
+                "previous_lineage_verifier_record",
+                "previous_recursive_proof_open_envelopes_archive",
+                "lineage_verifier_key",
+                "lineage_proving_key_archive",
+                "block_height",
+            },
+            requestFieldsByType["KagemushaRecursiveSpendAppendRequestV1"]);
+        Assert.Equal(
+            new[] { "bundle", "lineage_verifier_record", "block_height" },
+            requestFieldsByType["KagemushaRecursiveSpendVerifyRequestV1"]);
+        Assert.Equal(
+            new[]
+            {
+                "bundle",
+                "recipient",
+                "public_amount",
+                "redeem_proof",
+                "lineage_witness",
+                "lineage_verifier_record",
+                "block_height",
+            },
+            requestFieldsByType["KagemushaRecursiveSpendRedeemRequestV1"]);
+        Assert.Equal("redeem", redeemArchive.GetProperty("operation").GetString());
+        Assert.Equal(
+            "KagemushaRecursiveSpendRedeemRequestV1",
+            redeemArchive.GetProperty("norito_type").GetString());
+        Assert.Equal(
+            "b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2",
+            redeemArchive.GetProperty("sha256_hex").GetString());
+        Assert.True(redeemArchive.GetProperty("byte_len").GetInt32() > 0);
+        Assert.NotEmpty(Convert.FromBase64String(
+            redeemArchive.GetProperty("bytes_base64").GetString()!));
+        Assert.Equal("redeem", redeemInstructionArchive.GetProperty("operation").GetString());
+        Assert.Equal(
+            "RedeemKagemushaRecursive",
+            redeemInstructionArchive.GetProperty("norito_type").GetString());
+        Assert.Equal(
+            "a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e",
+            redeemInstructionArchive.GetProperty("sha256_hex").GetString());
+        Assert.True(redeemInstructionArchive.GetProperty("byte_len").GetInt32() > 0);
+        Assert.NotEmpty(Convert.FromBase64String(
+            redeemInstructionArchive.GetProperty("bytes_base64").GetString()!));
+
+        Assert.Equal(
+            circuitIds.GetProperty("reserved_lineage_append").GetString(),
+            KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(1u));
+        Assert.Equal(
+            circuitIds.GetProperty("reserved_lineage_append").GetString(),
+            KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(63u));
+        Assert.Equal(
+            circuitIds.GetProperty("recursive_aggregation").GetString(),
+            KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(64u));
+        Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(0u));
+        Assert.True(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(63u));
+        Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(64u));
+        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            2u));
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            65u));
+    }
+
+    [Fact]
     public void RecursiveSpendNativeRejectsEmptyArchivesBeforeLoadingNativeBridge()
     {
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(Array.Empty<byte>()));
@@ -427,6 +667,19 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeReadBridgeOutputRejectsOversizedSuccessOutput()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            KagemushaRecursiveSpendNative.ReadBridgeOutput(
+                "connect_norito_kagemusha_recursive_spend_redeem",
+                0,
+                IntPtr.Zero,
+                (UIntPtr)((ulong)KagemushaRecursiveSpendNative.NativeArchiveMaxBytes + 1UL)));
+
+        Assert.Contains("oversized output", error.Message);
+    }
+
+    [Fact]
     public void RecursiveSpendNativeRejectsMalformedArchivesWhenBridgeIsAvailable()
     {
         if (!KagemushaRecursiveSpendNative.IsAvailable())
@@ -449,5 +702,36 @@ public sealed class KagemushaRecursiveSpendNativeTests
             new byte[] { 0x05, 0x06 }));
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Verify(malformed));
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Redeem(malformed));
+    }
+
+    private static JsonDocument LoadSharedRecursiveSpendManifest()
+    {
+        return LoadSharedRecursiveSpendFixture("manifest.json");
+    }
+
+    private static JsonDocument LoadSharedRecursiveSpendArchives()
+    {
+        return LoadSharedRecursiveSpendFixture("archives.json");
+    }
+
+    private static JsonDocument LoadSharedRecursiveSpendFixture(string fileName)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "fixtures",
+                "kagemusha_recursive_spend_abi6",
+                fileName);
+            if (File.Exists(candidate))
+            {
+                return JsonDocument.Parse(File.ReadAllText(candidate));
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"missing shared recursive spend ABI-6 fixture {fileName}");
     }
 }

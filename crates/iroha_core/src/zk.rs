@@ -2106,6 +2106,274 @@ pub fn kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_pallas_archive_opening_len(
+    pallas_open_envelopes_archive: &[u8],
+    context: &str,
+) -> Result<u32, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive)
+            .map_err(|err| format!("failed to decode Kagemusha {context} archive: {err}"))?;
+    let (params, _witnesses) =
+        kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(&envelopes)?;
+    u32::try_from(params.n()).map_err(|_| {
+        format!("Kagemusha recursive spend {context} verifier opening length overflowed u32")
+    })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+    )?;
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifier key envelope".to_owned())?;
+    if params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-onehop-v1 verifier key opening length {LEN}"
+        )
+    })?;
+    let pk = halo2_backend::keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage proving key: {err}")
+    })?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        hash_vk(vk_box),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
+    )
+}
+
+/// Derive packaged Halo2 IPA proving-key bytes for the one-hop Reserved-lineage circuit.
+///
+/// The returned archive is bound to the one-hop circuit family and verifier-key
+/// commitment. It is transparent Halo2 IPA key material; no KZG/Groth16-style
+/// trusted setup is used.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key does not match the one-hop
+/// Reserved-lineage circuit or when the requested opening length is unsupported.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<Vec<u8>, String> {
+    match verifier_opening_len {
+        2 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<2>(
+                vk_box,
+            )
+        }
+        4 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<4>(
+                vk_box,
+            )
+        }
+        8 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<8>(
+                vk_box,
+            )
+        }
+        16 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<16>(
+                vk_box,
+            )
+        }
+        32 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<32>(
+                vk_box,
+            )
+        }
+        64 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<64>(
+                vk_box,
+            )
+        }
+        128 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_for_len::<
+                128,
+            >(vk_box)
+        }
+        other => Err(format!(
+            "Kagemusha recursive spend lineage one-hop proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Derive one-hop Reserved-lineage proving-key bytes from the matching Pallas archive.
+///
+/// # Errors
+///
+/// Returns an error when the Pallas archive is malformed or the verifier key does
+/// not match the archive-selected opening length.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+    vk_box: &VerifyingKeyBox,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let opening_len = kagemusha_recursive_spend_pallas_archive_opening_len(
+        pallas_open_envelopes_archive,
+        "lineage one-hop Pallas open-envelope",
+    )?;
+    derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+        vk_box,
+        opening_len,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
+        vk_box,
+        u32::try_from(LEN).expect("opening length fits u32"),
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+    )?;
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifier key envelope".to_owned())?;
+    if params.k() != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
+        return Err(format!(
+            "Kagemusha recursive spend lineage append verifier key IPAK `{}` does not match canonical `{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K}`",
+            params.k()
+        ));
+    }
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        format!(
+            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-append-v1 verifier key opening length {LEN}"
+        )
+    })?;
+    let pk = halo2_backend::keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default(),
+    )
+    .map_err(|err| {
+        format!("failed to derive Kagemusha recursive spend lineage append proving key: {err}")
+    })?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        hash_vk(vk_box),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
+    )
+}
+
+/// Derive packaged Halo2 IPA proving-key bytes for the Reserved-lineage append circuit.
+///
+/// The returned archive is bound to the append circuit family and verifier-key
+/// commitment. It is transparent Halo2 IPA key material; no KZG/Groth16-style
+/// trusted setup is used.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key does not match the append
+/// Reserved-lineage circuit or when the requested opening length is unsupported.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<Vec<u8>, String> {
+    match verifier_opening_len {
+        2 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<2>(
+                vk_box,
+            )
+        }
+        4 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<4>(
+                vk_box,
+            )
+        }
+        8 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<8>(
+                vk_box,
+            )
+        }
+        16 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<16>(
+                vk_box,
+            )
+        }
+        32 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<32>(
+                vk_box,
+            )
+        }
+        64 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<64>(
+                vk_box,
+            )
+        }
+        128 => {
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_for_len::<128>(
+                vk_box,
+            )
+        }
+        other => Err(format!(
+            "Kagemusha recursive spend lineage append proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Derive append Reserved-lineage proving-key bytes from the matching Pallas archive.
+///
+/// # Errors
+///
+/// Returns an error when the Pallas archive is malformed or the verifier key does
+/// not match the archive-selected opening length.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+    vk_box: &VerifyingKeyBox,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let opening_len = kagemusha_recursive_spend_pallas_archive_opening_len(
+        pallas_open_envelopes_archive,
+        "lineage append Pallas open-envelope",
+    )?;
+    derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(vk_box, opening_len)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_spend_lineage_vk_box_on_large_stack<const LEN: usize>()
 -> Result<VerifyingKeyBox, String> {
     std::thread::Builder::new()
@@ -5925,12 +6193,23 @@ fn validate_kagemusha_hop_verifier_record_set(
 fn validate_kagemusha_fold_verifier_record(
     step: &KagemushaFoldProofStep<'_>,
     hop_record: &KagemushaHopVerifierRecord<'_>,
+    block_height: Option<u64>,
 ) -> Result<(), String> {
     if hop_record.id != &step.attachment.vk_ref {
         return Err("Kagemusha fold verifier record id does not match hop vk_ref".to_owned());
     }
     let record = hop_record.record;
-    if !record.is_active() {
+    let record_active = if let Some(height) = block_height {
+        record.is_active_at(height)
+    } else {
+        if record.activation_height.is_some() || record.withdraw_height.is_some() {
+            return Err(
+                "Kagemusha fold verifier record height window requires chain height".to_owned(),
+            );
+        }
+        record.is_active()
+    };
+    if !record_active {
         return Err("Kagemusha fold verifier record is not active".to_owned());
     }
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
@@ -6166,9 +6445,10 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle(
 /// Returns an error when a hop verifier record is missing, duplicated, inactive,
 /// inconsistent with the proof envelope/key material, or when any bundled hop
 /// proof fails normal checked folding.
-pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let steps = bundle
@@ -6187,7 +6467,7 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
     validate_kagemusha_hop_verifier_record_set(&steps, records)?;
     for step in &steps {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
-        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_kagemusha_fold_verifier_record(step, record, block_height)?;
         validate_required_kagemusha_confidential_v2_step_public_inputs(
             &bundle.chain_id,
             &bundle.asset,
@@ -6195,6 +6475,48 @@ pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
         )?;
     }
     kagemusha_verified_folded_public_inputs(&bundle.chain_id, &bundle.asset, &steps)
+}
+
+/// Verify a serializable Kagemusha fold bundle against active hop verifier records.
+///
+/// Height-windowed verifier records require
+/// [`kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height`];
+/// this height-unbound wrapper fails closed when a record carries activation or
+/// withdrawal bounds.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// or folded transcript construction fails.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
+        bundle, records, None,
+    )
+}
+
+/// Verify a serializable Kagemusha fold bundle against hop verifier records at a chain height.
+///
+/// This is the production admission variant for record-backed Kagemusha folds:
+/// each referenced verifier record must be active at `block_height`, including
+/// its activation and withdrawal window.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// or folded transcript construction fails at the supplied height.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        Some(block_height),
+    )
 }
 
 /// Verify a serializable record-backed Kagemusha fold bundle and build folded public inputs.
@@ -6217,6 +6539,32 @@ pub fn kagemusha_verified_folded_public_inputs_from_record_bundle(
     kagemusha_verified_folded_public_inputs_from_bundle_with_records(
         &record_bundle.bundle,
         &records,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle at a chain height.
+///
+/// # Errors
+///
+/// Returns an error when the record-backed bundle fails verifier-record
+/// enforcement, hop proof verification, or folded transcript construction at
+/// the supplied height.
+pub fn kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+        &record_bundle.bundle,
+        &records,
+        block_height,
     )
 }
 
@@ -6932,7 +7280,7 @@ fn kagemusha_recursive_spend_lineage_append_opening_preflight_contract(
         *previous_accumulator_digest,
         *previous_recursive_proof_artifact_digest,
         *previous_recursive_proof_open_envelopes_archive_digest,
-        iroha_crypto::Hash::new(current_hop_proof_hash.as_ref()),
+        *current_hop_proof_hash,
     )
     .map_err(|err| err.to_string())
 }
@@ -7270,9 +7618,10 @@ fn ensure_kagemusha_recursive_spend_lineage_witnessless_append_available(
 /// fields are all-zero or schedule-mismatched, verifier-record enforcement
 /// fails, any hop proof fails verification, or the resulting recursive
 /// aggregation evidence is non-canonical.
-pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: Option<u64>,
     verifier_witness_count: u32,
     verifier_opening_len: u32,
     verifier_params_fingerprint: [u8; 32],
@@ -7367,7 +7716,7 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with
     let mut verified_steps = Vec::with_capacity(steps.len());
     for step in &steps {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
-        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_kagemusha_fold_verifier_record(step, record, block_height)?;
         validate_required_kagemusha_confidential_v2_step_public_inputs(
             &bundle.chain_id,
             &bundle.asset,
@@ -7387,6 +7736,75 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with
         verifier_witness_batch_digest,
     )
     .map_err(|err| err.to_string())
+}
+
+/// Verify a Kagemusha fold bundle against active records and build recursive evidence.
+///
+/// Height-windowed verifier records require
+/// [`kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height`];
+/// this height-unbound wrapper fails closed when a record carries activation or
+/// withdrawal bounds.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        None,
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
+}
+
+/// Verify a Kagemusha fold bundle against records active at a chain height.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails at
+/// the supplied height.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
+        bundle,
+        records,
+        Some(block_height),
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
 }
 
 /// Verify a record-backed Kagemusha fold bundle and build reserved-mode
@@ -7418,6 +7836,47 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_record_bund
     kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
         &record_bundle.bundle,
         &records,
+        verifier_witness_count,
+        verifier_opening_len,
+        verifier_params_fingerprint,
+        fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest,
+        verifier_witness_batch_digest,
+    )
+}
+
+#[cfg(test)]
+/// Verify a record-backed Kagemusha fold bundle at a height and build recursive evidence.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop proof verification,
+/// native batch preflight binding, or recursive evidence construction fails at
+/// the supplied height.
+pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+    verifier_witness_count: u32,
+    verifier_opening_len: u32,
+    verifier_params_fingerprint: [u8; 32],
+    fixed_window_table_schedule_digest: [u8; 32],
+    fixed_window_shared_table_manifest_digest: [u8; 32],
+    fixed_window_table_base_digest: [u8; 32],
+    verifier_witness_batch_digest: [u8; 32],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+        &record_bundle.bundle,
+        &records,
+        block_height,
         verifier_witness_count,
         verifier_opening_len,
         verifier_params_fingerprint,
@@ -7474,6 +7933,47 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
     params: &iroha_zkp_halo2::pallas::Params,
     witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+        bundle,
+        records,
+        params,
+        witnesses,
+        None,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and native Pallas IPA witness batch at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+        bundle,
+        records,
+        params,
+        witnesses,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let expected_witness_count =
         u32::try_from(bundle.steps.len()).expect("Kagemusha hop count is bounded to u32");
@@ -7497,9 +7997,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         witnesses,
         &hop_proof_hashes,
     )?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
         bundle,
         records,
+        block_height,
         expected_witness_count,
         preflight.opening_len,
         preflight.params_fingerprint,
@@ -7524,6 +8026,43 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
     params: &iroha_zkp_halo2::pallas::Params,
     witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+        record_bundle,
+        params,
+        witnesses,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and native Pallas IPA batch at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+        record_bundle,
+        params,
+        witnesses,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_batch_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let records = record_bundle
         .verifier_records
         .iter()
@@ -7532,11 +8071,12 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
             record: &entry.record,
         })
         .collect::<Vec<_>>();
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch(
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_optional_height(
         &record_bundle.bundle,
         &records,
         params,
         witnesses,
+        block_height,
     )
 }
 
@@ -7557,6 +8097,43 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+        bundle,
+        records,
+        envelopes,
+        None,
+    )
+}
+
+/// Verify a record-backed Kagemusha fold bundle and proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native batch preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification, or
+/// recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+        bundle,
+        records,
+        envelopes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     ensure_kagemusha_verified_step_count(bundle.steps.len())?;
     let expected_witness_count =
@@ -7603,9 +8180,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
             envelopes,
             &hop_proof_hashes,
         )?;
-    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_optional_height(
         bundle,
         records,
+        block_height,
         expected_witness_count,
         preflight.opening_len,
         preflight.params_fingerprint,
@@ -7630,6 +8209,39 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+        record_bundle,
+        envelopes,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when proof-derived native batch preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification, or
+/// recursive evidence construction fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+        record_bundle,
+        envelopes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let records = record_bundle
         .verifier_records
         .iter()
@@ -7638,10 +8250,11 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
             record: &entry.record,
         })
         .collect::<Vec<_>>();
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
+    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_optional_height(
         &record_bundle.bundle,
         &records,
         envelopes,
+        block_height,
     )
 }
 
@@ -7661,13 +8274,48 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     pallas_open_envelopes_archive: &[u8],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        None,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and archived proof-derived Pallas openings at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, proof-derived
+/// native batch preflight fails, verifier-record enforcement at `block_height`
+/// fails, hop proof verification fails, or recursive evidence construction
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
         })?;
-    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+    kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
         record_bundle,
         &envelopes,
+        block_height,
     )
 }
 
@@ -7753,6 +8401,35 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_w
     prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
 }
 
+/// Verify a record-backed Kagemusha fold bundle at `block_height`, derive native Pallas batch evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_batch_at_height(
+            bundle,
+            records,
+            params,
+            witnesses,
+            block_height,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle, derive Pallas batch evidence, and prove it.
 ///
 /// # Errors
@@ -7788,6 +8465,43 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     )
 }
 
+/// Verify a serializable record-backed Kagemusha fold bundle at `block_height`, derive Pallas batch evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when native batch preflight, verifier-record enforcement at
+/// `block_height`, hop proof verification, recursive evidence construction, or
+/// transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_batch_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    params: &iroha_zkp_halo2::pallas::Params,
+    witnesses: &[iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_batch_at_height(
+        &record_bundle.bundle,
+        &records,
+        params,
+        witnesses,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 /// Verify a record-backed Kagemusha fold bundle, derive proof-backed Pallas evidence, and prove it.
 ///
 /// This variant reconstructs native Pallas verifier witnesses from transparent
@@ -7812,6 +8526,34 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_w
     let evidence =
         kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes(
             bundle, records, envelopes,
+        )?;
+    prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
+}
+
+/// Verify a record-backed Kagemusha fold bundle at `block_height`, derive proof-backed Pallas evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification,
+/// recursive evidence construction, or transparent recursive proof generation
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+            bundle,
+            records,
+            envelopes,
+            block_height,
         )?;
     prove_kagemusha_recursive_aggregation_evidence(circuit_id, vk_box, evidence, proving_key_bytes)
 }
@@ -7849,6 +8591,42 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     )
 }
 
+/// Verify a serializable record-backed Kagemusha fold bundle at `block_height`, derive Pallas envelope evidence, and prove it.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope metadata/preflight,
+/// verifier-record enforcement at `block_height`, hop proof verification,
+/// recursive evidence construction, or transparent recursive proof generation
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_bundle_with_records_and_pallas_open_envelopes_at_height(
+        &record_bundle.bundle,
+        &records,
+        envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle and archived Pallas openings, then prove it.
 ///
 /// This FFI-friendly wrapper keeps Pallas opening envelope decoding inside the
@@ -7879,6 +8657,37 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
         circuit_id,
         vk_box,
         proving_key_bytes,
+    )
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and archived Pallas openings at `block_height`, then prove it.
+///
+/// # Errors
+///
+/// Returns an error when the envelope archive cannot be decoded, opening
+/// envelope metadata/preflight fails, verifier-record enforcement at
+/// `block_height` fails, hop proof verification fails, recursive evidence
+/// construction fails, or transparent recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelopes_at_height(
+        record_bundle,
+        &envelopes,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        block_height,
     )
 }
 
@@ -8130,15 +8939,65 @@ pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_e
     vk_box: &VerifyingKeyBox,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        None,
+    )
+}
+
+/// Verify the first offline Kagemusha hop at `block_height` and create a spendable recursive state.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope preflight, verifier-record
+/// enforcement at `block_height`, hop proof verification, accumulator
+/// construction, or recursive proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+            record_bundle,
+            pallas_open_envelopes_archive,
+            block_height,
+        )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
         })?;
-    let evidence =
-        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
-            record_bundle,
-            &envelopes,
-        )?;
     if evidence.aggregation_statement.steps.len() != 1 {
         return Err(format!(
             "Kagemusha recursive spend init requires exactly one hop (found {})",
@@ -8236,6 +9095,41 @@ pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_palla
     )
 }
 
+/// Verify the first offline Kagemusha hop at `block_height` and create a production lineage spend state.
+///
+/// # Errors
+///
+/// Returns an error when the archive/verifier-key selection, opening-envelope
+/// preflight, verifier-record enforcement at `block_height`, hop proof
+/// verification, accumulator construction, or recursive lineage proof
+/// generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+        return Err(format!(
+            "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV}=1 only for developer key-generation runs"
+        ));
+    }
+    let vk_box = kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 /// Verify the first offline Kagemusha hop and create a production lineage spend state with
 /// pre-packaged key artifacts.
 ///
@@ -8262,6 +9156,37 @@ pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_palla
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
         vk_box,
         Some(proving_key_bytes),
+    )
+}
+
+/// Verify the first offline Kagemusha hop at `block_height` and create a lineage spend state with pre-packaged key artifacts.
+///
+/// # Errors
+///
+/// Returns an error when the supplied verifier key/proving key archive does not
+/// match the one-hop Reserved-lineage circuit, or when the checked hop,
+/// verifier record at `block_height`, Pallas archive, note binding, or proof
+/// generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    proving_key_bytes: &[u8],
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if proving_key_bytes.is_empty() {
+        return Err("Kagemusha Reserved-lineage init proving key archive is empty".to_owned());
+    }
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        vk_box,
+        Some(proving_key_bytes),
+        block_height,
     )
 }
 
@@ -8524,6 +9449,66 @@ pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open
     vk_box: &VerifyingKeyBox,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        None,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Append a verified Kagemusha fold record bundle at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the previous proof, previous verifier-record activity
+/// at `block_height`, new hop evidence, or recursive proof generation fails.
+pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        circuit_id,
+        vk_box,
+        proving_key_bytes,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: Option<u64>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
     let output_proof_circuit_id =
         iroha_data_model::offline::normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
             circuit_id,
@@ -8608,7 +9593,21 @@ pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open
             ) {
                 return Err(append_output_selection_error());
             }
-            if !verify_kagemusha_recursive_spend_bundle_with_record(previous_bundle, record) {
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                previous_bundle,
+                record,
+                block_height,
+            )
+            .map_err(|err| {
+                format!(
+                    "previous reserved-lineage Kagemusha recursive spend bundle preverification failed: {err}"
+                )
+            })?;
+            if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                previous_bundle,
+                record,
+                block_height,
+            ) {
                 return Err(
                     "previous reserved-lineage Kagemusha recursive spend bundle did not verify"
                         .to_owned(),
@@ -8768,6 +9767,42 @@ pub fn prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pal
     )
 }
 
+/// Verify one additional offline Kagemusha hop for the reserved lineage state at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the previous recursive proof is invalid, the previous
+/// verifier record is inactive at `block_height`, the new hop proof/evidence is
+/// invalid, lineage continuity fails, archive-derived verifier-key selection
+/// fails, or recursive lineage proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    previous_lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    previous_recursive_proof_open_envelopes_archive: &[u8],
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    proving_key_bytes: Option<&[u8]>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let vk_box = kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+        pallas_open_envelopes_archive,
+    )?;
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+        previous_bundle,
+        previous_lineage_verifier_record,
+        previous_recursive_proof_open_envelopes_archive,
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+        &vk_box,
+        proving_key_bytes,
+        block_height,
+    )
+}
+
 const KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED: &str = "Kagemusha compact-token proving requires verifier-record trust anchors; use prove_verified_kagemusha_compact_payment_token_from_bundle_with_records or prove_verified_kagemusha_compact_payment_token_from_record_bundle";
 
 /// Reject unanchored private-hop compact Kagemusha token proving.
@@ -8832,6 +9867,30 @@ pub fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
     prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
 }
 
+/// Verify a Kagemusha fold bundle against records active at a chain height and prove a token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails at the supplied
+/// height.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_at_height(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    block_height: u64,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+        bundle,
+        records,
+        block_height,
+    )?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
 /// Verify a serializable record-backed Kagemusha fold bundle and prove one compact payment token.
 ///
 /// # Errors
@@ -8846,6 +9905,28 @@ pub fn prove_verified_kagemusha_compact_payment_token_from_record_bundle(
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
     let public_inputs = kagemusha_verified_folded_public_inputs_from_record_bundle(record_bundle)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a record-backed Kagemusha fold bundle at a chain height and prove a token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails at the supplied
+/// height.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_record_bundle_at_height(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    block_height: u64,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+        record_bundle,
+        block_height,
+    )?;
     prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
 }
 
@@ -8927,7 +10008,62 @@ pub fn verify_kagemusha_compact_payment_token_with_record(
     token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
-    if !record.is_active()
+    verify_kagemusha_compact_payment_token_with_record_at_optional_height(token, record, None)
+}
+
+/// Verify a compact Kagemusha payment token against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_compact_payment_token_with_record_at_height(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    verify_kagemusha_compact_payment_token_with_record_at_optional_height(
+        token,
+        record,
+        Some(block_height),
+    )
+}
+
+fn kagemusha_record_active_for_optional_height(
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if let Some(height) = block_height {
+        record.is_active_at(height)
+    } else {
+        record.activation_height.is_none() && record.withdraw_height.is_none() && record.is_active()
+    }
+}
+
+fn ensure_kagemusha_record_active_for_optional_height(
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+    label: &str,
+) -> Result<(), String> {
+    if let Some(height) = block_height {
+        if record.is_active_at(height) {
+            Ok(())
+        } else {
+            Err(format!("{label} verifier record is not active"))
+        }
+    } else if record.activation_height.is_some() || record.withdraw_height.is_some() {
+        Err(format!(
+            "{label} verifier record height window requires chain height"
+        ))
+    } else if record.is_active() {
+        Ok(())
+    } else {
+        Err(format!("{label} verifier record is not active"))
+    }
+}
+
+fn verify_kagemusha_compact_payment_token_with_record_at_optional_height(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if !kagemusha_record_active_for_optional_height(record, block_height)
         || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
         || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
         || kagemusha_record_curve_for_backend(record.backend) != Some(record.curve.as_str())
@@ -9121,9 +10257,38 @@ pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> Result<(), String> {
-    if !record.is_active() {
-        return Err("Kagemusha recursive aggregation verifier record is not active".to_owned());
-    }
+    preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+        bundle, record, None,
+    )
+}
+
+/// Preverify a Kagemusha recursive aggregation bundle against a verifier record at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> Result<(), String> {
+    ensure_kagemusha_record_active_for_optional_height(
+        record,
+        block_height,
+        "Kagemusha recursive aggregation",
+    )?;
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
         return Err(format!(
             "Kagemusha recursive aggregation verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
@@ -9244,6 +10409,35 @@ pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record(
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
     if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(bundle, record).is_err() {
+        return false;
+    }
+    let Some(vk_box) = record.key.as_ref() else {
+        return false;
+    };
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Verify a recursive aggregation proof bundle against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+        bundle,
+        record,
+        block_height,
+    )
+    .is_err()
+    {
         return false;
     }
     let Some(vk_box) = record.key.as_ref() else {
@@ -9447,6 +10641,39 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record(
             bundle,
             witness,
             recursive_record,
+            None,
+        )
+    }
+}
+
+/// Verify record-backed lineage material for recursive Kagemusha redemption at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when witness shape, private hop verification, accumulator
+/// replay, intermediate recursive proof verification, or verifier-record
+/// activity at `block_height` fails.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (bundle, witness, recursive_record, block_height);
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_inner(
+            bundle,
+            witness,
+            recursive_record,
+            Some(block_height),
         )
     }
 }
@@ -9484,6 +10711,42 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver<'re
             bundle,
             witness,
             recursive_record_for,
+            None,
+        )
+    }
+}
+
+/// Verify record-backed lineage material with resolved verifier records at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when witness replay fails, a required verifier record is
+/// missing, a resolved verifier record is inactive at `block_height`, or any
+/// intermediate recursive proof does not verify against its resolved record.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height<'record>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    block_height: u64,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (bundle, witness, block_height, recursive_record_for);
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+            bundle,
+            witness,
+            recursive_record_for,
+            Some(block_height),
         )
     }
 }
@@ -9553,17 +10816,88 @@ pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_r
     )
         -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
 ) -> Result<(), String> {
-    verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver(
+    verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height(
         bundle,
         witness,
+        final_recursive_record,
+        None,
         recursive_record_for,
-    )?;
-    if !verify_kagemusha_recursive_spend_bundle_with_record(bundle, final_recursive_record) {
-        return Err(
-            "record-backed recursive Kagemusha lineage final proof did not verify".to_owned(),
+    )
+}
+
+/// Verify record-backed lineage material and the final recursive spend proof with verifier records at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when lineage replay fails, any resolved verifier record is
+/// inactive at `block_height`, or the final recursive proof does not verify
+/// against `final_recursive_record` at `block_height`.
+pub fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_height<
+    'record,
+>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    final_recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height(
+        bundle,
+        witness,
+        final_recursive_record,
+        Some(block_height),
+        recursive_record_for,
+    )
+}
+
+fn verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_record_resolver_at_optional_height<
+    'record,
+>(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    final_recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+    recursive_record_for: impl FnMut(
+        &iroha_data_model::proof::VerifyingKeyId,
+    )
+        -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<(), String> {
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    {
+        let _ = (
+            bundle,
+            witness,
+            final_recursive_record,
+            block_height,
+            recursive_record_for,
         );
+        Err(
+            "record-backed recursive Kagemusha lineage verification requires zk-halo2-ipa"
+                .to_owned(),
+        )
     }
-    Ok(())
+    #[cfg(feature = "zk-halo2-ipa")]
+    {
+        verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
+            bundle,
+            witness,
+            recursive_record_for,
+            block_height,
+        )?;
+        if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+            bundle,
+            final_recursive_record,
+            block_height,
+        ) {
+            return Err(
+                "record-backed recursive Kagemusha lineage final proof did not verify".to_owned(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Build the ABI-6 recursive spend verify result for offline receivers.
@@ -9598,6 +10932,37 @@ pub fn kagemusha_recursive_spend_verify_result(
 pub fn kagemusha_recursive_spend_verify_result_with_lineage_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
+    kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+        bundle,
+        lineage_verifier_record,
+        None,
+    )
+}
+
+/// Build the ABI-6 recursive spend verify result at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error when the canonical recursive verifier key cannot be built.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: u64,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
+    kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+        bundle,
+        lineage_verifier_record,
+        Some(block_height),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_verify_result_with_lineage_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    lineage_verifier_record: Option<&iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1, String> {
     use iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1;
 
@@ -9678,11 +11043,19 @@ pub fn kagemusha_recursive_spend_verify_result_with_lineage_record(
                 ));
             };
             if let Err(reason) =
-                preverify_kagemusha_recursive_spend_bundle_with_record(bundle, record)
+                preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                    bundle,
+                    record,
+                    block_height,
+                )
             {
                 return Ok(invalid(reason));
             }
-            if !verify_kagemusha_recursive_spend_bundle_with_record(bundle, record) {
+            if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                bundle,
+                record,
+                block_height,
+            ) {
                 return Ok(backend_invalid());
             }
             if let Err(reason) =
@@ -9703,6 +11076,7 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_inner(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
     recursive_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
 ) -> Result<(), String> {
     verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner(
         bundle,
@@ -9714,6 +11088,7 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_inner(
                 None
             }
         },
+        block_height,
     )
 }
 
@@ -9725,6 +11100,7 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner<'
         &iroha_data_model::proof::VerifyingKeyId,
     )
         -> Option<&'record iroha_data_model::proof::VerifyingKeyRecord>,
+    block_height: Option<u64>,
 ) -> Result<(), String> {
     let previous_bundles =
         recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(bundle, witness)?;
@@ -9738,7 +11114,11 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner<'
         match id.name.as_str() {
             KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
                 if let Some(record) = recursive_record_for(id) {
-                    if !verify_kagemusha_recursive_spend_bundle_with_record(previous_bundle, record)
+                    if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                        previous_bundle,
+                        record,
+                        block_height,
+                    )
                     {
                         return Err(format!(
                             "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
@@ -9769,7 +11149,11 @@ fn verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_inner<'
                         id.backend, id.name
                     )
                 })?;
-                if !verify_kagemusha_recursive_spend_bundle_with_record(previous_bundle, record) {
+                if !verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+                    previous_bundle,
+                    record,
+                    block_height,
+                ) {
                     return Err(format!(
                         "record-backed recursive Kagemusha lineage previous proof {index} did not verify"
                     ));
@@ -10496,9 +11880,36 @@ pub fn preverify_kagemusha_recursive_spend_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> Result<(), String> {
-    if !record.is_active() {
-        return Err("Kagemusha recursive spend verifier record is not active".to_owned());
-    }
+    preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(bundle, record, None)
+}
+
+/// Preverify a recursive Kagemusha spend bundle against a verifier record at `block_height`.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> Result<(), String> {
+    preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> Result<(), String> {
+    ensure_kagemusha_record_active_for_optional_height(
+        record,
+        block_height,
+        "Kagemusha recursive spend",
+    )?;
     if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
         return Err(format!(
             "Kagemusha recursive spend verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
@@ -10693,7 +12104,35 @@ pub fn verify_kagemusha_recursive_spend_bundle_with_record(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
-    if preverify_kagemusha_recursive_spend_bundle_with_record(bundle, record).is_err() {
+    verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(bundle, record, None)
+}
+
+/// Verify a recursive Kagemusha spend bundle against a verifier record at `block_height`.
+#[must_use]
+pub fn verify_kagemusha_recursive_spend_bundle_with_record_at_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: u64,
+) -> bool {
+    verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        Some(block_height),
+    )
+}
+
+fn verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+    block_height: Option<u64>,
+) -> bool {
+    if preverify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
+        bundle,
+        record,
+        block_height,
+    )
+    .is_err()
+    {
         return false;
     }
     let Some(vk_box) = record.key.as_ref() else {
@@ -12545,15 +13984,24 @@ mod kagemusha_lineage_key_preflight_tests {
         bytes
     }
 
-    fn lineage_vk_box(ipa_k: u32, h2vk: &[u8]) -> VerifyingKeyBox {
+    fn lineage_vk_box_with_circuit_id(
+        ipa_k: u32,
+        circuit_id: &str,
+        h2vk: &[u8],
+    ) -> VerifyingKeyBox {
         let mut bytes = zk1::wrap_start();
-        zk1::wrap_append_circuit_id(
-            &mut bytes,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
-        );
+        zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
         zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
         append_test_tlv(&mut bytes, b"H2VK", h2vk);
         VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
+    fn lineage_vk_box(ipa_k: u32, h2vk: &[u8]) -> VerifyingKeyBox {
+        lineage_vk_box_with_circuit_id(
+            ipa_k,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+            h2vk,
+        )
     }
 
     fn run_lineage_vk_keygen_test(test: impl FnOnce() + Send + 'static) {
@@ -12789,6 +14237,98 @@ mod kagemusha_lineage_key_preflight_tests {
         assert!(
             err.contains("no fixed-column commitments"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs() {
+        let one_hop_vk_box = lineage_vk_box(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+        let append_vk_box = lineage_vk_box_with_circuit_id(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            &h2vk_header(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, 1, 3),
+        );
+        let short_one_hop_vk_box =
+            lineage_vk_box(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K, b"short");
+        let short_append_vk_box = lineage_vk_box_with_circuit_id(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            b"short",
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &one_hop_vk_box,
+            3,
+        )
+        .expect_err("unsupported one-hop opening length must reject before keygen");
+        assert!(
+            err.contains("opening length `3` is unsupported"),
+            "unexpected unsupported one-hop opening rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+            &one_hop_vk_box,
+            2,
+        )
+        .expect_err("one-hop verifier key must not derive append proving key material");
+        assert!(
+            err.contains("is not `")
+                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID),
+            "unexpected append circuit-id mismatch rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &append_vk_box,
+            2,
+        )
+        .expect_err("append verifier key must not derive one-hop proving key material");
+        assert!(
+            err.contains("is not `")
+                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID),
+            "unexpected one-hop circuit-id mismatch rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+            &short_one_hop_vk_box,
+            2,
+        )
+        .expect_err("short one-hop H2VK header must reject before keygen");
+        assert!(
+            err.contains("too short"),
+            "unexpected short one-hop H2VK rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+            &short_append_vk_box,
+            2,
+        )
+        .expect_err("short append H2VK header must reject before keygen");
+        assert!(
+            err.contains("too short"),
+            "unexpected short append H2VK rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+            &one_hop_vk_box,
+            b"bad",
+        )
+        .expect_err("malformed Pallas archive must reject before proving-key derivation");
+        assert!(
+            err.contains("failed to decode Kagemusha lineage one-hop Pallas open-envelope archive"),
+            "unexpected malformed one-hop Pallas archive rejection: {err}"
+        );
+
+        let err = derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+            &append_vk_box,
+            b"bad",
+        )
+        .expect_err("malformed append Pallas archive must reject before proving-key derivation");
+        assert!(
+            err.contains("failed to decode Kagemusha lineage append Pallas open-envelope archive"),
+            "unexpected malformed append Pallas archive rejection: {err}"
         );
     }
 }
@@ -15323,6 +16863,22 @@ fn preverify_open_verify_envelope_metadata(
     Ok(())
 }
 
+fn preverify_bound_vk_commitment(
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+) -> Result<[u8; 32], PreverifyResult> {
+    let Some(commitment) = vk_commitment else {
+        return Err(PreverifyResult::VerifyingKeyMissing);
+    };
+    let Some(expected) = expected_vk_commitment else {
+        return Err(PreverifyResult::VerifyingKeyMissing);
+    };
+    if commitment == [0u8; 32] || expected == [0u8; 32] || commitment != expected {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    Ok(commitment)
+}
+
 /// Result of a pre-verification step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreverifyResult {
@@ -15352,7 +16908,8 @@ pub enum PreverifyResult {
 
 /// Pre-verify a proof under a simple cost budget and deduplication cache.
 ///
-/// Current implementation only performs deduplication and backend tag sanity checks.
+/// This lightweight stage performs backend/tag admission, verifier-key binding
+/// checks, bounded envelope parsing where applicable, and batch deduplication.
 /// Full cryptographic verification is deferred to lane/overlay execution.
 pub fn preverify_with_budget(
     proof: &ProofBox,
@@ -15395,6 +16952,16 @@ pub fn preverify_with_budget(
             return PreverifyResult::PreverifyBudgetExceeded;
         }
     }
+    let bound_vk_commitment =
+        match preverify_bound_vk_commitment(vk_commitment, expected_vk_commitment) {
+            Ok(commitment) => commitment,
+            Err(err) => return err,
+        };
+    if let Some(vk_box) = vk
+        && vk_box.backend != proof.backend
+    {
+        return PreverifyResult::VerifyingKeyMismatch;
+    }
     // If we have both VK bytes and expected commitment, enforce the match early.
     if let (Some(expected), Some(vk_box)) = (expected_vk_commitment, vk) {
         let actual = crate::zk::hash_vk(vk_box);
@@ -15407,12 +16974,15 @@ pub fn preverify_with_budget(
             return PreverifyResult::VerifyingKeyMismatch;
         }
     }
-    if let Err(err) =
-        preverify_open_verify_envelope_metadata(proof, vk, vk_commitment, expected_vk_commitment)
-    {
+    if let Err(err) = preverify_open_verify_envelope_metadata(
+        proof,
+        vk,
+        Some(bound_vk_commitment),
+        expected_vk_commitment,
+    ) {
         return err;
     }
-    if !dedup.check_and_insert_with_commitment(proof, vk_commitment) {
+    if !dedup.check_and_insert_with_commitment(proof, Some(bound_vk_commitment)) {
         return PreverifyResult::Duplicate;
     }
     PreverifyResult::Accepted
@@ -31174,6 +32744,137 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_record_preverify_enforces_height_window_before_decoding() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        let vk_box = recursive_aggregation_vk_box();
+        attach_recursive_spend_zk1_halo2_envelope(
+            &mut bundle,
+            hash_vk(&vk_box),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            vec![0xC7; 96],
+        );
+        let mut record = recursive_aggregation_record(&vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(3);
+
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &record)
+            .expect_err("height-unbound recursive spend verifier record must reject");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record(&bundle, &record),
+            "height-unbound recursive spend verifier must reject windowed records"
+        );
+
+        let err =
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 1)
+                .expect_err("future recursive spend verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 1),
+            "future recursive spend verifier must reject"
+        );
+
+        preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 2)
+            .expect("in-window recursive spend verifier record must preverify");
+
+        let err =
+            preverify_kagemusha_recursive_spend_bundle_with_record_at_height(&bundle, &record, 3)
+                .expect_err("withdrawn recursive spend verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_verify_result_enforces_height_window_before_backend() {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let mut bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x42);
+        bundle.recursive_proof.public_inputs_hash = bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage recursive spend public-input hash");
+
+        let lineage_vk_box = recursive_spend_lineage_vk_box_with_h2vk_header(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+        );
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut bundle,
+            hash_vk(&lineage_vk_box),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xD1; 64],
+        );
+        let semantic_vk_box = recursive_aggregation_vk_box();
+        let mut record = recursive_aggregation_record(&semantic_vk_box);
+        record.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        record.commitment = hash_vk(&lineage_vk_box);
+        record.vk_len =
+            u32::try_from(lineage_vk_box.bytes.len()).expect("lineage verifier-key length fits");
+        record.key = Some(lineage_vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+
+        let no_height =
+            kagemusha_recursive_spend_verify_result_with_lineage_record(&bundle, Some(&record))
+                .expect("height-unbound lineage verify result");
+        assert!(!no_height.valid);
+        assert!(
+            no_height.reason.contains("chain height"),
+            "{}",
+            no_height.reason
+        );
+
+        let future = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            1,
+        )
+        .expect("future lineage verify result");
+        assert!(!future.valid);
+        assert!(future.reason.contains("not active"), "{}", future.reason);
+
+        let in_window = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            2,
+        )
+        .expect("in-window lineage verify result");
+        assert!(!in_window.valid);
+        assert_eq!(in_window.reason, "backend proof verification failed");
+
+        let withdrawn = kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+            &bundle,
+            Some(&record),
+            4,
+        )
+        .expect("withdrawn lineage verify result");
+        assert!(!withdrawn.valid);
+        assert!(
+            withdrawn.reason.contains("not active"),
+            "{}",
+            withdrawn.reason
+        );
+    }
+
+    #[test]
     fn kagemusha_record_curve_maps_only_supported_backends() {
         use iroha_data_model::zk::BackendTag;
 
@@ -31698,7 +33399,17 @@ mod kagemusha_folded_real_prover_tests {
             super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
                 4,
                 "lineage-append-contract-previous-probe",
-                iroha_zkp_halo2::PolyOpenTranscriptMetadata::default(),
+                iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+                    vk_commitment: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-vk",
+                    )),
+                    public_inputs_schema_hash: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-schema",
+                    )),
+                    domain_tag: Some(fixed_bytes(
+                        b"kagemusha-lineage-contract-previous-probe-domain",
+                    )),
+                },
             );
         let previous_probe_preflight = pallas_preflight_from_envelope(&previous_probe_envelope);
         let chain_id: ChainId = "kagemusha-lineage-append-contract"
@@ -32079,6 +33790,208 @@ mod kagemusha_folded_real_prover_tests {
                 && !err.contains("requires a previous lineage verifier record"),
             "capped Reserved-lineage append must reject before verifier-record or archive checks: {err}"
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_append_previous_lineage_record_enforces_height_window_before_backend()
+     {
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop recursive spend accumulator");
+        let mut recursive_proof = recursive_spend_proof(&accumulator);
+        recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            recursive_spend_lineage_scalar_projection(0x33);
+        recursive_proof.public_inputs_hash = recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("previous lineage recursive public-input hash");
+        let mut previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator.clone(),
+            recursive_proof,
+        };
+        let lineage_vk_box = recursive_spend_lineage_vk_box_with_h2vk_header(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K,
+        );
+        attach_recursive_spend_zk1_halo2_envelope_with_lineage_slice(
+            &mut previous_bundle,
+            hash_vk(&lineage_vk_box),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            vec![0xE1; 64],
+        );
+        let previous_archive = previous_recursive_spend_proof_pallas_open_envelope_archive(
+            &previous_bundle,
+            "append-window-previous-proof",
+        );
+        let semantic_vk_box = recursive_aggregation_vk_box();
+        let mut record = recursive_aggregation_record(&semantic_vk_box);
+        record.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        record.commitment = hash_vk(&lineage_vk_box);
+        record.vk_len =
+            u32::try_from(lineage_vk_box.bytes.len()).expect("lineage verifier-key length fits");
+        record.key = Some(lineage_vk_box);
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+
+        let chain_id: ChainId = "kagemusha-recursive-spend-append-window"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive-spend-window"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let output_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        let current_note = accumulator.current_note.clone();
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+            )
+            .expect_err("height-unbound previous lineage record must reject before backend");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !err.contains("Pallas open-envelope archive"),
+            "height-unbound previous record must reject before current-hop archive decode: {err}"
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                1,
+            )
+            .expect_err("future previous lineage record must reject before backend");
+        assert!(err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                2,
+            )
+            .expect_err("in-window previous lineage record reaches backend verification");
+        assert!(err.contains("did not verify"), "{err}");
+        assert!(!err.contains("chain height"), "{err}");
+        assert!(!err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &previous_bundle,
+                Some(&record),
+                &previous_archive,
+                &record_bundle,
+                &[0xFE],
+                current_note,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                &output_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn previous lineage record must reject before backend");
+        assert!(err.contains("not active"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_init_record_bundle_enforces_height_window_before_proving() {
+        let (chain_id, asset, hop, mut record) = sample_confidential_v2_verified_hop();
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(4);
+        let record_bundle = one_hop_record_bundle(chain_id, asset, &hop, &record);
+        let envelope_archive =
+            one_hop_pallas_open_envelope_archive(&record_bundle, "init-window-hop");
+        let current_note = sample_kagemusha_recursive_spend_note(
+            hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-recursive-spend-init-window-nullifier"),
+            7,
+        );
+        let empty_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+            )
+            .expect_err("height-unbound init must reject windowed hop records before proving");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                1,
+            )
+            .expect_err("future init hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                2,
+            )
+            .expect_err("in-window init hop record should reach proof-generation validation");
+        assert!(!err.contains("chain height"), "{err}");
+        assert!(!err.contains("not active"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &record_bundle,
+                &envelope_archive,
+                current_note,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &empty_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn init hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
     }
 
     #[test]
@@ -33015,12 +34928,24 @@ mod kagemusha_folded_real_prover_tests {
             7,
         );
 
+        let first_lineage_vk_box =
+            kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
+                &first_envelope_archive,
+            )
+            .expect("one-hop Reserved-lineage verifier key");
+        let first_lineage_proving_key =
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive(
+                &first_lineage_vk_box,
+                &first_envelope_archive,
+            )
+            .expect("one-hop Reserved-lineage proving key archive");
         let first_lineage_bundle =
-            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive(
+            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
                 &first_record_bundle,
                 &first_envelope_archive,
                 first_note,
-                None,
+                &first_lineage_vk_box,
+                &first_lineage_proving_key,
             )
             .expect("real Reserved-lineage recursive spend init proof");
         assert_eq!(first_lineage_bundle.accumulator.hop_count, 1);
@@ -33072,6 +34997,17 @@ mod kagemusha_folded_real_prover_tests {
                 &first_lineage_bundle,
                 "lineage-append-previous-proof",
             );
+        let append_lineage_vk_box =
+            kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
+                &second_envelope_archive,
+            )
+            .expect("append Reserved-lineage verifier key");
+        let append_lineage_proving_key =
+            derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive(
+                &append_lineage_vk_box,
+                &second_envelope_archive,
+            )
+            .expect("append Reserved-lineage proving key archive");
         let appended_lineage_bundle =
             prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &first_lineage_bundle,
@@ -33080,7 +35016,7 @@ mod kagemusha_folded_real_prover_tests {
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note,
-                None,
+                Some(&append_lineage_proving_key),
             )
             .expect("real Reserved-lineage recursive spend append proof");
         assert_eq!(appended_lineage_bundle.accumulator.hop_count, 2);
@@ -34652,6 +36588,52 @@ mod kagemusha_folded_real_prover_tests {
                 .is_err()
         );
 
+        let mut future = record.clone();
+        future.activation_height = Some(2);
+        let err =
+            preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &future)
+                .expect_err("height-unbound windowed recursive aggregation record must reject");
+        assert!(err.contains("chain height"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_aggregation_proof_bundle_with_record(&bundle, &future),
+            "height-unbound recursive aggregation verifier must reject windowed records"
+        );
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &future, 1,
+        )
+        .expect_err("future recursive aggregation verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+        assert!(
+            !verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+                &bundle, &future, 1,
+            ),
+            "future recursive aggregation verifier must reject"
+        );
+        preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &future, 2,
+        )
+        .expect("in-window recursive aggregation verifier record must preverify");
+
+        let mut withdrawn_at_boundary = record.clone();
+        withdrawn_at_boundary.activation_height = Some(1);
+        withdrawn_at_boundary.withdraw_height = Some(1);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle,
+            &withdrawn_at_boundary,
+            1,
+        )
+        .expect_err("withdrawn-at-boundary recursive aggregation record must reject");
+        assert!(err.contains("not active"), "{err}");
+
+        let mut expired = record.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height(
+            &bundle, &expired, 2,
+        )
+        .expect_err("expired recursive aggregation record must reject");
+        assert!(err.contains("not active"), "{err}");
+
         let mut wrong_namespace = record.clone();
         wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
         assert!(
@@ -35854,6 +37836,54 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_compact_payment_token_record_verifier_enforces_height_window_before_decoding() {
+        let public_inputs = sample_public_inputs();
+        let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+            folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_FOLDED_CIRCUIT_ID,
+                ),
+                public_inputs_hash: public_inputs
+                    .public_inputs_hash()
+                    .expect("folded public-input hash"),
+                proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xCA, 0xFE]),
+            },
+            public_inputs,
+        };
+        let vk_box = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3]);
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash(),
+            hash_vk(&vk_box),
+        );
+        record.status = ConfidentialStatus::Active;
+        record.activation_height = Some(2);
+        record.withdraw_height = Some(3);
+        record.max_proof_bytes = 1024;
+        record.vk_len = u32::try_from(vk_box.bytes.len()).expect("vk length fits u32");
+        record.key = Some(vk_box);
+
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record(&token, &record),
+            "height-unbound compact-token verifier must reject windowed records"
+        );
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record_at_height(&token, &record, 1),
+            "future compact-token verifier record must reject"
+        );
+        assert!(
+            !verify_kagemusha_compact_payment_token_with_record_at_height(&token, &record, 3),
+            "withdrawn compact-token verifier record must reject"
+        );
+    }
+
+    #[test]
     fn kagemusha_verified_folded_public_inputs_verifies_hop_proofs() {
         let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
         let step = hop.as_step();
@@ -36648,7 +38678,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect("serializable record-backed recursive evidence from Pallas open envelope")
         );
         let envelope_archive =
-            norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive");
+            norito::to_bytes(&vec![envelope.clone()]).expect("encode Pallas open-envelope archive");
         assert_eq!(
             evidence,
             kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
@@ -36657,6 +38687,61 @@ mod kagemusha_folded_real_prover_tests {
             )
             .expect("archive-backed record-backed recursive evidence from Pallas open envelope")
         );
+
+        let mut windowed_record = record.clone();
+        windowed_record.activation_height = Some(2);
+        windowed_record.withdraw_height = Some(4);
+        let windowed_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle,
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id,
+                record: windowed_record,
+            }],
+        };
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+            )
+            .expect_err("height-unbound recursive evidence must reject windowed records");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                1,
+            )
+            .expect_err("future recursive evidence verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                2,
+            )
+            .expect("in-window recursive evidence verifier record must pass")
+        );
+        assert_eq!(
+            evidence,
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &windowed_record_bundle,
+                &envelope_archive,
+                2,
+            )
+            .expect("in-window archived recursive evidence verifier record must pass")
+        );
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_height(
+                &windowed_record_bundle,
+                std::slice::from_ref(&envelope),
+                4,
+            )
+            .expect_err("withdrawn recursive evidence verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
     }
 
     #[test]
@@ -37509,6 +39594,106 @@ mod kagemusha_folded_real_prover_tests {
             "inactive-record error should come before proof decoding: {err}"
         );
 
+        let mut future = record.clone();
+        future.activation_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &future,
+        }];
+        let err = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+            &undecodable_bundle,
+            &records,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect_err("height-unbound windowed verifier record must reject recursive evidence");
+        assert!(
+            err.contains("chain height"),
+            "unexpected height-unbound window error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "height-unbound record error should come before proof decoding: {err}"
+        );
+
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+                &undecodable_bundle,
+                &records,
+                1,
+                1,
+                opening_len,
+                fixed_bytes(b"kagemusha-recursive-core-params"),
+                schedule_digest,
+                manifest_digest,
+                base_digest,
+                fixed_bytes(b"kagemusha-recursive-core-batch"),
+            )
+            .expect_err("future verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not active"),
+            "unexpected future-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "future-record error should come before proof decoding: {err}"
+        );
+
+        let future_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: future,
+            }],
+        };
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_at_height(
+            &future_record_bundle,
+            2,
+            1,
+            opening_len,
+            fixed_bytes(b"kagemusha-recursive-core-params"),
+            schedule_digest,
+            manifest_digest,
+            base_digest,
+            fixed_bytes(b"kagemusha-recursive-core-batch"),
+        )
+        .expect("in-window verifier record must build recursive evidence");
+
+        let mut expired = record.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &expired,
+        }];
+        let err =
+            kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
+                &undecodable_bundle,
+                &records,
+                2,
+                1,
+                opening_len,
+                fixed_bytes(b"kagemusha-recursive-core-params"),
+                schedule_digest,
+                manifest_digest,
+                base_digest,
+                fixed_bytes(b"kagemusha-recursive-core-batch"),
+            )
+            .expect_err("expired verifier record must reject recursive evidence");
+        assert!(
+            err.contains("not active"),
+            "unexpected expired-record error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "expired-record error should come before proof decoding: {err}"
+        );
+
         let mut wrong_namespace = record.clone();
         wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
         let records = [KagemushaHopVerifierRecord {
@@ -37664,6 +39849,65 @@ mod kagemusha_folded_real_prover_tests {
         let err =
             kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
                 .expect_err("inactive hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+
+        let mut future = valid.clone();
+        future.activation_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &future,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("height-unbound windowed hop verifier record must fail");
+        assert!(err.contains("chain height"), "unexpected error: {err}");
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 1,
+        )
+        .expect_err("future hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+        kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 2,
+        )
+        .expect("in-window hop verifier record must pass");
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: future,
+            }],
+        };
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(&record_bundle, 2)
+            .expect("serializable in-window hop verifier record must pass");
+        let err = kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
+            .expect_err("serializable height-unbound windowed record must fail");
+        assert!(err.contains("chain height"), "unexpected error: {err}");
+
+        let mut withdrawn_at_boundary = valid.clone();
+        withdrawn_at_boundary.activation_height = Some(1);
+        withdrawn_at_boundary.withdraw_height = Some(1);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &withdrawn_at_boundary,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 1,
+        )
+        .expect_err("withdrawn-at-boundary hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+
+        let mut expired = valid.clone();
+        expired.activation_height = Some(1);
+        expired.withdraw_height = Some(2);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &expired,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_height(
+            &bundle, &records, 2,
+        )
+        .expect_err("expired hop verifier record must fail");
         assert!(err.contains("not active"), "unexpected error: {err}");
 
         let mut wrong_namespace = valid.clone();
@@ -60635,6 +62879,111 @@ mod preverified_key_tests {
             PreverifyResult::Accepted
         );
 
+        let mut missing_commitment_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_commitment_dedup,
+                0,
+                None,
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_commitment_dedup,
+                0,
+                Some(expected),
+                None,
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_commitment_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut zero_commitment_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some([0u8; 32]),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some(expected),
+                Some([0u8; 32]),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut zero_commitment_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut wrong_backend_dedup = DedupCache::new();
+        let wrong_backend_vk = VerifyingKeyBox::new("stark/fri".into(), vk.bytes.clone());
+        let wrong_backend_expected = hash_vk(&wrong_backend_vk);
+        let wrong_backend_proof = preverify_enveloped_proof(wrong_backend_expected);
+        assert_eq!(
+            preverify_with_budget(
+                &wrong_backend_proof,
+                Some(&wrong_backend_vk),
+                &mut wrong_backend_dedup,
+                0,
+                Some(wrong_backend_expected),
+                Some(wrong_backend_expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut wrong_backend_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
         let mut mismatch_dedup = DedupCache::new();
         let mut wrong = expected;
         wrong[0] ^= 0x80;
@@ -61338,6 +63687,7 @@ mod tests {
             KAIGI_ROSTER_CIRCUIT_K, compute_commitment, compute_nullifier, empty_roster_root_hash,
             roster_root_limbs,
         };
+        use rand_core_06::OsRng;
 
         let k = KAIGI_ROSTER_CIRCUIT_K;
         let params: PastaParams = pasta_params_new(k);
@@ -61413,6 +63763,7 @@ mod tests {
             KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KaigiUsageCommitmentCircuit,
             compute_usage_commitment,
         };
+        use rand_core_06::OsRng;
 
         let params: PastaParams = pasta_params_new(KAIGI_USAGE_CIRCUIT_K);
         let duration = Scalar::from(1_200u64);
@@ -61505,10 +63856,11 @@ mod tests {
     #[test]
     fn preverify_basic() {
         let mut d = DedupCache::new();
+        let vk_commitment = [1u8; 32];
         let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             circuit_id: "halo2/ipa:preverify-basic".to_owned(),
-            vk_hash: [1u8; 32],
+            vk_hash: vk_commitment,
             public_inputs: vec![1],
             proof_bytes: vec![2],
             aux: Vec::new(),
@@ -61518,22 +63870,54 @@ mod tests {
             norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
         );
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 0, None, None, true),
+            preverify_with_budget(&p, None, &mut d, 0, None, Some(vk_commitment), true),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(&p, None, &mut d, 0, Some(vk_commitment), None, true),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut d,
+                0,
+                Some([0u8; 32]),
+                Some(vk_commitment),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut d,
+                0,
+                Some(vk_commitment),
+                Some(vk_commitment),
+                true,
+            ),
             PreverifyResult::Accepted
         );
         assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 0, None, None, true),
+            preverify_with_budget(
+                &p,
+                None,
+                &mut d,
+                0,
+                Some(vk_commitment),
+                Some(vk_commitment),
+                true,
+            ),
             PreverifyResult::Duplicate
         );
-        // Different commitment should allow same proof bytes
-        let p2 = p.clone();
+        let mut wrong = vk_commitment;
+        wrong[0] ^= 0x80;
         assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 0, Some([1u8; 32]), None, true),
-            PreverifyResult::Accepted
-        );
-        assert_eq!(
-            preverify_with_budget(&p2, None, &mut d, 0, Some([1u8; 32]), None, true),
-            PreverifyResult::Duplicate
+            preverify_with_budget(&p, None, &mut d, 0, Some(wrong), Some(vk_commitment), true),
+            PreverifyResult::VerifyingKeyMismatch
         );
     }
 

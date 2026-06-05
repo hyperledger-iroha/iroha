@@ -4,6 +4,7 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
     case emptyRequestArchive
     case bridgeUnavailable
     case proofRejected
+    case oversizedNativeOutput
 
     public var errorDescription: String? {
         switch self {
@@ -15,6 +16,8 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
             )
         case .proofRejected:
             return "Kagemusha recursive spend request was rejected by the native bridge."
+        case .oversizedNativeOutput:
+            return "Kagemusha recursive spend native bridge returned an oversized archive."
         }
     }
 }
@@ -38,6 +41,7 @@ public enum KagemushaRecursiveSpendProver {
     public static let recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1
     public static let recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024
     public static let recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128
+    public static let nativeArchiveMaxBytes = 64 * 1024 * 1024
     public static let recursiveSpendTransitionProfileDomain =
         "iroha:kagemusha:v1:recursive-spend-transition-profile"
     public static let recursiveSpendTransitionProfileDigestDomain =
@@ -320,6 +324,9 @@ public enum KagemushaRecursiveSpendProver {
         }
         guard !archive.isEmpty else {
             throw KagemushaRecursiveSpendProverError.proofRejected
+        }
+        guard archive.count <= nativeArchiveMaxBytes else {
+            throw KagemushaRecursiveSpendProverError.oversizedNativeOutput
         }
         return archive
     }

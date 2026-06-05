@@ -596,6 +596,28 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     }
 }
 
+struct MultiMessageBatch<E: EngineBLS> {
+    signature: BlsSignature<E>,
+    messages: Vec<w3f_bls::Message>,
+    public_keys: Vec<PublicKey<E>>,
+}
+
+impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
+    type E = E;
+    type M = &'a w3f_bls::Message;
+    type PKG = &'a PublicKey<E>;
+    type PKnM =
+        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
+
+    fn signature(&self) -> BlsSignature<E> {
+        BlsSignature(self.signature.0)
+    }
+
+    fn messages_and_publickeys(self) -> Self::PKnM {
+        self.messages.iter().zip(self.public_keys.iter())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,27 +660,5 @@ mod tests {
     fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
         assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
         assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
-    }
-}
-
-struct MultiMessageBatch<E: EngineBLS> {
-    signature: BlsSignature<E>,
-    messages: Vec<w3f_bls::Message>,
-    public_keys: Vec<PublicKey<E>>,
-}
-
-impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
-    type E = E;
-    type M = &'a w3f_bls::Message;
-    type PKG = &'a PublicKey<E>;
-    type PKnM =
-        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
-
-    fn signature(&self) -> BlsSignature<E> {
-        BlsSignature(self.signature.0)
-    }
-
-    fn messages_and_publickeys(self) -> Self::PKnM {
-        self.messages.iter().zip(self.public_keys.iter())
     }
 }
