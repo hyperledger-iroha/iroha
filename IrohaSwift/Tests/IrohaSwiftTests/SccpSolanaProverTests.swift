@@ -8994,9 +8994,64 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(parsedNativeProverBundle.provingKey, "artifacts/eth-mainnet/proving-key.bin")
         XCTAssertEqual(parsedNativeProverBundle.verifierKey, "artifacts/eth-mainnet/verifier-key.bin")
         XCTAssertEqual(
+            parsedNativeProverBundle.nativeProverSelfTestArtifact,
+            "artifacts/eth-mainnet/native-prover-self-test.json"
+        )
+        XCTAssertEqual(
             parsedNativeProverBundle.nativeSdkArtifacts.first { $0.sdk == "swift" }?.implementationArtifact,
             "artifacts/eth-mainnet/swift-implementation.bin"
         )
+        let parityJson = Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: nativeProverBundle
+        )
+        let parityFixture = try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: parityJson,
+            nativeProverBundle: nativeProverBundle
+        )
+        XCTAssertEqual(parityFixture.schema, sccpEthNativeEvmProverParityFixtureSchemaV1)
+        XCTAssertEqual(parityFixture.destinationBindingHash, binding.hash)
+        XCTAssertEqual(parityFixture.publicSignalWords.count, 9)
+        XCTAssertEqual(
+            parityFixture.sdkResults["swift"]?.toriiSubmitPayloadHash,
+            parityFixture.toriiSubmitPayloadHash
+        )
+        let driftedParityFixture = Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: nativeProverBundle,
+            swiftCalldataHash: "0x" + String(repeating: "96", count: 32)
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: driftedParityFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverParityFixture.sdkResults.swift")
+            )
+        }
+        let selfTestJson = Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: nativeProverBundle
+        )
+        let selfTestFixture = try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: selfTestJson,
+            nativeProverBundle: nativeProverBundle
+        )
+        XCTAssertEqual(selfTestFixture.schema, sccpEthNativeEvmProverSelfTestSchemaV1)
+        XCTAssertEqual(selfTestFixture.destinationBindingHash, binding.hash)
+        XCTAssertEqual(selfTestFixture.publicSignalWords.count, 9)
+        XCTAssertEqual(selfTestFixture.sdkResults["swift"]?.proofHash, selfTestFixture.proofHash)
+        let driftedSelfTestFixture = Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: nativeProverBundle,
+            swiftProofHash: "0x" + String(repeating: "97", count: 32)
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: driftedSelfTestFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestFixture.sdkResults.swift")
+            )
+        }
         XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
             jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
                 destinationBindingHash: binding.hash,
@@ -9105,7 +9160,10 @@ final class SccpSolanaProverTests: XCTestCase {
             jsonString: noncanonicalAuditManifest,
             expectedDestinationBindingHash: binding.hash
         )) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("auditHashes[0]"))
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidHex32("auditHashes.circuit_security_audit")
+            )
         }
         let replayedAuditManifest = Self.sampleEthereumNativeEvmProverBundleJson(
             destinationBindingHash: binding.hash
@@ -9117,7 +9175,10 @@ final class SccpSolanaProverTests: XCTestCase {
             jsonString: replayedAuditManifest,
             expectedDestinationBindingHash: binding.hash
         )) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("auditHashes[0]"))
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("auditHashes.circuit_security_audit")
+            )
         }
         let bundledFacade = EthereumMainnetSccp(nativeProverBundle: nativeProverBundle)
         let bundledRequest = try await bundledFacade.buildOutboundProofRequest(input)
@@ -9156,9 +9217,12 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: String(repeating: "56", count: 32),
             destinationBinding: artifactBinding
         )
-        let verifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+        let draftVerifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
             proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
             provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
             verifierKeyHash: verifierKeyHash,
             destinationBindingHash: artifactBinding.hash,
             nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
@@ -9170,6 +9234,7 @@ final class SccpSolanaProverTests: XCTestCase {
                         implementation: entry.value,
                         proofArtifactHash: proofArtifactHash,
                         provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
                         implementationHash: entry.key == "swift"
                             ? implementationHash
                             : "0x" + String(
@@ -9178,7 +9243,33 @@ final class SccpSolanaProverTests: XCTestCase {
                             )
                     )
                 },
-            auditHashes: ["0x" + String(repeating: "a1", count: 32)],
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let parityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftVerifiedBundle
+        ).utf8)
+        let parityFixtureHash = Self.sha256Hex(parityFixtureBytes)
+        let selfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftVerifiedBundle
+        ).utf8)
+        let selfTestFixtureHash = Self.sha256Hex(selfTestFixtureBytes)
+        var verifiedAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        verifiedAuditHashes["cross_sdk_fixture_parity"] = parityFixtureHash
+        verifiedAuditHashes["native_prover_self_test"] = selfTestFixtureHash
+        let verifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftVerifiedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: verifiedAuditHashes,
             expectedDestinationBindingHash: artifactBinding.hash
         )
         let verifiedArtifacts = try verifiedBundle.verifiedArtifacts(
@@ -9186,14 +9277,62 @@ final class SccpSolanaProverTests: XCTestCase {
             provingKeyBytes: provingKeyBytes,
             verifierKeyBytes: verifierKeyBytes,
             sdk: "swift",
-            implementationBytes: implementationBytes
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
         )
         XCTAssertEqual(verifiedArtifacts.hashAlgorithm, sccpNativeEvmProverArtifactHashAlgorithmV1)
         XCTAssertEqual(verifiedArtifacts.proofArtifactHash, proofArtifactHash)
         XCTAssertEqual(verifiedArtifacts.provingKeyHash, provingKeyHash)
         XCTAssertEqual(verifiedArtifacts.verifierKeyHash, verifierKeyHash)
+        XCTAssertEqual(verifiedArtifacts.crossSdkFixtureParityHash, parityFixtureHash)
+        XCTAssertEqual(
+            verifiedArtifacts.crossSdkFixtureParity?.calldataHash,
+            "0x" + String(repeating: "d3", count: 32)
+        )
+        XCTAssertEqual(verifiedArtifacts.nativeProverSelfTestHash, selfTestFixtureHash)
+        XCTAssertEqual(
+            verifiedArtifacts.nativeProverSelfTest?.proofHash,
+            "0x" + String(repeating: "e4", count: 32)
+        )
         XCTAssertEqual(verifiedArtifacts.implementation, "native-swift")
         XCTAssertEqual(verifiedArtifacts.implementationHash, implementationHash)
+        let swiftImplementationArtifact = try XCTUnwrap(
+            verifiedBundle.nativeSdkArtifacts.first { $0.sdk == "swift" }?.implementationArtifact
+        )
+        let artifactBytesByPath = [
+            try XCTUnwrap(verifiedBundle.proofArtifact): proofArtifactBytes,
+            try XCTUnwrap(verifiedBundle.provingKey): provingKeyBytes,
+            try XCTUnwrap(verifiedBundle.verifierKey): verifierKeyBytes,
+            try XCTUnwrap(verifiedBundle.crossSdkFixtureParityArtifact): parityFixtureBytes,
+            try XCTUnwrap(verifiedBundle.nativeProverSelfTestArtifact): selfTestFixtureBytes,
+            swiftImplementationArtifact: implementationBytes
+        ]
+        let verifiedFromResolver = try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            guard let bytes = artifactBytesByPath[path] else {
+                throw EvmSccpProverError.invalidPublicInputs(path)
+            }
+            return bytes
+        }
+        XCTAssertEqual(verifiedFromResolver.implementationHash, implementationHash)
+        XCTAssertEqual(verifiedFromResolver.crossSdkFixtureParityHash, parityFixtureHash)
+        XCTAssertEqual(verifiedFromResolver.nativeProverSelfTestHash, selfTestFixtureHash)
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            if path == verifiedBundle.crossSdkFixtureParityArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("crossSdkFixtureParityArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityArtifact"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            if path == verifiedBundle.nativeProverSelfTestArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestArtifact"))
+        }
         var missingArtifactsProverCalled = false
         let missingArtifactsFacade = EthereumMainnetSccp(proveFunction: { _ in
             missingArtifactsProverCalled = true
@@ -9207,6 +9346,7 @@ final class SccpSolanaProverTests: XCTestCase {
         }
         XCTAssertFalse(missingArtifactsProverCalled)
         var artifactBoundRequest: EvmSccpProofRequest?
+        var artifactBoundSelfTestCalled = false
         let artifactBoundFacade = EthereumMainnetSccp(
             proveFunction: { request in
                 artifactBoundRequest = request
@@ -9214,18 +9354,120 @@ final class SccpSolanaProverTests: XCTestCase {
                 XCTAssertEqual(request.provingKeyHash, provingKeyHash)
                 return Self.sampleGroth16ProofBytes()
             },
+            nativeProverSelfTestFunction: { fixture, expected, artifacts in
+                artifactBoundSelfTestCalled = true
+                XCTAssertEqual(fixture.proofHash, "0x" + String(repeating: "e4", count: 32))
+                XCTAssertEqual(artifacts.nativeProverSelfTestHash, selfTestFixtureHash)
+                return expected
+            },
             nativeProverArtifacts: verifiedArtifacts
         )
         let artifactBoundResult = try await artifactBoundFacade.proveOutboundToEthereum(artifactInput)
+        XCTAssertTrue(artifactBoundSelfTestCalled)
         XCTAssertEqual(artifactBoundRequest?.proofArtifactHash, proofArtifactHash)
         XCTAssertEqual(artifactBoundResult.proofArtifactHash, proofArtifactHash)
         XCTAssertEqual(artifactBoundResult.provingKeyHash, provingKeyHash)
+        var missingSelfTestHookProverCalled = false
+        let missingSelfTestHookFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                missingSelfTestHookProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        do {
+            _ = try await missingSelfTestHookFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must require the native self-test hook")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestFunction")
+            )
+        }
+        XCTAssertFalse(missingSelfTestHookProverCalled)
+        var driftingSelfTestHookProverCalled = false
+        let driftingSelfTestHookFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                driftingSelfTestHookProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverSelfTestFunction: { _, _, _ in
+                try EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                    requestHash: "0x" + String(repeating: "e1", count: 32),
+                    witnessHash: "0x" + String(repeating: "e2", count: 32),
+                    sourceProofHash: "0x" + String(repeating: "e3", count: 32),
+                    proofHash: "0x" + String(repeating: "97", count: 32),
+                    publicSignalWords: (0..<9).map { index in
+                        "0x" + String(repeating: String(format: "%02x", index + 0x20), count: 32)
+                    },
+                    calldataHash: "0x" + String(repeating: "e5", count: 32),
+                    toriiSubmitPayloadHash: "0x" + String(repeating: "e6", count: 32)
+                )
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        do {
+            _ = try await driftingSelfTestHookFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject drifting native self-test output")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestResult")
+            )
+        }
+        XCTAssertFalse(driftingSelfTestHookProverCalled)
+        var factoryBoundRequest: EvmSccpProofRequest?
+        let factoryBoundFacade = try EthereumMainnetSccp.fromNativeProverBundle(
+            proveFunction: { request in
+                factoryBoundRequest = request
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverSelfTestFunction: { _, expected, _ in expected },
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            guard let bytes = artifactBytesByPath[path] else {
+                throw EvmSccpProverError.invalidPublicInputs(path)
+            }
+            return bytes
+        }
+        let factoryBoundResult = try await factoryBoundFacade.proveOutboundToEthereum(artifactInput)
+        XCTAssertEqual(factoryBoundRequest?.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(factoryBoundRequest?.provingKeyHash, provingKeyHash)
+        XCTAssertEqual(factoryBoundResult.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(factoryBoundResult.provingKeyHash, provingKeyHash)
+        XCTAssertThrowsError(try EthereumMainnetSccp.fromNativeProverBundle(
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            if path == verifiedBundle.crossSdkFixtureParityArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("crossSdkFixtureParityArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityArtifact"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetSccp.fromNativeProverBundle(
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            if path == verifiedBundle.nativeProverSelfTestArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestArtifact"))
+        }
         let implementationUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
             hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
             nativeProverBundle: verifiedBundle,
             proofArtifactHash: proofArtifactHash,
             provingKeyHash: provingKeyHash,
             verifierKeyHash: verifierKeyHash,
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: selfTestFixtureHash,
+            nativeProverSelfTest: verifiedArtifacts.nativeProverSelfTest,
             sdk: "swift",
             implementation: "native-swift",
             implementationHash: nil
@@ -9254,6 +9496,10 @@ final class SccpSolanaProverTests: XCTestCase {
             proofArtifactHash: proofArtifactHash,
             provingKeyHash: provingKeyHash,
             verifierKeyHash: "0x" + String(repeating: "ef", count: 32),
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: selfTestFixtureHash,
+            nativeProverSelfTest: verifiedArtifacts.nativeProverSelfTest,
             sdk: "swift",
             implementation: "native-swift",
             implementationHash: implementationHash
@@ -9276,6 +9522,38 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         }
         XCTAssertFalse(verifierKeyUnboundProverCalled)
+        let selfTestUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: nil,
+            nativeProverSelfTest: nil,
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: implementationHash
+        )
+        var selfTestUnboundProverCalled = false
+        let selfTestUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                selfTestUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: selfTestUnboundArtifacts
+        )
+        do {
+            _ = try await selfTestUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject self-test-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.nativeProverSelfTestHash")
+            )
+        }
+        XCTAssertFalse(selfTestUnboundProverCalled)
         XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
             proofArtifactBytes: Data([0]),
             provingKeyBytes: provingKeyBytes,
@@ -9287,7 +9565,9 @@ final class SccpSolanaProverTests: XCTestCase {
             proofArtifactBytes: proofArtifactBytes,
             provingKeyBytes: provingKeyBytes,
             verifierKeyBytes: verifierKeyBytes,
-            implementationBytes: implementationBytes
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sdk"))
         }
@@ -9295,7 +9575,9 @@ final class SccpSolanaProverTests: XCTestCase {
             proofArtifactBytes: proofArtifactBytes,
             provingKeyBytes: provingKeyBytes,
             verifierKeyBytes: verifierKeyBytes,
-            sdk: "swift"
+            sdk: "swift",
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
         }
@@ -9304,15 +9586,62 @@ final class SccpSolanaProverTests: XCTestCase {
             provingKeyBytes: provingKeyBytes,
             verifierKeyBytes: verifierKeyBytes,
             sdk: "swift",
-            implementationBytes: Data("tampered".utf8)
+            implementationBytes: Data("tampered".utf8),
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
         }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: Data("{}".utf8),
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: Data("{}".utf8)
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestBytes"))
+        }
         let flaggedArtifactBytes = Data([0x77, 0x61, 0x73, 0x6D])
         let flaggedArtifactHash = Self.sha256Hex(flaggedArtifactBytes)
-        let flaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+        let draftFlaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
             proofArtifactHash: flaggedArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
             provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
             verifierKeyHash: verifierKeyHash,
             destinationBindingHash: artifactBinding.hash,
             nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
@@ -9324,6 +9653,7 @@ final class SccpSolanaProverTests: XCTestCase {
                         implementation: entry.value,
                         proofArtifactHash: flaggedArtifactHash,
                         provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
                         implementationHash: entry.key == "swift"
                             ? implementationHash
                             : "0x" + String(
@@ -9332,13 +9662,39 @@ final class SccpSolanaProverTests: XCTestCase {
                             )
                     )
                 },
-            auditHashes: ["0x" + String(repeating: "a1", count: 32)],
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let flaggedParityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftFlaggedBundle
+        ).utf8)
+        let flaggedSelfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftFlaggedBundle
+        ).utf8)
+        var flaggedAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        flaggedAuditHashes["cross_sdk_fixture_parity"] = Self.sha256Hex(flaggedParityFixtureBytes)
+        flaggedAuditHashes["native_prover_self_test"] = Self.sha256Hex(flaggedSelfTestFixtureBytes)
+        let flaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: flaggedArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftFlaggedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: flaggedAuditHashes,
             expectedDestinationBindingHash: artifactBinding.hash
         )
         XCTAssertThrowsError(try flaggedBundle.verifiedArtifacts(
             proofArtifactBytes: flaggedArtifactBytes,
             provingKeyBytes: provingKeyBytes,
-            verifierKeyBytes: verifierKeyBytes
+            verifierKeyBytes: verifierKeyBytes,
+            crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
+            nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes
         )) { error in
             XCTAssertEqual(
                 error as? EvmSccpProverError,
@@ -16380,12 +16736,22 @@ final class SccpSolanaProverTests: XCTestCase {
             noWasm: noWasm,
             remoteProverRequired: remoteProverRequired,
             nativeSdkArtifacts: artifacts,
-            auditHashes: [
-                "0x" + String(repeating: "a1", count: 32),
-                "0x" + String(repeating: "a2", count: 32)
-            ],
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
             expectedDestinationBindingHash: expectedDestinationBindingHash
         )
+    }
+
+    private static func sampleEthereumNativeEvmProverAuditHashes() -> [String: String] {
+        [
+            "circuit_security_audit": "0x" + String(repeating: "a1", count: 32),
+            "native_implementation_audit": "0x" + String(repeating: "a2", count: 32),
+            "reproducible_build_attestation": "0x" + String(repeating: "a3", count: 32),
+            "cross_sdk_fixture_parity": "0x" + String(repeating: "a4", count: 32),
+            "native_prover_self_test": "0x" + String(repeating: "a5", count: 32),
+            "no_wasm_no_remote_scan": "0x" + String(repeating: "a6", count: 32)
+        ]
     }
 
     private static func sha256Hex(_ data: Data) -> String {
@@ -16434,10 +16800,118 @@ final class SccpSolanaProverTests: XCTestCase {
           "remote_prover_required": \(remoteProverRequired),
           "browser_implementation": "pure-typescript",
           "native_sdk_artifacts": [\(artifacts)],
-          "audit_hashes": [
-            "0x\(String(repeating: "a1", count: 32))",
-            "0x\(String(repeating: "a2", count: 32))"
-          ]
+          "cross_sdk_fixture_parity_artifact": "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+          "native_prover_self_test_artifact": "artifacts/eth-mainnet/native-prover-self-test.json",
+          "audit_hashes": {
+            "circuit_security_audit": "0x\(String(repeating: "a1", count: 32))",
+            "native_implementation_audit": "0x\(String(repeating: "a2", count: 32))",
+            "reproducible_build_attestation": "0x\(String(repeating: "a3", count: 32))",
+            "cross_sdk_fixture_parity": "0x\(String(repeating: "a4", count: 32))",
+            "native_prover_self_test": "0x\(String(repeating: "a5", count: 32))",
+            "no_wasm_no_remote_scan": "0x\(String(repeating: "a6", count: 32))"
+          }
+        }
+        """
+    }
+
+    private static func sampleEthereumNativeEvmProverParityFixtureJson(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        swiftCalldataHash: String? = nil
+    ) -> String {
+        let publicSignalWords = (0..<9)
+            .map { index in
+                "0x" + String(repeating: String(format: "%02x", index + 0x10), count: 32)
+            }
+        func sdkResult(calldataHash: String = "0x" + String(repeating: "d3", count: 32)) -> String {
+            """
+            {
+              "receipt_proof_hash": "0x\(String(repeating: "d1", count: 32))",
+              "source_proof_hash": "0x\(String(repeating: "d2", count: 32))",
+              "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+              "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+              "calldata_hash": "\(calldataHash)",
+              "torii_submit_payload_hash": "0x\(String(repeating: "d4", count: 32))"
+            }
+            """
+        }
+        let sdkResults = sccpEthNativeEvmProverRequiredImplementationsV1
+            .keys
+            .sorted()
+            .map { sdk in
+                "\"\(sdk)\": \(sdkResult(calldataHash: sdk == "swift" ? (swiftCalldataHash ?? "0x" + String(repeating: "d3", count: 32)) : "0x" + String(repeating: "d3", count: 32)))"
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpEthNativeEvmProverParityFixtureSchemaV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact_hash": "\(nativeProverBundle.proofArtifactHash)",
+          "proving_key_hash": "\(nativeProverBundle.provingKeyHash)",
+          "verifier_key_hash": "\(nativeProverBundle.verifierKeyHash)",
+          "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+          "receipt_proof_hash": "0x\(String(repeating: "d1", count: 32))",
+          "source_proof_hash": "0x\(String(repeating: "d2", count: 32))",
+          "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+          "calldata_hash": "0x\(String(repeating: "d3", count: 32))",
+          "torii_submit_payload_hash": "0x\(String(repeating: "d4", count: 32))",
+          "sdk_results": {
+            \(sdkResults)
+          }
+        }
+        """
+    }
+
+    private static func sampleEthereumNativeEvmProverSelfTestFixtureJson(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        swiftProofHash: String? = nil
+    ) -> String {
+        let publicSignalWords = (0..<9)
+            .map { index in
+                "0x" + String(repeating: String(format: "%02x", index + 0x20), count: 32)
+            }
+        let proofHash = "0x" + String(repeating: "e4", count: 32)
+        func sdkResult(proofHash sdkProofHash: String) -> String {
+            """
+            {
+              "request_hash": "0x\(String(repeating: "e1", count: 32))",
+              "witness_hash": "0x\(String(repeating: "e2", count: 32))",
+              "source_proof_hash": "0x\(String(repeating: "e3", count: 32))",
+              "proof_hash": "\(sdkProofHash)",
+              "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+              "calldata_hash": "0x\(String(repeating: "e5", count: 32))",
+              "torii_submit_payload_hash": "0x\(String(repeating: "e6", count: 32))"
+            }
+            """
+        }
+        let sdkResults = sccpEthNativeEvmProverRequiredImplementationsV1
+            .keys
+            .sorted()
+            .map { sdk in
+                "\"\(sdk)\": \(sdkResult(proofHash: sdk == "swift" ? (swiftProofHash ?? proofHash) : proofHash))"
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpEthNativeEvmProverSelfTestSchemaV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact_hash": "\(nativeProverBundle.proofArtifactHash)",
+          "proving_key_hash": "\(nativeProverBundle.provingKeyHash)",
+          "verifier_key_hash": "\(nativeProverBundle.verifierKeyHash)",
+          "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+          "request_hash": "0x\(String(repeating: "e1", count: 32))",
+          "witness_hash": "0x\(String(repeating: "e2", count: 32))",
+          "source_proof_hash": "0x\(String(repeating: "e3", count: 32))",
+          "proof_hash": "\(proofHash)",
+          "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+          "calldata_hash": "0x\(String(repeating: "e5", count: 32))",
+          "torii_submit_payload_hash": "0x\(String(repeating: "e6", count: 32))",
+          "sdk_results": {
+            \(sdkResults)
+          }
         }
         """
     }

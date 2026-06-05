@@ -280,6 +280,9 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
     "js-sdk": {
         ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
             "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "validateEthereumMainnetNativeEvmProverParityFixture",
+            "SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
             "rejectDuplicateJsonObjectKeys",
             "JSON.parse(json)",
             "validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options)",
@@ -295,12 +298,20 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "normalizeNativeEvmProverArtifactPath",
             "proofArtifact",
             "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeEvmProverBundleRequiredAuditHashKeys",
+            "auditHashes missing field",
+            "auditHashes.${key}",
         ),
         ROOT / "javascript" / "iroha_js" / "src" / "index.js": (
             "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
             "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "validateEthereumMainnetNativeEvmProverParityFixture",
+            "SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
             "rejectDuplicateJsonObjectKeys",
             "JSON.parse(json)",
             "normalizeCanonicalNativeEvmProverBundleHex32",
@@ -315,16 +326,28 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "normalizeNativeEvmProverArtifactPath",
             "proofArtifact",
             "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeEvmProverBundleRequiredAuditHashKeys",
+            "auditHashes missing field",
+            "auditHashes.${key}",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "index.js": (
             "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
         ),
         ROOT / "javascript" / "iroha_js" / "index.d.ts": (
             "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "EthereumMainnetNativeEvmProverParitySdkResult",
             "json: string",
             "proofArtifact?: string",
             "implementationArtifact?: string",
+            "crossSdkFixtureParityArtifact?: string",
             "readonly proofArtifact: string",
+            "readonly crossSdkFixtureParityArtifact: string",
+            "EthereumMainnetNativeEvmProverAuditHashes",
+            "no_wasm_no_remote_scan",
         ),
     },
     "swift-sdk": {
@@ -336,6 +359,9 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "public init(jsonData: Data",
             "public init(jsonString: String",
             "public init(jsonObject object: [String: Any]",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "sccpEthNativeEvmProverParityFixtureSchemaV1",
+            "nativeProverParityFixture",
             "rejectDuplicateJsonObjectKeys",
             "nativeProverBundle.duplicateJsonKey",
             "manifestBool",
@@ -348,6 +374,10 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "evmNormalizeNativeEvmProverArtifactPath",
             "proofArtifact",
             "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "sccpEthNativeEvmProverRequiredAuditHashesV1",
+            "manifestStringMap",
+            "auditHashes.\\(key)",
         ),
     },
     "kotlin-sdk": {
@@ -366,6 +396,9 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "fun fromJson(",
             "fun fromJsonBytes(",
             "fun fromMap(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "nativeProverParityFixture",
             "manifestBoolean",
             "expectedDestinationBindingHash",
             "nativeProverBundle JSON is invalid",
@@ -378,6 +411,10 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "normalizeNativeEvmProverArtifactPath",
             "proofArtifact",
             "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1",
+            "manifestStringMap",
+            "auditHashes.$key",
         ),
         ROOT
         / "kotlin"
@@ -410,6 +447,9 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "fromJson(final String json",
             "fromJsonBytes(final byte[] payload",
             "public static EthereumMainnetNativeEvmProverBundle fromMap(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "nativeProverParityFixture",
             "final Map<String, Object> manifest",
             "manifestBoolean",
             "expectedDestinationBindingHash",
@@ -423,6 +463,10 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "normalizeNativeEvmProverArtifactPath",
             "proofArtifact",
             "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1",
+            "manifestStringMap",
+            "auditHashes.",
         ),
         ROOT
         / "java"
@@ -449,6 +493,9 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "FromJson(",
             "FromJsonBytes(",
             "FromJsonElement(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "EthNativeEvmProverParityFixtureSchemaV1",
+            "nativeProverParityFixture",
             "ManifestBool",
             "expectedDestinationBindingHash",
             "NormalizeNativeEvmProverBundleHex32",
@@ -463,6 +510,10 @@ NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
             "NormalizeNativeEvmProverArtifactPath",
             "ProofArtifact",
             "ImplementationArtifact",
+            "CrossSdkFixtureParityArtifact",
+            "EthNativeEvmProverRequiredAuditHashesV1",
+            "ManifestStringMap",
+            "auditHashes.",
         ),
     },
 }
@@ -470,67 +521,142 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
     "js-sdk": {
         ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "sha256Hex32",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "auditHashes.cross_sdk_fixture_parity",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "artifactResolver",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
             "contains forbidden prover dependency marker",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
+            "requireEthereumMainnetNativeProverSelfTest",
+            "nativeProverSelfTestFn",
+            "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+            "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
             "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
         ),
         ROOT / "javascript" / "iroha_js" / "src" / "index.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "sha256Hex32",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "auditHashes.cross_sdk_fixture_parity",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "artifactResolver",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
+            "requireEthereumMainnetNativeProverSelfTest",
+            "nativeProverSelfTestFn",
+            "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+            "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
             "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "index.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
         ),
         ROOT / "javascript" / "iroha_js" / "index.d.ts": (
             "EthereumMainnetNativeEvmProverArtifactsInput",
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "EthereumMainnetNativeEvmProverArtifactResolverMetadata",
+            "EthereumMainnetNativeEvmProverArtifactBundleInput",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "EthereumMainnetSccpNativeProverBundleOptions",
+            "static fromNativeProverBundle",
+            "artifactResolver?:",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "nativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts",
             "verifiedNativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts",
             "readonly implementationHash: string",
+            "implementationArtifact?: string",
+            "crossSdkFixtureParityBytes?: BinaryLike",
+            "readonly crossSdkFixtureParityHash: string",
+            "readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>",
+            "readonly crossSdkFixtureParityArtifact: string",
+            "EthereumMainnetNativeProverSelfTestContext",
+            "EthereumMainnetNativeProverSelfTestFn",
+            "nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn",
         ),
         ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
             "verifies native prover artifact bytes against manifest hashes",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "pass nativeProverArtifacts to the constructor directly",
+            "artifactResolver(path, metadata)",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts.implementationHash is required",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes is required",
+            "crossSdkFixtureParityBytes sha256",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
+            "proofArtifact:",
+            "implementationArtifact:",
+            "crossSdkFixtureParityArtifact:",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden prover dependency marker",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata({ proofResult })",
+            "nativeProverSelfTest(context)",
+            "missingSelfTestProverCalled",
+            "tamperedSelfTestProverCalled",
+            "native prover self-test hook",
+            "sdkResults.javascript.proofHash must match proofHash",
         ),
         ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "EthereumMainnetSccpNativeProverBundleOptions",
+            "artifactResolver(path)",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "EthereumMainnetNativeProverSelfTestFn",
+            "EthereumMainnetNativeProverSelfTestContext",
+            "nativeProverSelfTestBytes",
+            "nativeProverSelfTestHash",
+            "nativeProverSelfTest",
         ),
     },
     "swift-sdk": {
@@ -541,15 +667,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "SccpEvmProver.swift": (
             "sccpNativeEvmProverArtifactHashAlgorithmV1",
             "func verifiedArtifacts(proofArtifactBytes: Data",
+            "func verifiedArtifacts(sdk: String",
+            "artifactResolver: (String) throws -> Data",
+            "fromNativeProverBundle",
+            "nativeProverBundle.verifiedArtifacts",
             "sccpNativeEvmProverArtifactSha256Hex",
             "implementationBytes",
             "invalidPublicInputs(\"implementationBytes\")",
             "nativeProverArtifacts.implementationHash",
             "nativeProverArtifacts.verifierKeyHash",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture(",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
             "nativeProverBundle.verifierKeyHash",
             "sccpNativeEvmProverForbiddenArtifactMarkers",
             "sccpNativeEvmProverRejectForbiddenArtifactMarkers",
             "requireVerifiedNativeProverArtifacts",
+            "NativeProverSelfTestFunction",
+            "requireNativeProverSelfTest",
+            "nativeProverSelfTestFunction",
+            "nativeProverSelfTestResult",
             "proofResult: EvmSccpProofResult",
             "nativeProverArtifacts",
         ),
@@ -559,15 +699,28 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "IrohaSwiftTests"
         / "SccpSolanaProverTests.swift": (
             "verifiedBundle.verifiedArtifacts",
+            "verifiedArtifacts(sdk: \"swift\")",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
             "sccpNativeEvmProverArtifactHashAlgorithmV1",
             "implementationBytes",
             "nativeProverArtifacts.implementationHash",
             "nativeProverArtifacts.verifierKeyHash",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "swiftImplementationArtifact",
+            "Data(\"{}\".utf8)",
             "nativeProverBundle.verifierKeyHash",
             "flaggedArtifactBytes",
             "proofArtifactBytes.forbiddenMarker",
             "Ethereum outbound prover must require verified native artifacts",
             ".invalidPublicInputs(\"nativeProverArtifacts\")",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            ".invalidPublicInputs(\"nativeProverSelfTestFunction\")",
+            ".invalidPublicInputs(\"nativeProverSelfTestResult\")",
         ),
     },
     "kotlin-sdk": {
@@ -585,15 +738,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "EvmSccpProver.kt": (
             "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "fun verifiedArtifacts(",
+            "NativeEvmProverArtifactResolver",
+            "artifactResolver: NativeEvmProverArtifactResolver",
+            "fun fromNativeProverBundle(",
+            "nativeProverBundle.verifiedArtifacts",
             'MessageDigest.getInstance("SHA-256")',
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
             "nativeProverBundle.verifierKeyHash must match destinationBinding",
             "nativeEvmProverForbiddenArtifactMarkers",
             "contains forbidden prover dependency marker",
             "requireVerifiedNativeProverArtifacts",
+            "EthereumMainnetNativeProverSelfTest",
+            "requireNativeProverSelfTest",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
             "verified native EVM prover artifacts",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
@@ -611,16 +778,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "sccp"
         / "EvmSccpProverTest.kt": (
             "verifiedBundle.verifiedArtifacts",
+            "verifiedBundle.verifiedArtifacts(\"kotlin\")",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
             "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "kotlinImplementationPath",
+            "\"{}\".toByteArray()",
             "nativeProverBundle.verifierKeyHash",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata(EvmSccpSubmissionInput(result))",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
         ),
     },
     "java-android": {
@@ -638,9 +818,17 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "EvmSccpProver.java": (
             "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts",
+            "NativeEvmProverArtifactResolver",
+            "artifactResolver.resolveArtifact",
             'MessageDigest.getInstance("SHA-256")',
             "implementationBytes sha256",
             "implementationBytes are required",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes.get(\"cross_sdk_fixture_parity\")",
+            "EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
             "nativeProverBundle.verifierKeyHash must match destinationBinding",
             "NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
             "contains forbidden prover dependency marker",
@@ -657,10 +845,19 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "android"
         / "sccp"
         / "EthereumMainnetSccp.java": (
+            "fromNativeProverBundle",
+            "nativeProverBundle.verifiedArtifacts",
             "requireVerifiedNativeProverArtifacts",
+            "NativeProverSelfTest",
+            "requireNativeProverSelfTest",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
             "verified native EVM prover artifacts",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity()",
+            "auditHashes().get(\"cross_sdk_fixture_parity\")",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
         ),
@@ -677,16 +874,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "sccp"
         / "EvmSccpProverTests.java": (
             "verifiedBundle.verifiedArtifacts",
+            "javaImplementationArtifact",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
             "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "artifactBytesByPath",
+            "\"{}\".getBytes(StandardCharsets.UTF_8)",
             "nativeProverBundle.verifierKeyHash",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata(new EvmSccpProver.SubmissionInput(result))",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
         ),
     },
     "dotnet-sdk": {
@@ -698,15 +908,32 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "EthereumMainnetSccp.cs": (
             "NativeEvmProverArtifactHashAlgorithmV1",
             "VerifiedArtifacts(",
+            "ProveOutboundToEthereumFromNativeProverBundleAsync",
+            "BuildEthereumCalldataFromNativeProverBundle",
+            "SubmitOutboundToEthereumFromNativeProverBundleAsync",
+            "nativeProverBundle.VerifiedArtifacts",
+            "Func<string, byte[]> artifactResolver",
+            "artifactResolver(ProofArtifact)",
             "SHA256.HashData",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "CrossSdkFixtureParityHash",
+            "AuditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture.FromJsonBytes",
+            "CrossSdkFixtureParityArtifact",
+            "ImplementationArtifact",
             "nativeProverBundle.verifierKeyHash must match destinationBinding",
             "NativeEvmProverForbiddenArtifactMarkers",
             "contains forbidden prover dependency marker",
             "RequireVerifiedNativeProverArtifacts",
+            "IEthereumMainnetNativeProverSelfTest",
+            "RequireNativeProverSelfTestAsync",
+            "NativeProverSelfTestResultEquals",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
             "EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts",
             "BuildEthereumCalldataUnchecked",
             "Ethereum mainnet calldata requires verified native EVM prover artifacts",
@@ -718,16 +945,33 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
         / "Hyperledger.Iroha.Sdk.Tests"
         / "SccpEthereumMainnetTests.cs": (
             "verifiedBundle.VerifiedArtifacts",
+            "verifiedBundle.VerifiedArtifacts(",
+            "ProveOutboundToEthereumFromNativeProverBundleAsync",
+            "BuildEthereumCalldataFromNativeProverBundle",
+            "SubmitOutboundToEthereumFromNativeProverBundleAsync",
+            "factoryBoundProver",
+            "resolverSubmitter",
+            "CrossSdkFixtureParityArtifact",
+            "dotnetImplementationArtifact",
             "NativeEvmProverArtifactHashAlgorithmV1",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "CrossSdkFixtureParityHash",
+            "Encoding.UTF8.GetBytes(\"{}\")",
             "nativeProverBundle.verifierKeyHash",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "artifactBoundProver",
             "verified native EVM prover artifacts",
+            "NativeProverSelfTestStub",
+            "artifactBoundSelfTest",
+            "missingSelfTestHookProver",
+            "driftingSelfTestHookProver",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
         ),
     },
 }
@@ -941,6 +1185,79 @@ def write_native_evm_prover_bundle(
                 "implementation_hash": implementation_hash,
             }
         )
+    parity_vector = {
+        "schema": report.NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "receipt_proof_hash": fixed_hex32(0xB1),
+        "source_proof_hash": fixed_hex32(0xB2),
+        "public_signal_words": [fixed_hex32(0xC0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xB3),
+        "torii_submit_payload_hash": fixed_hex32(0xB4),
+    }
+    parity_vector["sdk_results"] = {
+        sdk: {
+            "receipt_proof_hash": parity_vector["receipt_proof_hash"],
+            "source_proof_hash": parity_vector["source_proof_hash"],
+            "destination_binding_hash": parity_vector["destination_binding_hash"],
+            "public_signal_words": parity_vector["public_signal_words"],
+            "calldata_hash": parity_vector["calldata_hash"],
+            "torii_submit_payload_hash": parity_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    parity_artifact, parity_hash = write_artifact(
+        "cross-sdk-fixture-parity.json",
+        (json.dumps(parity_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    self_test_vector = {
+        "schema": report.NATIVE_EVM_PROVER_SELF_TEST_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "request_hash": fixed_hex32(0xD1),
+        "witness_hash": fixed_hex32(0xD2),
+        "source_proof_hash": fixed_hex32(0xD3),
+        "proof_hash": fixed_hex32(0xD4),
+        "public_signal_words": [fixed_hex32(0xE0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xD5),
+        "torii_submit_payload_hash": fixed_hex32(0xD6),
+    }
+    self_test_vector["sdk_results"] = {
+        sdk: {
+            "request_hash": self_test_vector["request_hash"],
+            "witness_hash": self_test_vector["witness_hash"],
+            "source_proof_hash": self_test_vector["source_proof_hash"],
+            "proof_hash": self_test_vector["proof_hash"],
+            "public_signal_words": self_test_vector["public_signal_words"],
+            "calldata_hash": self_test_vector["calldata_hash"],
+            "torii_submit_payload_hash": self_test_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    self_test_artifact, self_test_hash = write_artifact(
+        "native-prover-self-test.json",
+        (json.dumps(self_test_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    audit_hashes = {
+        key: fixed_hex32(0xA1 + index)
+        for index, key in enumerate(report.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)
+    }
+    audit_hashes["cross_sdk_fixture_parity"] = parity_hash
+    audit_hashes["native_prover_self_test"] = self_test_hash
     payload: dict[str, object] = {
         "schema": report.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
         "bundle_id": report.NATIVE_EVM_PROVER_BUNDLE_ID,
@@ -958,7 +1275,9 @@ def write_native_evm_prover_bundle(
         "remote_prover_required": False,
         "browser_implementation": "pure-typescript",
         "native_sdk_artifacts": sdk_artifacts,
-        "audit_hashes": [fixed_hex32(0xA1), fixed_hex32(0xA2)],
+        "cross_sdk_fixture_parity_artifact": parity_artifact,
+        "native_prover_self_test_artifact": self_test_artifact,
+        "audit_hashes": audit_hashes,
     }
     if overrides:
         payload.update(overrides)
@@ -3401,7 +3720,7 @@ def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash(
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
-    payload["audit_hashes"] = ["0x" + "A1" * 32]
+    payload["audit_hashes"]["circuit_security_audit"] = "0x" + "A1" * 32
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -3429,7 +3748,8 @@ def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash(
     payload = json.loads(completed.stdout)
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert (
-        "native EVM Groth16 prover bundle audit_hashes[0] must be a "
+        "native EVM Groth16 prover bundle audit_hashes.circuit_security_audit "
+        "must be a "
         "canonical non-zero 32-byte hex value"
     ) in blockers
     assert payload["release_checklist"]["ready"] is False
@@ -3443,12 +3763,14 @@ def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash(
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
-    payload["audit_hashes"] = [
-        payload["proof_artifact_hash"],
-        payload["native_sdk_artifacts"][0]["implementation_hash"],
-        fixed_hex32(0xA1),
-        fixed_hex32(0xA1),
+    payload["audit_hashes"]["circuit_security_audit"] = payload[
+        "proof_artifact_hash"
     ]
+    payload["audit_hashes"]["native_implementation_audit"] = payload[
+        "native_sdk_artifacts"
+    ][0]["implementation_hash"]
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = fixed_hex32(0xA1)
+    payload["audit_hashes"]["no_wasm_no_remote_scan"] = fixed_hex32(0xA1)
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -3476,16 +3798,193 @@ def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash(
     payload = json.loads(completed.stdout)
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert (
-        "native EVM Groth16 prover bundle audit_hashes[0] must not reuse "
+        "native EVM Groth16 prover bundle audit_hashes.circuit_security_audit "
+        "must not reuse "
         "proof_artifact_hash"
     ) in blockers
     assert (
-        "native EVM Groth16 prover bundle audit_hashes[1] must not reuse "
+        "native EVM Groth16 prover bundle audit_hashes.native_implementation_audit "
+        "must not reuse "
         "native_sdk_artifacts[0].implementation_hash"
     ) in blockers
     assert (
-        "native EVM Groth16 prover bundle audit_hashes[3] must not duplicate "
-        "audit_hashes[2]"
+        "native EVM Groth16 prover bundle audit_hashes.no_wasm_no_remote_scan "
+        "must not duplicate audit_hashes.cross_sdk_fixture_parity"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_unlabeled_native_evm_prover_audits(
+    tmp_path: Path,
+) -> None:
+    """Native prover audits must be named evidence fields, not filler hashes."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["audit_hashes"] = [fixed_hex32(0xA1)]
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes must be a non-empty object"
+        in blockers
+    )
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_missing_native_evm_parity_fixture(
+    tmp_path: Path,
+) -> None:
+    """Native prover readiness must require concrete cross-SDK parity vectors."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload.pop("cross_sdk_fixture_parity_artifact")
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle missing field: "
+        "cross_sdk_fixture_parity_artifact"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash(
+    tmp_path: Path,
+) -> None:
+    """The cross-SDK parity vector file must match its named audit hash."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_path.write_text("{}\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sha256 must match audit_hashes.cross_sdk_fixture_parity"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift(
+    tmp_path: Path,
+) -> None:
+    """Every required SDK row in the parity vector must match the shared hashes."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["sdk_results"]["javascript"]["calldata_hash"] = fixed_hex32(0xD1)
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle "
+        "cross_sdk_fixture_parity_artifact sdk_results.javascript.calldata_hash "
+        "must match calldata_hash"
     ) in blockers
     assert payload["release_checklist"]["ready"] is False
 

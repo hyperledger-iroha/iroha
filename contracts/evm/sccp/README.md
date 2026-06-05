@@ -63,7 +63,10 @@ returned `messageId` and `commitmentRoot` against the supplied public inputs.
 The `destinationBindingHash()` view exposes the deployment binding that the
 wrapper passes to the verifier, and accepted proof events include both the
 statement hash and destination binding hash so canary logs can be matched to the
-exact governed proof statement and wrapper/verifier deployment.
+exact governed proof statement and wrapper/verifier deployment. A Groth16 proof
+accepted for one wrapper is not portable to another wrapper address because the
+destination binding hash is one of the verifier's public signals; the smoke test
+covers both direct wrong-binding verification and cross-wrapper replay failure.
 The reference secp256k1 verifier contract checks canonical attestation ABI
 encoding, non-zero SCCP statement/public-input/native-proof fields, signer
 authorization, and destination binding on-chain, but it remains a
@@ -139,4 +142,6 @@ The Ganache smoke test constructs a deterministic self-consistent BN254 proof
 for the test verifying key and submits it through the EVM wrapper, so the
 positive pairing path and replay guard are covered in addition to malformed
 proof rejection, zero proof-point rejection, off-curve G2 rejection, and
-non-prime-subgroup G2 rejection.
+non-prime-subgroup G2 rejection. It also pins the verifier's pre-pairing proof
+word policy for overflowing source/target domains and same source/target domain
+bindings.

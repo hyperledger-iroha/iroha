@@ -1379,7 +1379,46 @@ async function main() {
         statementHash,
         destinationBindingHash
       ),
-    callException
+    callExceptionWithReason("Source domain overflow")
+  );
+
+  const overflowTargetDomainGrothInputs = publicInputs.slice();
+  overflowTargetDomainGrothInputs[2] = ethers.zeroPadValue(
+    ethers.toBeHex(4294967296n),
+    32
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        invalidGroth16ProofBytes,
+        overflowTargetDomainGrothInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callExceptionWithReason("Target domain overflow")
+  );
+
+  const sameDomainGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 1, publicInputs[3], g1, g2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        sameDomainGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callExceptionWithReason("Source and target domains must differ")
   );
 
   const zeroPointGroth16ProofBytes = abi.encode(
@@ -1579,6 +1618,19 @@ async function main() {
   assert.equal(acceptedGroth16Result[0], messageId);
   assert.equal(acceptedGroth16Result[1], 0n);
   assert.equal(acceptedGroth16Result[2], publicInputs[3]);
+  const wrongDestinationBindingHash = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-groth16-destination-binding")
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        acceptingGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        wrongDestinationBindingHash
+      ),
+    callExceptionWithReason("Groth16 proof verification failed")
+  );
   const mismatchedPayloadGroth16Inputs = publicInputs.slice();
   mismatchedPayloadGroth16Inputs[1] = ethers.keccak256(
     ethers.toUtf8Bytes("wrong-accepted-groth16-payload")
@@ -1619,6 +1671,37 @@ async function main() {
         statementHash,
         groth16DestinationBindingHash
       ),
+    callExceptionWithReason("Groth16 proof verification failed")
+  );
+  const crossDeploymentGroth16Bridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      groth16VerifierAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      networkId,
+      0,
+      1,
+    ]
+  );
+  assert.notEqual(
+    await crossDeploymentGroth16Bridge.destinationBindingHash(),
+    groth16DestinationBindingHash
+  );
+  await assert.rejects(
+    async () => {
+      const crossDeploymentGroth16Tx =
+        await crossDeploymentGroth16Bridge.submitSccpMessageProof(
+          acceptingGroth16ProofBytes,
+          publicInputs,
+          statementHash
+        );
+      await crossDeploymentGroth16Tx.wait();
+    },
     callExceptionWithReason("Groth16 proof verification failed")
   );
   const acceptedGroth16Tx = await groth16Bridge.submitSccpMessageProof(

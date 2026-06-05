@@ -207,6 +207,79 @@ def write_native_evm_prover_bundle(
                 "implementation_hash": implementation_hash,
             }
         )
+    parity_vector = {
+        "schema": report.NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "receipt_proof_hash": fixed_hex32(0xB1),
+        "source_proof_hash": fixed_hex32(0xB2),
+        "public_signal_words": [fixed_hex32(0xC0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xB3),
+        "torii_submit_payload_hash": fixed_hex32(0xB4),
+    }
+    parity_vector["sdk_results"] = {
+        sdk: {
+            "receipt_proof_hash": parity_vector["receipt_proof_hash"],
+            "source_proof_hash": parity_vector["source_proof_hash"],
+            "destination_binding_hash": parity_vector["destination_binding_hash"],
+            "public_signal_words": parity_vector["public_signal_words"],
+            "calldata_hash": parity_vector["calldata_hash"],
+            "torii_submit_payload_hash": parity_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    parity_artifact, parity_hash = write_artifact(
+        "cross-sdk-fixture-parity.json",
+        (json.dumps(parity_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    self_test_vector = {
+        "schema": report.NATIVE_EVM_PROVER_SELF_TEST_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "request_hash": fixed_hex32(0xD1),
+        "witness_hash": fixed_hex32(0xD2),
+        "source_proof_hash": fixed_hex32(0xD3),
+        "proof_hash": fixed_hex32(0xD4),
+        "public_signal_words": [fixed_hex32(0xE0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xD5),
+        "torii_submit_payload_hash": fixed_hex32(0xD6),
+    }
+    self_test_vector["sdk_results"] = {
+        sdk: {
+            "request_hash": self_test_vector["request_hash"],
+            "witness_hash": self_test_vector["witness_hash"],
+            "source_proof_hash": self_test_vector["source_proof_hash"],
+            "proof_hash": self_test_vector["proof_hash"],
+            "public_signal_words": self_test_vector["public_signal_words"],
+            "calldata_hash": self_test_vector["calldata_hash"],
+            "torii_submit_payload_hash": self_test_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    self_test_artifact, self_test_hash = write_artifact(
+        "native-prover-self-test.json",
+        (json.dumps(self_test_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    audit_hashes = {
+        key: fixed_hex32(0xA1 + index)
+        for index, key in enumerate(report.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)
+    }
+    audit_hashes["cross_sdk_fixture_parity"] = parity_hash
+    audit_hashes["native_prover_self_test"] = self_test_hash
     payload: dict[str, object] = {
         "schema": report.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
         "bundle_id": report.NATIVE_EVM_PROVER_BUNDLE_ID,
@@ -224,7 +297,9 @@ def write_native_evm_prover_bundle(
         "remote_prover_required": False,
         "browser_implementation": "pure-typescript",
         "native_sdk_artifacts": sdk_artifacts,
-        "audit_hashes": [fixed_hex32(0xA1), fixed_hex32(0xA2)],
+        "cross_sdk_fixture_parity_artifact": parity_artifact,
+        "native_prover_self_test_artifact": self_test_artifact,
+        "audit_hashes": audit_hashes,
     }
     if overrides:
         payload.update(overrides)
@@ -862,6 +937,7 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
         "native-prover/native-prover-artifacts/proof-artifact.bin",
         "native-prover/native-prover-artifacts/proving-key.bin",
         "native-prover/native-prover-artifacts/verifier-key.bin",
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json",
         "native-prover/native-prover-artifacts/dotnet-implementation.bin",
         "native-prover/native-prover-artifacts/java-android-implementation.bin",
         "native-prover/native-prover-artifacts/javascript-implementation.bin",
@@ -906,6 +982,15 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     )
     assert native_report["verifier_key"]["path"] == (
         "native-prover/native-prover-artifacts/verifier-key.bin"
+    )
+    assert native_report["cross_sdk_fixture_parity_artifact"]["path"] == (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    assert native_report["audit_hashes"]["cross_sdk_fixture_parity"] == (
+        "0x"
+        + artifact_by_path[
+            "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+        ]["sha256"]
     )
     for row in native_report["sdk_artifacts"]:
         artifact_path = row["implementation_artifact"]["path"]
@@ -1343,7 +1428,7 @@ def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
     output_dir = build_ready_bundle(tmp_path)
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
-    payload["audit_hashes"] = ["0x" + "A1" * 32]
+    payload["audit_hashes"]["circuit_security_audit"] = "0x" + "A1" * 32
     native_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -1368,7 +1453,8 @@ def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
     assert verified.returncode == 1
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
-        "bundle audit_hashes[0] must be a canonical non-zero 32-byte hex value"
+        "bundle audit_hashes.circuit_security_audit must be a canonical "
+        "non-zero 32-byte hex value"
     ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
@@ -1384,12 +1470,14 @@ def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash(
     output_dir = build_ready_bundle(tmp_path)
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
-    payload["audit_hashes"] = [
-        payload["proof_artifact_hash"],
-        payload["native_sdk_artifacts"][0]["implementation_hash"],
-        "0x" + "a1" * 32,
-        "0x" + "a1" * 32,
+    payload["audit_hashes"]["circuit_security_audit"] = payload[
+        "proof_artifact_hash"
     ]
+    payload["audit_hashes"]["native_implementation_audit"] = payload[
+        "native_sdk_artifacts"
+    ][0]["implementation_hash"]
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = "0x" + "a1" * 32
+    payload["audit_hashes"]["no_wasm_no_remote_scan"] = "0x" + "a1" * 32
     native_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -1414,16 +1502,180 @@ def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash(
     assert verified.returncode == 1
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
-        "bundle audit_hashes[0] must not reuse proof_artifact_hash"
+        "bundle audit_hashes.circuit_security_audit must not reuse "
+        "proof_artifact_hash"
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
-        "bundle audit_hashes[1] must not reuse "
+        "bundle audit_hashes.native_implementation_audit must not reuse "
         "native_sdk_artifacts[0].implementation_hash"
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
-        "bundle audit_hashes[3] must not duplicate audit_hashes[2]"
+        "bundle audit_hashes.no_wasm_no_remote_scan must not duplicate "
+        "audit_hashes.cross_sdk_fixture_parity"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_unlabeled_native_evm_prover_audits(
+    tmp_path: Path,
+) -> None:
+    """Published native prover audits must be named evidence fields."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"] = ["0x" + "a1" * 32]
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes must be a non-empty object"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must keep the parity fixture path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload.pop("cross_sdk_fixture_parity_artifact")
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle missing field: cross_sdk_fixture_parity_artifact"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash(
+    tmp_path: Path,
+) -> None:
+    """Published cross-SDK parity vector bytes must match their audit hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    (output_dir / relative_path).write_text("{}\n", encoding="utf-8")
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sha256 must match "
+        "audit_hashes.cross_sdk_fixture_parity"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift(
+    tmp_path: Path,
+) -> None:
+    """A rehashed parity vector still fails if one SDK row drifts."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["sdk_results"]["javascript"]["calldata_hash"] = "0x" + "d1" * 32
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results.javascript."
+        "calldata_hash must match calldata_hash"
     ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
@@ -8597,6 +8849,14 @@ def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
                 'entry.name === "MessageProofAccepted"',
                 'callExceptionWithReason("Verifier key hash mismatch")',
                 'callExceptionWithReason("Destination binding hash is required")',
+                'callExceptionWithReason("Source domain overflow")',
+                'callExceptionWithReason("Target domain overflow")',
+                'callExceptionWithReason("Source and target domains must differ")',
+                "overflowTargetDomainGrothInputs",
+                "sameDomainGroth16ProofBytes",
+                "wrongDestinationBindingHash",
+                "crossDeploymentGroth16Bridge",
+                "crossDeploymentGroth16Tx",
                 "assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);",
                 'callExceptionWithReason("Message proof already used")',
             ),
@@ -8619,6 +8879,49 @@ def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
         "EVM contract smoke production surface SDK test inventory" in error
         and 'missing marker: callExceptionWithReason("Destination binding hash is required")'
         in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Source domain overflow")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Target domain overflow")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and 'missing marker: callExceptionWithReason("Source and target domains must differ")'
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: overflowTargetDomainGrothInputs" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: sameDomainGroth16ProofBytes" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: wrongDestinationBindingHash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: crossDeploymentGroth16Bridge" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "EVM contract smoke production surface SDK test inventory" in error
+        and "missing marker: crossDeploymentGroth16Tx" in error
         for error in verified["errors"]
     )
     assert any(
@@ -8804,8 +9107,16 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
             sparse_report_script,
             (
                 "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+                "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
+                "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
                 "def _native_evm_prover_forbidden_payload_blockers(",
                 "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+                "def _native_evm_prover_parity_fixture_status(",
+                "def _native_evm_prover_self_test_status(",
+                "sha256 must match audit_hashes.cross_sdk_fixture_parity",
+                "sha256 must match audit_hashes.native_prover_self_test",
+                "native_prover_self_test_artifact",
+                "sdk_results missing sdk",
                 "def _native_evm_prover_hash_role_blockers(",
                 "must not be empty",
                 "must not duplicate",
@@ -8842,6 +9153,13 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "nativeProverArtifacts must bind sdk implementation and implementationHash",
                 "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
                 "nativeProverBundle.verifierKeyHash must match destinationBinding",
+                "requireEthereumMainnetNativeProverSelfTest",
+                "NativeProverSelfTestFunction",
+                "EthereumMainnetNativeProverSelfTest",
+                "NativeProverSelfTest",
+                "IEthereumMainnetNativeProverSelfTest",
+                "nativeProverSelfTest runner",
+                "nativeProverSelfTest result",
                 "def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only",
                 "def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned",
                 "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
@@ -8849,6 +9167,9 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
                 "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
                 "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
+                "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
+                "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
+                "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
                 "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
                 '"prover_endpoint"',
             ),
@@ -8862,6 +9183,9 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
                 "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
                 "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
+                "def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
+                "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
+                "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
                 "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
                 "native proof artifact imports proof.wasm",
             ),
@@ -9022,6 +9346,16 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: def _native_evm_prover_self_test_status(" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: requireEthereumMainnetNativeProverSelfTest" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
         and (
             "missing marker: def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned"
             in error
@@ -9146,6 +9480,9 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
                 "parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)",
                 "verifyEthereumMainnetNativeEvmProverArtifacts",
+                "EthereumMainnetNativeProverSelfTestFn",
+                "nativeProverSelfTestBytes",
+                "nativeProverSelfTest(context)",
                 "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
                 "const proverEndpoint = endpoint",
             ),
@@ -9192,6 +9529,11 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and "missing marker: verifyEthereumMainnetNativeEvmProverArtifacts" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: EthereumMainnetNativeProverSelfTestFn" in error
         for error in verified["errors"]
     )
     assert any(

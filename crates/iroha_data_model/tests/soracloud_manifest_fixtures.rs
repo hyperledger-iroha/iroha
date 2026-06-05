@@ -11,8 +11,8 @@ use std::{
 use iroha_crypto::{
     Hash,
     fhe_bfv::{
-        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
-        registered_bfv_rns_modulus_chain_digest,
+        ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
+        registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
     },
 };
 #[cfg(feature = "json")]
@@ -421,6 +421,9 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         registered_bfv_parameter_digest(&registered_params).expect("registered BFV digest");
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
         .expect("registered BFV RNS digest");
+    let key_switch_decomposition_chain_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(&registered_params)
+            .expect("registered BFV key-switch decomposition-chain digest");
     FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
         param_set: "bfv-default".parse().expect("valid name"),
@@ -444,6 +447,7 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         withdraw_height: None,
         parameter_digest,
         rns_modulus_chain_digest,
+        key_switch_decomposition_chain_digest,
     }
 }
 

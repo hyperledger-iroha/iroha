@@ -23,7 +23,7 @@ use ciborium::{de::from_reader, value::Value as CborValue};
 use dashmap::DashMap;
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey as Ed25519Key};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
-use rand::TryRngCore as _;
+use rand::rand_core::{TryCryptoRng, TryRngCore as _};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
@@ -264,6 +264,15 @@ impl OperatorAuthError {
             "operator_webauthn_persist_failed",
             message,
             "persist_failed",
+        )
+    }
+
+    fn random_bytes_failure(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_auth_random_bytes_failed",
+            message,
+            "random_bytes",
         )
     }
 }
@@ -693,11 +702,22 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
+        let mut rng = rand::rngs::OsRng;
+        self.webauthn_registration_options_with_rng(ctx, &mut rng)
+    }
+
+    fn webauthn_registration_options_with_rng<R: TryCryptoRng + ?Sized>(
+        &self,
+        ctx: &AuthContext,
+        rng: &mut R,
+    ) -> Result<norito::json::Value, OperatorAuthError> {
         let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_REGISTER_OPTIONS, err.metric_label());
         })?;
         self.prune_challenges();
-        let challenge_bytes = random_bytes(CHALLENGE_BYTES);
+        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng).inspect_err(|err| {
+            self.record_failure(ctx, ACTION_REGISTER_OPTIONS, err.metric_label());
+        })?;
         let challenge_b64 = encode_b64url(&challenge_bytes);
         let expires_at = Instant::now() + policy.challenge_ttl;
         self.challenges.insert(
@@ -830,6 +850,15 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
+        let mut rng = rand::rngs::OsRng;
+        self.webauthn_authentication_options_with_rng(ctx, &mut rng)
+    }
+
+    fn webauthn_authentication_options_with_rng<R: TryCryptoRng + ?Sized>(
+        &self,
+        ctx: &AuthContext,
+        rng: &mut R,
+    ) -> Result<norito::json::Value, OperatorAuthError> {
         let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
         })?;
@@ -840,7 +869,9 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
             return Err(err);
         }
-        let challenge_bytes = random_bytes(CHALLENGE_BYTES);
+        let challenge_bytes = random_bytes_with_rng(CHALLENGE_BYTES, rng).inspect_err(|err| {
+            self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
+        })?;
         let challenge_b64 = encode_b64url(&challenge_bytes);
         let expires_at = Instant::now() + policy.challenge_ttl;
         self.challenges.insert(
@@ -882,6 +913,16 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
         payload: &norito::json::Value,
+    ) -> Result<SessionOutcome, OperatorAuthError> {
+        let mut rng = rand::rngs::OsRng;
+        self.webauthn_finish_authentication_with_rng(ctx, payload, &mut rng)
+    }
+
+    fn webauthn_finish_authentication_with_rng<R: TryCryptoRng + ?Sized>(
+        &self,
+        ctx: &AuthContext,
+        payload: &norito::json::Value,
+        rng: &mut R,
     ) -> Result<SessionOutcome, OperatorAuthError> {
         let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
@@ -945,14 +986,23 @@ impl OperatorAuth {
         persist_credentials(&self.credentials_path, &updated).inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
         })?;
-        let outcome = self.issue_session(&input.raw_id, policy.session_ttl);
+        let outcome = self
+            .issue_session_with_rng(&input.raw_id, policy.session_ttl, rng)
+            .inspect_err(|err| {
+                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
+            })?;
         self.record_success(ctx, ACTION_LOGIN_VERIFY, "ok");
         Ok(outcome)
     }
 
-    fn issue_session(&self, credential_id: &[u8], ttl: Duration) -> SessionOutcome {
+    fn issue_session_with_rng<R: TryCryptoRng + ?Sized>(
+        &self,
+        credential_id: &[u8],
+        ttl: Duration,
+        rng: &mut R,
+    ) -> Result<SessionOutcome, OperatorAuthError> {
         self.prune_sessions();
-        let token_bytes = random_bytes(SESSION_TOKEN_BYTES);
+        let token_bytes = random_bytes_with_rng(SESSION_TOKEN_BYTES, rng)?;
         let token = encode_b64url(&token_bytes);
         let expires_at = Instant::now() + ttl;
         self.sessions.insert(
@@ -962,11 +1012,11 @@ impl OperatorAuth {
                 credential_id: credential_id.to_vec(),
             },
         );
-        SessionOutcome {
+        Ok(SessionOutcome {
             session_token: token,
             expires_in_secs: ttl.as_secs().max(1),
             credential_id: encode_b64url(credential_id),
-        }
+        })
     }
 
     fn upsert_credential(&self, credential: StoredCredential) -> Result<usize, OperatorAuthError> {
@@ -1184,12 +1234,32 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn random_bytes(len: usize) -> Vec<u8> {
+#[cfg(test)]
+fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {
     let mut buf = vec![0u8; len];
     let mut rng = rand::rngs::OsRng;
-    rng.try_fill_bytes(&mut buf)
-        .expect("operating-system RNG should be available");
-    buf
+    random_bytes_with_rng_into(&mut buf, &mut rng)?;
+    Ok(buf)
+}
+
+fn random_bytes_with_rng<R: TryCryptoRng + ?Sized>(
+    len: usize,
+    rng: &mut R,
+) -> Result<Vec<u8>, OperatorAuthError> {
+    let mut buf = vec![0u8; len];
+    random_bytes_with_rng_into(&mut buf, rng)?;
+    Ok(buf)
+}
+
+fn random_bytes_with_rng_into<R: TryCryptoRng + ?Sized>(
+    buf: &mut [u8],
+    rng: &mut R,
+) -> Result<(), OperatorAuthError> {
+    rng.try_fill_bytes(buf).map_err(|err| {
+        OperatorAuthError::random_bytes_failure(format!(
+            "failed to generate operator auth random bytes: {err}"
+        ))
+    })
 }
 
 fn encode_b64url(bytes: &[u8]) -> String {
@@ -1783,8 +1853,41 @@ mod tests {
         ecdsa::{SigningKey, signature::Signer as _},
         elliptic_curve::rand_core::OsRng,
     };
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingOperatorAuthRng;
+
+    #[derive(Debug)]
+    struct FailingOperatorAuthRngError;
+
+    impl std::fmt::Display for FailingOperatorAuthRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing operator auth RNG")
+        }
+    }
+
+    impl std::error::Error for FailingOperatorAuthRngError {}
+
+    impl TryRngCore for FailingOperatorAuthRng {
+        type Error = FailingOperatorAuthRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingOperatorAuthRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingOperatorAuthRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingOperatorAuthRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingOperatorAuthRng {}
 
     fn base_webauthn_config(algorithms: Vec<OperatorWebAuthnAlgorithm>) -> OperatorWebAuthnConfig {
         OperatorWebAuthnConfig {
@@ -1908,6 +2011,87 @@ mod tests {
             rate_per_minute_to_per_sec(NonZeroU32::new(61).expect("non-zero")),
             2
         );
+    }
+
+    #[test]
+    fn registration_options_reports_challenge_rng_failure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        let ctx = AuthContext {
+            key: "registration-rng".to_owned(),
+        };
+
+        let err = auth
+            .webauthn_registration_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
+            .expect_err("registration challenge RNG failure");
+
+        assert_eq!(err.code, "operator_auth_random_bytes_failed");
+        assert!(err.message.contains("failing operator auth RNG"));
+        assert!(auth.challenges.is_empty());
+    }
+
+    #[test]
+    fn authentication_options_reports_challenge_rng_failure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        auth.credentials_write().push(StoredCredential {
+            id: vec![1, 2, 3],
+            public_key: Vec::new(),
+            alg: OperatorWebAuthnAlgorithm::Es256,
+            sign_count: 0,
+            created_at_ms: 0,
+        });
+        let ctx = AuthContext {
+            key: "authentication-rng".to_owned(),
+        };
+
+        let err = auth
+            .webauthn_authentication_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
+            .expect_err("authentication challenge RNG failure");
+
+        assert_eq!(err.code, "operator_auth_random_bytes_failed");
+        assert!(err.message.contains("failing operator auth RNG"));
+        assert!(auth.challenges.is_empty());
+    }
+
+    #[test]
+    fn issue_session_reports_token_rng_failure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let err = match auth.issue_session_with_rng(
+            b"credential-id",
+            Duration::from_secs(60),
+            &mut FailingOperatorAuthRng,
+        ) {
+            Ok(_) => panic!("session token RNG failure must be reported"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.code, "operator_auth_random_bytes_failed");
+        assert!(err.message.contains("failing operator auth RNG"));
+        assert!(auth.sessions.is_empty());
     }
 
     fn headers_with_operator_token(token: &str) -> HeaderMap {
@@ -2070,7 +2254,7 @@ mod tests {
         let challenge = extract_challenge(&options);
 
         let signing_key = SigningKey::random(&mut OsRng);
-        let credential_id = random_bytes(16);
+        let credential_id = random_bytes(16).expect("credential id");
         let policy = auth.webauthn_policy().expect("policy");
         let cose_key = build_cose_key_es256(&signing_key);
         let auth_data = build_auth_data_registration(policy, &credential_id, &cose_key, 1);
@@ -2134,7 +2318,7 @@ mod tests {
         let options = auth.webauthn_registration_options(&ctx).expect("options");
         let challenge = extract_challenge(&options);
         let signing_key = SigningKey::random(&mut OsRng);
-        let credential_id = random_bytes(16);
+        let credential_id = random_bytes(16).expect("credential id");
         let cose_key = build_cose_key_es256(&signing_key);
         let auth_data = build_auth_data_registration(policy, &credential_id, &cose_key, 1);
         let client_data_json =

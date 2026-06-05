@@ -1684,6 +1684,51 @@ public sealed record class ToriiSoraFsPinRegisterRequest
     public string? SuccessorOfHex { get; init; }
 }
 
+internal sealed record class ToriiSoraFsPinRegisterWireRequest
+{
+    [JsonPropertyName("authority")]
+    public string? Authority { get; init; }
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("chunker_profile_id")]
+    public uint? ChunkerProfileId { get; init; }
+
+    [JsonPropertyName("chunker_namespace")]
+    public string? ChunkerNamespace { get; init; }
+
+    [JsonPropertyName("chunker_name")]
+    public string? ChunkerName { get; init; }
+
+    [JsonPropertyName("chunker_semver")]
+    public string? ChunkerSemver { get; init; }
+
+    [JsonPropertyName("chunker_multihash_code")]
+    public uint? ChunkerMultihashCode { get; init; }
+
+    [JsonPropertyName("pin_policy")]
+    public ToriiSoraFsPinPolicy? PinPolicy { get; init; }
+
+    [JsonPropertyName("manifest_digest_hex")]
+    public string? ManifestDigestHex { get; init; }
+
+    [JsonPropertyName("chunk_digest_sha3_256_hex")]
+    public string? ChunkDigestSha3_256Hex { get; init; }
+
+    [JsonPropertyName("content_length")]
+    public ulong? ContentLength { get; init; }
+
+    [JsonPropertyName("submitted_epoch")]
+    public ulong? SubmittedEpoch { get; init; }
+
+    [JsonPropertyName("alias")]
+    public ToriiSoraFsPinAlias? Alias { get; init; }
+
+    [JsonPropertyName("successor_of_hex")]
+    public string? SuccessorOfHex { get; init; }
+}
+
 public sealed record class ToriiSoraFsPinRegisterResponse
 {
     [JsonPropertyName("manifest_digest_hex")]

@@ -84,7 +84,7 @@ pub const CIPHERTEXT_QUERY_RESPONSE_VERSION_V1: u16 = 1;
 pub const CIPHERTEXT_QUERY_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"]}"#;
+    br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"],"statement_layout":"((service_name,binding_name,key,operation,value_size_bytes,payload_commitment,encryption,governance_tx_hash),(bfv_parameter_digest,bfv_rns_modulus_chain_digest,bfv_key_switch_decomposition_chain_digest),residual_multiple_bound,bound_mode)"}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1: &str = "soracloud_fhe_input_admission_v1";
 /// Schema version for [`SoraServiceStateEntryV1`].
@@ -2906,6 +2906,8 @@ pub struct FheParamSetV1 {
     pub parameter_digest: Hash,
     /// Domain-separated digest of the backend RNS coefficient-modulus chain.
     pub rns_modulus_chain_digest: Hash,
+    /// Domain-separated digest of the backend key-switch decomposition RNS chain.
+    pub key_switch_decomposition_chain_digest: Hash,
 }
 
 impl FheParamSetV1 {
@@ -3648,6 +3650,20 @@ impl SoracloudFheInputAdmissionProofV1 {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "soracloud fhe input admission proof",
                 field: "proof.vk_ref.name",
+            });
+        }
+        if let Some((field, reason)) = self.proof.structural_error() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof",
+                reason: format!("{field} {reason}"),
+            });
+        }
+        if self.proof.envelope_hash.is_none() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.envelope_hash",
+                reason: "must be present and match proof bytes".to_string(),
             });
         }
         Ok(())
@@ -11551,10 +11567,11 @@ pub fn soracloud_fhe_input_admission_public_inputs_schema_hash_v1() -> [u8; 32] 
 
 /// Derive the canonical statement hash for Soracloud FHE input admission.
 ///
-/// The statement layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, key, operation, value_size_bytes,
-/// payload_commitment, encryption, governance_tx_hash, bfv_parameter_digest,
-/// bfv_rns_modulus_chain_digest, residual_multiple_bound,
+/// The statement layout is a nested Norito tuple in this exact field order:
+/// `((service_name, binding_name, key, operation, value_size_bytes,
+/// payload_commitment, encryption, governance_tx_hash),
+/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), residual_multiple_bound,
 /// ExactResidualMultiple)`.
 ///
 /// `operation` is expected to be a deterministic symbolic label such as
@@ -11574,6 +11591,7 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash(
     governance_tx_hash: Hash,
     bfv_parameter_digest: Hash,
     bfv_rns_modulus_chain_digest: Hash,
+    bfv_key_switch_decomposition_chain_digest: Hash,
     residual_multiple_bound: u128,
 ) -> Result<Hash, norito::Error> {
     derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
@@ -11587,6 +11605,7 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash(
         governance_tx_hash,
         bfv_parameter_digest,
         bfv_rns_modulus_chain_digest,
+        bfv_key_switch_decomposition_chain_digest,
         residual_multiple_bound,
         BfvCiphertextBoundModeV1::ExactResidualMultiple,
     )
@@ -11594,10 +11613,12 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash(
 
 /// Derive a canonical statement hash for Soracloud FHE input admission with bound mode.
 ///
-/// The statement layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, key, operation, value_size_bytes,
-/// payload_commitment, encryption, governance_tx_hash, bfv_parameter_digest,
-/// bfv_rns_modulus_chain_digest, residual_multiple_bound, bound_mode)`.
+/// The statement layout is a nested Norito tuple in this exact field order:
+/// `((service_name, binding_name, key, operation, value_size_bytes,
+/// payload_commitment, encryption, governance_tx_hash),
+/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), residual_multiple_bound,
+/// bound_mode)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -11613,20 +11634,26 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
     governance_tx_hash: Hash,
     bfv_parameter_digest: Hash,
     bfv_rns_modulus_chain_digest: Hash,
+    bfv_key_switch_decomposition_chain_digest: Hash,
     residual_multiple_bound: u128,
     bound_mode: BfvCiphertextBoundModeV1,
 ) -> Result<Hash, norito::Error> {
     let payload = norito::to_bytes(&(
-        service_name,
-        binding_name,
-        key,
-        operation,
-        value_size_bytes,
-        payload_commitment,
-        encryption,
-        governance_tx_hash,
-        bfv_parameter_digest,
-        bfv_rns_modulus_chain_digest,
+        (
+            service_name,
+            binding_name,
+            key,
+            operation,
+            value_size_bytes,
+            payload_commitment,
+            encryption,
+            governance_tx_hash,
+        ),
+        (
+            bfv_parameter_digest,
+            bfv_rns_modulus_chain_digest,
+            bfv_key_switch_decomposition_chain_digest,
+        ),
         residual_multiple_bound,
         bound_mode,
     ))?;
@@ -12983,6 +13010,7 @@ mod tests {
         let governance_tx_hash = sample_hash(2);
         let parameter_digest = sample_hash(3);
         let rns_digest = sample_hash(4);
+        let key_switch_decomposition_digest = sample_hash(5);
         let statement_hash = derive_soracloud_fhe_input_admission_statement_hash(
             "health_portal",
             "private_state",
@@ -12994,20 +13022,26 @@ mod tests {
             governance_tx_hash,
             parameter_digest,
             rns_digest,
+            key_switch_decomposition_digest,
             129,
         )
         .expect("derive statement hash");
         let expected_payload = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            "/state/private/records/1",
-            "upsert",
-            512_u64,
-            payload_commitment,
-            SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            parameter_digest,
-            rns_digest,
+            (
+                "health_portal",
+                "private_state",
+                "/state/private/records/1",
+                "upsert",
+                512_u64,
+                payload_commitment,
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+            ),
+            (
+                parameter_digest,
+                rns_digest,
+                key_switch_decomposition_digest,
+            ),
             129_u128,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
         ))
@@ -13025,6 +13059,7 @@ mod tests {
                 governance_tx_hash,
                 parameter_digest,
                 rns_digest,
+                key_switch_decomposition_digest,
                 129,
                 BfvCiphertextBoundModeV1::BoundedNoise,
             )
@@ -13036,6 +13071,50 @@ mod tests {
                 SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
             ))
         );
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_requires_matching_envelope_hash() {
+        let proof = crate::proof::ProofBox::new("stark/fri/v1".into(), vec![1, 2, 3]);
+        let mut admission = SoracloudFheInputAdmissionProofV1 {
+            schema_version: SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+            residual_multiple_bound: 17,
+            bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            statement_hash: sample_hash(9),
+            proof: ProofAttachment::new_ref(
+                "stark/fri/v1".into(),
+                proof,
+                crate::proof::VerifyingKeyId::new("stark/fri/v1", "soracloud_input"),
+            ),
+        };
+
+        let err = admission
+            .validate()
+            .expect_err("missing envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.envelope_hash",
+                ..
+            }
+        ));
+
+        admission.proof.envelope_hash =
+            Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
+        admission
+            .validate()
+            .expect("matching envelope hash must be accepted");
+
+        let mut forged_hash = admission.proof.envelope_hash.expect("matching hash");
+        forged_hash[0] ^= 0x01;
+        admission.proof.envelope_hash = Some(forged_hash);
+        let err = admission
+            .validate()
+            .expect_err("forged envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField { field: "proof", .. }
+        ));
     }
 
     #[test]
@@ -14052,6 +14131,7 @@ mod tests {
             withdraw_height: Some(40_000),
             parameter_digest: sample_hash(77),
             rns_modulus_chain_digest: sample_hash(78),
+            key_switch_decomposition_chain_digest: sample_hash(79),
         }
     }
 

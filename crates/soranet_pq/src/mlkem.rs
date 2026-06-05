@@ -2,14 +2,14 @@ use core::{fmt, str::FromStr};
 
 use pqcrypto_mlkem as _;
 use pqcrypto_traits::Error as PqError;
-use rand_core::RngCore;
+use rand_core::{RngCore, TryCryptoRng};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
-    hedged_chacha20_rng_from_os,
+    hedged_chacha20_rng_from_rng,
 };
 
 const MLKEM512_PUBLIC_KEY_BYTES: usize = 800;
@@ -734,7 +734,22 @@ pub fn generate_mlkem_keypair(
 /// ML-KEM error when generated material fails validation or the backend reports
 /// key-generation failure.
 pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair, MlKemError> {
-    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:keypair")?;
+    let mut rng = rand::rngs::OsRng;
+    generate_mlkem_keypair_from_rng(suite, &mut rng)
+}
+
+/// Generate an ML-KEM keypair using caller-supplied seed entropy plus live OS
+/// entropy when available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the required seed draw fails, or another
+/// ML-KEM error when generated material fails validation or the backend reports
+/// key-generation failure.
+pub fn generate_mlkem_keypair_from_rng<R: TryCryptoRng + ?Sized>(
+    suite: MlKemSuite,
+    rng: &mut R,
+) -> Result<MlKemKeyPair, MlKemError> {
+    let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mlkem:keypair", rng)?;
     try_generate_mlkem_keypair(suite, &mut rng)
 }
 
@@ -806,8 +821,25 @@ pub fn encapsulate_mlkem_from_os(
     suite: MlKemSuite,
     public_key: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut rng = rand::rngs::OsRng;
+    encapsulate_mlkem_from_rng(suite, public_key, &mut rng)
+}
+
+/// Encapsulate using caller-supplied seed entropy plus live OS entropy when
+/// available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the required seed draw fails, or
+/// [`MlKemError::BadEncoding`] or [`MlKemError::NonCanonicalEncoding`] when the
+/// public key encoding is invalid, or [`MlKemError::BackendFailure`] when the
+/// backend reports encapsulation failure.
+pub fn encapsulate_mlkem_from_rng<R: TryCryptoRng + ?Sized>(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    rng: &mut R,
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
     suite.validate_public_key(public_key)?;
-    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:encapsulate")?;
+    let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mlkem:encapsulate", rng)?;
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
 
@@ -1066,9 +1098,43 @@ mod mlkem_ffi {
 
 #[cfg(test)]
 mod tests {
+    use rand_core::{TryCryptoRng, TryRngCore};
+
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingPqSeedRng;
+
+    #[derive(Debug)]
+    struct FailingPqSeedRngError;
+
+    impl core::fmt::Display for FailingPqSeedRngError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("failing ML-KEM seed RNG")
+        }
+    }
+
+    impl std::error::Error for FailingPqSeedRngError {}
+
+    impl TryRngCore for FailingPqSeedRng {
+        type Error = FailingPqSeedRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingPqSeedRng {}
 
     fn set_first_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
         bytes[0] = 0xFF;
@@ -1192,6 +1258,34 @@ mod tests {
             .expect("ML-KEM decapsulation");
 
         assert_eq!(sender_shared.as_bytes(), receiver_shared.as_bytes());
+    }
+
+    #[test]
+    fn from_rng_keypair_reports_seed_failure() {
+        let mut rng = FailingPqSeedRng;
+        match generate_mlkem_keypair_from_rng(MlKemSuite::MlKem512, &mut rng) {
+            Err(MlKemError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-KEM keypair seed RNG failure must be reported"),
+            Err(other) => panic!("expected ML-KEM RNG error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_rng_encapsulation_reports_seed_failure() {
+        let suite = MlKemSuite::MlKem512;
+        let keypair = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xA6; 32]),
+            b"failing-encap-keygen",
+        )
+        .expect("seeded ML-KEM keypair generation should succeed");
+        let mut rng = FailingPqSeedRng;
+
+        match encapsulate_mlkem_from_rng(suite, keypair.public_key(), &mut rng) {
+            Err(MlKemError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-KEM encapsulation seed RNG failure must be reported"),
+            Err(other) => panic!("expected ML-KEM encapsulation RNG error, got {other:?}"),
+        }
     }
 
     #[test]

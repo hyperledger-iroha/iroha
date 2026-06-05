@@ -1761,11 +1761,12 @@ public sealed class ToriiClientTests
             Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("alice@boi", root.GetProperty("authority").GetString());
             Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
-            Assert.Equal((uint)1, root.GetProperty("chunker").GetProperty("profile_id").GetUInt32());
-            Assert.Equal("sorafs", root.GetProperty("chunker").GetProperty("namespace").GetString());
-            Assert.Equal("sf1", root.GetProperty("chunker").GetProperty("name").GetString());
-            Assert.Equal("1.0.0", root.GetProperty("chunker").GetProperty("semver").GetString());
-            Assert.Equal((uint)0, root.GetProperty("chunker").GetProperty("multihash_code").GetUInt32());
+            Assert.False(root.TryGetProperty("chunker", out _));
+            Assert.Equal((uint)1, root.GetProperty("chunker_profile_id").GetUInt32());
+            Assert.Equal("sorafs", root.GetProperty("chunker_namespace").GetString());
+            Assert.Equal("sf1", root.GetProperty("chunker_name").GetString());
+            Assert.Equal("1.0.0", root.GetProperty("chunker_semver").GetString());
+            Assert.Equal((uint)0, root.GetProperty("chunker_multihash_code").GetUInt32());
             var pinPolicy = root.GetProperty("pin_policy");
             Assert.Equal((uint)3, pinPolicy.GetProperty("min_replicas").GetUInt32());
             Assert.Equal("Hot", pinPolicy.GetProperty("storage_class").GetProperty("type").GetString());

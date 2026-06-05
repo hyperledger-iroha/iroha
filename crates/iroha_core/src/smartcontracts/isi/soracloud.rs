@@ -19,13 +19,15 @@ use iroha_crypto::{
         bfv_packed_rotate_left_output_residual_multiple_bound,
         bfv_rotate_slots_left_bounded_noise_output_bounds,
         bfv_rotate_slots_left_output_residual_multiple_bounds,
-        bootstrap_ciphertext_bounded_noise_rns_exact_round, bootstrap_ciphertext_rns_exact_round,
-        multiply_ciphertexts_bounded_noise_rns_exact, multiply_ciphertexts_rns_exact,
-        multiply_plain_scalar, ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
+        bootstrap_ciphertext_bounded_noise_rns_exact_rounds, bootstrap_ciphertext_rns_exact_rounds,
+        multiply_ciphertexts_bounded_noise_rns_basis_extension_exact,
+        multiply_ciphertexts_rns_exact, multiply_plain_scalar, ram_lfe_bfv_parameters_v1,
+        registered_bfv_key_switch_decomposition_chain,
+        registered_bfv_key_switch_decomposition_chain_digest, registered_bfv_parameter_digest,
         registered_bfv_rns_modulus_chain, registered_bfv_rns_modulus_chain_digest,
         rotate_ciphertext_slots_left_bounded_noise_rns_exact,
         rotate_ciphertext_slots_left_rns_exact,
-        rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact,
+        rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact,
         validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
         validate_registered_bfv_parameters,
@@ -769,6 +771,12 @@ fn expected_fhe_input_admission_statement_hash(
         .map_err(|err| invalid_parameter(format!("failed to digest BFV parameters: {err}")))?;
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&params)
         .map_err(|err| invalid_parameter(format!("failed to digest BFV RNS chain: {err}")))?;
+    let key_switch_decomposition_chain_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(&params).map_err(|err| {
+            invalid_parameter(format!(
+                "failed to digest BFV key-switch decomposition chain: {err}"
+            ))
+        })?;
 
     derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
         service_name.as_ref(),
@@ -781,6 +789,7 @@ fn expected_fhe_input_admission_statement_hash(
         governance_tx_hash,
         parameter_digest,
         rns_modulus_chain_digest,
+        key_switch_decomposition_chain_digest,
         residual_multiple_bound,
         bound_mode,
     )
@@ -868,6 +877,11 @@ fn validate_soracloud_fhe_input_admission_envelope(
             "FHE input admission proof envelope aux must be empty",
         ));
     }
+    envelope.validate_for_admission().map_err(|err| {
+        invalid_parameter(format!(
+            "invalid FHE input admission OpenVerifyEnvelope shape: {err}"
+        ))
+    })?;
     if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
         return Err(invalid_parameter(
             "FHE input admission proof public-input schema mismatch",
@@ -890,13 +904,14 @@ fn validate_soracloud_fhe_input_admission_envelope(
             "FHE input admission proof public inputs do not match statement hash",
         ));
     }
-    if let Some(envelope_hash) = attachment.envelope_hash {
-        let expected = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
-        if envelope_hash != expected {
-            return Err(invalid_parameter(
-                "FHE input admission proof envelope_hash mismatch",
-            ));
-        }
+    let envelope_hash = attachment
+        .envelope_hash
+        .ok_or_else(|| invalid_parameter("FHE input admission proof requires envelope_hash"))?;
+    let expected = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if envelope_hash != expected {
+        return Err(invalid_parameter(
+            "FHE input admission proof envelope_hash mismatch",
+        ));
     }
     Ok(())
 }
@@ -5246,6 +5261,17 @@ fn validate_registered_soracloud_bfv_descriptor(
             "fhe parameter-set RNS modulus-chain digest does not match the registered BFV profile",
         ));
     }
+    let key_switch_decomposition_chain_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(params).map_err(|err| {
+            invalid_parameter(format!(
+                "failed to digest BFV key-switch decomposition chain: {err}"
+            ))
+        })?;
+    if param_set.key_switch_decomposition_chain_digest != key_switch_decomposition_chain_digest {
+        return Err(invalid_parameter(
+            "fhe parameter-set key-switch decomposition-chain digest does not match the registered BFV profile",
+        ));
+    }
 
     Ok(())
 }
@@ -5854,18 +5880,14 @@ fn execute_soracloud_fhe_job(
                 .slots
                 .iter()
                 .map(|slot| {
-                    let mut refreshed = slot.clone();
-                    for round_index in 0..job.bootstrap_count {
-                        refreshed = bootstrap_ciphertext_rns_exact_round(
-                            params,
-                            &rns_chain,
-                            bootstrap_key,
-                            &refreshed,
-                            round_index,
-                        )
-                        .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))?;
-                    }
-                    Ok::<BfvCiphertext, InstructionExecutionError>(refreshed)
+                    bootstrap_ciphertext_rns_exact_rounds(
+                        params,
+                        &rns_chain,
+                        bootstrap_key,
+                        slot,
+                        job.bootstrap_count,
+                    )
+                    .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BfvIdentifierCiphertext { slots })
@@ -5881,6 +5903,10 @@ fn execute_soracloud_fhe_job_bounded_noise(
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
     let rns_chain = registered_bfv_rns_modulus_chain(params)
         .map_err(|err| invalid_parameter(format!("invalid registered BFV RNS chain: {err}")))?;
+    let decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain(params).map_err(|err| {
+            invalid_parameter(format!("invalid registered BFV key-switch chain: {err}"))
+        })?;
     ensure_matching_fhe_slots(inputs)?;
     validate_soracloud_fhe_evaluation_budget(job, inputs)?;
     match job.operation {
@@ -5889,8 +5915,9 @@ fn execute_soracloud_fhe_job_bounded_noise(
                 .map_err(|err| invalid_parameter(format!("FHE bounded-noise add failed: {err}")))
         }),
         FheJobOperationV1::Multiply => fold_fhe_slots_balanced(params, inputs, |lhs, rhs| {
-            multiply_ciphertexts_bounded_noise_rns_exact(
+            multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
                 params,
+                &decomposition_chain,
                 &rns_chain,
                 &evaluation_keys.relinearization_key,
                 lhs,
@@ -5903,8 +5930,9 @@ fn execute_soracloud_fhe_job_bounded_noise(
             let slots = &inputs.first().expect("input presence checked above").slots;
             if slots.len() == 1 {
                 let rotated =
-                    rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact(
+                    rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact(
                         params,
+                        &decomposition_chain,
                         &rns_chain,
                         &evaluation_keys.galois_keys,
                         &slots[0],
@@ -5953,20 +5981,16 @@ fn execute_soracloud_fhe_job_bounded_noise(
                 .slots
                 .iter()
                 .map(|slot| {
-                    let mut refreshed = slot.clone();
-                    for round_index in 0..job.bootstrap_count {
-                        refreshed = bootstrap_ciphertext_bounded_noise_rns_exact_round(
-                            params,
-                            &rns_chain,
-                            bootstrap_key,
-                            &refreshed,
-                            round_index,
-                        )
-                        .map_err(|err| {
-                            invalid_parameter(format!("FHE bounded-noise bootstrap failed: {err}"))
-                        })?;
-                    }
-                    Ok::<BfvCiphertext, InstructionExecutionError>(refreshed)
+                    bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+                        params,
+                        &rns_chain,
+                        bootstrap_key,
+                        slot,
+                        job.bootstrap_count,
+                    )
+                    .map_err(|err| {
+                        invalid_parameter(format!("FHE bounded-noise bootstrap failed: {err}"))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BfvIdentifierCiphertext { slots })
@@ -11651,13 +11675,14 @@ mod tests {
             apply_galois_automorphism_ciphertext, bfv_add_bounded_noise_output_bound,
             bfv_balanced_multiplication_depth, bfv_encrypted_zero_refresh_residual_multiple_bound,
             bfv_fresh_bounded_noise_ciphertext_bound, bootstrap_ciphertext_rns_exact_round,
+            bootstrap_ciphertext_rns_exact_rounds,
             bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed, bootstrap_key_from_seed,
             bootstrap_key_with_max_refresh_rounds_from_seed, decode_packed_plaintext_slots,
             decrypt, decrypt_bounded_noise, decrypt_identifier, encode_packed_plaintext_slots,
             encrypt_bounded_noise_from_seed, encrypt_from_seed, encrypt_identifier_from_seed,
-            galois_key_from_seed, keygen_bounded_noise_with_relinearization_from_seed,
-            keygen_from_seed, packed_galois_slot_permutation,
-            packed_left_rotation_galois_automorphism_power,
+            galois_key_bounded_noise_from_seed, galois_key_from_seed,
+            keygen_bounded_noise_with_relinearization_from_seed, keygen_from_seed,
+            packed_galois_slot_permutation, packed_left_rotation_galois_automorphism_power,
             packed_left_rotation_galois_automorphism_powers, registered_bfv_rns_modulus_chain,
             rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
         },
@@ -12255,6 +12280,9 @@ mod tests {
             .expect("registered BFV parameter digest");
         let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
             .expect("registered BFV RNS modulus-chain digest");
+        let key_switch_decomposition_chain_digest =
+            registered_bfv_key_switch_decomposition_chain_digest(&registered_params)
+                .expect("registered BFV key-switch decomposition-chain digest");
         FheParamSetV1 {
             schema_version: iroha_data_model::soracloud::FHE_PARAM_SET_VERSION_V1,
             param_set: "bfv-default".parse().expect("valid name"),
@@ -12280,6 +12308,7 @@ mod tests {
             withdraw_height: None,
             parameter_digest,
             rns_modulus_chain_digest,
+            key_switch_decomposition_chain_digest,
         }
     }
 
@@ -12426,16 +12455,29 @@ mod tests {
                 b"soracloud-core-registered-bounded-keygen",
             )
             .expect("registered bounded-noise keygen");
+        let bootstrap_seed = b"soracloud-core-registered-bounded-bootstrap";
+        let bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "soracloud-core-registered-bounded-bootstrap",
+            2,
+            bootstrap_seed,
+        )
+        .expect("registered bounded-noise bootstrap key");
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
             galois_keys: Vec::new(),
-            bootstrap_key: None,
+            bootstrap_key: Some(bootstrap_key),
         };
         let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
             public_key: public_key.clone(),
             rotation_transcripts: Vec::new(),
-            bootstrap_transcript: None,
+            bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
+                key_id: "soracloud-core-registered-bounded-bootstrap".to_string(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            }),
         };
         let digest = transcript
             .digest_for_evaluation_keys_with_mode(
@@ -12501,6 +12543,23 @@ mod tests {
     const FHE_INPUT_ADMISSION_BACKEND: &str = "stark/fri/sha256-goldilocks";
     const FHE_INPUT_ADMISSION_CIRCUIT_ID: &str = SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1;
 
+    fn sample_fhe_input_admission_attachment(
+        proof_box: iroha_data_model::proof::ProofBox,
+    ) -> iroha_data_model::proof::ProofAttachment {
+        let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                FHE_INPUT_ADMISSION_CIRCUIT_ID,
+            ),
+        );
+        attachment.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &attachment.proof.bytes,
+        )));
+        attachment
+    }
+
     fn sample_fhe_input_admission_proof(
         service_name: &Name,
         binding_name: &Name,
@@ -12564,14 +12623,7 @@ mod tests {
             residual_multiple_bound,
             bound_mode,
             statement_hash,
-            proof: iroha_data_model::proof::ProofAttachment::new_ref(
-                FHE_INPUT_ADMISSION_BACKEND.into(),
-                proof_box,
-                iroha_data_model::proof::VerifyingKeyId::new(
-                    FHE_INPUT_ADMISSION_BACKEND,
-                    FHE_INPUT_ADMISSION_CIRCUIT_ID,
-                ),
-            ),
+            proof: sample_fhe_input_admission_attachment(proof_box),
         }
     }
 
@@ -12660,14 +12712,7 @@ mod tests {
             residual_multiple_bound,
             bound_mode,
             statement_hash,
-            proof: iroha_data_model::proof::ProofAttachment::new_ref(
-                FHE_INPUT_ADMISSION_BACKEND.into(),
-                proof_box,
-                iroha_data_model::proof::VerifyingKeyId::new(
-                    FHE_INPUT_ADMISSION_BACKEND,
-                    FHE_INPUT_ADMISSION_CIRCUIT_ID,
-                ),
-            ),
+            proof: sample_fhe_input_admission_attachment(proof_box),
         }
     }
 
@@ -12743,6 +12788,79 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape() {
+        let service_name: Name = "portal".parse().expect("valid service name");
+        let binding_name: Name = "vault".parse().expect("valid binding name");
+        let state_key = "/state/private/input-open-verify-shape";
+        let payload = sample_fhe_payload(b"alice", b"seed-proof-open-verify-shape");
+        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-open-verify-shape");
+        let residual_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
+                .expect("fresh input residual bound");
+        let admission_proof = sample_fhe_input_admission_proof(
+            &service_name,
+            &binding_name,
+            state_key,
+            &payload,
+            governance_tx_hash,
+            residual_bound,
+        );
+        let envelope =
+            proof_attachment_envelope(&admission_proof.proof).expect("decode sample envelope");
+
+        let mut missing_envelope_hash = admission_proof.proof.clone();
+        missing_envelope_hash.envelope_hash = None;
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &missing_envelope_hash,
+            &envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("missing envelope hash must fail FHE input admission");
+        assert_invalid_parameter_contains(err, "requires envelope_hash");
+
+        let mut forged_envelope_hash = admission_proof.proof.clone();
+        forged_envelope_hash.envelope_hash =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-envelope")));
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &forged_envelope_hash,
+            &envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("forged envelope hash must fail FHE input admission");
+        assert_invalid_parameter_contains(err, "envelope_hash mismatch");
+
+        let mut invalid_circuit_id = envelope.clone();
+        invalid_circuit_id.circuit_id = "Soracloud/FHE/InputAdmission".to_owned();
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &invalid_circuit_id,
+            admission_proof.statement_hash,
+        )
+        .expect_err("non-portable circuit ids must fail shared OpenVerify admission");
+        assert_invalid_parameter_contains(err, "portable canonical identifier");
+
+        let mut zero_vk_hash = envelope.clone();
+        zero_vk_hash.vk_hash = [0; Hash::LENGTH];
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &zero_vk_hash,
+            admission_proof.statement_hash,
+        )
+        .expect_err("zero verifier-key hashes must fail shared OpenVerify admission");
+        assert_invalid_parameter_contains(err, "verifier-key hash is zero");
+
+        let mut empty_inner_proof = envelope;
+        empty_inner_proof.proof_bytes.clear();
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &empty_inner_proof,
+            admission_proof.statement_hash,
+        )
+        .expect_err("empty inner proof bytes must fail shared OpenVerify admission");
+        assert_invalid_parameter_contains(err, "proof bytes are empty");
     }
 
     fn sample_fhe_input_ref(state_key: &str, payload: &[u8]) -> FheJobInputRefV1 {
@@ -13585,17 +13703,14 @@ mod tests {
                 "bootstrap input SHA-256"
             );
 
-            let mut refreshed = input;
-            for round_index in 0..refresh_rounds {
-                refreshed = bootstrap_ciphertext_rns_exact_round(
-                    params,
-                    &rns_chain,
-                    bootstrap_key,
-                    &refreshed,
-                    round_index,
-                )
-                .expect("fixture bootstrap refresh must apply");
-            }
+            let refreshed = bootstrap_ciphertext_rns_exact_rounds(
+                params,
+                &rns_chain,
+                bootstrap_key,
+                &input,
+                refresh_rounds,
+            )
+            .expect("fixture bootstrap refresh must apply");
             let encoded_output = norito::to_bytes(&refreshed).expect("encode bootstrap output");
             assert_eq!(
                 fixture_u64(vector, "expected_output_ciphertext_bytes"),
@@ -15104,6 +15219,230 @@ mod tests {
     }
 
     #[test]
+    fn registered_bfv_key_switch_decomposition_chain_uses_target_limb_prefix() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluator_chain =
+            registered_bfv_rns_modulus_chain(&params).expect("registered BFV RNS chain");
+        let decomposition_chain = registered_bfv_key_switch_decomposition_chain(&params)
+            .expect("registered decomposition chain");
+
+        assert!(
+            decomposition_chain.moduli.len() < evaluator_chain.moduli.len(),
+            "registered decomposition chain should be a strict target-limb prefix"
+        );
+        assert_eq!(
+            decomposition_chain.moduli.as_slice(),
+            &evaluator_chain.moduli[..decomposition_chain.moduli.len()]
+        );
+        decomposition_chain
+            .validate_for_parameters(&params)
+            .expect("decomposition chain must validate for registered parameters");
+        let decomposition_product = decomposition_chain
+            .product()
+            .expect("decomposition product");
+        assert!(
+            decomposition_product >= u128::from(params.ciphertext_modulus),
+            "decomposition product must cover ciphertext modulus"
+        );
+        assert!(
+            decomposition_product >= 1_u128 << params.decomposition_base_log,
+            "decomposition product must cover key-switch decomposition base"
+        );
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_multiply_uses_target_limb_key_switch_bridge() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let inputs = [
+            BfvIdentifierCiphertext {
+                slots: vec![
+                    encrypt_bounded_noise_from_seed(
+                        &params,
+                        &public_key,
+                        &[5],
+                        b"soracloud-bounded-target-limb-mul-lhs-0",
+                    )
+                    .expect("encrypt lhs slot 0"),
+                    encrypt_bounded_noise_from_seed(
+                        &params,
+                        &public_key,
+                        &[7],
+                        b"soracloud-bounded-target-limb-mul-lhs-1",
+                    )
+                    .expect("encrypt lhs slot 1"),
+                ],
+            },
+            BfvIdentifierCiphertext {
+                slots: vec![
+                    encrypt_bounded_noise_from_seed(
+                        &params,
+                        &public_key,
+                        &[3],
+                        b"soracloud-bounded-target-limb-mul-rhs-0",
+                    )
+                    .expect("encrypt rhs slot 0"),
+                    encrypt_bounded_noise_from_seed(
+                        &params,
+                        &public_key,
+                        &[4],
+                        b"soracloud-bounded-target-limb-mul-rhs-1",
+                    )
+                    .expect("encrypt rhs slot 1"),
+                ],
+            },
+        ];
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Multiply;
+        job.requested_multiplication_depth = 1;
+
+        let output =
+            execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &inputs)
+                .expect("execute bounded-noise multiply through target-limb bridge");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded multiply output")[0]
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(plaintext_slots, vec![15, 28]);
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_packed_rotate_uses_target_limb_key_switch_bridge() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"soracloud-bounded-target-limb-packed-keygen",
+            )
+            .expect("bounded-noise keygen");
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let automorphism_power =
+            packed_left_rotation_galois_automorphism_power(&params, half_rotation)
+                .expect("registered packed half-rotation must be one Galois automorphism");
+        let degree = usize::from(params.polynomial_degree);
+        let input_slots = (0..degree)
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &input_slots).expect("encode packed slots");
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &packed_plaintext,
+                    b"soracloud-bounded-target-limb-packed-input",
+                )
+                .expect("encrypt bounded packed input"),
+            ],
+        };
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: vec![
+                galois_key_bounded_noise_from_seed(
+                    &params,
+                    &secret_key,
+                    automorphism_power,
+                    b"soracloud-bounded-target-limb-packed-galois-key",
+                )
+                .expect("bounded-noise Galois key"),
+            ],
+            bootstrap_key: None,
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-packed-input",
+            &norito::to_bytes(&input).expect("encode bounded packed input"),
+        )]);
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = half_rotation;
+
+        let output = execute_soracloud_fhe_job_bounded_noise(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+        )
+        .expect("execute bounded-noise packed rotate through target-limb bridge");
+        assert_eq!(output.slots.len(), 1);
+        let plaintext =
+            decrypt_bounded_noise(&params, &secret_key, &output.slots[0]).expect("decrypt output");
+        let output_slots =
+            decode_packed_plaintext_slots(&params, &plaintext).expect("decode packed output");
+        let mut expected_slots = input_slots;
+        expected_slots.rotate_left(usize::try_from(half_rotation).expect("rotation fits usize"));
+        assert_eq!(output_slots, expected_slots);
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[9, 4],
+                    b"soracloud-bounded-target-limb-bootstrap-slot-0",
+                )
+                .expect("encrypt bootstrap slot 0"),
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[7],
+                    b"soracloud-bounded-target-limb-bootstrap-slot-1",
+                )
+                .expect("encrypt bootstrap slot 1"),
+            ],
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-bootstrap-input",
+            &norito::to_bytes(&input).expect("encode bounded bootstrap input"),
+        )]);
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 2;
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let expected_output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+            &params,
+            evaluation_keys
+                .bootstrap_key
+                .as_ref()
+                .expect("registered bootstrap key"),
+            input_bound,
+            job.bootstrap_count,
+        )
+        .expect("bootstrap output noise bound");
+
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect("execute bounded-noise bootstrap through registered RNS bridge");
+
+        assert_eq!(output.slots.len(), 2);
+        assert_ne!(output.slots, input.slots);
+        let slot_0 =
+            decrypt_bounded_noise(&params, &secret_key, &output.slots[0]).expect("decrypt slot 0");
+        let slot_1 =
+            decrypt_bounded_noise(&params, &secret_key, &output.slots[1]).expect("decrypt slot 1");
+        assert_eq!(&slot_0[..2], &[9, 4]);
+        assert_eq!(slot_1[0], 7);
+        assert_eq!(output_bound, Some(expected_output_bound));
+    }
+
+    #[test]
     fn soracloud_multi_input_add_matches_plaintext_slots() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, _relinearization_key) =
@@ -15961,6 +16300,13 @@ mod tests {
         let err = registered_soracloud_bfv_parameters(&wrong_rns_digest)
             .expect_err("wrong RNS modulus-chain digest must be rejected");
         assert_invalid_parameter_contains(err, "RNS modulus-chain digest");
+
+        let mut wrong_key_switch_digest = bundle.param_set.clone();
+        wrong_key_switch_digest.key_switch_decomposition_chain_digest =
+            Hash::new(b"wrong-bfv-key-switch-decomposition-chain");
+        let err = registered_soracloud_bfv_parameters(&wrong_key_switch_digest)
+            .expect_err("wrong key-switch decomposition-chain digest must be rejected");
+        assert_invalid_parameter_contains(err, "key-switch decomposition-chain digest");
 
         let mut excessive_ciphertext_limb = bundle.param_set.clone();
         excessive_ciphertext_limb.ciphertext_modulus_bits = vec![

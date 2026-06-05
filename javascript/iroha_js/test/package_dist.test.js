@@ -110,14 +110,21 @@ import {
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   ethereumMainnetSccpDestinationBinding,
   parseEthereumMainnetNativeEvmProverBundleManifest,
+  parseEthereumMainnetNativeEvmProverParityFixture,
+  parseEthereumMainnetNativeEvmProverSelfTestFixture,
   validateEthereumMainnetNativeEvmProverBundle,
+  validateEthereumMainnetNativeEvmProverParityFixture,
+  validateEthereumMainnetNativeEvmProverSelfTestFixture,
   verifyEthereumMainnetNativeEvmProverArtifacts,
+  verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
   BscMainnetSccp,
   BscMainnetSccpProver,
   bscMainnetSccpDestinationBinding,
@@ -3095,6 +3102,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
     true,
   );
   const declaration = declarationClass("EthereumMainnetSccp");
+  assert.match(
+    declaration,
+    /static fromNativeProverBundle\([\s\S]*options: EthereumMainnetSccpNativeProverBundleOptions,[\s\S]*\): Promise<EthereumMainnetSccp>;/u,
+  );
   assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
   assert.match(
     declaration,
@@ -3117,6 +3128,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
     /proveOutboundToEthereum\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): Promise<EvmSccpProofResult>;/u,
   );
   assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetNativeProverSelfTestFn = \([\s\S]*context: Readonly<EthereumMainnetNativeProverSelfTestContext>[\s\S]*EthereumMainnetNativeEvmProverSelfTestSdkResultInput/u,
+  );
+  assert.match(
     declaration,
     /buildEthereumCalldata\(input: EthereumMainnetSccpSubmissionInput\): EvmSccpSubmission;/u,
   );
@@ -3127,6 +3142,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export type EthereumMainnetInboundProveFn = \([\s\S]*\) => BinaryLike \| Promise<BinaryLike>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetSccpNativeProverBundleOptions = Omit<[\s\S]*EthereumMainnetNativeEvmProverArtifactBundleInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -4167,6 +4186,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
+    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -4179,8 +4200,80 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         ? implementationHash
         : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
-    audit_hashes: [`0x${"a1".repeat(32)}`],
+    audit_hashes: {
+      circuit_security_audit: `0x${"a1".repeat(32)}`,
+      native_implementation_audit: `0x${"a2".repeat(32)}`,
+      reproducible_build_attestation: `0x${"a3".repeat(32)}`,
+      cross_sdk_fixture_parity: `0x${"a4".repeat(32)}`,
+      native_prover_self_test: `0x${"a5".repeat(32)}`,
+      no_wasm_no_remote_scan: `0x${"a6".repeat(32)}`,
+    },
   };
+  const publicSignalWords = Array.from(
+    { length: 9 },
+    (_, index) => `0x${(index + 0x10).toString(16).padStart(2, "0").repeat(32)}`,
+  );
+  const paritySdkResult = {
+    receipt_proof_hash: `0x${"d1".repeat(32)}`,
+    source_proof_hash: `0x${"d2".repeat(32)}`,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    public_signal_words: publicSignalWords,
+    calldata_hash: `0x${"d3".repeat(32)}`,
+    torii_submit_payload_hash: `0x${"d4".repeat(32)}`,
+  };
+  const parityFixture = {
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    ...paritySdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...paritySdkResult },
+      ]),
+    ),
+  };
+  const parityFixtureBytes = Buffer.from(JSON.stringify(parityFixture), "utf8");
+  const parityFixtureHash = sha256Hex(parityFixtureBytes);
+  nativeProverBundle.audit_hashes.cross_sdk_fixture_parity = parityFixtureHash;
+  const selfTestPublicSignalWords = Array.from(
+    { length: 9 },
+    (_, index) => `0x${(index + 0x30).toString(16).padStart(2, "0").repeat(32)}`,
+  );
+  const selfTestSdkResult = {
+    request_hash: `0x${"e1".repeat(32)}`,
+    witness_hash: `0x${"e2".repeat(32)}`,
+    source_proof_hash: `0x${"e3".repeat(32)}`,
+    proof_hash: `0x${"e4".repeat(32)}`,
+    public_signal_words: selfTestPublicSignalWords,
+    calldata_hash: `0x${"e5".repeat(32)}`,
+    torii_submit_payload_hash: `0x${"e6".repeat(32)}`,
+  };
+  const selfTestFixture = {
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...selfTestSdkResult },
+      ]),
+    ),
+  };
+  const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
+  const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
+  nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
   assert.equal(
     validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
       destinationBinding: ethereumMainnetBinding,
@@ -4193,12 +4286,42 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     }).proofArtifactHash,
     proofArtifactHash,
   );
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverParityFixture(
+      parityFixture,
+      nativeProverBundle,
+    ).sdkResults.javascript.calldataHash,
+    parityFixture.calldata_hash,
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverParityFixture(
+      JSON.stringify(parityFixture),
+      nativeProverBundle,
+    ).publicSignalWords.length,
+    9,
+  );
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverSelfTestFixture(
+      selfTestFixture,
+      nativeProverBundle,
+    ).sdkResults.javascript.proofHash,
+    selfTestFixture.proof_hash,
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverSelfTestFixture(
+      JSON.stringify(selfTestFixture),
+      nativeProverBundle,
+    ).publicSignalWords.length,
+    9,
+  );
   const verifiedNativeArtifacts = verifyEthereumMainnetNativeEvmProverArtifacts(
     {
       nativeProverBundle: nativeProverBundle,
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
+      crossSdkFixtureParityBytes: parityFixtureBytes,
+      nativeProverSelfTestBytes: selfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
     },
@@ -4210,6 +4333,61 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
   assert.equal(verifiedNativeArtifacts.implementation, "pure-typescript");
   assert.equal(verifiedNativeArtifacts.implementationHash, implementationHash);
+  assert.equal(verifiedNativeArtifacts.crossSdkFixtureParityHash, parityFixtureHash);
+  assert.equal(verifiedNativeArtifacts.nativeProverSelfTestHash, selfTestFixtureHash);
+  const nativeArtifactBytes = new Map([
+    [nativeProverBundle.proof_artifact, proofArtifactBytes],
+    [nativeProverBundle.proving_key, provingKeyBytes],
+    [nativeProverBundle.verifier_key, verifierKeyBytes],
+    [nativeProverBundle.cross_sdk_fixture_parity_artifact, parityFixtureBytes],
+    [nativeProverBundle.native_prover_self_test_artifact, selfTestFixtureBytes],
+    [
+      nativeProverBundle.native_sdk_artifacts.find((row) => row.sdk === "javascript")
+        .implementation_artifact,
+      implementationBytes,
+    ],
+  ]);
+  assert.equal(
+    (await verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+      {
+        nativeProverBundle,
+        sdk: "javascript",
+        artifactResolver(path) {
+          return nativeArtifactBytes.get(path);
+        },
+      },
+      { destinationBinding: ethereumMainnetBinding },
+    )).implementationHash,
+    implementationHash,
+  );
+  let factoryRequest;
+  const factorySdk = await EthereumMainnetSccp.fromNativeProverBundle({
+    destinationBinding: ethereumMainnetBinding,
+    manifest: JSON.stringify(nativeProverBundle),
+    sdk: "javascript",
+    artifactResolver(path) {
+      return nativeArtifactBytes.get(path);
+    },
+    nativeProverSelfTest(context) {
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove(request) {
+        factoryRequest = request;
+        return wrapEvmSccpProofResult(proofBytes, request);
+      },
+    },
+  });
+  const factoryResult = await factorySdk.proveOutboundToEthereum({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: ethereumMainnetBinding,
+  });
+  assert.equal(factoryRequest.proofArtifactHash, proofArtifactHash);
+  assert.equal(factoryRequest.provingKeyHash, provingKeyHash);
+  assert.equal(factoryResult.destinationBindingHash, ethereumMainnetBinding.bindingHash);
   assert.throws(
     () =>
       verifyEthereumMainnetNativeEvmProverArtifacts(
@@ -4218,6 +4396,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           proofArtifactBytes,
           provingKeyBytes,
           verifierKeyBytes,
+          crossSdkFixtureParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: Buffer.from("tampered", "utf8"),
         },

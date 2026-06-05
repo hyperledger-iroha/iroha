@@ -19,6 +19,12 @@ and completed history lives in [`status.md`](./status.md).
   topics, non-empty data, zero digests, duplicate/removed events, or missing
   transaction context, and the release bundle verifier requires those markers
   before the BSC lane can be advertised as ready.
+- Rust SCCP canonical transcript packaging now uses checked `u32`
+  length-prefix writers on production `Option` admission paths, so oversized
+  Merkle-proof, bundle, finality-proof, transparent-statement, and
+  source-chain proof-envelope transcript fields fail closed before TON,
+  native/local, platform, TAIRA diagnostic packaging, or runtime finality
+  export.
 - Ethereum mainnet SCCP release gating now treats the published JS browser
   artifact as a first-class launch surface: the strict release bundle verifier
   scans both source and `dist` for receipt-proof admission guards that bind
@@ -126,15 +132,35 @@ and completed history lives in [`status.md`](./status.md).
   check, keeping signed manifest review and SDK binding on the same field
   value. Those
   SDKs now also verify local native prover artifact bytes against the bundle's
-  SHA-256 proof-artifact, proving-key, verifier-key, and per-SDK
-  implementation hashes before reporting artifact readiness, and reject
+  SHA-256 proof-artifact, proving-key, verifier-key, per-SDK implementation,
+  `cross_sdk_fixture_parity_artifact`, and
+  `native_prover_self_test_artifact` hashes before reporting artifact
+  readiness. Those SDKs parse the parity and self-test fixture bytes locally,
+  carry the normalized vectors in the verified descriptor, and reject
   hash-consistent local payloads that still contain forbidden WASM, `snarkjs`,
   or remote-prover dependency markers; release/readiness inventories and
   package-dist tests pin those verifier APIs across the same
-  browser/mobile/native surfaces. The SDK marker tables and hash-consistent
+  browser/mobile/native surfaces. Those same SDKs now expose resolver-based
+  helpers that load the manifest-declared proof artifact, proving key, verifier
+  key, cross-SDK parity fixture, native prover self-test fixture, and selected
+  SDK implementation from app-owned local bundle resources before running the
+  byte verifier, so product apps do not need side metadata, WASM, or a remote
+  prover to assemble a verified
+  descriptor. JS/browser, Swift, Kotlin/JVM, and Java Android now add
+  `EthereumMainnetSccp.fromNativeProverBundle(...)` product entry points for
+  that flow, returning facades already bound to the verified artifacts before
+  outbound proof/calldata/submission guards run; C# exposes
+  `ProveOutboundToEthereumFromNativeProverBundleAsync(...)`,
+  `BuildEthereumCalldataFromNativeProverBundle(...)`, and
+  `SubmitOutboundToEthereumFromNativeProverBundleAsync(...)` for the same
+  resolver-backed proof, calldata, and submission path. The SDK marker tables and hash-consistent
   regression payloads now use numeric byte construction so those runtime
   checks stay present without putting forbidden dependency identifiers in the
-  source artifacts scanned by the no-WASM/no-remote-prover inventories. The
+  source artifacts scanned by the no-WASM/no-remote-prover inventories. Those
+  facades now also require the manifest-bound native prover self-test to run
+  through the SDK-owned/app-linked self-test hook before production proof
+  output is requested, rejecting missing hooks or drifted self-test rows before
+  native prover callbacks execute. The
   verified descriptor path now also requires a concrete SDK id plus matching
   verifier-key and per-SDK implementation bytes before reporting native
   artifact readiness, so product apps cannot satisfy the easy Ethereum proof
@@ -165,12 +191,27 @@ and completed history lives in [`status.md`](./status.md).
   hashes are self-consistent. The native prover bundle's proof-artifact,
   proving-key, verifier-key, destination-binding, and per-SDK implementation
   hashes are role-separated as well, so one manifest hash cannot stand in for
-  another. Bundle `audit_hashes` now must be unique and cannot reuse those
-  artifact, key, binding, or implementation hashes, and every bundle hash must
-  use canonical lowercase `0x`-prefixed 32-byte hex before readiness can pass.
-  Strict verifier source-inventory markers pin the scanner, empty-payload
-  blockers, native hash-role blockers, canonical-hash blockers, audit-hash
-  role blockers, and adversarial regressions.
+  another. Bundle `audit_hashes` now must be a named evidence object with
+  `circuit_security_audit`, `native_implementation_audit`,
+  `reproducible_build_attestation`, `cross_sdk_fixture_parity`, and
+  `no_wasm_no_remote_scan`; every value must be unique, cannot reuse artifact,
+  key, binding, or implementation hashes, and must use canonical lowercase
+  `0x`-prefixed 32-byte hex before readiness can pass. The
+  `cross_sdk_fixture_parity` hash must now bind a public
+  `cross_sdk_fixture_parity_artifact` JSON vector that repeats the active
+  Ethereum mainnet artifact hashes, receipt-proof hash, source-proof hash, nine
+  public signal words, destination-binding hash, calldata hash, and Torii
+  submit-payload hash for every required SDK (`javascript`, `swift`, `kotlin`,
+  `java-android`, and `dotnet`); missing vectors, tampered vector bytes, and
+  per-SDK drift block readiness and strict release-bundle verification. The
+  JS/browser, Swift, Kotlin/JVM, Java Android, and C# signed-manifest parsers
+  now expose that release-bundled parity-vector path as part of the native
+  prover descriptor and parse the parity fixture locally with the same
+  schema/domain/backend/hash, nine-word public-signal, and per-SDK drift
+  checks. Strict verifier source-inventory markers pin the scanner,
+  empty-payload blockers, native hash-role blockers, canonical-hash blockers,
+  audit-hash role blockers, parity-vector blockers, SDK parity parsers, and
+  adversarial regressions.
   The same
   manifest-declared
   artifact paths are now parsed, validated as safe manifest-relative POSIX
@@ -367,7 +408,9 @@ and completed history lives in [`status.md`](./status.md).
   does not match the target domain's canonical mainnet EIP-155 chain id word.
   The release bundle verifier now also requires EVM contract smoke markers for
   verifier code/key hash binding, `destinationBindingHash()`, malformed
-  Groth16 proof words, `MessageProofAccepted` payload fields, and replayed
+  Groth16 proof words, source/target domain overflow and same-domain proof-word
+  rejection, nonzero wrong destination-binding rejection, cross-wrapper Groth16
+  replay failure, `MessageProofAccepted` payload fields, and replayed
   `messageId` rejection before Ethereum mainnet can be advertised as ready.
   The diagnostic `sccp_allow_unready_transparent_proofs` bypass is now
   config-only, with the old runtime environment override removed from
@@ -530,7 +573,7 @@ and completed history lives in [`status.md`](./status.md).
   `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
   keeps explicit seeds deterministic while routing unseeded `StdRng` setup
   through `SeedableRng::try_from_os_rng` and the CLI `Result` path, and CEK
-  rotation receipt HKDF salts use the same checked OS-seeded path when an
+  rotation receipt HKDF salts now use direct checked OS RNG fills when an
   explicit `--hkdf-salt` is not supplied; Kagami keypair, PoP, client-config,
   genesis-signing including NPoS bootstrap escrow, wizard, localnet
   peer/genesis/gas/extra-account key generation, and the Taira Kaigi localnet
@@ -1046,7 +1089,18 @@ and completed history lives in [`status.md`](./status.md).
   through checked OS RNG fills before signed gossip entries are emitted;
   SoraFS orchestrator fetch job IDs now use checked OS RNG fills and return
   `OrchestratorError::JobIdRandomness` before fetch telemetry or provider
-  selection continues on entropy failure;
+  selection continues on entropy failure; local QUIC proxy browser-manifest
+  session IDs and cache-tag salts now also use checked OS RNG fills and return
+  `ProxyError::RandomBytes` before manifest previews or handshake
+  acknowledgements are emitted; Torii MCP async job IDs and Connect session
+  SID fallbacks now also use checked OS RNG fills and fail closed with
+  JSON-RPC/tool errors before async job state or Connect requests are emitted;
+  Torii operator-auth WebAuthn challenge bytes and session tokens now also use
+  checked OS RNG fills and fail closed with operator-auth errors before
+  challenge or session state is inserted; Torii Connect session app, wallet,
+  management, and relay bearer tokens now also use checked OS RNG fills and
+  fail closed with internal Connect-session errors before response tokens are
+  emitted;
   embedded Soracloud
   uploaded-model X25519 upload-key persistence now generates the local static
   secret seed through checked OS RNG fills and returns a labelled `io::Error`
@@ -1061,7 +1115,11 @@ and completed history lives in [`status.md`](./status.md).
   return command errors before request signing or staging on entropy failure;
   Rust client transaction nonces now use checked OS RNG reads through fallible
   `try_build_transaction*` APIs, and client submission plus CLI transaction
-  creation paths propagate those entropy failures before submit;
+  creation paths propagate those entropy failures before submit; SoraNet PQ
+  hedged seed construction now accepts caller-supplied `TryCryptoRng` seed
+  entropy, and ML-DSA keypair/signing plus ML-KEM keypair/encapsulation OS
+  helpers delegate through the same fail-closed required-seed boundary before
+  deriving PQ material;
   transaction gossiper public/restricted shuffle seeds now derive
   deterministically from chain/local-peer/max-peer identity material and plane
   domains instead of reading process RNG during actor construction;
@@ -1084,7 +1142,11 @@ and completed history lives in [`status.md`](./status.md).
   seeds deterministic while routing unseeded `StdRng` setup through checked OS
   entropy and returning setup errors on entropy failure; CLI multisig
   auto-account registration now uses checked key generation and returns command
-  errors on entropy failure;
+  errors on entropy failure; JS-host SM2 keypair generation now uses checked OS
+  entropy through `Sm2PrivateKey::try_random_from_os` and returns N-API errors
+  on entropy or key-generation failure; Rust SDK SM2
+  `Sm2KeyPair::generate_with_distid` now uses the same checked OS helper and
+  returns `ParseError` on entropy or scalar-generation failure;
   verifier
   construction exposes a fallible path
   that rejects malformed issuer public keys before fingerprint derivation or
@@ -1922,6 +1984,43 @@ and completed history lives in [`status.md`](./status.md).
   live RBC chunk handoff gating,
   live RBC READY handoff gating,
   committed-phase terminality,
+  committed consensus-state stability,
+  committed post-finality GST-only movement,
+  committed+GST full-state quiescence,
+  committed+GST disabled action guards,
+  committed+GST Next rejection,
+  GST observation provenance,
+  timeout no-progress preemption,
+  view-advance timeout provenance,
+  live-progress timeout-reset provenance,
+  view-evidence quorum/timeout provenance,
+  NewView vote-counter provenance,
+  prepare-vote counter provenance,
+  commit-vote/stake counter provenance,
+  phase-transition provenance,
+  prepare-phase entry provenance,
+  RBC state protocol/fault provenance,
+  RBC evidence protocol/fault provenance,
+  RBC corruption entry provenance,
+  RBC INIT entry provenance,
+  RBC chunk-completion entry provenance,
+  RBC READY quorum-entry provenance,
+  RBC delivery-entry provenance,
+  commit-artifact finality-only installation,
+  commit-artifact finality-source provenance,
+  finality-latch complete-stack installation,
+  finality-latch/commit-artifact coupling,
+  committed-phase complete-stack entry,
+  committed-phase/finality-latch entry coupling,
+  finality-latch committed-transition monotonicity,
+  finality-latch/live-commit-gate crossing equivalence,
+  finality-latch commit-certificate witness installation,
+  nonzero finality commit-view witness installation,
+  finality-latch commit-view witness installation,
+  finality-latch NewView handoff isolation,
+  finality-latch source classification,
+  finality-latch source-effect exactness,
+  finality-latch source quorum-gate evidence,
   committed-view witness stability,
 	  commit-view future-view exclusion,
 	  GST elapsed pre-GST gate matching,
@@ -6979,17 +7078,21 @@ or ABI behavior.
   with matching output-bound validation before the final RNS basis-extension
   pipeline lands. RNS polynomials now also have an exact CRT basis-extension
   bridge between validated chains with target-product coverage checks, giving
-  the future BFV-RNS key-switch path a deterministic conversion primitive
-  while the final approximate basis extension remains pending. Key-switch
-  components now decompose directly into RNS digit polynomials, exact RNS
-  key switching consumes those digits internally, and basis-extended digit
-  inputs are validated against canonical decomposition ranges before use. An
-  explicit exact basis-extension key-switch path now decomposes in a source
+  the BFV-RNS evaluator a deterministic reconstructable conversion primitive
+  alongside the target-limb key-switch path. A deterministic target-limb
+  basis-extension helper now computes the CRT quotient correction exactly with
+  integer arithmetic and reduces source representatives into target limbs
+  without requiring the target product to cover the source product; narrow
+  target reconstruction remains visibly lossy. Key-switch
+  components now decompose directly into RNS digit polynomials, exact RNS key
+  switching consumes those digits internally, and basis-extended digit inputs
+  are validated against canonical decomposition ranges before use. An explicit
+  target-limb basis-extension key-switch path now decomposes in a source
   chain, rejects decomposition chains that can alias base digits,
-  basis-extends canonical key-switch digits into the evaluator chain without
-  requiring the evaluator target to cover the full source-chain product, and
-  drives rounded multiplication, Galois, and packed `RotateLeft` bridges while
-  matching the scalar bounded-noise outputs.
+  basis-extends canonical key-switch digits through the deterministic
+  target-limb helper without requiring the evaluator target to cover the full
+  source-chain product, and drives rounded multiplication, Galois, and packed
+  `RotateLeft` bridges while matching the scalar bounded-noise outputs.
   Rounded ciphertext multiplication now has an RNS exact raw-product bridge
   that decomposes ciphertext components as centered residues, reconstructs
   signed negacyclic products before `t/q` scale-and-rounding, and relinearizes
@@ -7008,11 +7111,29 @@ or ABI behavior.
   refresh transcript mode, data-model digesting routes through exact-lift or
   bounded-noise transcript derivation explicitly, and core runtime admission
   rejects mode/digest mismatches before job execution. Soracloud bounded-noise
-  jobs now dispatch to the bounded-noise RNS bridge for Add, Multiply,
-  outer/packed `RotateLeft`, and encrypted-zero Bootstrap refresh when
-  policy/input metadata are explicitly bounded; public bounded input admission,
-  approximate BFV-RNS basis extension, and full bootstrapping circuit/key
-  material remain pending.
+  jobs now dispatch to the bounded-noise RNS bridge for Add, outer
+  `RotateLeft`, and encrypted-zero Bootstrap refresh when policy/input metadata
+  are explicitly bounded, while Multiply and packed `RotateLeft` select the
+  smallest registered key-switch decomposition prefix and run through the
+  target-limb basis-extension bridge. The crypto layer now exposes that
+  registered decomposition chain plus a role-separated digest so runtime and
+  admission paths can share the canonical target-limb key-switch source
+  basis, and Soracloud FHE parameter governance plus input-admission statement
+  hashes now bind that digest beside the parameter and evaluator RNS-chain
+  digests. Soracloud registered bounded-noise runtime coverage now also drives
+  two-round Bootstrap through the registered RNS refresh bridge, verifies the
+  decrypted multi-slot output, and checks the propagated key-authorized
+  centered-noise bound at the runtime boundary. The crypto layer now owns
+  scalar and exact-RNS multi-round Bootstrap refresh helpers for exact and
+  bounded-noise ciphertexts, rejects zero or over-capacity refresh counts before
+  applying any round, and Soracloud routes exact and bounded-noise Bootstrap
+  jobs plus shared operation-vector checks through those helpers.
+  Verifier-backed bounded-noise
+  FHE input-admission envelopes now persist bounded metadata after
+  bound-capacity, statement-hash, shared `OpenVerifyEnvelope` admission-shape,
+  active-verifier, and backend proof checks; the production bounded-noise
+  admission circuit/prover rollout, broader target-limb BFV-RNS evaluator
+  hardening, and full bootstrapping circuit/key material remain pending.
   Owner-side
   evaluated-output diagnostics can now validate ciphertexts against
   caller-declared exact residual-multiple bounds and reject plaintext-preserving

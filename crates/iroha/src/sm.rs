@@ -11,29 +11,11 @@ use iroha_crypto::{
     error::{Error as CryptoError, ParseError},
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
-use rand_core_06::OsRng;
 use thiserror::Error;
 
 /// Convenience wrapper around an SM2 key pair.
 pub struct Sm2KeyPair {
     private: Sm2PrivateKey,
-}
-
-// Normalize Sm2PrivateKey::random return type across crypto versions.
-trait IntoSm2Result {
-    fn into_result(self) -> Result<Sm2PrivateKey, ParseError>;
-}
-
-impl IntoSm2Result for Sm2PrivateKey {
-    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        Ok(self)
-    }
-}
-
-impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
-    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        self
-    }
 }
 
 impl fmt::Debug for Sm2KeyPair {
@@ -60,10 +42,10 @@ impl Sm2KeyPair {
     /// Generate a random SM2 key pair with a custom distinguishing ID.
     ///
     /// # Errors
-    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid,
+    /// OS entropy fails, or valid scalar material cannot be produced.
     pub fn generate_with_distid(distid: impl Into<String>) -> Result<Self, ParseError> {
-        let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(distid, &mut rng).into_result()?;
+        let private = Sm2PrivateKey::try_random_from_os(distid)?;
         Ok(Self { private })
     }
 
@@ -298,5 +280,16 @@ mod tests {
             keypair.verify(&message, &tampered),
             Err(Sm2VerifyError::Verify(_))
         ));
+    }
+
+    #[test]
+    fn generate_with_distid_uses_checked_os_rng() {
+        let keypair =
+            Sm2KeyPair::generate_with_distid("sdk-sm2-generate").expect("checked OS SM2 key pair");
+        let message = b"sdk checked sm2";
+        let signature = keypair.sign(message);
+        keypair
+            .verify(message, &signature)
+            .expect("signature verifies");
     }
 }

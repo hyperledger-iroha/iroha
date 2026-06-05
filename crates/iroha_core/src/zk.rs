@@ -7749,6 +7749,7 @@ fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at
 ///
 /// Returns an error when verifier-record enforcement, hop proof verification,
 /// native batch preflight binding, or recursive evidence construction fails.
+#[cfg(test)]
 pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
@@ -7781,6 +7782,7 @@ pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with
 /// Returns an error when verifier-record enforcement, hop proof verification,
 /// native batch preflight binding, or recursive evidence construction fails at
 /// the supplied height.
+#[cfg(test)]
 pub(crate) fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records_at_height(
     bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
     records: &[KagemushaHopVerifierRecord<'_>],
