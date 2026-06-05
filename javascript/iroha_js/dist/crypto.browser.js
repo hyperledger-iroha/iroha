@@ -378,6 +378,10 @@ export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProo
   );
 }
 
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit() {
+  return true;
+}
+
 export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
   proofCircuitId,
   hopCount,
@@ -409,6 +413,14 @@ export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(out
   return (
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
     normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+  outputProofCircuitId,
+) {
+  return isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
   );
 }
 

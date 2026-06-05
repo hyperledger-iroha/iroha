@@ -428,6 +428,8 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
     return raw
@@ -442,38 +444,40 @@ def _require_message_def_id(value: str, label: str) -> str:
 
 
 def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string when set")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
     return raw
 
 
 def _optional_bool(value: dict[str, Any], key: str, label: str) -> bool | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if not isinstance(raw, bool):
         raise FixtureManifestError(f"{label}.{key} must be a boolean when set")
     return raw
 
 
 def _optional_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         raise FixtureManifestError(f"{label}.{key} must be a non-negative integer when set")
     return raw
 
 
 def _optional_string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return []
+    raw = value.get(key)
     items = _require_array(raw, f"{label}.{key}")
     result: list[str] = []
     seen: dict[str, int] = {}
@@ -665,9 +669,9 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
 
 
 def _validate_amount_minor_units(message: dict[str, Any], label: str) -> None:
-    raw = message.get("amount_minor_units")
-    if raw is None:
+    if "amount_minor_units" not in message:
         return
+    raw = message.get("amount_minor_units")
     entries = _require_array(raw, f"{label}.amount_minor_units")
     seen: dict[str, int] = {}
     for offset, raw_entry in enumerate(entries):
@@ -738,6 +742,10 @@ def _validate_source_path(raw: str, label: str) -> str:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
+    if any(ch.isspace() for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
     path = Path(raw)
     if path.is_absolute():
         raise FixtureManifestError(f"{label} must be relative, got {raw}")
@@ -974,6 +982,10 @@ def _validate_relative_path(
         raise FixtureManifestError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
+    if any(ch.isspace() for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
     path = Path(raw)
     if path.is_absolute():
         raise FixtureManifestError(f"{label} must be relative, got {raw}")
@@ -1163,6 +1175,15 @@ def verify_fixture_entry(
     schema_backed = False
     schema_validated = False
     if schema_rel is not None:
+        if not schema_rel.endswith(".xsd"):
+            raise FixtureManifestError(f"{label}.schema must point to an .xsd file")
+        schema_path = _validate_relative_path(
+            schema_rel,
+            manifest_dir,
+            manifest_dir,
+            f"{label}.schema",
+            allow_parent_segments=False,
+        )
         schema = schemas_by_path.get(schema_rel)
         if schema is None:
             raise FixtureManifestError(f"{label}.schema references unknown schema {schema_rel}")
@@ -1178,13 +1199,6 @@ def verify_fixture_entry(
             )
         schema_backed = True
         if validate_xml_schema:
-            schema_path = _validate_relative_path(
-                schema_rel,
-                manifest_dir,
-                manifest_dir,
-                f"{label}.schema",
-                allow_parent_segments=False,
-            )
             _validate_fixture_xml_schema(schema_path, path, label)
             schema_validated = True
 

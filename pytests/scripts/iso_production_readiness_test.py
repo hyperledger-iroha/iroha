@@ -325,6 +325,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(
                 trust_profile["source"],
                 {
+                    "authority": "Example Rail PKI",
+                    "version": "2026-Q2",
                     "url": "https://pki.example.invalid/swift-cbpr-plus",
                     "retrieved_at": "2026-06-04T00:00:00Z",
                 },
@@ -939,8 +941,19 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             schema_only_missing_reason = json.loads(xsd_summary.read_text(encoding="utf-8"))
             schema_only_missing_reason["schemas"][0]["schema_only"] = True
-            schema_only_missing_reason["schemas"][0]["schema_only_reason"] = ""
+            schema_only_missing_reason["schemas"][0]["schema_only_reason"] = None
             cases.append((schema_only_missing_reason, "xsd.schema_only_reason_absent"))
+
+            missing_schema_reason = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_schema_reason["fixtures"][0][
+                "missing_schema_reason"
+            ] = "forged missing schema gap"
+            cases.append(
+                (
+                    missing_schema_reason,
+                    "xsd.fixture_missing_schema_reason_mismatch",
+                )
+            )
 
             for offset, (body, code) in enumerate(cases):
                 with self.subTest(code=code):
@@ -976,6 +989,26 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 )
             )
 
+            schema_only_empty = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            schema_only_empty["schemas"][0]["schema_only"] = True
+            schema_only_empty["schemas"][0]["schema_only_reason"] = ""
+            cases.append(
+                (
+                    schema_only_empty,
+                    "schema_only_reason must be a non-empty string when provided",
+                )
+            )
+
+            schema_only_numeric = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            schema_only_numeric["schemas"][0]["schema_only"] = True
+            schema_only_numeric["schemas"][0]["schema_only_reason"] = 7
+            cases.append(
+                (
+                    schema_only_numeric,
+                    "schema_only_reason must be a non-empty string when provided",
+                )
+            )
+
             schema_only_control = json.loads(xsd_summary.read_text(encoding="utf-8"))
             schema_only_control["schemas"][0]["schema_only"] = True
             schema_only_control["schemas"][0][
@@ -998,6 +1031,28 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (
                     missing_reason_whitespace,
                     "missing_schema_reason must not have surrounding whitespace",
+                )
+            )
+
+            missing_reason_empty = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_reason_empty["fixtures"][0]["schema_backed"] = False
+            missing_reason_empty["fixtures"][0]["schema"] = None
+            missing_reason_empty["fixtures"][0]["missing_schema_reason"] = ""
+            cases.append(
+                (
+                    missing_reason_empty,
+                    "missing_schema_reason must be a non-empty string when provided",
+                )
+            )
+
+            missing_reason_numeric = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_reason_numeric["fixtures"][0]["schema_backed"] = False
+            missing_reason_numeric["fixtures"][0]["schema"] = None
+            missing_reason_numeric["fixtures"][0]["missing_schema_reason"] = 7
+            cases.append(
+                (
+                    missing_reason_numeric,
+                    "missing_schema_reason must be a non-empty string when provided",
                 )
             )
 
@@ -1051,6 +1106,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             backslash_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             backslash_path["schemas"][0]["path"] = r"iso\fooo.001.001.01.xsd"
             malformed_cases.append((backslash_path, "must use forward slashes"))
+
+            whitespace_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            whitespace_path["schemas"][0]["path"] = "iso/fooo source.001.001.01.xsd"
+            malformed_cases.append((whitespace_path, "path must not contain whitespace"))
+
+            semicolon_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            semicolon_path["schemas"][0]["path"] = "iso;debug/fooo.001.001.01.xsd"
+            malformed_cases.append(
+                (semicolon_path, "path must not contain semicolon path parameters")
+            )
 
             non_xsd_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             non_xsd_path["schemas"][0]["path"] = "iso/fooo.001.001.01.xml"
@@ -1127,6 +1192,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             absolute_path["fixtures"][0]["path"] = "/tmp/foo_fixture.xml"
             cases.append((absolute_path, "must be relative"))
 
+            whitespace_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            whitespace_path["fixtures"][0]["path"] = "../foo fixture.xml"
+            cases.append((whitespace_path, "path must not contain whitespace"))
+
+            semicolon_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            semicolon_path["fixtures"][0]["path"] = "../fixtures;debug/foo_fixture.xml"
+            cases.append(
+                (semicolon_path, "path must not contain semicolon path parameters")
+            )
+
             non_xml_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             non_xml_path["fixtures"][0]["path"] = "../foo_fixture.txt"
             cases.append((non_xml_path, "must point to an .xml file"))
@@ -1178,6 +1253,28 @@ class IsoProductionReadinessTest(unittest.TestCase):
             escaped_source_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
             escaped_source_path["schemas"][0]["source"]["path"] = "../fooo.001.001.01.xsd"
             malformed_cases.append((escaped_source_path, "must not contain empty, dot, or parent segments"))
+
+            whitespace_source_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            whitespace_source_path["schemas"][0]["source"]["path"] = (
+                "xsd/iso/fooo source.001.001.01.xsd"
+            )
+            malformed_cases.append(
+                (
+                    whitespace_source_path,
+                    "source.path must not contain whitespace",
+                )
+            )
+
+            semicolon_source_path = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            semicolon_source_path["schemas"][0]["source"]["path"] = (
+                "xsd/iso;debug/fooo.001.001.01.xsd"
+            )
+            malformed_cases.append(
+                (
+                    semicolon_source_path,
+                    "source.path must not contain semicolon path parameters",
+                )
+            )
 
             for offset, (body, message) in enumerate(malformed_cases):
                 with self.subTest(message=message):
@@ -1432,6 +1529,57 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     refresh_digest(xsd)
                     mutated_path = write_json(
                         root / f"malformed-xsd-profile-coordinate-{name}.summary.json",
+                        xsd,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_xsd_profile_catalog_path_is_canonical(self):
+        cases = (
+            (
+                "/ops/iso/profile catalog.rs",
+                "profile_catalog.path must not contain whitespace",
+            ),
+            (
+                "/ops/iso/profiles.rs;v=1",
+                "profile_catalog.path must not contain semicolon path parameters",
+            ),
+            (
+                "/ops/iso//profiles.rs",
+                "profile_catalog.path must not contain empty path segments",
+            ),
+            (
+                "/ops/iso/../profiles.rs",
+                "profile_catalog.path must not contain dot or parent segments",
+            ),
+            (
+                r"/ops\iso/profiles.rs",
+                "profile_catalog.path must use forward slashes",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for profile_path, message in cases:
+                with self.subTest(profile_path=profile_path):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    xsd["profile_catalog"]["path"] = profile_path
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / "malformed-xsd-profile-catalog-path.summary.json",
                         xsd,
                     )
 
@@ -2249,12 +2397,28 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "must not contain control characters",
                 ),
                 (
+                    "/ops/iso/can ary.summary.json",
+                    "must not contain whitespace",
+                ),
+                (
+                    "/ops/iso/canary.summary.json;v=1",
+                    "must not contain semicolon path parameters",
+                ),
+                (
+                    "/ops/iso//canary.summary.json",
+                    "must not contain empty path segments",
+                ),
+                (
                     "/ops/iso/../canary.summary.json",
                     "must not contain dot or parent segments",
                 ),
                 (
                     r"..\canary.summary.json",
                     "must not contain dot or parent segments",
+                ),
+                (
+                    r"/ops\iso/canary.summary.json",
+                    "must use forward slashes",
                 ),
             )
             locations = (
@@ -2285,8 +2449,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
     def test_compact_canary_config_path_is_canonical(self):
         cases = (
             ("/ops/iso/canary\n.json", "config_path must not contain control characters"),
+            ("/ops/iso/can ary.json", "config_path must not contain whitespace"),
+            ("/ops/iso/canary.json;v=1", "config_path must not contain semicolon path parameters"),
+            ("/ops/iso//canary.json", "config_path must not contain empty path segments"),
             ("/ops/iso/../canary.json", "config_path must not contain dot or parent segments"),
             (r"..\canary.json", "config_path must not contain dot or parent segments"),
+            (r"/ops\iso/canary.json", "config_path must use forward slashes"),
             ("/ops/iso/canary.txt", "config_path must point to a .json file"),
         )
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2350,6 +2518,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("missing-source", lambda evidence: evidence["trust_summaries"][0]["profiles"][0].pop("source"), "source must be a JSON object"),
             ("non-object-source", lambda evidence: set_source(evidence, []), "source must be a JSON object"),
             ("unknown-source-key", lambda evidence: set_source_field(evidence, "unexpected", "value"), "source contains unknown keys"),
+            ("missing-authority", lambda evidence: evidence["trust_summaries"][0]["profiles"][0]["source"].pop("authority"), "source.authority must be a non-empty string"),
+            ("empty-authority", lambda evidence: set_source_field(evidence, "authority", ""), "source.authority must be a non-empty string"),
+            ("numeric-authority", lambda evidence: set_source_field(evidence, "authority", 7), "source.authority must be a non-empty string"),
+            ("padded-authority", lambda evidence: set_source_field(evidence, "authority", " Example Rail PKI"), "source.authority must not have surrounding whitespace"),
+            ("control-authority", lambda evidence: set_source_field(evidence, "authority", "Example\nRail PKI"), "source.authority must not contain control characters"),
+            ("missing-version", lambda evidence: evidence["trust_summaries"][0]["profiles"][0]["source"].pop("version"), "source.version must be a non-empty string"),
+            ("empty-version", lambda evidence: set_source_field(evidence, "version", ""), "source.version must be a non-empty string"),
+            ("numeric-version", lambda evidence: set_source_field(evidence, "version", 2026), "source.version must be a non-empty string"),
+            ("padded-version", lambda evidence: set_source_field(evidence, "version", "2026-Q2 "), "source.version must not have surrounding whitespace"),
+            ("control-version", lambda evidence: set_source_field(evidence, "version", "2026-Q2\n"), "source.version must not contain control characters"),
             ("missing-url", lambda evidence: evidence["trust_summaries"][0]["profiles"][0]["source"].pop("url"), "source.url must be a non-empty string"),
             ("http-url", lambda evidence: set_source_field(evidence, "url", "http://pki.example.invalid/source"), "source.url must use HTTPS URL"),
             ("credential-url", lambda evidence: set_source_field(evidence, "url", "https://user:pass@pki.example.invalid/source"), "source.url must not contain credentials"),
@@ -2366,6 +2544,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("encoded-host-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example%2einvalid/source"), "source.url host must not contain percent escapes"),
             ("numeric-spoof-host-url", lambda evidence: set_source_field(evidence, "url", "https://123.000.000.001/source"), "source.url numeric host labels must be a valid IP address"),
             ("dot-segment-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/../source"), "source.url path must not contain dot segments"),
+            ("empty-segment-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift//source"), "source.url path must not contain empty segments"),
             ("encoded-dot-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/%2e%2e/source"), "source.url path must not contain encoded dot or separator characters"),
             ("encoded-slash-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%2fsource"), "source.url path must not contain encoded dot or separator characters"),
             ("encoded-percent-url", lambda evidence: set_source_field(evidence, "url", "https://pki.example.invalid/swift%252fsource"), "source.url path must not contain encoded percent characters"),
@@ -3287,12 +3466,28 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "must not contain control characters",
                 ),
                 (
+                    "/ops/iso/receipts/rail 0.receipt.json",
+                    "must not contain whitespace",
+                ),
+                (
+                    "/ops/iso/receipts/rail.receipt.json;v=1",
+                    "must not contain semicolon path parameters",
+                ),
+                (
+                    "/ops/iso/receipts//rail.receipt.json",
+                    "must not contain empty path segments",
+                ),
+                (
                     "/ops/iso/receipts/../rail.receipt.json",
                     "must not contain dot or parent segments",
                 ),
                 (
                     r"..\rail.receipt.json",
                     "must not contain dot or parent segments",
+                ),
+                (
+                    r"/ops\iso/receipts/rail.receipt.json",
+                    "must use forward slashes",
                 ),
                 (
                     "/ops/iso/receipts/rail.json",

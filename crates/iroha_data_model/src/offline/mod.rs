@@ -6321,6 +6321,34 @@ impl KagemushaRecursiveSpendBundleV1 {
     }
 }
 
+fn validate_kagemusha_recursive_spend_lineage_key_artifact_pair(
+    lineage_verifier_key: Option<&VerifyingKeyBox>,
+    lineage_proving_key_archive: Option<&[u8]>,
+) -> Result<(), KagemushaFoldError> {
+    match (lineage_verifier_key, lineage_proving_key_archive) {
+        (Some(vk), Some(proving_key_archive)) => {
+            if vk.backend.is_empty() || vk.bytes.is_empty() {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "lineage_verifier_key",
+                });
+            }
+            if proving_key_archive.is_empty() {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "lineage_proving_key_archive",
+                });
+            }
+            Ok(())
+        }
+        (Some(_), None) => Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "lineage_proving_key_archive",
+        }),
+        (None, Some(_)) => Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "lineage_verifier_key",
+        }),
+        (None, None) => Ok(()),
+    }
+}
+
 impl KagemushaRecursiveSpendInitRequestV1 {
     /// Build and validate the first-hop recursive spend init request.
     ///
@@ -6345,6 +6373,53 @@ impl KagemushaRecursiveSpendInitRequestV1 {
         Ok(request)
     }
 
+    /// Build and validate an init request with packaged Reserved-lineage proof artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either key artifact is missing,
+    /// empty, or the resulting init request no longer satisfies its public
+    /// binding.
+    pub fn new_with_lineage_key_artifacts(
+        record_bundle: KagemushaVerifiedFoldRecordBundle,
+        pallas_open_envelopes_archive: Vec<u8>,
+        current_note: KagemushaSpendableNoteDescriptorV1,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new(record_bundle, pallas_open_envelopes_archive, current_note)?
+            .with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
+    }
+
+    /// Attach packaged Reserved-lineage proving artifacts to an init request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either key artifact is empty or the
+    /// resulting init request no longer satisfies its public binding.
+    pub fn with_lineage_key_artifacts(
+        mut self,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        self.lineage_verifier_key = Some(lineage_verifier_key);
+        self.lineage_proving_key_archive = Some(lineage_proving_key_archive);
+        self.validate_public_binding()?;
+        Ok(self)
+    }
+
+    /// Attach a verifier-record activation height to an init request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the resulting init request no longer
+    /// satisfies its public binding.
+    pub fn with_block_height(mut self, block_height: u64) -> Result<Self, KagemushaFoldError> {
+        self.block_height = Some(block_height);
+        self.validate_public_binding()?;
+        Ok(self)
+    }
+
     /// Validate the one-hop init request before proving the first recursive spend bundle.
     ///
     /// # Errors
@@ -6358,18 +6433,10 @@ impl KagemushaRecursiveSpendInitRequestV1 {
             &self.pallas_open_envelopes_archive,
             1,
         )?;
-        if let Some(vk) = &self.lineage_verifier_key
-            && (vk.backend.is_empty() || vk.bytes.is_empty())
-        {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "lineage_verifier_key",
-            });
-        }
-        if matches!(&self.lineage_proving_key_archive, Some(bytes) if bytes.is_empty()) {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "lineage_proving_key_archive",
-            });
-        }
+        validate_kagemusha_recursive_spend_lineage_key_artifact_pair(
+            self.lineage_verifier_key.as_ref(),
+            self.lineage_proving_key_archive.as_deref(),
+        )?;
         let step = self
             .record_bundle
             .bundle
@@ -6473,6 +6540,69 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
         Ok(request)
     }
 
+    /// Build and validate a Reserved-lineage append request with packaged key artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either key artifact is missing,
+    /// empty, or any append public binding is malformed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_previous_lineage_proof_witness_and_key_artifacts(
+        previous_bundle: KagemushaRecursiveSpendBundleV1,
+        previous_lineage_verifier_record: Option<VerifyingKeyRecord>,
+        previous_recursive_proof_open_envelopes_archive: Vec<u8>,
+        record_bundle: KagemushaVerifiedFoldRecordBundle,
+        pallas_open_envelopes_archive: Vec<u8>,
+        current_note: KagemushaSpendableNoteDescriptorV1,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new_with_previous_proof_witness_and_output_circuit(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            previous_bundle,
+            previous_lineage_verifier_record,
+            previous_recursive_proof_open_envelopes_archive,
+            record_bundle,
+            pallas_open_envelopes_archive,
+            current_note,
+        )?
+        .with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
+    }
+
+    /// Attach packaged Reserved-lineage proving artifacts to an append request.
+    ///
+    /// The request must select the Reserved-lineage append output circuit. The
+    /// semantic append output rejects these artifacts so legacy callers cannot
+    /// accidentally smuggle unused key material through the ABI.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either key artifact is empty, when the
+    /// append output circuit does not consume Reserved-lineage key artifacts, or
+    /// when the resulting append request no longer satisfies its public binding.
+    pub fn with_lineage_key_artifacts(
+        mut self,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        self.lineage_verifier_key = Some(lineage_verifier_key);
+        self.lineage_proving_key_archive = Some(lineage_proving_key_archive);
+        self.validate_public_binding()?;
+        Ok(self)
+    }
+
+    /// Attach a verifier-record activation height to an append request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the resulting append request no
+    /// longer satisfies its public binding.
+    pub fn with_block_height(mut self, block_height: u64) -> Result<Self, KagemushaFoldError> {
+        self.block_height = Some(block_height);
+        self.validate_public_binding()?;
+        Ok(self)
+    }
+
     /// Return the selected append output proof circuit id.
     #[must_use]
     pub fn output_proof_circuit_id(&self) -> &str {
@@ -6516,17 +6646,10 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
             ),
         )?;
         if is_kagemusha_recursive_spend_lineage_append_output_circuit_id(output_proof_circuit_id) {
-            if matches!(&self.lineage_verifier_key, Some(vk) if vk.backend.is_empty() || vk.bytes.is_empty())
-            {
-                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                    field: "lineage_verifier_key",
-                });
-            }
-            if matches!(&self.lineage_proving_key_archive, Some(bytes) if bytes.is_empty()) {
-                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                    field: "lineage_proving_key_archive",
-                });
-            }
+            validate_kagemusha_recursive_spend_lineage_key_artifact_pair(
+                self.lineage_verifier_key.as_ref(),
+                self.lineage_proving_key_archive.as_deref(),
+            )?;
         } else if self.lineage_verifier_key.is_some() || self.lineage_proving_key_archive.is_some()
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -16649,16 +16772,74 @@ mod offline_note_tests {
                 &init_record_bundle,
                 0x41,
             );
-        let mut init = KagemushaRecursiveSpendInitRequestV1::new(
+        let init_without_key_artifacts = KagemushaRecursiveSpendInitRequestV1::new(
             init_record_bundle.clone(),
             init_pallas_open_envelopes_archive.clone(),
             note0.clone(),
         )
         .expect("ABI init request validates before proving");
-        init.lineage_verifier_key = Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]));
-        init.lineage_proving_key_archive = Some(vec![0xE8; 64]);
-        init.validate_public_binding()
-            .expect("ABI init request accepts Reserved-lineage key material");
+        assert_eq!(
+            init_without_key_artifacts
+                .clone()
+                .with_block_height(12)
+                .expect("ABI init request accepts block height")
+                .block_height,
+            Some(12)
+        );
+        assert!(matches!(
+            init_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifacts(
+                    VerifyingKeyBox::new("halo2/ipa".into(), Vec::new()),
+                    vec![0xE8; 64],
+                ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
+        assert!(matches!(
+            init_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifacts(
+                    VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                    Vec::new(),
+                ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_proving_key_archive"
+            })
+        ));
+        let init = init_without_key_artifacts
+            .with_lineage_key_artifacts(
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                vec![0xE8; 64],
+            )
+            .expect("ABI init request builder accepts Reserved-lineage key material");
+        let init_from_production_builder =
+            KagemushaRecursiveSpendInitRequestV1::new_with_lineage_key_artifacts(
+                init_record_bundle.clone(),
+                init_pallas_open_envelopes_archive.clone(),
+                note0.clone(),
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                vec![0xE8; 64],
+            )
+            .expect("ABI init production builder accepts Reserved-lineage key material");
+        assert_eq!(init_from_production_builder, init);
+        let mut init_missing_proving_key = init.clone();
+        init_missing_proving_key.lineage_proving_key_archive = None;
+        assert!(matches!(
+            init_missing_proving_key.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_proving_key_archive"
+            })
+        ));
+        let mut init_missing_verifier_key = init.clone();
+        init_missing_verifier_key.lineage_verifier_key = None;
+        assert!(matches!(
+            init_missing_verifier_key.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
         let init_bytes = to_bytes(&init).expect("encode recursive spend init request");
         let decoded_init: KagemushaRecursiveSpendInitRequestV1 =
             norito::decode_from_bytes(&init_bytes).expect("decode recursive spend init request");
@@ -16764,7 +16945,7 @@ mod offline_note_tests {
                 &append_record_bundle,
                 0x51,
             );
-        let mut append =
+        let append_without_key_artifacts =
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 init_lineage_bundle.clone(),
@@ -16775,12 +16956,91 @@ mod offline_note_tests {
                 note1.clone(),
             )
             .expect("ABI Reserved-lineage append request validates before proving");
-        append.lineage_verifier_key =
-            Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]));
-        append.lineage_proving_key_archive = Some(vec![0xA8; 64]);
-        append
-            .validate_public_binding()
-            .expect("ABI append request accepts Reserved-lineage key material");
+        assert_eq!(
+            append_without_key_artifacts
+                .clone()
+                .with_block_height(13)
+                .expect("ABI append request accepts block height")
+                .block_height,
+            Some(13)
+        );
+        assert!(matches!(
+            append_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifacts(
+                    VerifyingKeyBox::new("halo2/ipa".into(), Vec::new()),
+                    vec![0xA8; 64],
+                ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
+        assert!(matches!(
+            append_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifacts(
+                    VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+                    Vec::new(),
+                ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_proving_key_archive"
+            })
+        ));
+        let semantic_append_without_key_artifacts =
+            KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                bundle0.clone(),
+                None,
+                Vec::new(),
+                append_record_bundle.clone(),
+                append_pallas_open_envelopes_archive.clone(),
+                note1.clone(),
+            )
+            .expect("ABI semantic append request validates without Reserved-lineage key material");
+        assert!(matches!(
+            semantic_append_without_key_artifacts.with_lineage_key_artifacts(
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+                vec![0xA8; 64],
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_key_artifacts"
+            })
+        ));
+        let append = append_without_key_artifacts
+            .with_lineage_key_artifacts(
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+                vec![0xA8; 64],
+            )
+            .expect("ABI append request builder accepts Reserved-lineage key material");
+        let append_from_production_builder =
+            KagemushaRecursiveSpendAppendRequestV1::new_with_previous_lineage_proof_witness_and_key_artifacts(
+                init_lineage_bundle.clone(),
+                Some(previous_lineage_verifier_record.clone()),
+                previous_recursive_proof_open_envelopes_archive.clone(),
+                append_record_bundle.clone(),
+                append_pallas_open_envelopes_archive.clone(),
+                note1.clone(),
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+                vec![0xA8; 64],
+            )
+            .expect("ABI append production builder accepts Reserved-lineage key material");
+        assert_eq!(append_from_production_builder, append);
+        let mut append_missing_proving_key = append.clone();
+        append_missing_proving_key.lineage_proving_key_archive = None;
+        assert!(matches!(
+            append_missing_proving_key.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_proving_key_archive"
+            })
+        ));
+        let mut append_missing_verifier_key = append.clone();
+        append_missing_verifier_key.lineage_verifier_key = None;
+        assert!(matches!(
+            append_missing_verifier_key.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
         let append_bytes = to_bytes(&append).expect("encode recursive spend append request");
         let decoded_append: KagemushaRecursiveSpendAppendRequestV1 =
             norito::decode_from_bytes(&append_bytes)

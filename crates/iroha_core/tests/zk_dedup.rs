@@ -47,13 +47,13 @@ fn preverify_state_wrapper_requires_bound_commitments_and_dedups() {
     let c1 = [0x11u8; 32];
     let proof = open_verify_proof(c1);
 
-    let missing = stx.preverify_proof(&proof, None, 100_000, None, Some(c1), true);
+    let missing = stx.preverify_proof(&proof, None, 100_000, Some(c1), None, true);
     assert!(matches!(
         missing,
         iroha_core::zk::PreverifyResult::VerifyingKeyMissing
     ));
 
-    let r1 = stx.preverify_proof(&proof, None, 100_000, Some(c1), Some(c1), true);
+    let r1 = stx.preverify_proof(&proof, None, 100_000, None, Some(c1), true);
     assert!(matches!(r1, iroha_core::zk::PreverifyResult::Accepted));
     let r1_dup = stx.preverify_proof(&proof, None, 100_000, Some(c1), Some(c1), true);
     assert!(matches!(r1_dup, iroha_core::zk::PreverifyResult::Duplicate));

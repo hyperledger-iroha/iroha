@@ -978,9 +978,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildRotateZkAceIdentityCommitmentInstruction",
             "buildRevokeZkAceIdentityCommitmentInstruction",
             "buildZkAceAuthorizedTransferInstruction",
+            "buildZkAceAuthorizationProofV1",
         ],
         planned_entrypoints: &[
-            "buildZkAceAuthorizationProofV1",
+            "buildShieldedZkAceAuthorizationProofV1",
             "buildShieldedZkAceAuthorizedTransferInstruction",
         ],
     },
@@ -6171,8 +6172,7 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
     use iroha_core::zk::{
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
-        kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height,
     };
@@ -6184,6 +6184,14 @@ fn kagemusha_recursive_spend_append_from_request_archive(
         .validate_public_binding()
         .map_err(|_| BridgeError::KagemushaProve)?;
     let output_proof_circuit_id = request.output_proof_circuit_id().to_owned();
+    let output_append_is_currently_provable =
+        iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            output_proof_circuit_id.as_str(),
+            request.previous_bundle.accumulator.hop_count,
+        );
+    if !output_append_is_currently_provable {
+        return Err(BridgeError::KagemushaProve);
+    }
     let mut lineage_proving_key_archive = None;
     let vk_box = match output_proof_circuit_id.as_str() {
         KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
@@ -6195,26 +6203,16 @@ fn kagemusha_recursive_spend_append_from_request_archive(
                 output_circuit,
             ) =>
         {
-            if iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                output_proof_circuit_id.as_str(),
-                request.previous_bundle.accumulator.hop_count,
-            ) {
-                lineage_proving_key_archive = Some(
-                    request
-                        .lineage_proving_key_archive
-                        .as_deref()
-                        .ok_or(BridgeError::KagemushaProve)?,
-                );
+            lineage_proving_key_archive = Some(
                 request
-                    .lineage_verifier_key
-                    .clone()
-                    .ok_or(BridgeError::KagemushaProve)?
-            } else {
-                iroha_data_model::proof::VerifyingKeyBox::new(
-                    ZK_BACKEND_HALO2_IPA.to_owned(),
-                    Vec::new(),
-                )
-            }
+                    .lineage_proving_key_archive
+                    .as_deref()
+                    .ok_or(BridgeError::KagemushaProve)?,
+            );
+            request
+                .lineage_verifier_key
+                .clone()
+                .ok_or(BridgeError::KagemushaProve)?
         }
         _ => return Err(BridgeError::KagemushaProve),
     };
@@ -9246,6 +9244,10 @@ mod offline_note_prover_tests {
     #[test]
     fn kagemusha_recursive_spend_append_ffi_rejects_forged_previous_proof_circuit_id() {
         let mut previous_bundle = sample_reserved_lineage_previous_bundle();
+        attach_recursive_spend_previous_proof_open_verify_envelope(
+            &mut previous_bundle,
+            b"bridge-recursive-spend-forged-circuit-previous-proof-envelope-vk",
+        );
         let previous_proof_open_archive = sample_previous_recursive_proof_open_envelopes_archive(
             &previous_bundle,
             "bridge-recursive-spend-append-previous-proof-circuit-id-open",
@@ -9310,11 +9312,18 @@ mod offline_note_prover_tests {
 
     #[test]
     fn kagemusha_recursive_spend_append_ffi_rejects_missing_lineage_key_artifacts() {
-        for case in ["missing both artifacts", "missing verifier key"] {
+        for (case, verifier_key, proving_key_archive) in [
+            ("missing both artifacts", None, None),
+            (
+                "missing proving key archive",
+                Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xAB; 32])),
+                None,
+            ),
+            ("missing verifier key", None, Some(vec![0xAC; 32])),
+        ] {
             let mut request = sample_reserved_lineage_append_request_missing_key_artifacts();
-            if case == "missing verifier key" {
-                request.lineage_proving_key_archive = Some(vec![0xAC; 32]);
-            }
+            request.lineage_verifier_key = verifier_key;
+            request.lineage_proving_key_archive = proving_key_archive;
             let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
 
             assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{case}");
@@ -9679,7 +9688,7 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_verify_reports_semantic_proof_offline_valid_chain_inadmissible() {
+    fn kagemusha_recursive_spend_verify_reports_semantic_fixture_invalid_proof_envelope() {
         let bundle = sample_verifying_semantic_recursive_spend_bundle();
         let request = KagemushaRecursiveSpendVerifyRequestV1 {
             bundle,
@@ -9692,23 +9701,26 @@ mod offline_note_prover_tests {
             .expect("recursive spend verify result");
 
         assert!(
-            result.valid,
-            "backend-valid semantic recursive spend proofs must be spendable offline"
+            !result.valid,
+            "bridge semantic fixture carries synthetic proof bytes and must fail proof preverification"
         );
         assert!(
             !result.chain_admissible,
-            "semantic recursive spend proofs without lineage witness are not directly redeemable"
+            "backend-invalid semantic recursive spend proofs are not directly redeemable"
         );
         assert!(!result.witnessless_redeem_supported);
         assert!(result.lineage_witness_required_for_redeem);
         assert_eq!(result.hop_count, request.bundle.accumulator.hop_count);
         assert!(result.encoded_bytes > 0);
-        assert!(result.reason.is_empty());
         assert!(
-            result.chain_admission_reason.contains("chain admission")
-                && result
-                    .chain_admission_reason
-                    .contains("private-hop lineage"),
+            result
+                .reason
+                .contains("failed to decode recursive spend proof envelope"),
+            "unexpected semantic recursive spend verify reason: {}",
+            result.reason
+        );
+        assert!(
+            result.chain_admission_reason.contains("offline verification failed"),
             "unexpected semantic recursive spend verify reason: {}",
             result.chain_admission_reason
         );
@@ -21675,7 +21687,10 @@ mod tests {
         let result: PrivacyProofResultV1 = take_privacy_output(out_ptr, out_len);
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.public_inputs, b"public-inputs");
+        assert!(result.algorithm_id.is_empty());
+        assert!(result.entrypoint.is_empty());
+        assert!(result.vk_ref.is_empty());
+        assert!(result.public_inputs.is_empty());
         assert!(result.proof.is_empty());
     }
 
@@ -21911,7 +21926,6 @@ mod tests {
             "buildOrchardActionBundleProofV1",
             Vec::new(),
         );
-        request.vk_ref.clear();
         request.witness = b"planned-entrypoint-witness-must-not-echo".to_vec();
 
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
@@ -21941,7 +21955,10 @@ mod tests {
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.message.contains("vk_ref"));
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
+        assert!(result.algorithm_id.is_empty());
+        assert!(result.entrypoint.is_empty());
+        assert!(result.vk_ref.is_empty());
+        assert!(result.public_inputs.is_empty());
         assert!(result.proof.is_empty());
     }
 

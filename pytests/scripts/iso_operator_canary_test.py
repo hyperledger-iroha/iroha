@@ -537,6 +537,17 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid/base//v1",
+                    },
+                },
+                "path must not contain empty segments",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
                         "torii_base_url": "https://torii.example.invalid/base%2fv1",
                     },
                 },
@@ -695,6 +706,17 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                 },
                 "path must not contain dot segments",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso//anchor"],
+                    },
+                },
+                "path must not contain empty segments",
             ),
             (
                 {
@@ -867,7 +889,93 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
 
             self.assertEqual(rc, 2)
-            self.assertIn("relative paths must stay under", stderr)
+            self.assertIn("must not contain dot or parent segments", stderr)
+
+    def test_runbook_paths_reject_smuggled_segments_before_planning(self):
+        base = {
+            "provider": "local-bank",
+            "environment": "ci",
+            "rail": {
+                "inbox_dir": "inbox",
+                "torii_base_url": "https://torii.example.invalid",
+            },
+        }
+        cases = [
+            (
+                "rail inbox whitespace",
+                lambda body: body["rail"].__setitem__("inbox_dir", "in box"),
+                "rail.inbox_dir must not contain whitespace",
+            ),
+            (
+                "rail message backslash",
+                lambda body: body["rail"].__setitem__("message", r"messages\status.xml"),
+                "rail.message must use forward slashes",
+            ),
+            (
+                "rail receipt semicolon",
+                lambda body: body["rail"].__setitem__("receipt_dir", "receipts;v=1"),
+                "rail.receipt_dir must not contain semicolon path parameters",
+            ),
+            (
+                "rail token empty segment",
+                lambda body: body["rail"].__setitem__(
+                    "bearer_token_file",
+                    "secrets//torii.bearer",
+                ),
+                "rail.bearer_token_file must not contain empty path segments",
+            ),
+            (
+                "notary export dot segment",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "./export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                    },
+                ),
+                "notary.export_dir must not contain dot or parent segments",
+            ),
+            (
+                "notary receipt parent segment",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "receipt_dir": "export/../receipts",
+                    },
+                ),
+                "notary.receipt_dir must not contain dot or parent segments",
+            ),
+            (
+                "verify receipt dir dot segment",
+                lambda body: body.__setitem__(
+                    "verify",
+                    {"receipt_dirs": ["receipts/./stage"]},
+                ),
+                "verify.receipt_dirs[0] must not contain dot or parent segments",
+            ),
+            (
+                "verify receipt whitespace",
+                lambda body: body.__setitem__(
+                    "verify",
+                    {"receipts": ["receipts/a receipt.json"]},
+                ),
+                "verify.receipts[0] must not contain whitespace",
+            ),
+        ]
+        for label, mutate, message in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = copy.deepcopy(base)
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_control_characters_in_runbook_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -956,6 +1064,108 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     {"receipt_dirs": ["receipts "]},
                 ),
                 "verify.receipt_dirs[0] must not have surrounding whitespace",
+            ),
+        ]
+        for label, mutate, message in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = copy.deepcopy(base)
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_optional_runbook_scalars_must_not_be_null_when_present(self):
+        base = {
+            "provider": "local-bank",
+            "environment": "ci",
+            "rail": {
+                "inbox_dir": "inbox",
+                "torii_base_url": "https://torii.example.invalid",
+            },
+        }
+        cases = [
+            (
+                "rail message null",
+                lambda body: body["rail"].__setitem__("message", None),
+                "rail.message must be a non-empty string when provided",
+            ),
+            (
+                "rail receipt dir null",
+                lambda body: body["rail"].__setitem__("receipt_dir", None),
+                "rail.receipt_dir must be a non-empty string when provided",
+            ),
+            (
+                "rail token path null",
+                lambda body: body["rail"].__setitem__("bearer_token_file", None),
+                "rail.bearer_token_file must be a non-empty string when provided",
+            ),
+            (
+                "rail max payload null",
+                lambda body: body["rail"].__setitem__("max_payload_bytes", None),
+                "rail.max_payload_bytes must be a positive integer",
+            ),
+            (
+                "rail timeout null",
+                lambda body: body["rail"].__setitem__("timeout_secs", None),
+                "rail.timeout_secs must be a positive number",
+            ),
+            (
+                "rail response limit null",
+                lambda body: body["rail"].__setitem__("response_limit_bytes", None),
+                "rail.response_limit_bytes must be a positive integer",
+            ),
+            (
+                "notary receipt dir null",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "receipt_dir": None,
+                    },
+                ),
+                "notary.receipt_dir must be a non-empty string when provided",
+            ),
+            (
+                "notary token path null",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "bearer_token_file": None,
+                    },
+                ),
+                "notary.bearer_token_file must be a non-empty string when provided",
+            ),
+            (
+                "notary timeout null",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "timeout_secs": None,
+                    },
+                ),
+                "notary.timeout_secs must be a positive number",
+            ),
+            (
+                "notary response limit null",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "response_limit_bytes": None,
+                    },
+                ),
+                "notary.response_limit_bytes must be a positive integer",
             ),
         ]
         for label, mutate, message in cases:

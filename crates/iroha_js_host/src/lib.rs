@@ -2364,6 +2364,20 @@ pub fn kagemusha_recursive_spend_append(request_archive: Uint8Array) -> napi::Re
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err.to_string()))?;
     let output_proof_circuit_id = request.output_proof_circuit_id().to_owned();
+    let output_append_is_currently_provable =
+        iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            output_proof_circuit_id.as_str(),
+            request.previous_bundle.accumulator.hop_count,
+        );
+    if !output_append_is_currently_provable {
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            format!(
+                "Kagemusha recursive spend append cannot prove output proof circuit `{}` at previous hop {}",
+                output_proof_circuit_id, request.previous_bundle.accumulator.hop_count,
+            ),
+        ));
+    }
     let mut lineage_proving_key_archive = None;
     let vk_box = match output_proof_circuit_id.as_str() {
         iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
@@ -2375,29 +2389,19 @@ pub fn kagemusha_recursive_spend_append(request_archive: Uint8Array) -> napi::Re
                 output_circuit,
             ) =>
         {
-            if iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                output_proof_circuit_id.as_str(),
-                request.previous_bundle.accumulator.hop_count,
-            ) {
-                lineage_proving_key_archive =
-                    Some(request.lineage_proving_key_archive.as_deref().ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Kagemusha Reserved-lineage append requires lineage_proving_key_archive",
-                        )
-                    })?);
-                request.lineage_verifier_key.clone().ok_or_else(|| {
+            lineage_proving_key_archive =
+                Some(request.lineage_proving_key_archive.as_deref().ok_or_else(|| {
                     napi::Error::new(
                         napi::Status::InvalidArg,
-                        "Kagemusha Reserved-lineage append requires lineage_verifier_key",
+                        "Kagemusha Reserved-lineage append requires lineage_proving_key_archive",
                     )
-                })?
-            } else {
-                iroha_data_model::proof::VerifyingKeyBox::new(
-                    iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                    Vec::new(),
+                })?);
+            request.lineage_verifier_key.clone().ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "Kagemusha Reserved-lineage append requires lineage_verifier_key",
                 )
-            }
+            })?
         }
         other => {
             return Err(napi::Error::new(
@@ -10095,9 +10099,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildRotateZkAceIdentityCommitmentInstruction",
             "buildRevokeZkAceIdentityCommitmentInstruction",
             "buildZkAceAuthorizedTransferInstruction",
+            "buildZkAceAuthorizationProofV1",
         ],
         planned_entrypoints: &[
-            "buildZkAceAuthorizationProofV1",
+            "buildShieldedZkAceAuthorizationProofV1",
             "buildShieldedZkAceAuthorizedTransferInstruction",
         ],
     },
@@ -15774,20 +15779,32 @@ mod tests {
 
     #[test]
     fn kagemusha_recursive_spend_append_rejects_missing_lineage_key_artifacts() {
-        for (case, expected_field, proving_key_archive) in [
+        for (case, expected_field, verifier_key, proving_key_archive) in [
             (
                 "missing both artifacts",
                 "lineage_proving_key_archive",
+                None,
+                None,
+            ),
+            (
+                "missing proving key archive",
+                "lineage_proving_key_archive",
+                Some(iroha_data_model::proof::VerifyingKeyBox::new(
+                    "halo2/ipa".to_owned(),
+                    vec![0xAB; 32],
+                )),
                 None,
             ),
             (
                 "missing verifier key",
                 "lineage_verifier_key",
+                None,
                 Some(vec![0xAC; 32]),
             ),
         ] {
             let mut request =
                 sample_reserved_lineage_append_request_missing_key_artifacts_for_js_host();
+            request.lineage_verifier_key = verifier_key;
             request.lineage_proving_key_archive = proving_key_archive;
             let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
@@ -16273,8 +16290,12 @@ mod tests {
     fn kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage() {
         let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
         attach_strict_reserved_lineage_envelope_for_js_host(&mut request);
-        request.lineage_verifier_record =
-            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
+        let mut lineage_record =
+            sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host();
+        lineage_record.max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
+                as u32;
+        request.lineage_verifier_record = Some(lineage_record);
         request.validate_public_binding().expect(
             "witnessless reserved-lineage redeem validates before backend proof verification",
         );
@@ -16301,7 +16322,7 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("proof did not verify"),
+            err.to_string().contains("inline key"),
             "unexpected backend-invalid lineage rejection: {err}"
         );
 

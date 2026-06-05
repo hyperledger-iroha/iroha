@@ -2953,8 +2953,14 @@ test("native chain proof admission uses explicit production verifier backend all
       `${label} must reject non-portable privacy proof-envelope backend labels before tag alias compaction`,
     );
     assert.ok(
-      text.includes("return /^[A-Za-z0-9/_.:-]+$/u.test(backend);"),
-      `${label} must reject spaces and plus signs in verifier backend labels before alias compaction`,
+      text.includes(
+        'backend.includes("+") && !PLUS_PRIVACY_BACKEND_ALIASES.has(backend)',
+      ),
+      `${label} must reject non-FCMP++ plus signs in verifier backend labels before alias compaction`,
+    );
+    assert.ok(
+      text.includes("return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);"),
+      `${label} must keep verifier backend labels portable while admitting explicit FCMP++ aliases`,
     );
   }
   for (const [label, text] of [
@@ -2986,8 +2992,8 @@ test("native chain proof admission uses explicit production verifier backend all
       `${label} must reject unsupported updateVerifyingKey backends before fetch`,
     );
     assert.ok(
-      text.includes("return /^[A-Za-z0-9/_.:-]+$/u.test(backend);"),
-      `${label} must reject spaces and plus signs in verifier backend labels before request dispatch`,
+      text.includes("return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);"),
+      `${label} must reject spaces in verifier backend labels before request dispatch while preserving portable plus aliases`,
     );
   }
   assert.match(
@@ -4163,88 +4169,18 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
     /privacy-sdk-guard:[\s\S]*needs:\s*\[[^\]]*\bprivacy_python_sdk_tests\b[^\]]*\]/,
     "Privacy SDK guard job must depend on focused Python privacy tests",
   );
+  const privacySdkGuardNegativeControlModes = negativeControlModesFromInventory(
+    guard,
+    "negative_control_commands = (",
+    "required_paths = (",
+  );
   assertWorkflowRunsNegativeControlModes(
     workflow,
     "ci/check_privacy_sdk_guard.sh",
-    negativeControlModesFromInventory(
-      guard,
-      "negative_control_commands = (",
-      "required_paths = (",
-    ),
+    privacySdkGuardNegativeControlModes,
     "Privacy SDK guard",
   );
-  for (const mode of [
-    "--negative-control-bridge-header-workflow-path",
-    "--negative-control-bridge-header-command-workflow",
-    "--negative-control-bridge-header-negative-controls-workflow",
-    "--negative-control-bytecode-workflow",
-    "--negative-control-workflow-path",
-    "--negative-control-workflow-command",
-    "--negative-control-backend-tag-workflow-path",
-    "--negative-control-browser-test-workflow-path",
-    "--negative-control-negative-controls-workflow",
-    "--negative-control-negative-controls-comment-workflow",
-    "--negative-control-negative-controls-order-workflow",
-    "--negative-control-readme-boundary",
-    "--negative-control-readme-api",
-    "--negative-control-readme-error-code",
-    "--negative-control-browser-error-code",
-    "--negative-control-browser-dist-error-code",
-    "--negative-control-workflow-cancel-in-progress",
-    "--negative-control-native-bridge-job-workflow",
-    "--negative-control-native-bridge-runner-workflow",
-    "--negative-control-native-bridge-test-workflow",
-    "--negative-control-native-bridge-needs-workflow",
-    "--negative-control-swift-sdk-job-workflow",
-    "--negative-control-swift-sdk-runner-workflow",
-    "--negative-control-swift-sdk-parse-workflow",
-    "--negative-control-swift-sdk-version-script",
-    "--negative-control-swift-sdk-override-script",
-    "--negative-control-swift-sdk-needs-workflow",
-    "--negative-control-jvm-sdk-job-workflow",
-    "--negative-control-jvm-sdk-setup-workflow",
-    "--negative-control-jvm-sdk-test-workflow",
-    "--negative-control-jvm-sdk-java-home-override-script",
-    "--negative-control-jvm-sdk-java-home-reject-script",
-    "--negative-control-jvm-sdk-needs-workflow",
-    "--negative-control-csharp-sdk-job-workflow",
-    "--negative-control-csharp-sdk-setup-workflow",
-    "--negative-control-csharp-sdk-dotnet-version-workflow",
-    "--negative-control-csharp-sdk-setup-order-workflow",
-    "--negative-control-csharp-sdk-dotnet-version-script",
-    "--negative-control-csharp-sdk-dotnet-override-script",
-    "--negative-control-csharp-sdk-dotnet-major-script",
-    "--negative-control-csharp-sdk-test-workflow",
-    "--negative-control-csharp-sdk-needs-workflow",
-    "--negative-control-js-sdk-job-workflow",
-    "--negative-control-js-sdk-runner-workflow",
-    "--negative-control-js-sdk-node-setup-workflow",
-    "--negative-control-js-sdk-node-version-script",
-    "--negative-control-js-sdk-node-override-script",
-    "--negative-control-js-sdk-node-resolver-script",
-    "--negative-control-js-sdk-node-major-script",
-    "--negative-control-js-sdk-install-workflow",
-    "--negative-control-js-sdk-test-workflow",
-    "--negative-control-js-sdk-install-order-workflow",
-    "--negative-control-js-sdk-test-order-workflow",
-    "--negative-control-js-sdk-needs-workflow",
-    "--negative-control-python-sdk-job-workflow",
-    "--negative-control-python-sdk-runner-workflow",
-    "--negative-control-python-sdk-setup-workflow",
-    "--negative-control-python-sdk-rust-cache-workflow",
-    "--negative-control-python-sdk-timeout-workflow",
-    "--negative-control-python-sdk-test-workflow",
-    "--negative-control-python-sdk-override-script",
-    "--negative-control-python-sdk-resolver-script",
-    "--negative-control-python-sdk-major-script",
-    "--negative-control-python-sdk-venv-rebuild-script",
-    "--negative-control-python-sdk-native-build-script",
-    "--negative-control-python-sdk-venv-activation-script",
-    "--negative-control-python-sdk-bytecode-script",
-    "--negative-control-python-sdk-needs-workflow",
-    "--negative-control-main-rust-cache-workflow",
-    "--negative-control-main-timeout-workflow",
-  ]) {
+  for (const mode of privacySdkGuardNegativeControlModes) {
     assert.ok(
       guard.includes(`if mode == "${mode}":`),
       `Privacy SDK guard must implement ${mode}`,

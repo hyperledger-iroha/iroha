@@ -26921,7 +26921,7 @@ function isStarkFriProductionBackendLabel(backend) {
 }
 
 function isPortableVerifierBackendLabel(backend) {
-  return /^[A-Za-z0-9/_.:-]+$/u.test(backend);
+  return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);
 }
 
 function normalizeNativeHalo2PastaBackendLabel(value) {

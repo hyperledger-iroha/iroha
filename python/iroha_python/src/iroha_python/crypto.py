@@ -151,6 +151,7 @@ __all__ = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
+    "build_zk_ace_authorization_proof_v1",
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
@@ -962,6 +963,12 @@ def zk_ace_build_transfer_authorization_v1(
     if not isinstance(parsed, dict):
         raise RuntimeError("ZK-ACE prover returned a non-object payload")
     return parsed
+
+
+def build_zk_ace_authorization_proof_v1(**kwargs: Any) -> Dict[str, Any]:
+    """Build the executable Python SDK ZK-ACE authorization proof v1 payload."""
+
+    return zk_ace_build_transfer_authorization_v1(**kwargs)
 
 
 def _privacy_request_archive(request_archive: bytes | bytearray | memoryview) -> bytearray:

@@ -55,7 +55,7 @@ REQUIRE_VERIFIED = "require-verified"
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
-TRUST_SOURCE_KEYS = {"url", "retrieved_at"}
+TRUST_SOURCE_KEYS = {"authority", "version", "url", "retrieved_at"}
 TRUST_DER_PROOF_KEYS = {"sha256", "byte_len"}
 PRODUCTION_FALSE_POLICY_FLAGS = {
     "allow_plan_only",
@@ -504,40 +504,42 @@ def _require_compact_der_entries(
 
 
 def _validate_receipt_path(raw: str, label: str) -> str:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
-        raise ReadinessError(f"{label} must not contain control characters")
-    if raw != raw.strip():
-        raise ReadinessError(f"{label} must not have surrounding whitespace")
-    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
-    if any(part in {".", ".."} for part in normalized_parts):
-        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    _reject_path_smuggling(raw, label)
     if not raw.endswith(RECEIPT_PATH_SUFFIX):
         raise ReadinessError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
     return raw
 
 
 def _validate_compact_summary_path(raw: str, label: str) -> str:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
-        raise ReadinessError(f"{label} must not contain control characters")
-    if raw != raw.strip():
-        raise ReadinessError(f"{label} must not have surrounding whitespace")
-    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
-    if any(part in {".", ".."} for part in normalized_parts):
-        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    _reject_path_smuggling(raw, label)
     return raw
 
 
 def _validate_config_path(raw: str, label: str) -> str:
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
+def _reject_path_smuggling(raw: str, label: str) -> None:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain empty path segments")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise ReadinessError(f"{label} must not contain dot or parent segments")
-    if not raw.endswith(".json"):
-        raise ReadinessError(f"{label} must point to a .json file")
-    return raw
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
 
 
 def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
@@ -577,6 +579,10 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
     path = Path(raw)
     if path.is_absolute():
         raise ReadinessError(f"{label} must be relative, got {raw}")
@@ -594,6 +600,10 @@ def _validate_fixture_summary_path(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
     if Path(raw).is_absolute():
         raise ReadinessError(f"{label} must be relative, got {raw}")
     if not raw.endswith(".xml"):
@@ -615,7 +625,7 @@ def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
     if raw is None:
         return None
     if not isinstance(raw, str) or not raw.strip():
-        return None
+        raise ReadinessError(f"{label} must be a non-empty string when provided")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -806,7 +816,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReadinessError(f"{label} path must use forward slashes")
     if ";" in path:
         raise ReadinessError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise ReadinessError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise ReadinessError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
@@ -1025,11 +1039,21 @@ def _verify_xsd_summary_entries(
         schema_backed = _require_bool(fixture, "schema_backed", label)
         schema_validated = _require_bool(fixture, "schema_validated", label)
         schema_rel = fixture.get("schema")
-        missing_reason = fixture.get("missing_schema_reason")
+        missing_reason = _validate_reviewed_gap_reason(
+            fixture.get("missing_schema_reason"),
+            f"{label}.missing_schema_reason",
+        )
         if schema_backed:
             computed_schema_backed += 1
             if schema_validated:
                 computed_schema_validated += 1
+            if missing_reason is not None:
+                _blocker(
+                    blockers,
+                    "xsd.fixture_missing_schema_reason_mismatch",
+                    f"{label} is schema-backed but still records a missing-schema reason",
+                    path,
+                )
             if not isinstance(schema_rel, str) or not schema_rel.strip():
                 _blocker(
                     blockers,
@@ -1064,10 +1088,6 @@ def _verify_xsd_summary_entries(
                     f"{label} is marked unbacked but still records a schema reference",
                     path,
                 )
-            missing_reason = _validate_reviewed_gap_reason(
-                missing_reason,
-                f"{label}.missing_schema_reason",
-            )
             if missing_reason is None:
                 _blocker(
                     blockers,
@@ -1219,6 +1239,7 @@ def _verify_xsd_profile_catalog_entries(
         "path",
         f"{path}.profile_catalog",
     )
+    _reject_path_smuggling(profile_catalog_path, f"{path}.profile_catalog.path")
     profile_catalog_sha256 = _require_sha256(
         profile_catalog,
         "sha256",
@@ -2072,6 +2093,8 @@ def _verify_trust_profile(
         )
     source = _require_object(profile.get("source"), f"{label}.source")
     _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
+    source_authority = _require_string(source, "authority", f"{label}.source")
+    source_version = _require_string(source, "version", f"{label}.source")
     source_url = _validate_https_source_url(
         _require_string(source, "url", f"{label}.source"),
         f"{label}.source.url",
@@ -2138,12 +2161,14 @@ def _verify_trust_profile(
             f"trust profile {profile_id!r} requires OCSP revocation checking but has no OCSP responses",
             path,
         )
-    return {
+    result = {
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
         "bundle_sha256": bundle_sha256,
         "source": {
+            "authority": source_authority,
+            "version": source_version,
             "url": source_url,
             "retrieved_at": source_retrieved_at_raw,
         },
@@ -2161,6 +2186,7 @@ def _verify_trust_profile(
         "x509_ocsp_response_count": x509_ocsp_response_count,
         "x509_ocsp_response_der": x509_ocsp_response_der,
     }
+    return result
 
 
 def _verify_archive_receipts(

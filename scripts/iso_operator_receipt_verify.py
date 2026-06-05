@@ -374,7 +374,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReceiptError(f"{label} path must use forward slashes")
     if ";" in path:
         raise ReceiptError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise ReceiptError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise ReceiptError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
@@ -397,6 +401,23 @@ def _require_optional_clean_string(value: Any, label: str) -> str | None:
     if value is None:
         return None
     return _require_clean_string(value, label)
+
+
+def _require_clean_path_string(value: Any, label: str) -> str:
+    path = _require_clean_string(value, label)
+    if any(ch.isspace() for ch in path):
+        raise ReceiptError(f"{label} must not contain whitespace")
+    if "\\" in path:
+        raise ReceiptError(f"{label} must use forward slashes")
+    if ";" in path:
+        raise ReceiptError(f"{label} must not contain semicolon path parameters")
+    parts = path.split("/")
+    checked_parts = parts[1:] if path.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise ReceiptError(f"{label} must not contain empty path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise ReceiptError(f"{label} must not contain dot or parent segments")
+    return path
 
 
 def _require_nonnegative_int(value: Any, label: str) -> int:
@@ -824,7 +845,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
     if not isinstance(record_count, int) or record_count < 0:
         raise ReceiptError(f"{path} record_count must be a non-negative integer")
 
-    anchor_path_raw = _require_clean_string(
+    anchor_path_raw = _require_clean_path_string(
         receipt.get("anchor_path"),
         f"{path} anchor_path",
     )
@@ -968,9 +989,9 @@ def _verify_rail_source(
         allow_embedded_whitespace=False,
     )
 
-    xml_path_raw = _require_clean_string(receipt.get("xml_path"), f"{path} xml_path")
+    xml_path_raw = _require_clean_path_string(receipt.get("xml_path"), f"{path} xml_path")
     xml_path = Path(xml_path_raw)
-    sidecar_path_raw = _require_clean_string(
+    sidecar_path_raw = _require_clean_path_string(
         receipt.get("sidecar_path"),
         f"{path} sidecar_path",
     )

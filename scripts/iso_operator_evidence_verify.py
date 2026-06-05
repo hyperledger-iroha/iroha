@@ -601,8 +601,8 @@ def _required_der_summary_entries(
         entry_label = f"{label}.{key}[{offset}]"
         entry = _require_object(raw_entry, entry_label)
         _reject_unknown_keys(entry, TRUST_DER_SUMMARY_KEYS, entry_label)
-        raw_label = entry.get("label")
-        if raw_label is not None:
+        if "label" in entry:
+            raw_label = entry.get("label")
             if not isinstance(raw_label, str) or not raw_label.strip():
                 raise EvidenceError(
                     f"{entry_label}.label must be a non-empty string when provided"
@@ -698,26 +698,14 @@ def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> N
 
 
 def _validate_receipt_path(raw: str, label: str) -> str:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
-        raise EvidenceError(f"{label} must not contain control characters")
-    if raw != raw.strip():
-        raise EvidenceError(f"{label} must not have surrounding whitespace")
-    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
-    if any(part in {".", ".."} for part in normalized_parts):
-        raise EvidenceError(f"{label} must not contain dot or parent segments")
+    _reject_path_smuggling(raw, label)
     if not raw.endswith(RECEIPT_PATH_SUFFIX):
         raise EvidenceError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
     return raw
 
 
 def _validate_config_path(raw: str, label: str) -> str:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
-        raise EvidenceError(f"{label} must not contain control characters")
-    if raw != raw.strip():
-        raise EvidenceError(f"{label} must not have surrounding whitespace")
-    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
-    if any(part in {".", ".."} for part in normalized_parts):
-        raise EvidenceError(f"{label} must not contain dot or parent segments")
+    _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise EvidenceError(f"{label} must point to a .json file")
     return raw
@@ -726,14 +714,28 @@ def _validate_config_path(raw: str, label: str) -> str:
 def _validate_artifact_path(raw: str, label: str) -> str:
     if not raw.strip():
         raise EvidenceError(f"{label} must be a non-empty path")
+    _reject_path_smuggling(raw, label)
+    return raw
+
+
+def _reject_path_smuggling(raw: str, label: str) -> None:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise EvidenceError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise EvidenceError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise EvidenceError(f"{label} must not contain empty path segments")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
-    return raw
+    if "\\" in raw:
+        raise EvidenceError(f"{label} must use forward slashes")
 
 
 def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
@@ -1426,7 +1428,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise EvidenceError(f"{label} path must use forward slashes")
     if ";" in path:
         raise EvidenceError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise EvidenceError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise EvidenceError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
@@ -1504,6 +1510,8 @@ def _check_trust_bundle(
     else:
         source_obj = _require_object(source, f"{label}.source")
         _reject_unknown_keys(source_obj, TRUST_SOURCE_KEYS, f"{label}.source")
+        authority = _required_string(source_obj, "authority", f"{label}.source")
+        version = _required_string(source_obj, "version", f"{label}.source")
         url = source_obj.get("url")
         if not isinstance(url, str) or not url.strip():
             raise EvidenceError(f"{label}.source.url must be recorded")
@@ -1535,6 +1543,8 @@ def _check_trust_bundle(
             args,
         )
         source_summary = {
+            "authority": authority,
+            "version": version,
             "url": url,
             "retrieved_at": retrieved_at,
         }

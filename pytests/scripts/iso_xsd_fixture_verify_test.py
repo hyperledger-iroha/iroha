@@ -592,6 +592,19 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((unknown_message_key, "contains unknown keys"))
+        control_profile_id = [
+            {
+                "id": "minimal\nprofile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((control_profile_id, "id must not contain control characters"))
         missing_rail = [
             {
                 "id": "minimal-profile",
@@ -667,6 +680,20 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((bad_reference_dataset, "unknown dataset"))
+        null_reference_datasets = [
+            {
+                "id": "minimal-profile",
+                "required_reference_datasets": None,
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((null_reference_datasets, "required_reference_datasets must be a JSON array"))
         bad_trust_pin = [
             {
                 "id": "minimal-profile",
@@ -681,6 +708,20 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((bad_trust_pin, "canonical nonzero SHA-256"))
+        null_trust_pin_list = [
+            {
+                "id": "minimal-profile",
+                "signature_public_key_sha256_pins": None,
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((null_trust_pin_list, "signature_public_key_sha256_pins must be a JSON array"))
         bad_policy_oid = [
             {
                 "id": "minimal-profile",
@@ -744,6 +785,20 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((bad_revocation_bool, "must be a boolean"))
+        null_revocation_bool = [
+            {
+                "id": "minimal-profile",
+                "x509_require_crl_revocation_check": None,
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((null_revocation_bool, "must be a boolean"))
         missing_address_mode = [
             {
                 "id": "minimal-profile",
@@ -786,6 +841,20 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((malformed_ocsp_material, "must be canonical base64"))
+        null_crl_material = [
+            {
+                "id": "minimal-profile",
+                "x509_crl_der_base64": None,
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((null_crl_material, "x509_crl_der_base64 must be a JSON array"))
         malformed_crl_der = [
             {
                 "id": "minimal-profile",
@@ -880,6 +949,34 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((service_without_app_header, "require_app_header must be true"))
+        null_business_services = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "business_services": None,
+                    }
+                ],
+            }
+        ]
+        cases.append((null_business_services, "business_services must be a JSON array"))
+        null_require_app_header = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "require_app_header": None,
+                    }
+                ],
+            }
+        ]
+        cases.append((null_require_app_header, "require_app_header must be a boolean"))
         missing_business_service = [
             {
                 "id": "minimal-profile",
@@ -908,6 +1005,39 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((zero_supplementary_cap, "supplementary_data_max_bytes must be positive"))
+        null_supplementary_cap = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "supplementary_data_max_bytes": None,
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                null_supplementary_cap,
+                "supplementary_data_max_bytes must be a non-negative integer",
+            )
+        )
+        null_amount_minor_units = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "amount_minor_units": None,
+                    }
+                ],
+            }
+        ]
+        cases.append((null_amount_minor_units, "amount_minor_units must be a JSON array"))
         bad_minor_units_currency = [
             {
                 "id": "minimal-profile",
@@ -924,6 +1054,22 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((bad_minor_units_currency, "uppercase ISO 4217 code"))
+        null_minor_units = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "amount_minor_units": [
+                            {"currency": "USD", "minor_units": None},
+                        ],
+                    }
+                ],
+            }
+        ]
+        cases.append((null_minor_units, "minor_units must be a non-negative integer"))
         duplicate_minor_units_currency = [
             {
                 "id": "minimal-profile",
@@ -1540,6 +1686,23 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         escaped_path["schemas"][0]["source"]["path"] = "../fooo.001.001.01.xsd"
         cases.append((escaped_path, "must not contain empty, dot, or parent segments"))
 
+        whitespace_path = minimal_manifest()
+        whitespace_path["schemas"][0]["source"]["path"] = (
+            "xsd/iso/fooo source.001.001.01.xsd"
+        )
+        cases.append((whitespace_path, "source.path must not contain whitespace"))
+
+        semicolon_path = minimal_manifest()
+        semicolon_path["schemas"][0]["source"]["path"] = (
+            "xsd/iso;debug/fooo.001.001.01.xsd"
+        )
+        cases.append(
+            (
+                semicolon_path,
+                "source.path must not contain semicolon path parameters",
+            )
+        )
+
         mismatched_filename = minimal_manifest()
         mismatched_filename["schemas"][0]["source"]["path"] = "xsd/other.001.001.01.xsd"
         cases.append((mismatched_filename, "filename must match message_def_id"))
@@ -1628,18 +1791,51 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         schema_backslash = minimal_manifest()
         schema_backslash["schemas"][0]["path"] = r"iso\fooo.001.001.01.xsd"
         cases.append((schema_backslash, "must use forward slashes"))
+        schema_whitespace = minimal_manifest()
+        schema_whitespace["schemas"][0]["path"] = "iso/fooo source.001.001.01.xsd"
+        cases.append((schema_whitespace, "path must not contain whitespace"))
+        schema_semicolon = minimal_manifest()
+        schema_semicolon["schemas"][0]["path"] = "iso;debug/fooo.001.001.01.xsd"
+        cases.append(
+            (
+                schema_semicolon,
+                "path must not contain semicolon path parameters",
+            )
+        )
         schema_dot_segment = minimal_manifest()
         schema_dot_segment["schemas"][0]["path"] = "iso/./fooo.001.001.01.xsd"
         cases.append((schema_dot_segment, "must not contain empty or dot segments"))
         schema_empty_segment = minimal_manifest()
         schema_empty_segment["schemas"][0]["path"] = "iso//fooo.001.001.01.xsd"
         cases.append((schema_empty_segment, "must not contain empty or dot segments"))
+        null_schema_only_reason = minimal_manifest()
+        null_schema_only_reason["schemas"][0]["schema_only_reason"] = None
+        cases.append((null_schema_only_reason, "schema_only_reason must be a non-empty string"))
+        control_schema_only_reason = minimal_manifest()
+        control_schema_only_reason["schemas"][0]["schema_only_reason"] = "schema\nonly"
+        cases.append(
+            (
+                control_schema_only_reason,
+                "schema_only_reason must not contain control characters",
+            )
+        )
         fixture_parent_escape = minimal_manifest()
         fixture_parent_escape["fixtures"][0]["path"] = "../../foo_fixture.xml"
         cases.append((fixture_parent_escape, "must stay under"))
         fixture_non_xml = minimal_manifest()
         fixture_non_xml["fixtures"][0]["path"] = "../foo_fixture.txt"
         cases.append((fixture_non_xml, "must point to an .xml file"))
+        fixture_whitespace = minimal_manifest()
+        fixture_whitespace["fixtures"][0]["path"] = "../fixtures/foo fixture.xml"
+        cases.append((fixture_whitespace, "path must not contain whitespace"))
+        fixture_semicolon = minimal_manifest()
+        fixture_semicolon["fixtures"][0]["path"] = "../fixtures;debug/foo_fixture.xml"
+        cases.append(
+            (
+                fixture_semicolon,
+                "path must not contain semicolon path parameters",
+            )
+        )
         fixture_dot_segment = minimal_manifest()
         fixture_dot_segment["fixtures"][0]["path"] = ".././foo_fixture.xml"
         cases.append((fixture_dot_segment, "must not contain empty or dot segments"))
@@ -1656,15 +1852,51 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         invalid_fixture_id = minimal_manifest()
         invalid_fixture_id["fixtures"][0]["message_def_id"] = "fooo.1.001.01"
         cases.append((invalid_fixture_id, "lowercase ISO message id"))
+        null_fixture_schema = minimal_manifest()
+        null_fixture_schema["fixtures"][0]["schema"] = None
+        cases.append((null_fixture_schema, "schema must be a non-empty string"))
         no_schema_reason = minimal_manifest()
         no_schema_reason["fixtures"][0].pop("schema")
         cases.append((no_schema_reason, "must set schema or missing_schema_reason"))
+        null_missing_schema_reason = minimal_manifest()
+        null_missing_schema_reason["fixtures"][0].pop("schema")
+        null_missing_schema_reason["fixtures"][0]["missing_schema_reason"] = None
+        cases.append(
+            (
+                null_missing_schema_reason,
+                "missing_schema_reason must be a non-empty string",
+            )
+        )
+        control_missing_schema_reason = minimal_manifest()
+        control_missing_schema_reason["fixtures"][0].pop("schema")
+        control_missing_schema_reason["fixtures"][0]["missing_schema_reason"] = "missing\nschema"
+        cases.append(
+            (
+                control_missing_schema_reason,
+                "missing_schema_reason must not contain control characters",
+            )
+        )
         both_schema_and_reason = minimal_manifest()
         both_schema_and_reason["fixtures"][0]["missing_schema_reason"] = "not allowed"
         cases.append((both_schema_and_reason, "cannot set both"))
         unknown_schema_ref = minimal_manifest()
         unknown_schema_ref["fixtures"][0]["schema"] = "iso/missing.001.001.01.xsd"
         cases.append((unknown_schema_ref, "references unknown schema"))
+        fixture_schema_whitespace = minimal_manifest()
+        fixture_schema_whitespace["fixtures"][0]["schema"] = (
+            "iso/fooo source.001.001.01.xsd"
+        )
+        cases.append((fixture_schema_whitespace, "schema must not contain whitespace"))
+        fixture_schema_semicolon = minimal_manifest()
+        fixture_schema_semicolon["fixtures"][0]["schema"] = (
+            "iso;debug/fooo.001.001.01.xsd"
+        )
+        cases.append(
+            (
+                fixture_schema_semicolon,
+                "schema must not contain semicolon path parameters",
+            )
+        )
         for manifest, message in cases:
             with self.subTest(message=message):
                 with tempfile.TemporaryDirectory() as raw_root:

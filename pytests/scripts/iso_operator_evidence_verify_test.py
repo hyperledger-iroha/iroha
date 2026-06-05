@@ -491,6 +491,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(
                 trust_profile["source"],
                 {
+                    "authority": "Example Rail PKI",
+                    "version": "2026-Q2",
                     "url": "https://pki.example.invalid/swift-cbpr-plus",
                     "retrieved_at": "2026-06-04T00:00:00Z",
                 },
@@ -622,8 +624,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
     def test_canary_config_path_is_canonical(self):
         cases = (
             ("/ops/iso/canary\n.json", "config_path must not contain control characters"),
+            ("/ops/iso/can ary.json", "config_path must not contain whitespace"),
+            ("/ops/iso/canary.json;v=1", "config_path must not contain semicolon path parameters"),
+            ("/ops/iso//canary.json", "config_path must not contain empty path segments"),
             ("/ops/iso/../canary.json", "config_path must not contain dot or parent segments"),
             (r"..\canary.json", "config_path must not contain dot or parent segments"),
+            (r"/ops\iso/canary.json", "config_path must use forward slashes"),
             ("/ops/iso/canary.txt", "config_path must point to a .json file"),
         )
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1657,12 +1663,24 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             executed_parent = valid_canary_summary()
             executed_parent["stages"][1]["receipt_dir"] = "/ops/iso/../notary-receipts"
             executed_parent.pop("summary_sha256")
+            executed_whitespace = valid_canary_summary()
+            executed_whitespace["stages"][0]["receipt_dir"] = "/ops/iso/rail receipts"
+            executed_whitespace.pop("summary_sha256")
+            executed_empty = valid_canary_summary()
+            executed_empty["stages"][0]["receipt_dir"] = "/ops/iso//rail-receipts"
+            executed_empty.pop("summary_sha256")
             planned_control = plan_only_canary_summary()
             planned_control["planned_stages"][0]["receipt_dir"] = "/ops/iso/rail\nreceipts"
             planned_control.pop("summary_sha256")
+            planned_semicolon = plan_only_canary_summary()
+            planned_semicolon["planned_stages"][0]["receipt_dir"] = "/ops/iso/rail;receipts"
+            planned_semicolon.pop("summary_sha256")
             planned_parent = plan_only_canary_summary()
             planned_parent["planned_stages"][1]["receipt_dir"] = r"..\notary-receipts"
             planned_parent.pop("summary_sha256")
+            planned_backslash = plan_only_canary_summary()
+            planned_backslash["planned_stages"][0]["receipt_dir"] = r"ops\iso\rail-receipts"
+            planned_backslash.pop("summary_sha256")
             cases = (
                 (
                     digest_summary(executed_control),
@@ -1675,14 +1693,34 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[1].receipt_dir must not contain dot or parent segments",
                 ),
                 (
+                    digest_summary(executed_whitespace),
+                    [],
+                    "stages[0].receipt_dir must not contain whitespace",
+                ),
+                (
+                    digest_summary(executed_empty),
+                    [],
+                    "stages[0].receipt_dir must not contain empty path segments",
+                ),
+                (
                     digest_summary(planned_control),
                     ["--allow-plan-only"],
                     "planned_stages[0].receipt_dir must not contain control characters",
                 ),
                 (
+                    digest_summary(planned_semicolon),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].receipt_dir must not contain semicolon path parameters",
+                ),
+                (
                     digest_summary(planned_parent),
                     ["--allow-plan-only"],
                     "planned_stages[1].receipt_dir must not contain dot or parent segments",
+                ),
+                (
+                    digest_summary(planned_backslash),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].receipt_dir must use forward slashes",
                 ),
             )
             for body, extra_args, message in cases:
@@ -1998,6 +2036,20 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     ),
                     "embedded_signature_policy must not contain control characters",
                 ),
+                (
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "authority",
+                        "Example\nRail PKI",
+                    ),
+                    "source.authority must not contain control characters",
+                ),
+                (
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        "2026-Q2\n",
+                    ),
+                    "source.version must not contain control characters",
+                ),
             )
             for offset, (mutate, message) in enumerate(trust_cases):
                 with self.subTest(kind="trust", offset=offset):
@@ -2010,6 +2062,64 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             str(canary_path),
                             "--trust-summary",
                             str(mutated_trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_trust_source_identity_fields_are_required_and_must_be_strings(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            cases = (
+                (
+                    "missing-authority",
+                    lambda summary: summary["bundles"][0]["source"].pop("authority"),
+                    "source.authority must be a non-empty string",
+                ),
+                (
+                    "empty-authority",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "authority",
+                        "",
+                    ),
+                    "source.authority must be a non-empty string",
+                ),
+                (
+                    "null-authority",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "authority",
+                        None,
+                    ),
+                    "source.authority must be a non-empty string",
+                ),
+                (
+                    "missing-version",
+                    lambda summary: summary["bundles"][0]["source"].pop("version"),
+                    "source.version must be a non-empty string",
+                ),
+                (
+                    "numeric-version",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        2026,
+                    ),
+                    "source.version must be a non-empty string",
+                ),
+            )
+
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
                         ]
                     )
 
@@ -2213,12 +2323,36 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "source.url must not have surrounding whitespace",
                 ),
                 (
+                    "source-url-empty-segment",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "url",
+                        "https://pki.example.invalid/swift//cbpr-plus",
+                    ),
+                    "source.url path must not contain empty segments",
+                ),
+                (
                     "source-retrieved-at",
                     lambda summary: summary["bundles"][0]["source"].__setitem__(
                         "retrieved_at",
                         "2026-06-04T00:00:00Z ",
                     ),
                     "source.retrieved_at must not have surrounding whitespace",
+                ),
+                (
+                    "source-authority",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "authority",
+                        "Example Rail PKI ",
+                    ),
+                    "source.authority must not have surrounding whitespace",
+                ),
+                (
+                    "source-version",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        " 2026-Q2",
+                    ),
+                    "source.version must not have surrounding whitespace",
                 ),
                 (
                     "policy-oid",
@@ -2450,12 +2584,28 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "must not contain control characters",
                 ),
                 (
+                    "/ops/iso/receipts/rail 0.receipt.json",
+                    "must not contain whitespace",
+                ),
+                (
+                    "/ops/iso/receipts/rail.receipt.json;v=1",
+                    "must not contain semicolon path parameters",
+                ),
+                (
+                    "/ops/iso/receipts//rail.receipt.json",
+                    "must not contain empty path segments",
+                ),
+                (
                     "/ops/iso/receipts/../rail.receipt.json",
                     "must not contain dot or parent segments",
                 ),
                 (
                     r"..\rail.receipt.json",
                     "must not contain dot or parent segments",
+                ),
+                (
+                    r"/ops\iso/receipts/rail.receipt.json",
+                    "must use forward slashes",
                 ),
                 (
                     "/ops/iso/receipts/rail.json",
@@ -2917,6 +3067,14 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         "3" * 64,
                     ),
                     "not recorded in",
+                ),
+                (
+                    "crl-summary-label-null",
+                    lambda summary: summary["bundles"][0]["x509_crls"][0].__setitem__(
+                        "label",
+                        None,
+                    ),
+                    "x509_crls[0].label must be a non-empty string when provided",
                 ),
                 (
                     "ocsp-summary-byte-len-drift",

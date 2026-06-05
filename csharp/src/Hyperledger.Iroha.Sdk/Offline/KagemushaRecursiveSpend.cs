@@ -145,6 +145,11 @@ public static class KagemushaRecursiveSpendNative
             || outputCircuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
     }
 
+    public static bool RequiresLineageKeyArtifactsForInit()
+    {
+        return true;
+    }
+
     public static bool RequiresLineageWitnessForRedeem(string? circuitId, uint hopCount)
     {
         return !CanRedeemWitnessless(circuitId, hopCount);
@@ -173,6 +178,11 @@ public static class KagemushaRecursiveSpendNative
         var normalized = NormalizeAppendOutputCircuitId(outputCircuitId);
         return normalized == RecursiveAggregationProofCircuitIdV1
             || normalized == RecursiveSpendLineageAppendProofCircuitIdV1;
+    }
+
+    public static bool RequiresLineageKeyArtifactsForAppendOutput(string? outputCircuitId)
+    {
+        return IsLineageAppendOutputCircuitId(NormalizeAppendOutputCircuitId(outputCircuitId));
     }
 
     public static bool IsSupportedPreviousProofCircuitId(string? previousProofCircuitId)

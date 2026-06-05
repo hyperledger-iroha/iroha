@@ -17,6 +17,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
   public static final int RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
+  public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
   public static final String RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
       "iroha:kagemusha:v1:recursive-spend-transition-profile";
   public static final String RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =
@@ -85,6 +86,10 @@ public final class KagemushaRecursiveSpendProver {
         || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId);
   }
 
+  public static boolean requiresLineageKeyArtifactsForInit() {
+    return true;
+  }
+
   public static boolean requiresLineageWitnessForRedeem(
       final String circuitId, final int hopCount) {
     return !canRedeemWitnessless(circuitId, hopCount);
@@ -110,6 +115,10 @@ public final class KagemushaRecursiveSpendProver {
     final String normalized = normalizeAppendOutputCircuitId(outputCircuitId);
     return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalized)
         || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(normalized);
+  }
+
+  public static boolean requiresLineageKeyArtifactsForAppendOutput(final String outputCircuitId) {
+    return isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId));
   }
 
   public static boolean isSupportedPreviousProofCircuitId(final String previousProofCircuitId) {
@@ -283,7 +292,20 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   static byte[] requireRecursiveSpendOutput(final byte[] output, final String label) {
-    return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native " + label);
+    return requireNativeOutput(output, "native " + label);
+  }
+
+  private static byte[] requireNativeOutput(final byte[] output, final String label) {
+    if (output == null) {
+      throw new IllegalStateException(label + " returned no output");
+    }
+    if (output.length == 0) {
+      throw new IllegalStateException(label + " returned empty output");
+    }
+    if (output.length > NATIVE_ARCHIVE_MAX_BYTES) {
+      throw new IllegalStateException(label + " returned oversized output");
+    }
+    return output;
   }
 
   private static void requireNative() {

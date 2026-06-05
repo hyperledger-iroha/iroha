@@ -299,6 +299,44 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     "xml_path must not contain control characters",
                 ),
                 (
+                    "xml path embedded whitespace",
+                    lambda body: body.update(
+                        {
+                            "xml_path": str(xml_path).replace(
+                                "rail-status.xml",
+                                "rail status.xml",
+                            )
+                        }
+                    ),
+                    "xml_path must not contain whitespace",
+                ),
+                (
+                    "xml path backslash",
+                    lambda body: body.update(
+                        {"xml_path": str(xml_path).replace("/", "\\", 1)}
+                    ),
+                    "xml_path must use forward slashes",
+                ),
+                (
+                    "xml path semicolon",
+                    lambda body: body.update({"xml_path": str(xml_path) + ";debug"}),
+                    "xml_path must not contain semicolon path parameters",
+                ),
+                (
+                    "xml path empty segment",
+                    lambda body: body.update(
+                        {"xml_path": f"{xml_path.parent}//{xml_path.name}"}
+                    ),
+                    "xml_path must not contain empty path segments",
+                ),
+                (
+                    "xml path parent segment",
+                    lambda body: body.update(
+                        {"xml_path": f"{xml_path.parent}/../{xml_path.name}"}
+                    ),
+                    "xml_path must not contain dot or parent segments",
+                ),
+                (
                     "sidecar path whitespace",
                     lambda body: body.update({"sidecar_path": " " + str(sidecar_path)}),
                     "sidecar_path must not have surrounding whitespace",
@@ -307,6 +345,50 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     "sidecar path control",
                     lambda body: body.update({"sidecar_path": str(sidecar_path) + "\n"}),
                     "sidecar_path must not contain control characters",
+                ),
+                (
+                    "sidecar path embedded whitespace",
+                    lambda body: body.update(
+                        {
+                            "sidecar_path": str(sidecar_path).replace(
+                                "rail-status.xml.json",
+                                "rail status.xml.json",
+                            )
+                        }
+                    ),
+                    "sidecar_path must not contain whitespace",
+                ),
+                (
+                    "sidecar path backslash",
+                    lambda body: body.update(
+                        {"sidecar_path": str(sidecar_path).replace("/", "\\", 1)}
+                    ),
+                    "sidecar_path must use forward slashes",
+                ),
+                (
+                    "sidecar path semicolon",
+                    lambda body: body.update(
+                        {"sidecar_path": str(sidecar_path) + ";debug"}
+                    ),
+                    "sidecar_path must not contain semicolon path parameters",
+                ),
+                (
+                    "sidecar path empty segment",
+                    lambda body: body.update(
+                        {
+                            "sidecar_path": (
+                                f"{sidecar_path.parent}//{sidecar_path.name}"
+                            )
+                        }
+                    ),
+                    "sidecar_path must not contain empty path segments",
+                ),
+                (
+                    "sidecar path dot segment",
+                    lambda body: body.update(
+                        {"sidecar_path": f"{sidecar_path.parent}/./{sidecar_path.name}"}
+                    ),
+                    "sidecar_path must not contain dot or parent segments",
                 ),
             ]
 
@@ -1101,6 +1183,59 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "anchor_path must not contain control characters",
             ),
             (
+                "anchor_path_embedded_whitespace",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {
+                            "anchor_path": str(latest).replace(
+                                "latest.notary.json",
+                                "latest notary.json",
+                            )
+                        }
+                    ),
+                ),
+                "anchor_path must not contain whitespace",
+            ),
+            (
+                "anchor_path_backslash",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {"anchor_path": str(latest).replace("/", "\\", 1)}
+                    ),
+                ),
+                "anchor_path must use forward slashes",
+            ),
+            (
+                "anchor_path_semicolon",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"anchor_path": str(latest) + ";debug"}),
+                ),
+                "anchor_path must not contain semicolon path parameters",
+            ),
+            (
+                "anchor_path_empty_segment",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {"anchor_path": f"{latest.parent}//{latest.name}"}
+                    ),
+                ),
+                "anchor_path must not contain empty path segments",
+            ),
+            (
+                "anchor_path_parent_segment",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {"anchor_path": f"{latest.parent}/../{latest.name}"}
+                    ),
+                ),
+                "anchor_path must not contain dot or parent segments",
+            ),
+            (
                 "published_at_whitespace",
                 lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
                     receipt,
@@ -1329,6 +1464,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("notary", "endpoint", "https://notary.example%2einvalid/anchor", False),
             ("notary", "endpoint", "https://123.000.000.001/anchor", False),
             ("notary", "endpoint", "https://notary.example/../anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive//anchor", False),
             ("notary", "endpoint", "https://notary.example/%2e%2e/anchor", False),
             ("notary", "endpoint", "https://notary.example/archive%2fanchor", False),
             ("notary", "endpoint", "https://notary.example/archive%252fanchor", False),
@@ -1348,6 +1484,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("rail", "endpoint_url", "http://local_host:8080/v1/iso20022", True),
             ("rail", "endpoint_url", "http://127.000.000.001:8080/v1/iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1/../iso20022", True),
+            ("rail", "endpoint_url", "http://127.0.0.1:8080/v1//iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1/%2e%2e/iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%2fiso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%252fiso20022", True),

@@ -23,6 +23,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: Int = 1
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: Int = 8 * 1024 * 1024
         const val RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: Int = 128
+        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
         const val RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: String =
             "iroha:kagemusha:v1:recursive-spend-transition-profile"
         const val RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: String =
@@ -78,6 +79,9 @@ class KagemushaRecursiveSpendProver private constructor() {
                 outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 
         @JvmStatic
+        fun requiresLineageKeyArtifactsForInit(): Boolean = true
+
+        @JvmStatic
         fun requiresLineageWitnessForRedeem(circuitId: String?, hopCount: Int): Boolean =
             !canRedeemWitnessless(circuitId, hopCount)
 
@@ -105,6 +109,10 @@ class KagemushaRecursiveSpendProver private constructor() {
                 -> true
                 else -> false
             }
+
+        @JvmStatic
+        fun requiresLineageKeyArtifactsForAppendOutput(outputCircuitId: String?): Boolean =
+            isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId))
 
         @JvmStatic
         fun isSupportedPreviousProofCircuitId(previousProofCircuitId: String?): Boolean =
@@ -282,7 +290,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         internal fun requireRecursiveSpendOutput(output: ByteArray?, label: String): ByteArray =
-            KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+            requireNativeOutput(output, "native $label")
+
+        private fun requireNativeOutput(output: ByteArray?, label: String): ByteArray {
+            check(output != null) { "$label returned no output" }
+            check(output.isNotEmpty()) { "$label returned empty output" }
+            check(output.size <= NATIVE_ARCHIVE_MAX_BYTES) { "$label returned oversized output" }
+            return output
+        }
 
         private fun loadLibrary(): Boolean =
             detectNativeAvailability(

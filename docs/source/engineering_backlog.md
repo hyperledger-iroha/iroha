@@ -1346,8 +1346,9 @@ track detailed unfinished engineering work.
 	  malformed, out-of-range, or explicit-default ports, non-canonical hosts,
 	  invalid DNS labels, percent-escaped hosts, and numeric-host spoofing,
 	  rejects traversal, backslash, encoded-separator, encoded-percent,
-	  percent-encoded control/space bytes, malformed percent escapes, or embedded-semicolon URL
-	  paths, rejects duplicate publication endpoints before network delivery, and
+	  percent-encoded control/space bytes, malformed percent escapes,
+	  repeated URL path separators, or embedded-semicolon URL paths, rejects
+	  duplicate publication endpoints before network delivery, and
 	  requires bearer-token files to be regular non-symlink bounded exact UTF-8
 	  values with no surrounding whitespace, embedded whitespace, or control
 	  characters, and
@@ -1370,9 +1371,12 @@ track detailed unfinished engineering work.
 	  numeric-host spoofing, rejects traversal, backslash, encoded-separator,
 	  encoded-percent, percent-encoded control/space bytes, malformed percent
 	  escapes, or embedded-semicolon URL paths, keeps explicit `--message` paths
-	  inside the declared inbox, rejects sidecar `profile` and `rail_message_id`
-	  values with surrounding whitespace, embedded whitespace, or control
-	  characters, rejects legacy `colr.007` drops unless `--allow-legacy-colr007`
+	  inside the declared inbox, rejects explicit `--message` path and discovered
+	  XML leaf whitespace, backslash, semicolon, empty-segment, or dot/parent
+	  segment smuggling before reads, rejects sidecar `profile` and `rail_message_id`
+	  values that are explicitly `null` or carry surrounding whitespace,
+	  embedded whitespace, or control characters, rejects legacy `colr.007`
+	  drops unless `--allow-legacy-colr007`
 	  is set for local diagnostics, requires bearer-token files to be regular
 	  non-symlink bounded exact UTF-8 values with no surrounding whitespace,
 	  embedded whitespace, or control characters, rejects symlinked XML payload
@@ -1392,7 +1396,7 @@ track detailed unfinished engineering work.
 	  characters, invalid DNS labels, percent-escaped hosts, numeric-host
 	  spoofing, plus traversal, backslash, encoded-separator, encoded-percent,
 	  percent-encoded control/space bytes, malformed percent escapes, or
-	  embedded-semicolon URL paths, can cross-check referenced XML or notary anchor
+	  embedded-semicolon/repeated-separator URL paths, can cross-check referenced XML or notary anchor
   source files, closes the raw receipt schemas per receipt kind plus notary
   anchor/audit-index source schemas, including nested audit records, binds
   audit record filenames to `sha256(message_id).json`, binds each indexed
@@ -1407,7 +1411,9 @@ track detailed unfinished engineering work.
 	  `anchors/<index_sha256>.notary.json` shape even when source files are not
 	  required, rejects raw notary `anchor_path` values, raw rail receipt
 	  `message_type`, `xml_path`, and
-	  `sidecar_path` values, plus receipt and source-sidecar rail
+	  `sidecar_path` values that carry whitespace, control characters,
+	  backslashes, semicolon path parameters, empty path segments, or dot/parent
+	  path segments, plus receipt and source-sidecar rail
 	  `profile`/`rail_message_id` values when they carry surrounding whitespace or
 	  embedded whitespace or control characters, replays digest-addressed notary-anchor and
   `messages.index.json` checks while rejecting symlinked or non-regular notary
@@ -1420,11 +1426,14 @@ track detailed unfinished engineering work.
 - Completed 2026-06-04: added `scripts/iso_operator_canary.py` as the generic
   provider canary runner. The runner consumes a strict JSON runbook with
   explicit provider/environment labels, executes the rail file-drop adapter,
-  audit notary adapter, and receipt verifier as subprocesses, rejects unknown
+	  audit notary adapter, and receipt verifier as subprocesses, rejects unknown
 	  runbook keys, rejects surrounding whitespace and control characters in
-	  runbook strings, keeps relative paths inside the runbook directory, rejects
-	  relative path parent escapes while preserving final path leaves for child
-	  script symlink/file-boundary checks, rejects
+	  runbook strings, rejects present `null` optional path and numeric limit
+	  fields instead of silently applying defaults, rejects embedded whitespace,
+	  backslashes, semicolon path parameters, empty path segments, and dot/parent
+	  segments in runbook paths before expansion, keeps relative paths inside
+	  the runbook directory while preserving final path leaves for child script
+	  symlink/file-boundary checks, rejects
 	  endpoint URLs with credentials, params, query strings, fragments, or embedded
 	  whitespace, rejects malformed, out-of-range, or explicit-default ports,
 	  rejects non-canonical hosts, invalid DNS labels, percent-escaped hosts,
@@ -1457,11 +1466,15 @@ track detailed unfinished engineering work.
 	  or embedded whitespace, malformed/out-of-range/default ports, localhost, or
 	  local/private IP literals, non-canonical hosts, invalid DNS labels,
 	  percent-escaped hosts, numeric-host spoofing, percent-escape smuggling,
-	  smuggled URL paths, required provenance URL and timezone-aware
-  non-future retrieval timestamp fields, repeated-path/copied-bundle/duplicate
+	  smuggled URL paths including repeated separators, required provenance URL and timezone-aware
+  non-future retrieval timestamp fields, clean source authority/version values
+  when present,
+  repeated-path/copied-bundle/duplicate
   profile ID rejection, duplicate `bundle_sha256` rejection, unique DER labels
-  per material class, and secret-looking fields before emitting Torii profile
-  trust override JSON.
+  per material class, DER-object `sha256` values that fail when present as
+  `null` or another non-string value, omitted absent labels in trust summaries,
+  archived-summary `label: null` rejection in the evidence gate, and
+  secret-looking fields before emitting Torii profile trust override JSON.
 - Completed 2026-06-04: added checked-in trust-bundle templates under
   `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
   Inst, and securities CSD profile families. The templates use synthetic DER
@@ -1481,11 +1494,15 @@ track detailed unfinished engineering work.
 	  rechecking, requires explicit freshness budgets for canary, trust-summary,
 	  and trust-source evidence while recording them in the evidence policy,
 	  preserves compact trust profile JSON emission booleans and a digest
-	  recomputed from archived profile overrides, `bundle_sha256`, source
-	  URL/retrieval provenance, revoked-certificate pin count, certificate-policy
+	  recomputed from archived profile overrides, `bundle_sha256`, required
+	  source authority/version plus source URL/retrieval provenance,
+	  revoked-certificate pin count, certificate-policy
 	  OID count, and compact trust-anchor/revoked/CRL/OCSP DER proof digests and
 	  byte lengths for the final rollup,
-  rejects stale digest-correct archive inputs, rejects repeated or copied
+	  rejects compact canary config paths, receipt paths, and child
+	  receipt-directory arguments with embedded whitespace, semicolon path
+	  parameters, empty segments, raw backslashes, or traversal segments,
+	  rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
   `--require-explicit-policy`, rejects duplicate archived trust profile IDs and
@@ -1506,7 +1523,7 @@ track detailed unfinished engineering work.
   default-profile fallbacks, legacy `colr.007` local overrides, unredacted
 	  bearer-token paths, secret-looking child output, smuggled, whitespace-bearing,
 	  malformed-port, non-canonical-host, invalid-host-label, percent-escape,
-	  numeric-host-spoofed, or traversal-bearing trust-source URLs,
+	  numeric-host-spoofed, repeated-separator, or traversal-bearing trust-source URLs,
   missing/malformed/future trust-source retrieval timestamps,
   missing/malformed/future or padded trust-summary `verified_at` timestamps, smuggled
   child command endpoint URLs, local-only child command flags in either
@@ -1530,15 +1547,27 @@ track detailed unfinished engineering work.
   namespaces, `Document` payload roots, XML fixture namespaces and payload
   roots, canonical lowercase ISO message definition ids, schema path
   containment under the manifest tree, fixture path containment under the ISO
-  fixture tree, manifest duplicates/path escapes, duplicate XML fixture
-  SHA-256 values, optional `xmllint --nonet` XML schema validation for
+  fixture tree, manifest duplicates/path escapes, manifest schema/fixture path
+  and fixture schema-reference whitespace or semicolon smuggling, duplicate XML
+  fixture SHA-256 values, optional `xmllint --nonet` XML schema validation for
   schema-backed fixtures, and digest-bound summaries while making reviewed
   missing-schema fixture exceptions explicit. All
   checked-in payment XSDs now have standalone XML fixtures and validate against
   their checked-in XSDs, so the `--require-fixture-for-schema` strict flag
   passes; the schema-backed strict flag still rejects the current
   official-package gaps until the remaining securities/collateral/legacy-return
-  XSDs are checked in.
+	  XSDs are checked in. Optional manifest/profile fields are optional only when
+	  omitted; present `null` reviewed reasons, trust/revocation material lists,
+	  booleans, numeric caps, business-service arrays, or amount minor-unit arrays
+	  fail before a digest-bound XSD summary can be emitted. Required and optional
+	  manifest/profile-catalog strings now reject ASCII control characters before
+	  summary emission, including reviewed gap reasons. Readiness also rejects
+	  archived reviewed gap reasons that are present but empty or non-string
+	  instead of treating them as absent, blocks schema-backed archived fixtures
+		  that still carry a missing-schema reason, and checked-in XSD source
+	  provenance, manifest schema, fixture, fixture schema-reference, and
+	  archived profile-catalog paths reject embedded whitespace or semicolon path
+	  parameters before summary emission and during readiness rechecks.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
   aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
   operator evidence summaries, requires strict schema-backed/fixture-backed XSD
@@ -1554,8 +1583,9 @@ track detailed unfinished engineering work.
   fixture evidence digests, non-canonical or message-id-mismatched schema
   paths, non-XML, absolute, empty-segment, dot-segment, or non-leading-parent
   fixture paths, schema-reference drift, unknown XSD summary fields, forged or
-  non-canonical missing-schema/schema-only reviewed gap lists and reason
-  strings, forged schema-only flags/reasons, forged
+	  non-canonical missing-schema/schema-only reviewed gap lists and reason
+	  strings, forged schema-only flags/reasons, stale missing-schema reasons on
+	  schema-backed fixtures, forged
   profile-catalog missing-version lists,
   omitted evidence or nested receipt-summary policy flags, archived trust
   summaries with omitted policy/profile revocation flags, omitted planned-stage
@@ -1563,12 +1593,15 @@ track detailed unfinished engineering work.
   evidence input summaries, omitted explicit release `--provider` or
   `--environment` context, omitted explicit freshness budgets, stale
   digest-correct XSD/evidence/canary/trust summaries, omitted or drifted
-  evidence policy context, omitted or weaker evidence freshness policy fields,
-  omitted or malformed compact trust source provenance, stale compact trust
-  source retrieval timestamps, omitted canary explicit-policy proof, repeated or
-  copied XSD/evidence summaries, missing or non-canonical compact canary
-  runbook `config_path` values, whitespace-padded compact strings or paths,
-  unknown compact evidence fields,
+	  evidence policy context, omitted or weaker evidence freshness policy fields,
+	  omitted or malformed compact trust source authority/version provenance,
+	  omitted or malformed compact trust source provenance, stale compact trust
+	  source retrieval timestamps, omitted canary explicit-policy proof, repeated or
+	  copied XSD/evidence summaries, missing or non-canonical compact canary
+	  runbook `config_path` values, compact canary/trust summary paths, canary
+	  config paths, and receipt paths with embedded whitespace, semicolon path
+	  parameters, empty segments, raw backslashes, or traversal segments,
+	  whitespace-padded compact strings or paths, unknown compact evidence fields,
   repeated or copied compact canary/trust summaries, nested receipt-summary
   tampering, non-canonical compact receipt paths, duplicate receipt paths or
   receipt digests, weak trust profiles, duplicate compact trust profile IDs or

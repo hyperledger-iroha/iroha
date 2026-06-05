@@ -176,6 +176,14 @@ negative_control_commands = (
         "ci/check_privacy_sdk_guard.sh --negative-control-readme-api",
     ),
     (
+        "ZK-ACE proof-builder coverage negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage",
+    ),
+    (
+        "Python catalog bytecode guard negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard",
+    ),
+    (
         "README error-code negative control",
         "ci/check_privacy_sdk_guard.sh --negative-control-readme-error-code",
     ),
@@ -612,6 +620,8 @@ readme_required = {
         "privacy_capabilities_v1()",
         "privacy_build_proof_v1(request_archive)",
         "privacy_verify_proof_v1(request_archive)",
+        "build_zk_ace_authorization_proof_v1()",
+        "zk_ace_build_transfer_authorization_v1()",
         "production_ready = False",
         "PRIVACY_FFI_STATUS_ERROR",
         "PRIVACY_FFI_ERROR_NULL_POINTER",
@@ -712,6 +722,90 @@ def check_readmes(errors):
                 f"{relative} is missing privacy native bridge documentation tokens: "
                 + ", ".join(missing_needles)
             ),
+            errors,
+        )
+
+
+def check_zk_ace_proof_builder_coverage(errors):
+    js_parity = read("javascript/iroha_js/test/privacyCatalogParity.test.js")
+    python_catalog = read("python/iroha_python/src/iroha_python/privacy_catalog.py")
+    python_crypto = read("python/iroha_python/src/iroha_python/crypto.py")
+    python_package_root = read("python/iroha_python/src/iroha_python/__init__.py")
+    python_tests = read("python/iroha_python/tests/privacy_catalog_test.py")
+    python_readme = read("python/iroha_python/README.md")
+
+    require(
+        "function assertPythonZkAceProofBuilderCoverage()" in js_parity,
+        "Privacy catalog parity tests must define the Python ZK-ACE proof-builder coverage guard",
+        errors,
+    )
+    require(
+        re.search(r"(?m)^\s*assertPythonZkAceProofBuilderCoverage\(\);\s*$", js_parity)
+        is not None,
+        "Privacy catalog parity tests must invoke the Python ZK-ACE proof-builder coverage guard",
+        errors,
+    )
+    require(
+        'env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }' in js_parity,
+        "Privacy catalog parity tests must suppress Python bytecode when loading the Python catalog",
+        errors,
+    )
+    for snippet in (
+        "Python privacy capabilities must require both ZK-ACE proof-builder names",
+        "Python catalog-named ZK-ACE proof builder must delegate to the native-backed builder",
+        "Python tests must cover ZK-ACE alias delegation, missing-native propagation, and malformed native prover payloads",
+        "privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape",
+        "assertZkAceExecutableDescriptorShape",
+        "buildShieldedZkAceAuthorizedTransferInstruction",
+        "planned shielded SDK entrypoints",
+    ):
+        require(
+            snippet in js_parity,
+            f"Privacy catalog parity tests are missing ZK-ACE proof-builder assertion: {snippet}",
+            errors,
+        )
+    require(
+        re.search(
+            r'zk_ace_prover\s*=\s*_callable_on_crypto\(\s*"build_zk_ace_authorization_proof_v1"\s*\)\s*and\s*_callable_on_crypto\("zk_ace_build_transfer_authorization_v1"\)',
+            python_catalog,
+        )
+        is not None,
+        "Python privacy capabilities must fail closed unless both ZK-ACE proof-builder names are callable",
+        errors,
+    )
+    require(
+        re.search(
+            r"def\s+build_zk_ace_authorization_proof_v1\(\*\*kwargs:\s*Any\)\s*->\s*Dict\[str,\s*Any\]:[\s\S]*return\s+zk_ace_build_transfer_authorization_v1\(\*\*kwargs\)",
+            python_crypto,
+        )
+        is not None,
+        "Python catalog-named ZK-ACE proof builder must delegate to the native-backed alias",
+        errors,
+    )
+    for label, text in (
+        ("Python crypto exports", python_crypto),
+        ("Python package root exports", python_package_root),
+        ("Python README", python_readme),
+    ):
+        require(
+            "build_zk_ace_authorization_proof_v1" in text
+            and "zk_ace_build_transfer_authorization_v1" in text,
+            f"{label} must keep both ZK-ACE proof-builder names",
+            errors,
+        )
+    for snippet in (
+        "def test_zk_ace_python_capabilities_require_both_proof_builder_names(",
+        '"build_zk_ace_authorization_proof_v1"',
+        '"zk_ace_build_transfer_authorization_v1"',
+        'assert capabilities["zk_ace_authorization_proof_v1"] is False',
+        'assert capabilities["zk_ace_sdk_exports_v1"] is False',
+        "test_zk_ace_python_catalog_named_proof_builder_delegates",
+        "test_zk_ace_python_catalog_named_proof_builder_propagates_native_errors",
+        "test_zk_ace_python_transfer_authorization_rejects_non_object_native_payload",
+    ):
+        require(
+            snippet in python_tests,
+            f"Python ZK-ACE proof-builder adversarial coverage is missing {snippet}",
             errors,
         )
 
@@ -1285,6 +1379,7 @@ def check_jvm_sdk_script_pins_jdk21(errors):
 def run_checks():
     errors = []
     check_readmes(errors)
+    check_zk_ace_proof_builder_coverage(errors)
     check_workflow_paths(errors)
     check_workflow_commands(errors)
     check_workflow_cancellation_policy(errors)
@@ -1521,8 +1616,8 @@ if mode == "--negative-control-readme-api":
     target = "python/iroha_python/README.md"
     original = read(target)
     mutated = original.replace(
-        "privacy_build_proof_v1(request_archive)",
-        "privacy_build_claim_v1(request_archive)",
+        "build_zk_ace_authorization_proof_v1()",
+        "build_zk_ace_authorization_claim_v1()",
         1,
     )
     if mutated == original:
@@ -1535,6 +1630,44 @@ if mode == "--negative-control-readme-api":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: README API drift was not detected")
+
+if mode == "--negative-control-zk-ace-proof-builder-coverage":
+    target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
+    original = read(target)
+    mutated = original.replace(
+        "  assertPythonZkAceProofBuilderCoverage();",
+        "  assertPythonZkAceProofBuilderCoverageSkipped();",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate ZK-ACE proof-builder coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected ZK-ACE proof-builder coverage drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: ZK-ACE proof-builder coverage drift was not detected")
+
+if mode == "--negative-control-python-catalog-bytecode-guard":
+    target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
+    original = read(target)
+    mutated = original.replace(
+        '    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python catalog bytecode guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected Python catalog bytecode guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python catalog bytecode guard drift was not detected")
 
 if mode == "--negative-control-readme-error-code":
     target = "javascript/iroha_js/README.md"

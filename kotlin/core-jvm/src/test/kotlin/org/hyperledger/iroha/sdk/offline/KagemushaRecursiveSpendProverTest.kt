@@ -44,6 +44,10 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
         )
         assertEquals(
+            64 * 1024 * 1024,
+            KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
+        assertEquals(
             "iroha:kagemusha:v1:recursive-spend-transition-profile",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
         )
@@ -214,6 +218,30 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             ),
         )
+        assertTrue(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
+        assertTrue(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            ),
+        )
+        assertTrue(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            ),
+        )
+        for (outputCircuitId in listOf(
+            null,
+            "",
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            "unknown-kagemusha-recursive-spend-circuit",
+        )) {
+            assertFalse(
+                KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                    outputCircuitId,
+                ),
+            )
+        }
         assertFalse(
             KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
                 "unknown-kagemusha-recursive-spend-circuit",
@@ -535,7 +563,10 @@ class KagemushaRecursiveSpendProverTest {
             manifest,
             "\"pallas_open_envelope_max_transcript_label_bytes\": ${KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES}",
         )
-        assertContains(manifest, "\"native_archive_max_bytes\": 67108864")
+        assertContains(
+            manifest,
+            "\"native_archive_max_bytes\": ${KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES}",
+        )
         assertContains(
             manifest,
             "\"transition_profile\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN}\"",
@@ -593,6 +624,9 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"name\": \"lineage_verifier_record\"")
         assertContains(archives, "\"name\": \"lineage_witness\"")
         assertContains(archives, "\"name\": \"block_height\"")
+        assertContains(archives, "\"type\": \"Option<u64>\"")
+        assertContains(archives, "\"norito_default\": true")
+        assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")
         assertContains(
             archives,
             "\"sha256_hex\": \"b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2\"",
@@ -783,7 +817,7 @@ class KagemushaRecursiveSpendProverTest {
 
         val oversized = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
-                ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
+                ByteArray(KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
                 "redeem",
             )
         }

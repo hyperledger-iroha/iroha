@@ -4815,8 +4815,9 @@ descriptorTest("privacy algorithm descriptors expose strict post-quantum MASP se
       reference.url === "https://csrc.nist.gov/pubs/fips/204/final"
     ),
   );
-  assert.ok(pq.sdkEntrypoints.includes("buildAssetHiddenZkTransferInstruction"));
+  assert.deepEqual(pq.sdkEntrypoints, []);
   assert.ok(pq.plannedSdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"));
+  assert.ok(pq.plannedSdkEntrypoints.includes("buildPqMaspStarkTransferInstruction"));
   assert.equal(pq.sdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"), false);
   assert.equal(pq.coveredCriteria.includes("post_quantum"), true);
 });

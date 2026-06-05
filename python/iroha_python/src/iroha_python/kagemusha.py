@@ -89,6 +89,8 @@ __all__ = [
     "can_redeem_kagemusha_recursive_spend_witnessless",
     "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
     "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
+    "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init",
+    "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output",
     "requires_kagemusha_recursive_spend_lineage_witness_for_redeem",
     "can_append_kagemusha_recursive_spend_witnessless_lineage",
     "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
@@ -362,6 +364,12 @@ def is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
     )
 
 
+def requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init() -> bool:
+    """Return whether init proof builders need packaged Reserved-lineage keys."""
+
+    return True
+
+
 def requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
     proof_circuit_id: str,
     hop_count: int,
@@ -411,6 +419,17 @@ def is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
+
+
+def requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output(
+    output_proof_circuit_id: str | None,
+) -> bool:
+    """Return whether append output proving needs packaged Reserved-lineage keys."""
+
+    normalized = normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
+        output_proof_circuit_id,
+    )
+    return is_kagemusha_recursive_spend_lineage_append_output_circuit_id(normalized)
 
 
 def is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(

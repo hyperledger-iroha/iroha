@@ -442,6 +442,71 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertIn("--message path", stderr)
             self.assertEqual(requests, [])
 
+    def test_explicit_message_paths_reject_smuggling_before_network_delivery(self):
+        cases = [
+            ("whitespace", "rail status.xml", "must not contain whitespace"),
+            ("backslash", r"nested\rail-status.xml", "must use forward slashes"),
+            (
+                "semicolon",
+                "rail-status.xml;v=1",
+                "must not contain semicolon path parameters",
+            ),
+            ("empty segment", "nested//rail-status.xml", "must not contain empty path segments"),
+            ("dot segment", "nested/./rail-status.xml", "must not contain dot or parent segments"),
+            ("parent segment", "nested/../rail-status.xml", "must not contain dot or parent segments"),
+        ]
+        for label, message, expected in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    write_message(inbox)
+                    with capture_server() as (base_url, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--message",
+                                message,
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn(expected, stderr)
+
+    def test_discovered_message_leaf_rejects_smuggling_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path = inbox / "rail status.xml"
+            xml_path.write_bytes(SAMPLE_XML)
+            sidecar = {
+                "message_type": "pacs.002",
+                "profile": "swift-cbpr-plus",
+                "payload_sha256": ADAPTER.sha256_hex(SAMPLE_XML),
+                "rail_message_id": "rail-drop-1",
+            }
+            (inbox / "rail status.xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("filename must not contain whitespace", stderr)
+
     def test_symlinked_message_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -582,6 +647,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
     def test_sidecar_header_strings_must_not_require_trimming(self):
         cases = [
             (
+                "profile null",
+                "profile",
+                None,
+                "profile must be a non-empty string",
+            ),
+            (
                 "profile whitespace",
                 "profile",
                 " swift-cbpr-plus",
@@ -598,6 +669,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "profile",
                 "swift cbpr-plus",
                 "profile must not contain whitespace",
+            ),
+            (
+                "rail message null",
+                "rail_message_id",
+                None,
+                "rail_message_id must be a non-empty string",
             ),
             (
                 "rail message whitespace",
@@ -701,6 +778,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("https://torii.example%2einvalid", False),
             ("https://123.000.000.001", False),
             ("https://torii.example/../base", False),
+            ("https://torii.example/base//v1", False),
             ("https://torii.example/%2e%2e/base", False),
             ("https://torii.example/base%2fv1", False),
             ("https://torii.example/base%252fv1", False),

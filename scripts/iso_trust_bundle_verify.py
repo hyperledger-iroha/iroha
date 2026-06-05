@@ -269,9 +269,9 @@ def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
 
 
 def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None:
-    raw = bundle.get(key)
-    if raw is None:
+    if key not in bundle:
         return None
+    raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
     _reject_ascii_control(raw, f"{label}.{key}")
@@ -561,8 +561,8 @@ def _der_objects(
             allow_synthetic_der=allow_synthetic_der,
         )
         digest = sha256_hex(der)
-        declared_digest = obj.get("sha256")
-        if declared_digest is not None:
+        if "sha256" in obj:
+            declared_digest = obj.get("sha256")
             if not isinstance(declared_digest, str):
                 raise TrustBundleError(f"{label}.{key}[{offset}].sha256 must be a string")
             if declared_digest != declared_digest.strip():
@@ -574,14 +574,14 @@ def _der_objects(
         if digest in seen:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates DER SHA-256 {digest}")
         seen.add(digest)
-        entries.append(
-            {
-                "label": name,
-                "sha256": digest,
-                "der_base64": canonical_b64,
-                "byte_len": len(der),
-            }
-        )
+        entry = {
+            "sha256": digest,
+            "der_base64": canonical_b64,
+            "byte_len": len(der),
+        }
+        if name is not None:
+            entry["label"] = name
+        entries.append(entry)
         base64_values.append(canonical_b64)
     return entries, base64_values
 
@@ -720,7 +720,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise TrustBundleError(f"{label} path must use forward slashes")
     if ";" in path:
         raise TrustBundleError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise TrustBundleError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise TrustBundleError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):

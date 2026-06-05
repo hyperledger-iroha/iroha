@@ -290,6 +290,7 @@ def verify_message_file(
 ) -> GatewayMessage:
     """Verify a gateway XML payload and its sidecar metadata."""
 
+    _validate_path_argument(str(xml_path.name), f"{xml_path} filename")
     if xml_path.suffix.lower() != ".xml":
         raise AdapterError(f"{xml_path} must use a .xml suffix")
     sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
@@ -316,13 +317,16 @@ def verify_message_file(
             "use colr.012 for production collateral substitution confirmations"
         )
 
-    profile = sidecar.get("profile")
-    if profile is None:
+    profile_present = "profile" in sidecar
+    if not profile_present:
         if not allow_default_profile:
             raise AdapterError(f"{sidecar_path} must specify profile for live rail submission")
-    elif not isinstance(profile, str) or not profile.strip():
-        raise AdapterError(f"{sidecar_path} profile must be a non-empty string")
+        profile = None
     else:
+        profile = sidecar.get("profile")
+    if profile_present and (not isinstance(profile, str) or not profile.strip()):
+        raise AdapterError(f"{sidecar_path} profile must be a non-empty string")
+    if isinstance(profile, str):
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in profile):
             raise AdapterError(f"{sidecar_path} profile must not contain control characters")
         if profile != profile.strip():
@@ -332,8 +336,11 @@ def verify_message_file(
         if any(ch.isspace() for ch in profile):
             raise AdapterError(f"{sidecar_path} profile must not contain whitespace")
 
-    rail_message_id = sidecar.get("rail_message_id")
-    if rail_message_id is not None and (
+    rail_message_id_present = "rail_message_id" in sidecar
+    rail_message_id = None
+    if rail_message_id_present:
+        rail_message_id = sidecar.get("rail_message_id")
+    if rail_message_id_present and (
         not isinstance(rail_message_id, str) or not rail_message_id.strip()
     ):
         raise AdapterError(f"{sidecar_path} rail_message_id must be a non-empty string")
@@ -370,17 +377,35 @@ def discover_messages(inbox_dir: Path) -> list[Path]:
     messages = sorted(path for path in inbox_dir.iterdir() if path.suffix.lower() == ".xml")
     if not messages:
         raise AdapterError(f"{inbox_dir} has no *.xml gateway messages")
+    for path in messages:
+        _validate_path_argument(str(path.name), f"{path} filename")
     return messages
 
 
-def resolve_message_paths(inbox_dir: Path, message: Path | None) -> list[Path]:
+def _validate_path_argument(raw: str, label: str) -> None:
+    if any(ch.isspace() for ch in raw):
+        raise AdapterError(f"{label} must not contain whitespace")
+    if "\\" in raw:
+        raise AdapterError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise AdapterError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    for offset, part in enumerate(parts):
+        if part == "" and offset != 0:
+            raise AdapterError(f"{label} must not contain empty path segments")
+        if part in {".", ".."}:
+            raise AdapterError(f"{label} must not contain dot or parent segments")
+
+
+def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     """Resolve one explicit message or discover all messages under the inbox."""
 
     _ensure_input_directory(inbox_dir, "inbox_dir")
     inbox_root = inbox_dir.resolve()
     if message is None:
         return discover_messages(inbox_dir)
-    raw_message = message.expanduser()
+    _validate_path_argument(message, "--message path")
+    raw_message = Path(message).expanduser()
     message_path = raw_message if raw_message.is_absolute() else inbox_dir / raw_message
     resolved_parent = message_path.parent.resolve()
     if not resolved_parent.is_relative_to(inbox_root):
@@ -467,7 +492,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise AdapterError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise AdapterError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
@@ -719,7 +748,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--message",
-        type=Path,
         help="Submit one XML file instead of scanning --inbox-dir.",
     )
     parser.add_argument(

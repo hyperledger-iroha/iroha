@@ -4016,9 +4016,10 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildRotateZkAceIdentityCommitmentInstruction",
         "buildRevokeZkAceIdentityCommitmentInstruction",
         "buildZkAceAuthorizedTransferInstruction",
+        "buildZkAceAuthorizationProofV1",
     ]
     assert zk_ace["planned_sdk_entrypoints"] == [
-        "buildZkAceAuthorizationProofV1",
+        "buildShieldedZkAceAuthorizationProofV1",
         "buildShieldedZkAceAuthorizedTransferInstruction",
     ]
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
@@ -4592,6 +4593,7 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     assert capabilities["zk_ace_revoke_identity_instruction"] is True
     assert capabilities["zk_ace_identity_lifecycle_instruction"] is True
     assert capabilities["zk_ace_authorized_transfer_instruction"] is True
+    assert capabilities["zk_ace_authorization_proof_v1"] is True
     assert capabilities["zk_ace_native_air_prover_v1"] is True
     assert capabilities["zk_ace_validator_support_v1"] is True
     assert capabilities["zk_ace_air_opening_privacy_v1"] is True
@@ -4654,6 +4656,7 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
     assert capabilities["transfer_asset_instruction"] is True
     assert capabilities["zk_ace_identity_lifecycle_instruction"] is True
     assert capabilities["zk_ace_authorized_transfer_instruction"] is True
+    assert capabilities["zk_ace_authorization_proof_v1"] is True
     assert capabilities["zk_ace_native_air_prover_v1"] is True
     assert capabilities["zk_ace_validator_support_v1"] is True
     assert capabilities["zk_ace_air_opening_privacy_v1"] is True
@@ -4668,6 +4671,135 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
     assert capabilities["jindo_lattice_sdk_exports_v0"] is True
     assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
     assert capabilities["privacy_criteria"] == get_privacy_criteria()
+
+
+@pytest.mark.parametrize(
+    "missing_builder",
+    [
+        "build_zk_ace_authorization_proof_v1",
+        "zk_ace_build_transfer_authorization_v1",
+    ],
+)
+def test_zk_ace_python_capabilities_require_both_proof_builder_names(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_builder: str,
+) -> None:
+    original_callable_on_crypto = privacy_catalog._callable_on_crypto
+
+    def callable_on_crypto_without_one_builder(name: str) -> bool:
+        if name == missing_builder:
+            return False
+        return original_callable_on_crypto(name)
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_crypto",
+        callable_on_crypto_without_one_builder,
+    )
+
+    capabilities = privacy_capabilities()
+
+    assert capabilities["zk_ace_authorization_proof_v1"] is False
+    assert capabilities["zk_ace_sdk_exports_v1"] is False
+    assert capabilities["zk_ace_identity_lifecycle_instruction"] is True
+    assert capabilities["zk_ace_authorized_transfer_instruction"] is True
+
+
+def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
+    assert "build_zk_ace_authorization_proof_v1" in crypto.__all__
+    assert "build_zk_ace_authorization_proof_v1" in iroha_python.__all__
+    assert (
+        crypto.build_zk_ace_authorization_proof_v1
+        is not crypto.zk_ace_build_transfer_authorization_v1
+    )
+    assert callable(crypto.build_zk_ace_authorization_proof_v1)
+    assert (
+        iroha_python.build_zk_ace_authorization_proof_v1
+        is crypto.build_zk_ace_authorization_proof_v1
+    )
+
+
+def test_zk_ace_python_catalog_named_proof_builder_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_transfer_authorization_builder(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"ok": True, "entrypoint": "zk_ace_authorization_proof_v1"}
+
+    monkeypatch.setattr(
+        crypto,
+        "zk_ace_build_transfer_authorization_v1",
+        fake_transfer_authorization_builder,
+    )
+
+    result = crypto.build_zk_ace_authorization_proof_v1(
+        from_account_id="alice@wonderland",
+        to_account_id="bob@wonderland",
+        asset_definition_id="xor#wonderland",
+        amount="1",
+        chain_id="wonderland",
+        identity_root=b"identity-root",
+        identity_blinding=b"identity-blinding",
+        replay_secret=b"replay-secret",
+        policy_hash=b"policy-hash",
+    )
+
+    assert result == {"ok": True, "entrypoint": "zk_ace_authorization_proof_v1"}
+    assert captured == {
+        "from_account_id": "alice@wonderland",
+        "to_account_id": "bob@wonderland",
+        "asset_definition_id": "xor#wonderland",
+        "amount": "1",
+        "chain_id": "wonderland",
+        "identity_root": b"identity-root",
+        "identity_blinding": b"identity-blinding",
+        "replay_secret": b"replay-secret",
+        "policy_hash": b"policy-hash",
+    }
+
+
+def test_zk_ace_python_catalog_named_proof_builder_propagates_native_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_transfer_authorization_builder(**_kwargs: object) -> dict[str, object]:
+        raise RuntimeError(
+            "iroha_python._crypto is missing ZK-ACE prover support; rebuild the extension"
+        )
+
+    monkeypatch.setattr(
+        crypto,
+        "zk_ace_build_transfer_authorization_v1",
+        unavailable_transfer_authorization_builder,
+    )
+
+    with pytest.raises(RuntimeError, match="missing ZK-ACE prover support"):
+        crypto.build_zk_ace_authorization_proof_v1()
+
+
+def test_zk_ace_python_transfer_authorization_rejects_non_object_native_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NonObjectPayloadNative:
+        @staticmethod
+        def zk_ace_build_transfer_authorization_v1(*_args: object) -> str:
+            return "[]"
+
+    monkeypatch.setattr(crypto, "_crypto", NonObjectPayloadNative())
+
+    with pytest.raises(RuntimeError, match="non-object payload"):
+        crypto.zk_ace_build_transfer_authorization_v1(
+            from_account_id="alice@wonderland",
+            to_account_id="bob@wonderland",
+            asset_definition_id="xor#wonderland",
+            amount="1",
+            chain_id="wonderland",
+            identity_root=b"identity-root",
+            identity_blinding=b"identity-blinding",
+            replay_secret=b"replay-secret",
+            policy_hash=b"policy-hash",
+        )
 
 
 def test_privacy_native_availability_probe_is_exact_bool_and_fail_closed(

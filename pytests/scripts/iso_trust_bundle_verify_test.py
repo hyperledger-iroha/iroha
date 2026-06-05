@@ -373,6 +373,58 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("does not match der_base64", stderr)
 
+    def test_declared_der_digest_must_be_string_when_present(self):
+        for key in (
+            "x509_trust_anchors",
+            "revoked_certificates",
+            "x509_crls",
+            "x509_ocsp_responses",
+        ):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle[key][0]["sha256"] = None
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{key}[0].sha256 must be a string", stderr)
+
+    def test_absent_der_labels_are_omitted_from_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            for key in (
+                "x509_trust_anchors",
+                "revoked_certificates",
+                "x509_crls",
+                "x509_ocsp_responses",
+            ):
+                bundle[key][0].pop("label")
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(path),
+                    "--emit-profile-json",
+                    str(root / "profile.json"),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            bundle_summary = summary["bundles"][0]
+            for key in (
+                "x509_trust_anchors",
+                "revoked_certificates",
+                "x509_crls",
+                "x509_ocsp_responses",
+            ):
+                self.assertNotIn("label", bundle_summary[key][0])
+
     def test_json_strings_must_not_require_trimming(self):
         cases = (
             (
@@ -384,6 +436,14 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "source-version",
                 lambda bundle: bundle["source"].__setitem__("version", "2026-Q2 "),
                 "source.version must not have surrounding whitespace",
+            ),
+            (
+                "source-authority",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    " Example Rail PKI",
+                ),
+                "source.authority must not have surrounding whitespace",
             ),
             (
                 "public-pin",
@@ -416,6 +476,11 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     der_digest(CRL_B64) + " ",
                 ),
                 "x509_crls[0].sha256 must not have surrounding whitespace",
+            ),
+            (
+                "der-label-null",
+                lambda bundle: bundle["x509_crls"][0].__setitem__("label", None),
+                "x509_crls[0].label must be a non-empty string when provided",
             ),
         )
         for name, mutate, message in cases:
@@ -593,6 +658,65 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_optional_source_identity_fields_must_be_strings_when_present(self):
+        cases = (
+            (
+                "authority-null",
+                lambda bundle: bundle["source"].__setitem__("authority", None),
+                "source.authority must be a non-empty string when provided",
+            ),
+            (
+                "authority-empty",
+                lambda bundle: bundle["source"].__setitem__("authority", ""),
+                "source.authority must be a non-empty string when provided",
+            ),
+            (
+                "authority-numeric",
+                lambda bundle: bundle["source"].__setitem__("authority", 7),
+                "source.authority must be a non-empty string when provided",
+            ),
+            (
+                "authority-control",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Example\nRail PKI",
+                ),
+                "source.authority must not contain ASCII control characters",
+            ),
+            (
+                "version-null",
+                lambda bundle: bundle["source"].__setitem__("version", None),
+                "source.version must be a non-empty string when provided",
+            ),
+            (
+                "version-empty",
+                lambda bundle: bundle["source"].__setitem__("version", ""),
+                "source.version must be a non-empty string when provided",
+            ),
+            (
+                "version-numeric",
+                lambda bundle: bundle["source"].__setitem__("version", 2026),
+                "source.version must be a non-empty string when provided",
+            ),
+            (
+                "version-control",
+                lambda bundle: bundle["source"].__setitem__("version", "2026-Q2\n"),
+                "source.version must not contain ASCII control characters",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_source_url_rejects_credentials_query_fragment_and_local_addresses(self):
         cases = [
             ("https://user:pass@pki.example.invalid/swift-cbpr-plus", "credentials"),
@@ -611,6 +735,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("https://pki.example%2einvalid/swift-cbpr-plus", "host must not contain percent escapes"),
             ("https://123.000.000.001/swift-cbpr-plus", "numeric host labels must be a valid IP address"),
             ("https://pki.example.invalid/../swift-cbpr-plus", "path must not contain dot segments"),
+            ("https://pki.example.invalid/swift//cbpr-plus", "path must not contain empty segments"),
             ("https://pki.example.invalid/%2e%2e/swift-cbpr-plus", "path must not contain encoded dot or separator characters"),
             ("https://pki.example.invalid/swift%2fcbpr-plus", "path must not contain encoded dot or separator characters"),
             ("https://pki.example.invalid/swift%252fcbpr-plus", "path must not contain encoded percent characters"),

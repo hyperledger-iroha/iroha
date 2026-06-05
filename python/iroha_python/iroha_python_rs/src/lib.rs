@@ -4216,6 +4216,17 @@ fn kagemusha_recursive_spend_append_py(
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let output_proof_circuit_id = request.output_proof_circuit_id().to_owned();
+    let output_append_is_currently_provable =
+        iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            output_proof_circuit_id.as_str(),
+            request.previous_bundle.accumulator.hop_count,
+        );
+    if !output_append_is_currently_provable {
+        return Err(PyRuntimeError::new_err(format!(
+            "Kagemusha recursive spend append cannot prove output proof circuit `{}` at previous hop {}",
+            output_proof_circuit_id, request.previous_bundle.accumulator.hop_count,
+        )));
+    }
     let mut lineage_proving_key_archive = None;
     let vk_box = match output_proof_circuit_id.as_str() {
         iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
@@ -4227,27 +4238,17 @@ fn kagemusha_recursive_spend_append_py(
                 output_circuit,
             ) =>
         {
-            if iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                output_proof_circuit_id.as_str(),
-                request.previous_bundle.accumulator.hop_count,
-            ) {
-                lineage_proving_key_archive =
-                    Some(request.lineage_proving_key_archive.as_deref().ok_or_else(|| {
-                        PyValueError::new_err(
-                            "Kagemusha Reserved-lineage append requires lineage_proving_key_archive",
-                        )
-                    })?);
-                request.lineage_verifier_key.clone().ok_or_else(|| {
+            lineage_proving_key_archive =
+                Some(request.lineage_proving_key_archive.as_deref().ok_or_else(|| {
                     PyValueError::new_err(
-                        "Kagemusha Reserved-lineage append requires lineage_verifier_key",
+                        "Kagemusha Reserved-lineage append requires lineage_proving_key_archive",
                     )
-                })?
-            } else {
-                iroha_data_model::proof::VerifyingKeyBox::new(
-                    iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                    Vec::new(),
+                })?);
+            request.lineage_verifier_key.clone().ok_or_else(|| {
+                PyValueError::new_err(
+                    "Kagemusha Reserved-lineage append requires lineage_verifier_key",
                 )
-            }
+            })?
         }
         other => {
             return Err(PyRuntimeError::new_err(format!(
@@ -4841,7 +4842,7 @@ mod tests {
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
-        proof::VerifyingKeyId,
+        proof::{VerifyingKeyBox, VerifyingKeyId},
         zk::{BackendTag, OpenVerifyEnvelope},
     };
     use ivm::bn254_vec::{self, FieldElem};
@@ -8938,7 +8939,7 @@ mod tests {
                     .expect_err("init lineage helper must reject empty bundle archive")
                     .to_string();
             assert!(
-                err.contains("archive must not be empty"),
+                err.contains("failed to fill whole buffer"),
                 "unexpected empty bundle error: {err}"
             );
 
@@ -8964,7 +8965,7 @@ mod tests {
             .expect_err("append lineage helper must reject empty request archive")
             .to_string();
             assert!(
-                err.contains("archive must not be empty"),
+                err.contains("failed to fill whole buffer"),
                 "unexpected empty append request error: {err}"
             );
 
@@ -8977,7 +8978,7 @@ mod tests {
             .expect_err("append lineage helper must reject empty bundle archive")
             .to_string();
             assert!(
-                err.contains("archive must not be empty"),
+                err.contains("failed to fill whole buffer"),
                 "unexpected empty append bundle error: {err}"
             );
 
@@ -9472,19 +9473,28 @@ mod tests {
     fn kagemusha_recursive_spend_append_python_rejects_missing_lineage_key_artifacts() {
         ensure_python();
         Python::attach(|py| {
-            for (case, expected_field, proving_key_archive) in [
+            for (case, expected_field, verifier_key, proving_key_archive) in [
                 (
                     "missing both artifacts",
                     "lineage_proving_key_archive",
+                    None,
+                    None,
+                ),
+                (
+                    "missing proving key archive",
+                    "lineage_proving_key_archive",
+                    Some(VerifyingKeyBox::new("halo2/ipa".to_owned(), vec![0xAB; 32])),
                     None,
                 ),
                 (
                     "missing verifier key",
                     "lineage_verifier_key",
+                    None,
                     Some(vec![0xAC; 32]),
                 ),
             ] {
                 let mut request = sample_reserved_lineage_append_request_missing_key_artifacts();
+                request.lineage_verifier_key = verifier_key;
                 request.lineage_proving_key_archive = proving_key_archive;
                 let archive =
                     norito::to_bytes(&request).expect("encode Python append request archive");
@@ -9722,8 +9732,8 @@ mod tests {
             .expect_err("lineage helper must reject mismatched init bundle")
             .to_string();
             assert!(
-                err.contains("lineage"),
-                "mismatched init bundle error lost lineage context: {err}"
+                err.contains("changed chain id"),
+                "mismatched init bundle error lost continuity context: {err}"
             );
         });
     }
@@ -10272,8 +10282,8 @@ mod tests {
                 "Python native redeem builder must reject backend-invalid reserved-lineage proof",
             );
         assert!(
-            err.contains("proof did not verify"),
-            "unexpected backend-invalid reserved-lineage rejection: {err}"
+            err.contains("missing verifier-slice public instance columns"),
+            "unexpected structurally invalid reserved-lineage rejection: {err}"
         );
 
         let mut missing_lineage_slice = sample_recursive_spend_redeem_request(42);
@@ -10335,11 +10345,15 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_python_function_rejects_backend_invalid_lineage() {
+    fn kagemusha_recursive_spend_redeem_python_function_rejects_structurally_invalid_lineage() {
         ensure_python();
         let mut request = sample_recursive_spend_redeem_request(42);
         attach_strict_reserved_lineage_envelope(&mut request);
-        request.lineage_verifier_record = Some(sample_recursive_spend_lineage_verifier_record());
+        let mut lineage_record = sample_recursive_spend_lineage_verifier_record();
+        lineage_record.max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
+                as u32;
+        request.lineage_verifier_record = Some(lineage_record);
         let archive =
             norito::to_bytes(&request).expect("encode reserved lineage recursive spend request");
         Python::attach(|py| {
@@ -10347,7 +10361,10 @@ mod tests {
                 .expect_err("Python function must reject backend-invalid reserved-lineage redeem");
             let message = err.to_string();
             assert!(message.contains("invalid Kagemusha recursive spend redeem request"));
-            assert!(message.contains("inline key"));
+            assert!(
+                message.contains("missing verifier-slice public instance columns"),
+                "unexpected structurally invalid lineage rejection: {message}"
+            );
         });
     }
 
@@ -15589,9 +15606,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildRotateZkAceIdentityCommitmentInstruction",
             "buildRevokeZkAceIdentityCommitmentInstruction",
             "buildZkAceAuthorizedTransferInstruction",
+            "buildZkAceAuthorizationProofV1",
         ],
         planned_entrypoints: &[
-            "buildZkAceAuthorizationProofV1",
+            "buildShieldedZkAceAuthorizationProofV1",
             "buildShieldedZkAceAuthorizedTransferInstruction",
         ],
     },

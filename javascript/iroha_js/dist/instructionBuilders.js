@@ -1790,12 +1790,27 @@ const STARK_FRI_PRODUCTION_BACKEND_LABELS = new Set([
   "stark/fri/sha256_goldilocks.v1",
 ]);
 
+const HUMAN_READABLE_PRIVACY_BACKEND_ALIASES = new Set([
+  "zkAt policy-private authenticator",
+]);
+
+const PLUS_PRIVACY_BACKEND_ALIASES = new Set([
+  "fcmp++",
+  "monero-fcmp++",
+]);
+
 function isStarkFriProductionBackendLabel(backend) {
   return STARK_FRI_PRODUCTION_BACKEND_LABELS.has(backend);
 }
 
 function isPortableVerifierBackendLabel(backend) {
-  return /^[A-Za-z0-9/_.:-]+$/u.test(backend);
+  if (HUMAN_READABLE_PRIVACY_BACKEND_ALIASES.has(backend)) {
+    return true;
+  }
+  if (backend.includes("+") && !PLUS_PRIVACY_BACKEND_ALIASES.has(backend)) {
+    return false;
+  }
+  return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);
 }
 
 function normalizeNativeHalo2PastaBackendLabel(value) {
@@ -14977,7 +14992,7 @@ export function buildRevokeZkAceIdentityCommitmentInstruction(options) {
  * @param {object} options
  * @returns {{public_inputs: object, proof: object}}
  */
-function buildZkAceAuthorizationProofV1(options) {
+export function buildZkAceAuthorizationProofV1(options) {
   const source = assertPlainObject(options, "zkAceAuthorizationProof");
   const publicInputs = normalizeZkAcePublicInputs(
     source.publicInputs ?? source.public_inputs,

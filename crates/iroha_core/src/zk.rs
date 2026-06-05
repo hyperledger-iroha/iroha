@@ -9625,9 +9625,10 @@ fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_env
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
         })?;
     let evidence =
-        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes_at_optional_height(
             record_bundle,
             &envelopes,
+            block_height,
         )?;
     if evidence.aggregation_statement.steps.len() != 1 {
         return Err(format!(
@@ -16867,13 +16868,16 @@ fn preverify_bound_vk_commitment(
     vk_commitment: Option<[u8; 32]>,
     expected_vk_commitment: Option<[u8; 32]>,
 ) -> Result<[u8; 32], PreverifyResult> {
-    let Some(commitment) = vk_commitment else {
-        return Err(PreverifyResult::VerifyingKeyMissing);
-    };
     let Some(expected) = expected_vk_commitment else {
         return Err(PreverifyResult::VerifyingKeyMissing);
     };
-    if commitment == [0u8; 32] || expected == [0u8; 32] || commitment != expected {
+    if expected == [0u8; 32] {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    let Some(commitment) = vk_commitment else {
+        return Ok(expected);
+    };
+    if commitment == [0u8; 32] || commitment != expected {
         return Err(PreverifyResult::VerifyingKeyMismatch);
     }
     Ok(commitment)
@@ -35141,6 +35145,78 @@ mod kagemusha_folded_real_prover_tests {
             &first_bundle,
             &recursive_vk
         ));
+
+        let mut windowed_second_record_bundle = second_record_bundle.clone();
+        let windowed_record = &mut windowed_second_record_bundle
+            .verifier_records
+            .first_mut()
+            .expect("one-hop record bundle has one verifier record")
+            .record;
+        windowed_record.activation_height = Some(2);
+        windowed_record.withdraw_height = Some(4);
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("height-unbound append must reject windowed current-hop records");
+        assert!(err.contains("chain height"), "{err}");
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                1,
+            )
+            .expect_err("future append current-hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
+
+        let windowed_appended =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                2,
+            )
+            .expect("in-window append current-hop record must pass evidence verification");
+        assert_eq!(windowed_appended.accumulator.hop_count, 2);
+
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                &first_bundle,
+                None,
+                &[],
+                &windowed_second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+                4,
+            )
+            .expect_err("withdrawn append current-hop record must reject before proving");
+        assert!(err.contains("not active"), "{err}");
 
         let appended =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
@@ -62879,15 +62955,41 @@ mod preverified_key_tests {
             PreverifyResult::Accepted
         );
 
-        let mut missing_commitment_dedup = DedupCache::new();
+        let mut resolved_commitment_dedup = DedupCache::new();
         assert_eq!(
             preverify_with_budget(
                 &proof,
                 Some(&vk),
-                &mut missing_commitment_dedup,
+                &mut resolved_commitment_dedup,
                 0,
                 None,
                 Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut resolved_commitment_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Duplicate
+        );
+
+        let mut missing_expected_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut missing_expected_dedup,
+                0,
+                None,
+                None,
                 true,
             ),
             PreverifyResult::VerifyingKeyMissing
@@ -62896,7 +62998,7 @@ mod preverified_key_tests {
             preverify_with_budget(
                 &proof,
                 Some(&vk),
-                &mut missing_commitment_dedup,
+                &mut missing_expected_dedup,
                 0,
                 Some(expected),
                 None,
@@ -62908,7 +63010,7 @@ mod preverified_key_tests {
             preverify_with_budget(
                 &proof,
                 Some(&vk),
-                &mut missing_commitment_dedup,
+                &mut missing_expected_dedup,
                 0,
                 Some(expected),
                 Some(expected),
@@ -63855,7 +63957,6 @@ mod tests {
 
     #[test]
     fn preverify_basic() {
-        let mut d = DedupCache::new();
         let vk_commitment = [1u8; 32];
         let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
@@ -63869,22 +63970,28 @@ mod tests {
             ZK_BACKEND_HALO2_IPA.into(),
             norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
         );
-        assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 0, None, Some(vk_commitment), true),
-            PreverifyResult::VerifyingKeyMissing
-        );
-        assert_eq!(
-            preverify_with_budget(&p, None, &mut d, 0, Some(vk_commitment), None, true),
-            PreverifyResult::VerifyingKeyMissing
-        );
+        let mut missing_expected = DedupCache::new();
         assert_eq!(
             preverify_with_budget(
                 &p,
                 None,
-                &mut d,
+                &mut missing_expected,
                 0,
-                Some([0u8; 32]),
                 Some(vk_commitment),
+                None,
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMissing
+        );
+        let mut zero_commitment = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &p,
+                None,
+                &mut zero_commitment,
+                0,
+                None,
+                Some([0u8; 32]),
                 true,
             ),
             PreverifyResult::VerifyingKeyMismatch
@@ -63893,12 +64000,17 @@ mod tests {
             preverify_with_budget(
                 &p,
                 None,
-                &mut d,
+                &mut zero_commitment,
                 0,
-                Some(vk_commitment),
+                Some([0u8; 32]),
                 Some(vk_commitment),
                 true,
             ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        let mut d = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(&p, None, &mut d, 0, None, Some(vk_commitment), true,),
             PreverifyResult::Accepted
         );
         assert_eq!(

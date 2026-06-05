@@ -252,9 +252,9 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
 
 
 def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise CanaryError(f"{label}.{key} must be a non-empty string when provided")
     _reject_control_chars(raw, f"{label}.{key}")
@@ -295,9 +295,9 @@ def _policy_bool(
 def _optional_positive_int(
     value: dict[str, Any], key: str, label: str
 ) -> int | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
         raise CanaryError(f"{label}.{key} must be a positive integer")
     return raw
@@ -306,9 +306,9 @@ def _optional_positive_int(
 def _optional_positive_number(
     value: dict[str, Any], key: str, label: str
 ) -> float | None:
-    raw = value.get(key)
-    if raw is None:
+    if key not in value:
         return None
+    raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
         raise CanaryError(f"{label}.{key} must be a positive number")
     return float(raw)
@@ -349,7 +349,23 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
         seen[key] = offset
 
 
+def _validate_path_string(raw: str, label: str) -> None:
+    if any(ch.isspace() for ch in raw):
+        raise CanaryError(f"{label} must not contain whitespace")
+    if "\\" in raw:
+        raise CanaryError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise CanaryError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    for offset, part in enumerate(parts):
+        if part == "" and offset != 0:
+            raise CanaryError(f"{label} must not contain empty path segments")
+        if part in {".", ".."}:
+            raise CanaryError(f"{label} must not contain dot or parent segments")
+
+
 def _path_from_config(config_dir: Path, raw: str, label: str) -> Path:
+    _validate_path_string(raw, label)
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
@@ -456,7 +472,11 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise CanaryError(f"{label} path must use forward slashes")
     if ";" in path:
         raise CanaryError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise CanaryError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise CanaryError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
@@ -693,14 +713,14 @@ def _build_verify_stage(
         require_explicit_policy=require_explicit_policy,
     )
     receipt_dirs = [
-        _path_from_config(config_dir, item, "verify.receipt_dirs")
-        for item in _string_list(verify, "receipt_dirs", "verify")
+        _path_from_config(config_dir, item, f"verify.receipt_dirs[{offset}]")
+        for offset, item in enumerate(_string_list(verify, "receipt_dirs", "verify"))
     ]
     if include_stage_receipts:
         receipt_dirs.extend(stage_receipt_dirs)
     receipts = [
-        _path_from_config(config_dir, item, "verify.receipts")
-        for item in _string_list(verify, "receipts", "verify")
+        _path_from_config(config_dir, item, f"verify.receipts[{offset}]")
+        for offset, item in enumerate(_string_list(verify, "receipts", "verify"))
     ]
     _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
     _reject_duplicate_paths(receipts, "verify.receipts")

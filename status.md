@@ -2,6 +2,359 @@
 
 Last updated: 2026-06-05
 
+## 2026-06-05 Privacy guard negative-control inventory parity
+
+- Tightened the JS privacy FFI workflow/parity test so it derives the privacy
+  SDK guard negative-control mode list from `ci/check_privacy_sdk_guard.sh`
+  instead of relying on a stale manual subset.
+- The test now requires every mode in the guard inventory to have a matching
+  implementation block and a workflow invocation, covering new adversarial
+  checks such as the ZK-ACE proof-builder coverage guard and Python catalog
+  bytecode guard automatically.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python|privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+
+## 2026-06-05 Privacy catalog parity bytecode suppression
+
+- Updated the JS privacy catalog parity loader so Python catalog imports run
+  with `PYTHONDONTWRITEBYTECODE=1`, keeping source-only JS privacy checks from
+  creating local `__pycache__` artifacts under `python/iroha_python`.
+- Extended the aggregate privacy SDK source guard to require that bytecode
+  suppression when loading the Python catalog from JS parity tests.
+- Added `--negative-control-python-catalog-bytecode-guard` and wired it into
+  the PR privacy SDK workflow so removing the bytecode guard is rejected before
+  the aggregate native-building guard runs.
+- Validation:
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python|privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` before and
+    after JS validation returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an external `maturin develop --release`/Cargo/Rust build was already active
+  in this repo, and the script proceeds into the native Python SDK release
+  build after its source guard.
+
+## 2026-06-05 ZK-ACE executable descriptor-shape guard
+
+- Added a JS privacy catalog regression that pins the ZK-ACE descriptor as a
+  `chain-executable` STARK/FRI row with
+  `buildZkAceAuthorizationProofV1` in executable SDK entrypoints.
+- The same regression keeps the shielded ZK-ACE proof and instruction builders
+  in planned SDK entrypoints, rejects stale `buildZkAceAuthorizationProofV0`
+  drift, pins PQ-layer scope to proof plus authorization only, and verifies the
+  production gate remains closed while shielded builders are planned.
+- Extended the aggregate source guard to require the new JS descriptor-shape
+  regression so the executable transparent proof-builder contract cannot be
+  silently removed from the parity suite.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+  - `bash ci/check_privacy_js_sdk.sh`
+
+## 2026-06-05 ZK-ACE proof-builder CI guard hardening
+
+- Extended the aggregate privacy SDK guard so the shell-level source guard now
+  pins the JS parity helper that protects Python ZK-ACE proof-builder coverage.
+- Added guard assertions that Python capabilities still require both
+  `build_zk_ace_authorization_proof_v1` and
+  `zk_ace_build_transfer_authorization_v1`, that the catalog-named Python
+  builder delegates to the native-backed alias, and that Python crypto,
+  package-root, README, and adversarial tests all keep both names covered.
+- Added `--negative-control-zk-ace-proof-builder-coverage` and wired it into
+  the PR privacy SDK workflow so removing the JS parity helper invocation is
+  caught before the aggregate guard runs.
+- Validation:
+  - Embedded `ci/check_privacy_sdk_guard.sh` Python source compile
+  - Direct embedded source-only `run_checks()` execution
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-readme-api`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  the script proceeds into the native Python SDK release build after the
+  source guard, and the previous attempt on this host failed with disk
+  exhaustion during `maturin develop --release`.
+
+## 2026-06-05 JS/Python ZK-ACE proof-builder parity guard
+
+- Extended the JS privacy catalog parity suite so the main JS/Python catalog
+  parity test now also pins Python ZK-ACE proof-builder coverage.
+- The new guard requires Python privacy capabilities to depend on both
+  `build_zk_ace_authorization_proof_v1` and
+  `zk_ace_build_transfer_authorization_v1`, requires the catalog-named Python
+  builder to delegate to the native-backed builder, and requires Python crypto,
+  package-root, and README surfaces to expose/document both names.
+- The guard also requires Python tests to prove the ZK-ACE capability and SDK
+  export flags stay false if either proof-builder name is missing, and to cover
+  alias delegation, missing-native error propagation, and non-object native
+  prover payload rejection.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_privacy_js_sdk.sh`
+
+## 2026-06-05 Python ZK-ACE alias guard hardening
+
+- Pinned the Python README privacy API guard to require the executable ZK-ACE
+  SDK builder names `build_zk_ace_authorization_proof_v1()` and
+  `zk_ace_build_transfer_authorization_v1()` alongside the generic raw Norito
+  privacy FFI archive bridge.
+- Retargeted the README API negative control so it now mutates the catalog-named
+  ZK-ACE Python proof-builder alias and proves the guard detects that drift.
+- Added Python catalog tests that the catalog-named ZK-ACE builder delegates to
+  the native-backed transfer-authorization builder, propagates fail-closed
+  missing-native errors, rejects a non-object native prover payload, and keeps
+  `zk_ace_authorization_proof_v1` plus `zk_ace_sdk_exports_v1` false unless
+  both public proof-builder names are callable.
+- Validation:
+  - `python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct `PYTHONDONTWRITEBYTECODE=1 python3` isolated fake-native import check
+    for ZK-ACE alias delegation, native availability error propagation, and
+    non-object native payload rejection
+  - Direct `PYTHONDONTWRITEBYTECODE=1 python3` isolated fake-package capability
+    check that each missing ZK-ACE proof-builder name keeps
+    `zk_ace_authorization_proof_v1` and `zk_ace_sdk_exports_v1` false
+  - Python AST parse for `python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-readme-api`
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `git diff --check`
+- Full `bash ci/check_privacy_sdk_guard.sh` was attempted, but the Python native
+  release build failed in `maturin develop --release` with local disk exhaustion:
+  `No space left on device` while writing Cargo release fingerprints. The JS
+  privacy portions that ran before the Python native build passed.
+
+## 2026-06-05 Python ZK-ACE proof-builder alias parity
+
+- Added the executable Python SDK alias
+  `build_zk_ace_authorization_proof_v1`, delegating to the existing
+  native-backed `zk_ace_build_transfer_authorization_v1` builder so Python now
+  exposes the ZK-ACE proof builder under the catalog-style production
+  entrypoint name.
+- Exported the alias from both `iroha_python.crypto.__all__` and package
+  root `iroha_python.__all__`.
+- Tightened Python privacy capability detection so `zk_ace_authorization_proof_v1`
+  and `zk_ace_sdk_exports_v1` require both the existing transfer-authorization
+  builder and the catalog-named proof-builder alias.
+- Added Python catalog assertions pinning the public alias export.
+- Updated the Python README so the native privacy FFI remains documented as a
+  generic fail-closed Norito bridge while the executable ZK-ACE SDK builder is
+  documented separately.
+- Validation:
+  - Isolated `PYTHONDONTWRITEBYTECODE=1 python3` fake-native import check that
+    calls `build_zk_ace_authorization_proof_v1` and verifies delegation into
+    `zk_ace_build_transfer_authorization_v1`
+  - Isolated `PYTHONDONTWRITEBYTECODE=1 python3` fake-module privacy
+    capability probe for `zk_ace_authorization_proof_v1` and
+    `zk_ace_sdk_exports_v1`
+  - Python AST parse for touched Python source/test files
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-readme-api`
+  - `bash ci/check_privacy_js_sdk.sh`
+
+## 2026-06-05 ZK-ACE native privacy catalog parity
+
+- Aligned Python, PyO3, JS NAPI, and C bridge privacy catalogs with the JS
+  source descriptor by moving `buildZkAceAuthorizationProofV1` into the
+  executable ZK-ACE SDK entrypoints.
+- Kept the shielded ZK-ACE builder path fail-closed by reserving
+  `buildShieldedZkAceAuthorizationProofV1` and
+  `buildShieldedZkAceAuthorizedTransferInstruction` as planned entrypoints.
+- Updated the privacy FFI parity guard to allow explicit FCMP++ plus aliases
+  while still rejecting non-FCMP plus-sign backend labels in proof-envelope
+  normalization; Torii request labels remain portable and reject spaces.
+- Tightened stale C bridge privacy negative-test assertions so early malformed
+  algorithm/entrypoint/vk-ref failures continue to suppress reflected request
+  fields, while the planned-entrypoint test now reaches the planned-entrypoint
+  guard with a valid verifier-key ref.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy|ZK-ACE|package dist entrypoint exports privacy' javascript/iroha_js/test/package_dist.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1 python3` import/assertion check for the
+    ZK-ACE Python catalog descriptor and fail-closed production gate
+  - Python AST parse for `privacy_catalog.py` and `privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check` on the touched privacy native catalog
+    sources
+  - `bash ci/check_privacy_js_sdk.sh`
+  - `bash ci/check_connect_norito_bridge_header.sh`
+  - `bash ci/check_privacy_swift_sdk.sh`
+  - `PRIVACY_JVM_SDK_JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home bash ci/check_privacy_jvm_sdk.sh`
+    after the inherited `JAVA_HOME` was rejected for not pointing to JDK 21
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1`
+    after waiting for an external Cargo lock; 56 privacy tests passed
+
+## 2026-06-05 JS privacy pending-backend label portability
+
+- Fixed the JS privacy backend-tag portability precheck so canonical
+  pending-production labels with hyphens and plus signs, including
+  `zcash-orchard`, `monero-fcmp++`, and SDK-builder rows like
+  `anonymous-pgc-k-out-of-n-v1`, reach the existing backend normalizer instead
+  of being rejected as non-portable.
+- Kept plus-sign support exact for FCMP++ aliases so adversarial labels such
+  as `stark/fri/sha256+goldilocks` still reject instead of normalizing to a
+  valid STARK backend.
+- Exported the existing `buildZkAceAuthorizationProofV1` source/dist builder
+  through the package entrypoint and TypeScript declarations, then moved it
+  from planned to executable in the ZK-ACE catalog descriptor while retaining a
+  separate planned shielded proof builder for the production gate.
+- Corrected the PQ MASP research-target test to assert planned-only SDK
+  entrypoints rather than advertising the generic asset-hidden transfer builder
+  as executable for a fail-closed research row.
+- Expanded package-dist privacy envelope coverage to mirror the source
+  pending-backend alias set and to reject malformed whitespace, homoglyph,
+  production-claim, dev-fixture, and non-FCMP plus-sign backend labels.
+- Kept source/dist `instructionBuilders` and Torii client copies aligned.
+- Validation:
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - Minimal direct source import/assertion check for `buildPrivacyProofEnvelope`
+    plus `noritoDecodePrivacyProofEnvelope` on hyphen/plus pending backend
+    labels
+- Full source `instructionBuilders` tests pass with native-host-dependent cases
+  skipped because `iroha_js_host` was not built in this environment.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend SDK lineage key-artifact parity
+
+- Added public SDK helpers across JS, Python, Swift, Kotlin, Android Java, and
+  .NET so callers can detect that init builders always need packaged
+  Reserved-lineage verifier/proving key artifacts and append builders need
+  them when the normalized output selector is Reserved-lineage append.
+- Exported the JS helpers through source, dist, browser, package entrypoints,
+  and TypeScript declarations; exported the Python helpers through `__all__`.
+- Added positive and negative helper assertions for canonical lineage,
+  lineage-append, semantic aggregation, one-hop lineage, empty/null, and
+  unknown selectors across the SDK test surfaces.
+- Extended the Kagemusha recursive-spend policy guard to pin the new helper
+  methods in source and tests, including the JS dist/declaration surface.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern 'package dist entrypoint exports Kagemusha recursive spend helpers' javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3` isolated `kagemusha.py` helper import/assertion check with `_native` stubbed
+  - Python AST parse for `python/iroha_python/src/iroha_python/kagemusha.py`
+    and `python/iroha_python/tests/kagemusha_test.py`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core:testClasses`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin/java -ea -cp 'core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+- Full `node --test javascript/iroha_js/test/package_dist.test.js` later
+  passed after the JS privacy backend-label portability fix.
+- `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+  later passed with 32 tests passing and 2 real-proof fixtures intentionally
+  ignored.
+- `python3 -m pytest python/iroha_python/tests/kagemusha_test.py` could not
+  run because `pytest` is not installed, direct package import is blocked by a
+  missing local `norito` module, and `dotnet` is not installed for the .NET
+  assertions.
+- Swift filtered build compiled the touched Kagemusha source/test files, but
+  the test target remains blocked by unrelated throwing-call errors in
+  `ToriiClientTests.swift`.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend lineage key-artifact pair hardening
+
+- Added shared Rust validation for Reserved-lineage verifier/proving key
+  artifacts so request archives may omit both artifacts for legacy decode and
+  builder staging, but can no longer carry only one side of the pair.
+- Added explicit production builders for init and append request archives that
+  attach packaged Reserved-lineage key artifacts in one call, then pinned those
+  builders in the shared ABI roundtrip test.
+- Expanded C FFI, JS host, and Python native append negative tests to reject
+  both partial artifact directions: verifier key without proving archive and
+  proving archive without verifier key.
+- Updated the Kagemusha policy check to track the recursive-spend class-local
+  native archive caps in Kotlin and Android Java tests.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge kagemusha_recursive_spend_append_ffi_rejects_missing_lineage_key_artifacts --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge kagemusha_recursive_spend_append_ffi_rejects_lineage_output_at_hop_cap --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host kagemusha_recursive_spend_append_rejects_missing_lineage_key_artifacts --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_python_rs kagemusha_recursive_spend_append_python_rejects_missing_lineage_key_artifacts --lib -- --test-threads=1`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+- The first C FFI validation attempt hit a local build-volume exhaustion error;
+  deleting the temporary Cargo target directory under `/var/folders/.../T`
+  restored enough space and the rerun passed.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend SDK block-height metadata contract
+
+- Tightened Swift, .NET, Kotlin, and Android Java shared ABI-6 fixture checks
+  so `block_height` is pinned as a defaulted `Option<u64>` with
+  `verifier_record_activation_height` semantics, matching the JS/Python
+  assertions.
+- Normalized Swift fixture limit comparisons through `Int(...)` to avoid
+  compiler generic ambiguity in the recursive-spend test file.
+- Validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core:testClasses`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin/java -ea -cp 'core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+- Swift filtered build still cannot execute because unrelated
+  `ToriiClientTests.swift` throwing-call compile errors stop the test target;
+  the touched `KagemushaRecursiveSpendProverTests.swift` no longer emits its
+  own compile errors in that attempt.
+- .NET validation was unavailable because `dotnet` is not installed.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend JVM archive-limit parity
+
+- Added `NATIVE_ARCHIVE_MAX_BYTES` directly to the Kotlin core-JVM and Android
+  Java recursive-spend provers, matching Swift/.NET recursive-spend surfaces
+  instead of requiring callers/tests to reach through the compact-token prover.
+- Routed Kotlin and Android Java recursive-spend native output validation
+  through class-local archive-size guards while preserving existing no-output,
+  empty-output, and oversized-output diagnostics.
+- Updated Kotlin and Android Java recursive-spend tests to pin the local limit
+  against the shared ABI-6 manifest and use it for oversized-output rejection.
+- Validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core:testClasses`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin/java -ea -cp 'core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+- Android Gradle was run under JDK 21 because its Kotlin DSL fails before
+  configuration on the current Java 25 runtime.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
+## 2026-06-05 Kagemusha recursive spend ABI request field contract
+
+- Extended the shared recursive spend ABI-6 archive fixture with
+  `request_archive_fields` metadata for init, append, verify, and redeem
+  request archives.
+- Pinned `block_height` as a defaulted `Option<u64>` request field with
+  verifier-record activation-height semantics, so SDK fixture tests catch any
+  drift that would hide height-aware request archives from public surfaces.
+- Added JS and Python shared-fixture assertions for the complete request field
+  order and the `block_height` defaulting contract.
+- Validation:
+  - `python3 -m json.tool fixtures/kagemusha_recursive_spend_abi6/archives.json >/dev/null && python3 -m json.tool fixtures/kagemusha_recursive_spend_abi6/manifest.json >/dev/null`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`17` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --test-threads=1`
+    (`1` passed)
+- Python pytest validation was unavailable in the current environment
+  (`pytest`/`python3 -m pytest` not installed); no packages were added.
+- Hygiene checks passed with no lockfile or Python bytecode drift.
+
 ## 2026-06-05 Kagemusha recursive spend transition-profile request height tests
 
 - Added C FFI, Python native, and JS host regressions for recursive spend
@@ -291,7 +644,36 @@ Last updated: 2026-06-05
   `--require-source-files` now requires `store_dir` for non-empty notary indexes
   and rejects missing record files, internally digest-correct source/body
   mismatches, metadata row drift, and persisted-state-derived `pacs002_code`
-  drift.
+  drift. Raw notary `anchor_path` and raw rail `xml_path`/`sidecar_path`
+  receipt fields now reject embedded whitespace, backslashes, semicolon path
+  parameters, empty path segments, and dot/parent path segments as well as
+  surrounding whitespace and control characters before source-file cross-checks
+  run.
+- Hardened compact trust-source provenance across
+  `scripts/iso_operator_evidence_verify.py` and
+  `scripts/iso_production_readiness.py` so archived `source.authority` and
+  `source.version` values are required, preserved from trust summaries, and
+  rechecked as non-empty, control-free, trim-free strings. Evidence and
+  readiness now reject digest-correct summaries that omit or smuggle malformed
+  authority/version provenance while still allowing ordinary embedded spaces in
+  authority names.
+- Hardened `scripts/iso_trust_bundle_verify.py` so optional trust-bundle
+  `source.authority` and `source.version` fields are optional only when absent:
+  present `null`, empty, non-string, control-bearing, or whitespace-padded
+  values now fail before a trust summary or profile override can be emitted.
+- Hardened `scripts/iso_trust_bundle_verify.py` so DER-object `sha256` digests
+  are optional only when the key is absent. Present `null` or other non-string
+  values now fail for trust anchors, revoked certificates, CRLs, and OCSP
+  responses before a trust summary or profile override can be emitted.
+- Hardened DER proof labels across `scripts/iso_trust_bundle_verify.py` and
+  `scripts/iso_operator_evidence_verify.py`: absent DER labels are omitted from
+  trust summaries, while archived trust summaries that explicitly carry
+  `label: null` now fail before production evidence aggregation.
+- Hardened compact archive path strings in `scripts/iso_operator_evidence_verify.py`
+  and `scripts/iso_production_readiness.py` so canary config paths, compact
+  canary/trust summary paths, receipt paths, and canary child receipt-directory
+  arguments reject embedded whitespace, semicolon path parameters, empty
+  segments, and raw backslashes before evidence aggregation or readiness rollup.
 - Hardened `scripts/iso_trust_bundle_verify.py` so `--emit-profile-json` writes
   the profile override JSON before any summary is emitted, rejects
   `--summary-out` and `--emit-profile-json` pointing at the same path, and records
@@ -331,6 +713,18 @@ Last updated: 2026-06-05
   declaration and ignores spoofed matches in comments or unrelated strings.
   Duplicate active declarations now fail closed before an XSD/profile summary
   can be emitted.
+- Hardened `scripts/iso_xsd_fixture_verify.py` so required and optional
+  manifest/profile-catalog strings reject ASCII control characters before
+  summary emission. Reviewed `schema_only_reason` and `missing_schema_reason`
+  values with embedded newlines now fail in the XSD preflight instead of only
+  being caught later by readiness. Production readiness also rejects
+  digest-correct archived reviewed gap reasons that are present but empty or
+  non-string instead of treating them as missing, and schema-backed archived
+  fixtures that still carry a missing-schema reason. Checked-in XSD source
+  provenance, manifest schema, fixture, fixture schema-reference, and archived
+  profile-catalog paths now reject embedded whitespace and semicolon path
+  parameters before summary emission, and production readiness rechecks enforce
+  the same rule for digest-correct archived summaries.
 - Hardened `scripts/iso_xsd_fixture_verify.py` so checked-in XSD schemas and
   XML fixtures reject DTD/entity declarations before XML parsing. This keeps
   fixture evidence deterministic and prevents entity-expansion or external-DTD
@@ -365,15 +759,33 @@ Last updated: 2026-06-05
   checked-in templates remain summary-only and cannot satisfy production evidence.
 - Validation:
   - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
-    (`133` tests passed)
+    (`135` tests passed)
   - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
-    (`94` tests passed)
+    (`95` tests passed)
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`70` tests passed)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py && python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`26` tests passed)
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
     (`20` tests passed)
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`18` tests passed)
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py && python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
+    (`23` tests passed)
+  - `python3 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py && python3 -m unittest pytests.scripts.iso_operator_canary_test`
+    (`21` tests passed)
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py && python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`32` tests passed)
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py && python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test`
+    (`97` tests passed)
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`228` tests passed)
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
     (`190` tests passed)
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
-    (`265` tests passed)
+    (`275` tests passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+    (passed)
 
 ## 2026-06-05 Privacy proof attachment envelope-hash binding gate
 
@@ -464,14 +876,17 @@ Last updated: 2026-06-05
   hosts, including invalid DNS labels, percent-escaped hosts, and numeric-host
   spoofing, and path traversal, encoded path separators, encoded percent signs,
   or percent-encoded control/space bytes before any network delivery. Rail
-  sidecar `profile` and `rail_message_id` values also reject surrounding
-  whitespace, embedded whitespace, and control characters before they can become
-  outbound headers. Audit-notary and rail bearer-token files are now regular
+  sidecar `profile` and `rail_message_id` values also reject explicit `null`,
+  surrounding whitespace, embedded whitespace, and control characters before
+  they can become outbound headers. Audit-notary and rail bearer-token files are now regular
   non-symlink, bounded exact UTF-8 runtime inputs: empty, padded, whitespace-bearing,
   control-bearing, non-UTF-8, or oversized token files fail before network
   delivery, and receipts still do not persist token material. Rail file-drop XML
   payloads and sidecar JSON files now also reject symlinks, and XML payloads
-  must be regular files before a sidecar/payload pair can be submitted.
+  must be regular files before a sidecar/payload pair can be submitted. Direct
+  rail `--message` paths and discovered XML leaves now also reject embedded
+  whitespace, backslashes, semicolon path parameters, empty path segments, and
+  dot/parent segments before sidecar or payload reads.
   Audit-notary export inputs now apply the same source-file boundary:
   `latest.notary.json`, the digest-addressed anchor peer, and exported
   `messages.index.json` must be regular non-symlink files before publication.
@@ -482,7 +897,8 @@ Last updated: 2026-06-05
   characters, plus path traversal, embedded semicolon path parameters, or
   encoded path separators before evidence summaries can be emitted. Raw rail
   receipt `message_type`, `xml_path`, and `sidecar_path` fields now follow the
-  same exact-string rule, receipt and source-sidecar `profile`/`rail_message_id`
+  same exact-string rule, with source paths also rejecting empty path segments;
+  receipt and source-sidecar `profile`/`rail_message_id`
   values reject embedded whitespace as identifier smuggling, and audit-notary
   `anchor_path` values and adapter timestamp strings reject padding or controls.
   Receipt `error` strings reject padding or controls while retaining ordinary
@@ -499,9 +915,23 @@ Last updated: 2026-06-05
   trust-source URLs reject embedded whitespace, malformed/out-of-range ports,
   explicit default HTTPS ports, non-lowercase hosts, trailing-dot hosts, invalid
   DNS labels, percent-escaped hosts, and numeric-host spoofing, plus
-  dot-segment, semicolon-parameter, backslash, percent-encoded dot/separator,
+  dot-segment, semicolon-parameter, backslash, repeated-separator, percent-encoded dot/separator,
   encoded-percent, and percent-encoded control/space path smuggling before URL
   parsing.
+- Tightened `scripts/iso_operator_canary.py` so optional runbook path strings
+  (`rail.message`, rail/notary `receipt_dir`, rail/notary
+  `bearer_token_file`) and optional numeric limits (`max_payload_bytes`,
+  `timeout_secs`, `response_limit_bytes`) are optional only when absent.
+  Present `null` values now fail before the canary can emit planned or executed
+  child commands. Canary runbook path strings now also reject embedded
+  whitespace, backslashes, semicolon path parameters, empty path segments, and
+  dot/parent segments before expansion or child-script planning.
+- Tightened `scripts/iso_xsd_fixture_verify.py` so optional XSD
+  manifest/profile fields are optional only when absent. Present `null` values
+  for schema/fixture reviewed reasons, trust/revocation material lists,
+  revocation booleans, supplementary-data caps, business-service arrays, and
+  amount minor-unit arrays now fail before a digest-bound XSD/profile summary
+  can be emitted.
 - Tightened the readiness rollup's XSD summary checks so fixture `schema`
   references are revalidated as canonical schema paths, fixture paths reject
   empty or dot segments and non-leading parent segments while preserving the
@@ -558,7 +988,7 @@ Last updated: 2026-06-05
   URL ports, non-canonical source hosts, invalid source host labels, percent
   escapes in source hosts, numeric-host spoofing, percent-encoded
   control/space bytes, malformed percent escapes, encoded-percent path
-  smuggling, and smuggled source URL paths. XSD preflight coverage now also
+  smuggling, smuggled source URL paths, and repeated URL path separators. XSD preflight coverage now also
   includes schema paths with backslashes, dot segments, empty segments, or
   parent segments, plus non-XML, dot/empty-segment, and non-leading-parent
   fixture paths. Adapter coverage now also proves valid bearer-token files

@@ -724,7 +724,11 @@ and completed history lives in [`status.md`](./status.md).
   checks only for the exact message-family alias, not arbitrary strings, and
   runtime-required catalog fields are required while optional catalog fields are
   shape-checked when present, including fail-closed trust/revocation pin overlap
-  and bounded CRL/OCSP DER-sequence material checks.
+  and bounded CRL/OCSP DER-sequence material checks; optional manifest/profile
+  fields are optional only when omitted, so present `null` reviewed reasons,
+  trust/revocation material lists, booleans, numeric caps, business-service
+  arrays, or amount minor-unit arrays fail before digest-bound XSD/profile
+  evidence is emitted.
   All checked-in
   XSDs now
   have standalone XML fixtures that pass XML schema validation, and remaining
@@ -748,7 +752,9 @@ and completed history lives in [`status.md`](./status.md).
 	  raw-whitespace-free, canonical-host/label/port/path,
 	  percent-smuggling-free, duplicate-free HTTPS archival/notary endpoints with
 	  regular non-symlink bounded exact runtime bearer-token files, symlink-free
-	  rail drop roots and inputs including explicit message leaves,
+	  rail drop roots and inputs including explicit message leaves with
+	  whitespace/backslash/semicolon/empty-segment/dot-segment smuggling rejected
+	  before reads,
 	  regular non-symlink notary export roots/source files, and local receipts that do
 	  not persist token material while preflighting receipt output
 	  directories/leaves before publication or Torii submission, rejecting
@@ -759,7 +765,9 @@ and completed history lives in [`status.md`](./status.md).
 	  audit record filename/message-id bindings, endpoint-digest bindings,
 	  timestamp/status consistency, bounded response
 	  metadata, canonical receipt endpoint,
-	  timestamp, notary anchor-path, and whitespace-free rail metadata identifiers,
+	  timestamp, canonical notary/rail source paths, and whitespace-free rail
+	  metadata identifiers, with live rail sidecars rejecting explicit `null`
+	  `profile`/`rail_message_id` values before submission,
 	  rail sidecar source bindings, notary anchor-path shape checks even when
 	  source files are not required, notary anchor/index source bindings that
 	  require regular non-symlink files, notary adapter publication that requires
@@ -769,8 +777,10 @@ and completed history lives in [`status.md`](./status.md).
 	  local `--allow-missing-record-sources` diagnostic override, and
 	  symlink-free receipt archive directories,
 	  and a strict JSON-runbook canary runner rejects
-  whitespace-padded or control-bearing runbook strings and duplicate endpoint
-  and receipt inputs before executing the rail/notary/verify path with one
+  whitespace-padded or control-bearing runbook strings, present-null optional
+  path/numeric limit fields, embedded-whitespace/backslash/semicolon/dot-segment
+  path smuggling, and duplicate endpoint and receipt inputs before
+  executing the rail/notary/verify path with one
   bounded summary.
   The operator scripts reject duplicate JSON object keys across runbooks,
   sidecars, anchors/indexes, receipts, trust bundles, XSD manifests, evidence
@@ -817,8 +827,9 @@ and completed history lives in [`status.md`](./status.md).
 	  `--require-explicit-policy`. The evidence gate requires explicit freshness
 	  budgets for canary, trust-summary, and trust-source evidence plus direct
 	  receipt archive verification covering canary receipt digests and receipt
-	  kinds before archival, preserves compact trust bundle SHA-256, source URL/retrieval
-	  provenance, revoked-certificate pin counts, certificate-policy OID counts,
+	  kinds before archival, preserves compact trust bundle SHA-256, source
+	  authority/version and URL/retrieval provenance, revoked-certificate pin
+	  counts, certificate-policy OID counts,
 	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
 	  for release review,
   and the aggregate readiness gate rechecks that proof plus the evidence policy
@@ -854,9 +865,16 @@ and completed history lives in [`status.md`](./status.md).
   the same checked bytes,
   requiring XML schema-validation proof for every
   schema-backed fixture, rejecting unknown XSD summary fields, recomputing
-  schema-only flags/reasons and reviewed gap lists from the schema/fixture
-  relationship while rejecting padded or control-bearing reviewed reason
-  strings, requiring profile-catalog source and embedded JSON
+	  schema-only flags/reasons and reviewed gap lists from the schema/fixture
+	  relationship while rejecting padded or control-bearing reviewed reason
+	  strings plus present empty/non-string archived reviewed reasons in both the
+	  XSD preflight and readiness rollup, rejecting stale missing-schema reasons
+	  on schema-backed archived fixtures, rejecting embedded
+	  whitespace or semicolon path parameters in checked-in XSD source provenance,
+	  manifest schema, fixture, fixture schema-reference, and archived
+	  profile-catalog paths during preflight and archived-summary readiness
+	  rechecks, requiring
+	  profile-catalog source and embedded JSON
   digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
   raw-string declaration plus duplicate-free profile/message/direction/version shape
   with unknown source catalog keys rejected by the XSD preflight and
@@ -869,7 +887,10 @@ and completed history lives in [`status.md`](./status.md).
   timestamps and ordered canary and non-overlapping per-stage start/finish
   windows for final evidence traceability. Compact stage-window names must
   match the recorded stage sequence, and compact stage names are rechecked as
-  unique production rail/notary/verify stages. The repository also
+  unique production rail/notary/verify stages. Compact canary/trust summary
+  paths, canary config paths, receipt paths, and child receipt-directory
+  arguments reject embedded whitespace, semicolon path parameters, empty
+  segments, raw backslashes, and traversal segments before aggregation. The repository also
   carries plan-valid templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst,
   and securities CSD operator canaries. Remaining persistence work is
   provider-specific live service canaries and vendor evidence that passes the
@@ -900,8 +921,13 @@ and completed history lives in [`status.md`](./status.md).
   for X.509 chains, explicit certificate revocation pins, configured and
   signature-scoped embedded CRL/OCSP signer revocation checks evaluated against verified XAdES
   `SigningTime` or BAH `CreDt` rather than local wall clock, plus an offline
-  trust-bundle verifier with semantic DER-shape checks, required clean
-  provenance URL and retrieval-time fields, duplicate-label rejection, and
+	  trust-bundle verifier with semantic DER-shape checks, required clean
+	  provenance URL and retrieval-time fields, trim-free source
+	  authority/version provenance for archives, duplicate-label rejection,
+	  DER-object digest keys
+  that fail closed when present as `null` or another non-string value, omitted
+  absent labels in trust summaries, archived-summary `label: null` rejection,
+  repeated-separator URL path rejection, and
   repeated-path/copied-bundle/duplicate-profile rejection plus profile-family
   templates for operator PKI preflight. The templates are schema/CI scaffolding
   only, require an explicit synthetic-template flag, and cannot emit profile

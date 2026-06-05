@@ -220,6 +220,8 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-readme-boundary
           ci/check_privacy_sdk_guard.sh --negative-control-readme-api
+          ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard
           ci/check_privacy_sdk_guard.sh --negative-control-readme-error-code
           ci/check_privacy_sdk_guard.sh --negative-control-browser-error-code
           ci/check_privacy_sdk_guard.sh --negative-control-browser-dist-error-code

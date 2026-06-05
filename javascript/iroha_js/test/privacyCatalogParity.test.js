@@ -570,6 +570,7 @@ print(json.dumps({
 `;
   const result = spawnSync("python3", ["-c", script, PYTHON_PRIVACY_CATALOG], {
     encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
   assert.equal(
     result.status,
@@ -796,6 +797,119 @@ function assertPythonCatalogDefensiveCopyCoverage() {
       `Python privacy catalog defensive-copy coverage missing ${snippet}`,
     );
   }
+}
+
+function assertPythonZkAceProofBuilderCoverage() {
+  const pythonCatalogSource = fileText(
+    "python/iroha_python/src/iroha_python/privacy_catalog.py",
+  );
+  const pythonCrypto = fileText("python/iroha_python/src/iroha_python/crypto.py");
+  const pythonPackageRoot = fileText("python/iroha_python/src/iroha_python/__init__.py");
+  const pythonReadme = fileText("python/iroha_python/README.md");
+  const pythonCatalogTests = fileText("python/iroha_python/tests/privacy_catalog_test.py");
+
+  assert.match(
+    pythonCatalogSource,
+    /zk_ace_prover\s*=\s*_callable_on_crypto\(\s*"build_zk_ace_authorization_proof_v1"\s*\)\s*and\s*_callable_on_crypto\("zk_ace_build_transfer_authorization_v1"\)/,
+    "Python privacy capabilities must require both ZK-ACE proof-builder names",
+  );
+  assert.match(
+    pythonCrypto,
+    /def\s+build_zk_ace_authorization_proof_v1\(\*\*kwargs:\s*Any\)\s*->\s*Dict\[str,\s*Any\]:[\s\S]*return\s+zk_ace_build_transfer_authorization_v1\(\*\*kwargs\)/,
+    "Python catalog-named ZK-ACE proof builder must delegate to the native-backed builder",
+  );
+  for (const [label, text] of [
+    ["Python crypto exports", pythonCrypto],
+    ["Python package root exports", pythonPackageRoot],
+    ["Python README", pythonReadme],
+  ]) {
+    assert.ok(
+      text.includes("build_zk_ace_authorization_proof_v1") &&
+        text.includes("zk_ace_build_transfer_authorization_v1"),
+      `${label} must expose both ZK-ACE proof-builder names`,
+    );
+  }
+  for (const snippet of [
+    "def test_zk_ace_python_capabilities_require_both_proof_builder_names(",
+    '"build_zk_ace_authorization_proof_v1"',
+    '"zk_ace_build_transfer_authorization_v1"',
+    'assert capabilities["zk_ace_authorization_proof_v1"] is False',
+    'assert capabilities["zk_ace_sdk_exports_v1"] is False',
+  ]) {
+    assert.ok(
+      pythonCatalogTests.includes(snippet),
+      `Python ZK-ACE capability fail-closed coverage missing ${snippet}`,
+    );
+  }
+  assert.match(
+    pythonCatalogTests,
+    /test_zk_ace_python_catalog_named_proof_builder_delegates[\s\S]*test_zk_ace_python_catalog_named_proof_builder_propagates_native_errors[\s\S]*test_zk_ace_python_transfer_authorization_rejects_non_object_native_payload/,
+    "Python tests must cover ZK-ACE alias delegation, missing-native propagation, and malformed native prover payloads",
+  );
+}
+
+function assertZkAceExecutableDescriptorShape(label, descriptor) {
+  assert.equal(
+    descriptor.implementationStage,
+    "chain-executable",
+    `${label} ZK-ACE descriptor must remain chain-executable`,
+  );
+  assert.equal(
+    descriptor.backendFamily,
+    "stark-fri",
+    `${label} ZK-ACE descriptor must stay on the STARK/FRI backend`,
+  );
+  assert.deepEqual(
+    descriptor.sdkEntrypoints,
+    [
+      "buildRegisterZkAceIdentityCommitmentInstruction",
+      "buildRotateZkAceIdentityCommitmentInstruction",
+      "buildRevokeZkAceIdentityCommitmentInstruction",
+      "buildZkAceAuthorizedTransferInstruction",
+      "buildZkAceAuthorizationProofV1",
+    ],
+    `${label} ZK-ACE descriptor must advertise the executable transparent authorization proof builder`,
+  );
+  assert.deepEqual(
+    descriptor.plannedSdkEntrypoints,
+    [
+      "buildShieldedZkAceAuthorizationProofV1",
+      "buildShieldedZkAceAuthorizedTransferInstruction",
+    ],
+    `${label} ZK-ACE descriptor must keep shielded builders planned until production gates pass`,
+  );
+  assert.ok(
+    !descriptor.plannedSdkEntrypoints.includes("buildZkAceAuthorizationProofV0"),
+    `${label} ZK-ACE descriptor must not retain stale v0 proof-builder drift`,
+  );
+  assert.deepEqual(
+    descriptor.pqLayers,
+    {
+      proof: true,
+      authorization: true,
+      noteEncryption: false,
+    },
+    `${label} ZK-ACE descriptor must keep note encryption out of PQ coverage`,
+  );
+  assert.equal(
+    descriptor.coveredCriteria.includes("post_quantum"),
+    false,
+    `${label} ZK-ACE descriptor must not claim full post-quantum coverage`,
+  );
+  assert.equal(
+    descriptor.productionReady,
+    false,
+    `${label} ZK-ACE descriptor must remain fail-closed until audited production gates pass`,
+  );
+  assert.equal(
+    descriptor.productionGate.ready,
+    false,
+    `${label} ZK-ACE production gate must remain closed`,
+  );
+  assert.ok(
+    descriptor.productionGate.missing.includes("planned SDK entrypoints remain"),
+    `${label} ZK-ACE production gate must report planned shielded SDK entrypoints`,
+  );
 }
 
 function extractJsBackendFamilyEntries(text, label) {
@@ -1548,8 +1662,21 @@ test("privacy algorithm catalogs stay fail-closed and in parity across JS and Py
   assertBridgeMissingReasonParity(pythonCatalog);
   assertBackendFamilyRegistrationParity(pythonCatalog);
   assertPythonCatalogDefensiveCopyCoverage();
+  assertPythonZkAceProofBuilderCoverage();
   assertRustNativeProductionGateParity(pythonCatalog);
   assertRustNativeCatalogParity(pythonCatalog);
+});
+
+test("privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape", () => {
+  for (const [label, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    assertZkAceExecutableDescriptorShape(
+      label,
+      getDescriptor("zk-ace-pq-authorization-v0"),
+    );
+  }
 });
 
 test("privacy algorithm catalogs require proof builders on required production plan rows", () => {

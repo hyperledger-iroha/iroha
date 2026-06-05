@@ -2167,9 +2167,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "buildRotateZkAceIdentityCommitmentInstruction",
       "buildRevokeZkAceIdentityCommitmentInstruction",
       "buildZkAceAuthorizedTransferInstruction",
+      "buildZkAceAuthorizationProofV1",
     ]),
     plannedSdkEntrypoints: Object.freeze([
-      "buildZkAceAuthorizationProofV1",
+      "buildShieldedZkAceAuthorizationProofV1",
       "buildShieldedZkAceAuthorizedTransferInstruction",
     ]),
     chainRequirements: Object.freeze([

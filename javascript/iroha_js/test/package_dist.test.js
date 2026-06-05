@@ -57,6 +57,8 @@ import {
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput,
+  requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit,
   requiresKagemushaRecursiveSpendLineageWitnessForRedeem,
   requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend,
   requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend,
@@ -820,6 +822,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
     "isKagemushaRecursiveSpendLineageProofCircuitId",
     "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
+    "requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit",
+    "requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput",
     "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "isSupportedKagemushaRecursiveSpendAppendProofTransition",
@@ -1002,6 +1006,32 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
+  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  for (const outputCircuitId of [
+    undefined,
+    null,
+    "",
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    "unknown-kagemusha-recursive-spend-circuit",
+  ]) {
+    assert.equal(
+      requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(outputCircuitId),
+      false,
+    );
+  }
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1531,25 +1561,56 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
 test("package dist privacy proof envelopes preserve pending production backend tags", () => {
   const vkHash = Buffer.alloc(32, 0x66);
   const cases = [
+    ["halo2-ipa-orchard", "Halo2IpaOrchard"],
+    ["halo2/ipa/orchard", "Halo2IpaOrchard"],
+    ["orchard", "Halo2IpaOrchard"],
     ["zcash-orchard", "Halo2IpaOrchard"],
+    ["groth16-bls12-377", "Groth16Bls12377"],
     ["groth16/bls12-377", "Groth16Bls12377"],
+    ["bls12-377", "Groth16Bls12377"],
+    ["decaf377", "Groth16Bls12377"],
+    ["masp", "Groth16Bls12377"],
+    ["penumbra-masp", "Groth16Bls12377"],
     ["halo2/ipa/penumbra", "Groth16Bls12377"],
     ["halo2/ipa/masp", "Groth16Bls12377"],
+    ["fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"],
+    ["fcmp++", "FcmpPlusPlusCurveTree"],
     ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
     ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
     ["halo2/ipa/curve-tree", "FcmpPlusPlusCurveTree"],
+    ["lattice-pcs-sis", "LatticePcsSis"],
+    ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
+    ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
     ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["pq-masp-stark-fri", "PqMaspStarkFri"],
     ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
+    ["post-quantum-masp", "PqMaspStarkFri"],
+    ["anonymous-pgc", "AnonymousPgc"],
+    ["anonymous-pgc-k-out-of-n", "AnonymousPgc"],
     ["anonymous-pgc-k-out-of-n-v1", "AnonymousPgc"],
+    ["verange", "VeRange"],
+    ["verange-transparent-range", "VeRange"],
     ["verange-transparent-range-v1", "VeRange"],
+    ["zkat", "ZkAt"],
+    ["zkAt policy-private authenticator", "ZkAt"],
     ["zkat-policy-private-auth-v1", "ZkAt"],
+    ["recursive-anonymous-admission", "RecursiveAnonymousAdmission"],
     ["recursive-anonymous-admission-v0", "RecursiveAnonymousAdmission"],
+    ["zk-ams-recursive-admission-v0", "RecursiveAnonymousAdmission"],
+    ["vega-existing-credential-zk", "VegaExistingCredentialZk"],
     ["vega-existing-credential-zk-v0", "VegaExistingCredentialZk"],
+    ["silent-threshold-anoncred", "SilentThresholdAnoncred"],
     ["silent-threshold-anoncred-v0", "SilentThresholdAnoncred"],
+    ["threshold-anonymous-credentials", "SilentThresholdAnoncred"],
+    ["zk-x509", "ZkX509"],
+    ["zkvm-x509-identity", "ZkX509"],
     ["zk-x509-onchain-identity-v0", "ZkX509"],
+    ["sis-with-hints", "SisWithHints"],
     ["sis-hints-anoncred-pq-v0", "SisWithHints"],
+    ["lattice-anonymous-credentials", "SisWithHints"],
   ];
 
   for (const [backend, expected] of cases) {
@@ -1577,6 +1638,30 @@ test("package dist privacy proof envelopes reject production metadata claims", (
   };
   for (const payload of [
     { ...base, backend: "unsupported" },
+    { ...base, backend: "mock/dev" },
+    { ...base, backend: " unsupported" },
+    { ...base, backend: "unsupported " },
+    { ...base, backend: " stark/fri/sha256-goldilocks" },
+    { ...base, backend: "stark/fri/sha256-goldilocks " },
+    { ...base, backend: "stark/fri/sha256 goldilocks" },
+    { ...base, backend: "stark/fri/sha256+goldilocks" },
+    { ...base, backend: "halo2/ipa+mock" },
+    { ...base, backend: "stark/fri/dev-fixture" },
+    { ...base, backend: "stark/fri/d-e-v-f-i-x-t-u-r-e" },
+    { ...base, backend: "stark/fri/sha512-goldilocks" },
+    { ...base, backend: "stark/fri/audit-proof-v1" },
+    { ...base, backend: "halo2\uFF0Fipa" },
+    { ...base, backend: "halo2/\u200Bipa" },
+    { ...base, backend: "h\u0430lo2/ipa" },
+    { ...base, backend: "stark\uFF0Ffri/sha256-goldilocks" },
+    { ...base, backend: "stark/fri/\u200Bsha256-goldilocks" },
+    { ...base, backend: "st\u0430rk/fri/sha256-goldilocks" },
+    { ...base, backend: "halo2/ipa/orchard/dev-fixture" },
+    { ...base, backend: "stark/fri/miden/claimed-production" },
+    { ...base, backend: "anonymous-pgc-k-out-of-n-v1-production" },
+    { ...base, backend: "sis-hints-anoncred-pq-v0-devfixture" },
+    { ...base, backend: "groth16/bls12-377/../../prod" },
+    { ...base, backend: "post-quantum-masp/audit-claimed" },
     { ...base, production: true },
     { ...base, productionReady: true },
     { ...base, production_ready: true },

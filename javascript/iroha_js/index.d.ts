@@ -12324,6 +12324,11 @@ export interface ZkAceAuthorizationProofV1Input {
   envelopeHash?: BinaryLike | null;
 }
 
+export interface ZkAceAuthorizationProofV1 {
+  public_inputs: object;
+  proof: ProofAttachmentInput;
+}
+
 export interface ZkAceWitnessV1Input {
   identityRoot: BinaryLike;
   identityBlinding: BinaryLike;
@@ -15276,6 +15281,10 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
   outputProofCircuitId?: string | null,
 ): boolean;
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
+export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+  outputProofCircuitId?: string | null,
+): boolean;
 export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
   proofCircuitId: string,
   hopCount: number,
@@ -16599,6 +16608,10 @@ export function buildRotateZkAceIdentityCommitmentInstruction(
 export function buildRevokeZkAceIdentityCommitmentInstruction(
   input: RevokeZkAceIdentityCommitmentInstructionInput,
 ): object;
+
+export function buildZkAceAuthorizationProofV1(
+  input: ZkAceAuthorizationProofV1Input,
+): ZkAceAuthorizationProofV1;
 
 export function buildZkAceAuthorizedTransferInstruction(
   input: ZkAceAuthorizedTransferInstructionInput,

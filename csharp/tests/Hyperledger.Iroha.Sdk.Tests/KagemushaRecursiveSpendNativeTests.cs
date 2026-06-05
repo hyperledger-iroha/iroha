@@ -177,6 +177,19 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.IsLineageAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForInit());
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(null));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(""));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
+            "unknown-kagemusha-recursive-spend-circuit"));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
@@ -496,15 +509,16 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "redeem_request",
             "redeem_instruction",
         }));
+        var requestFieldRecordsByType = new Dictionary<string, JsonElement[]>();
         var requestFieldsByType = new Dictionary<string, string[]>();
         foreach (var entry in archiveRoot.GetProperty("request_archive_fields").EnumerateArray())
         {
+            var requestType = entry.GetProperty("norito_type").GetString()!;
+            var fields = entry.GetProperty("fields").EnumerateArray().ToArray();
+            requestFieldRecordsByType.Add(requestType, fields);
             requestFieldsByType.Add(
-                entry.GetProperty("norito_type").GetString()!,
-                entry.GetProperty("fields")
-                    .EnumerateArray()
-                    .Select(field => field.GetProperty("name").GetString()!)
-                    .ToArray());
+                requestType,
+                fields.Select(field => field.GetProperty("name").GetString()!).ToArray());
         }
 
         Assert.True(requestFieldsByType.Keys.ToHashSet().SetEquals(new[]
@@ -555,6 +569,16 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 "block_height",
             },
             requestFieldsByType["KagemushaRecursiveSpendRedeemRequestV1"]);
+        foreach (var requestType in requestFieldsByType.Keys)
+        {
+            var blockHeight = requestFieldRecordsByType[requestType]
+                .Single(field => field.GetProperty("name").GetString() == "block_height");
+            Assert.Equal("Option<u64>", blockHeight.GetProperty("type").GetString());
+            Assert.True(blockHeight.GetProperty("norito_default").GetBoolean());
+            Assert.Equal(
+                "verifier_record_activation_height",
+                blockHeight.GetProperty("semantics").GetString());
+        }
         Assert.Equal("redeem", redeemArchive.GetProperty("operation").GetString());
         Assert.Equal(
             "KagemushaRecursiveSpendRedeemRequestV1",

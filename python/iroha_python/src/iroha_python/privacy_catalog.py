@@ -175,8 +175,8 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "er.\",\"Generate a ZK-ACE authorization proof and submit a protected transparent transfer.\"],\"sdkE"
     "ntrypoints\":[\"buildRegisterZkAceIdentityCommitmentInstruction\",\"buildRotateZkAceIdentityCommitme"
     "ntInstruction\",\"buildRevokeZkAceIdentityCommitmentInstruction\",\"buildZkAceAuthorizedTransferInst"
-    "ruction\"],\"plannedSdkEntrypoints\":[\"buildZkAceAuthorizationProofV1\",\"buildShieldedZkAceAuthorize"
-    "dTransferInstruction\"],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
+    "ruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints\":[\"buildShieldedZkAceAuthor"
+    "izationProofV1\",\"buildShieldedZkAceAuthorizedTransferInstruction\"],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
     "ceIdentityCommitment\",\"zk::RevokeZkAceIdentityCommitment\",\"zk::SubmitZkAceAuthorizedTransfer\",\"a"
     "ctive stark/fri/sha256-goldilocks ZK-ACE verifier key\",\"ZK-ACE identity source-account allowli"
     "st\"]},{\"id\":\"anonymous-pgc-k-out-of-n-v1\",\"na"
@@ -2849,7 +2849,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     zk_ace_rotate = _callable_on_instruction("rotate_zk_ace_identity_commitment")
     zk_ace_revoke = _callable_on_instruction("revoke_zk_ace_identity_commitment")
     zk_ace_transfer = _callable_on_instruction("zk_ace_authorized_transfer")
-    zk_ace_prover = _callable_on_crypto("zk_ace_build_transfer_authorization_v1")
+    zk_ace_prover = _callable_on_crypto(
+        "build_zk_ace_authorization_proof_v1"
+    ) and _callable_on_crypto("zk_ace_build_transfer_authorization_v1")
     zk_ace_sdk_exports = (
         zk_ace_register and zk_ace_rotate and zk_ace_revoke and zk_ace_transfer and zk_ace_prover
     )

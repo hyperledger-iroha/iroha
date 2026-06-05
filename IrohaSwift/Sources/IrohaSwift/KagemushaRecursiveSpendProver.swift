@@ -87,6 +87,10 @@ public enum KagemushaRecursiveSpendProver {
             || outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
     }
 
+    public static func requiresLineageKeyArtifactsForInit() -> Bool {
+        true
+    }
+
     public static func requiresLineageWitnessForRedeem(circuitId: String, hopCount: UInt32) -> Bool {
         !canRedeemWitnessless(circuitId: circuitId, hopCount: hopCount)
     }
@@ -111,6 +115,10 @@ public enum KagemushaRecursiveSpendProver {
         let normalized = normalizedAppendOutputCircuitId(outputCircuitId)
         return normalized == recursiveAggregationProofCircuitIdV1
             || normalized == recursiveSpendLineageAppendProofCircuitIdV1
+    }
+
+    public static func requiresLineageKeyArtifactsForAppendOutput(outputCircuitId: String?) -> Bool {
+        isLineageAppendOutputCircuitId(normalizedAppendOutputCircuitId(outputCircuitId))
     }
 
     public static func isSupportedPreviousProofCircuitId(_ previousProofCircuitId: String?) -> Bool {

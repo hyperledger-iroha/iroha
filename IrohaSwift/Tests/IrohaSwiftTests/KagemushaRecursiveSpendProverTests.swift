@@ -20,7 +20,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             manifest["schema"] as? String,
             "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
         )
-        XCTAssertEqual(manifest["bridge_abi_version"] as? Int, KagemushaRecursiveSpendProver.requiredBridgeAbiVersion)
+        XCTAssertEqual(
+            manifest["bridge_abi_version"] as? Int,
+            Int(KagemushaRecursiveSpendProver.requiredBridgeAbiVersion)
+        )
 
         let circuitIds = try XCTUnwrap(manifest["proof_circuit_ids"] as? [String: Any])
         XCTAssertEqual(
@@ -41,24 +44,30 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
 
         let limits = try XCTUnwrap(manifest["limits"] as? [String: Any])
-        XCTAssertEqual(limits["compact_token_max_hops"] as? Int, KagemushaRecursiveSpendProver.compactTokenMaxHops)
+        XCTAssertEqual(
+            limits["compact_token_max_hops"] as? Int,
+            Int(KagemushaRecursiveSpendProver.compactTokenMaxHops)
+        )
         XCTAssertEqual(
             limits["reserved_lineage_witnessless_max_hops"] as? Int,
-            KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1
+            Int(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1)
         )
         XCTAssertEqual(
             limits["previous_proof_open_envelopes_required_count"] as? Int,
-            KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesRequiredCountV1
+            Int(KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesRequiredCountV1)
         )
         XCTAssertEqual(
             limits["previous_proof_open_envelopes_max_bytes"] as? Int,
-            KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesMaxBytes
+            Int(KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesMaxBytes)
         )
         XCTAssertEqual(
             limits["pallas_open_envelope_max_transcript_label_bytes"] as? Int,
-            KagemushaRecursiveSpendProver.recursivePallasOpenEnvelopeMaxTranscriptLabelBytes
+            Int(KagemushaRecursiveSpendProver.recursivePallasOpenEnvelopeMaxTranscriptLabelBytes)
         )
-        XCTAssertEqual(limits["native_archive_max_bytes"] as? Int, KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)
+        XCTAssertEqual(
+            limits["native_archive_max_bytes"] as? Int,
+            Int(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)
+        )
 
         let domains = try XCTUnwrap(manifest["domains"] as? [String: Any])
         XCTAssertEqual(
@@ -122,15 +131,20 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             ])
         )
         let requestArchiveFields = try XCTUnwrap(archiveFixture["request_archive_fields"] as? [[String: Any]])
-        let fieldsByType = Dictionary(
-            uniqueKeysWithValues: requestArchiveFields.compactMap { entry -> (String, [String])? in
+        let fieldRecordsByType = Dictionary(
+            uniqueKeysWithValues: requestArchiveFields.compactMap { entry -> (String, [[String: Any]])? in
                 guard
                     let type = entry["norito_type"] as? String,
                     let fields = entry["fields"] as? [[String: Any]]
                 else {
                     return nil
                 }
-                return (type, fields.compactMap { $0["name"] as? String })
+                return (type, fields)
+            }
+        )
+        let fieldsByType = Dictionary(
+            uniqueKeysWithValues: fieldRecordsByType.map { entry in
+                (entry.key, entry.value.compactMap { $0["name"] as? String })
             }
         )
         XCTAssertEqual(
@@ -184,6 +198,14 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 "block_height"
             ]
         )
+        for requestType in fieldsByType.keys {
+            let blockHeight = try XCTUnwrap(
+                fieldRecordsByType[requestType]?.first { $0["name"] as? String == "block_height" }
+            )
+            XCTAssertEqual(blockHeight["type"] as? String, "Option<u64>")
+            XCTAssertEqual(blockHeight["norito_default"] as? Bool, true)
+            XCTAssertEqual(blockHeight["semantics"] as? String, "verifier_record_activation_height")
+        }
         let redeemArchive = try XCTUnwrap(archives.first { $0["name"] as? String == "redeem_request" })
         XCTAssertEqual(redeemArchive["operation"] as? String, "redeem")
         XCTAssertEqual(redeemArchive["norito_type"] as? String, "KagemushaRecursiveSpendRedeemRequestV1")
@@ -429,6 +451,42 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertTrue(
             KagemushaRecursiveSpendProver.isLineageAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+            )
+        )
+        XCTAssertTrue(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
+        XCTAssertTrue(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1
+            )
+        )
+        XCTAssertTrue(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: nil
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: ""
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
+                outputCircuitId: "unknown-kagemusha-recursive-spend-circuit"
             )
         )
         XCTAssertFalse(
