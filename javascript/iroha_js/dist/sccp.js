@@ -26,6 +26,9 @@ export const SCCP_ETH_MAINNET_NETWORK_ID =
 export const SCCP_BSC_MAINNET_EVM_CHAIN_ID = 56;
 export const SCCP_BSC_MAINNET_NETWORK_ID =
   "0x0000000000000000000000000000000000000000000000000000000000000038";
+export const SCCP_BSC_TESTNET_EVM_CHAIN_ID = 97;
+export const SCCP_BSC_TESTNET_NETWORK_ID =
+  "0x0000000000000000000000000000000000000000000000000000000000000061";
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
 export const SCCP_SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
 export const SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES = 128;
@@ -127,6 +130,7 @@ export const SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1 = "tron-groth16-bn254-v1";
 export const SCCP_TAIRA_CHAIN_ID_V1 = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1 = 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1 = "taira_tron_xor";
+export const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1 = "taira_bsc_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1 = "xor";
 export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 = 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1 =
@@ -2111,6 +2115,18 @@ const normalizeTairaXorRouteIdInput = (input, label = "routeId") => {
   return routeId;
 };
 
+const normalizeTairaBscXorRouteIdInput = (input, label = "routeId") => {
+  const selected = strictOptionalResultField(input, label, "routeId", "route_id");
+  const routeId =
+    selected === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1
+      : normalizeNonEmptyString(selected, label);
+  if (routeId !== SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label} must be ${SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1}`);
+  }
+  return routeId;
+};
+
 const normalizeTairaXorAssetKeyInput = (input, label = "assetKey") => {
   const selected = strictOptionalResultField(
     input,
@@ -2391,6 +2407,78 @@ export const tairaXorTronToTairaCanonicalTransferPayloadBytes = (input) =>
 export const tairaXorTronToTairaTransferMessageId = (input, options = {}) =>
   sccpTransferMessageId(buildTairaXorTronToTairaTransferPayload(input), options);
 
+export const buildTairaXorBscTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR BSC-destination transfer payload input must be an object");
+  }
+  const routeId = normalizeTairaBscXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "sender",
+      "sender",
+      "tairaSender",
+      "taira_sender",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "sender",
+  );
+  const recipient = nonZeroHex(
+    strictResultField(
+      input,
+      "recipientAddress",
+      "recipientAddress",
+      "recipient_address",
+      "recipient",
+      "bscRecipient",
+      "bsc_recipient",
+      "evmRecipient",
+      "evm_recipient",
+    ),
+    "recipientAddress",
+    20,
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_BSC,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender,
+    recipient_codec: SCCP_CODEC_EVM_HEX,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorBscCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(buildTairaXorBscTransferPayload(input));
+
+export const tairaXorBscTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(buildTairaXorBscTransferPayload(input), options);
+
 export const buildTairaXorSccpRecordDescriptor = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("TAIRA XOR SCCP record descriptor input must be an object");
@@ -2449,6 +2537,87 @@ export const buildTairaXorSccpRecordDescriptor = (input) => {
     message_kind: "Transfer",
     source_domain: SCCP_DOMAIN_SORA,
     dest_domain: SCCP_DOMAIN_TRON,
+    message_id: messageId,
+    canonical_payload_hex: canonicalPayloadHex,
+    payload,
+    record_instruction: Object.freeze({
+      kind: "RecordSccpMessage",
+      payload_bytes_hex: canonicalPayloadHex,
+    }),
+    execution_requirements: Object.freeze({
+      executable: "IvmProved",
+      overlay_instruction: "RecordSccpMessage",
+      settlement_instruction: "Burn<Numeric, Asset>",
+      settlement_asset_selector: "nexus.fees.fee_asset_id",
+      settlement_asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      settlement_account_binding: "burn.destination.account == payload.sender",
+      settlement_amount_binding: "sum(whole-unit burns) >= sum(recorded amounts) per sender",
+      proof_gate: "sccp_recording_proof_verified",
+      normal_transaction_supported: false,
+    }),
+  };
+  defineCopiedByteField(descriptor, "canonicalPayloadBytes", canonicalPayloadBytes);
+  return Object.freeze(descriptor);
+};
+
+export const buildTairaXorBscSccpRecordDescriptor = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR BSC SCCP record descriptor input must be an object");
+  }
+  const tairaContext = normalizeOptionalTairaChainContext(input);
+  const payload = buildTairaXorBscTransferPayload(input);
+  const canonicalPayloadBytes = canonicalSccpTransferPayloadBytes(payload);
+  const canonicalPayloadHex = bytesToHex(canonicalPayloadBytes);
+  const messageId = sccpTransferMessageId(payload);
+
+  const expectedMessageId = strictOptionalResultField(
+    input,
+    "expectedMessageId",
+    "expectedMessageId",
+    "expected_message_id",
+    "messageId",
+    "message_id",
+  );
+  if (expectedMessageId !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedMessageId = normalizeNonZeroHex32(expectedMessageId, "expectedMessageId");
+    if (normalizedMessageId !== messageId) {
+      throw new TypeError("expectedMessageId must match the canonical TAIRA XOR BSC message id");
+    }
+  }
+
+  const expectedPayloadBytes = strictOptionalResultField(
+    input,
+    "expectedCanonicalPayloadBytes",
+    "expectedCanonicalPayloadBytes",
+    "expected_canonical_payload_bytes",
+    "expectedCanonicalPayloadHex",
+    "expected_canonical_payload_hex",
+    "expectedPayloadBytes",
+    "expected_payload_bytes",
+  );
+  if (expectedPayloadBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedExpectedPayloadBytes = toBytes(
+      expectedPayloadBytes,
+      "expectedCanonicalPayloadBytes",
+    );
+    if (!bytesEqual(normalizedExpectedPayloadBytes, canonicalPayloadBytes)) {
+      throw new TypeError(
+        "expectedCanonicalPayloadBytes must match the canonical TAIRA XOR BSC payload bytes",
+      );
+    }
+  }
+
+  const descriptor = {
+    version: 1,
+    kind: "TairaXorSccpRecordDescriptor",
+    execution_kind: SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
+    chain_id: tairaContext.chain_id,
+    network_prefix: tairaContext.network_prefix,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    message_kind: "Transfer",
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_BSC,
     message_id: messageId,
     canonical_payload_hex: canonicalPayloadHex,
     payload,
@@ -2543,6 +2712,77 @@ const normalizeTairaXorRecordDescriptor = (input) => {
   return rebuilt;
 };
 
+const normalizeTairaXorBscRecordDescriptor = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR BSC SCCP record descriptor must be an object");
+  }
+  if (input.kind !== undefined && input.kind !== "TairaXorSccpRecordDescriptor") {
+    throw new TypeError("descriptor.kind must be TairaXorSccpRecordDescriptor");
+  }
+  if (input.execution_kind !== SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1) {
+    throw new TypeError("descriptor.execution_kind must match TAIRA XOR SCCP record execution");
+  }
+  if (input.route_id !== SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1) {
+    throw new TypeError("descriptor.route_id must be taira_bsc_xor");
+  }
+  if (input.asset_key !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("descriptor.asset_key must be xor");
+  }
+  const payload = input.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("descriptor.payload must be an object");
+  }
+  const canonicalPayloadHex = normalizeHexInput(
+    strictResultField(
+      input,
+      "descriptor.canonical_payload_hex",
+      "canonical_payload_hex",
+      "canonicalPayloadHex",
+    ),
+    "descriptor.canonical_payload_hex",
+  );
+  const rebuilt = buildTairaXorBscSccpRecordDescriptor({
+    chainId: input.chain_id,
+    networkPrefix: input.network_prefix,
+    sender: payload.sender,
+    recipientAddress: payload.recipient,
+    amount: payload.amount,
+    nonce: payload.nonce,
+    expectedMessageId: input.message_id,
+    expectedCanonicalPayloadHex: canonicalPayloadHex,
+  });
+  const recordInstruction = input.record_instruction;
+  if (recordInstruction !== undefined && recordInstruction !== null) {
+    if (typeof recordInstruction !== "object" || Array.isArray(recordInstruction)) {
+      throw new TypeError("descriptor.record_instruction must be an object");
+    }
+    if (recordInstruction.kind !== "RecordSccpMessage") {
+      throw new TypeError("descriptor.record_instruction.kind must be RecordSccpMessage");
+    }
+    const payloadBytesHex = strictResultField(
+      recordInstruction,
+      "descriptor.record_instruction.payload_bytes_hex",
+      "payload_bytes_hex",
+      "payloadBytesHex",
+    );
+    if (payloadBytesHex !== undefined) {
+      const normalizedRecordPayload = normalizeHexInput(
+        payloadBytesHex,
+        "descriptor.record_instruction.payload_bytes_hex",
+      );
+      if (
+        normalizedRecordPayload !==
+        normalizeHexInput(rebuilt.canonical_payload_hex, "descriptor.canonical_payload_hex")
+      ) {
+        throw new TypeError(
+          "descriptor.record_instruction.payload_bytes_hex must match canonical payload",
+        );
+      }
+    }
+  }
+  return rebuilt;
+};
+
 const tairaXorRecordDescriptorFromInput = (input) => {
   const descriptorInput = strictOptionalResultField(
     input,
@@ -2555,6 +2795,20 @@ const tairaXorRecordDescriptorFromInput = (input) => {
     return normalizeTairaXorRecordDescriptor(descriptorInput);
   }
   return buildTairaXorSccpRecordDescriptor(input);
+};
+
+const tairaXorBscRecordDescriptorFromInput = (input) => {
+  const descriptorInput = strictOptionalResultField(
+    input,
+    "descriptor",
+    "descriptor",
+    "recordDescriptor",
+    "record_descriptor",
+  );
+  if (descriptorInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    return normalizeTairaXorBscRecordDescriptor(descriptorInput);
+  }
+  return buildTairaXorBscSccpRecordDescriptor(input);
 };
 
 const normalizeTairaXorSettlementAssetDefinitionId = (value) => {
@@ -2742,6 +2996,42 @@ export const buildTairaXorSccpBurnRecordContractPayload = (input) => {
   });
 };
 
+export const buildTairaXorBscSccpBurnRecordContractPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR BSC burn-record payload input must be an object");
+  }
+  const descriptor = tairaXorBscRecordDescriptorFromInput(input);
+  const settlementAssetDefinitionId = normalizeTairaXorSettlementAssetDefinitionId(
+    strictResultField(
+      input,
+      "settlementAssetDefinitionId",
+      "settlementAssetDefinitionId",
+      "settlement_asset_definition_id",
+      "settlementAsset",
+      "settlement_asset",
+    ),
+  );
+  const sender = descriptor.payload.sender;
+  normalizeTairaXorBurnRecordAuthority(input, sender);
+  const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
+  const recordInstructionBytes = buildRecordSccpMessageInstructionBytes(
+    descriptor.canonicalPayloadBytes,
+  );
+  const payload = {
+    sender,
+    settlement_asset: settlementAssetDefinitionId,
+    amount: amount.toString(),
+    record_instruction: bytesToHex(recordInstructionBytes),
+  };
+  return Object.freeze({
+    version: 1,
+    entrypoint: SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+    descriptor,
+    payload: Object.freeze(payload),
+    record_instruction_hex: payload.record_instruction,
+  });
+};
+
 const normalizeTairaXorBurnRecordVkRef = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("vkRef must be an object");
@@ -2840,6 +3130,47 @@ export const buildTairaXorSccpBurnRecordZkIvmRequest = (input) => {
   return Object.freeze({
     version: 1,
     route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    descriptor: contract.descriptor,
+    contract,
+    request: Object.freeze({
+      vkRef,
+      authority,
+      metadata: Object.freeze(metadata),
+      bytecode,
+    }),
+  });
+};
+
+export const buildTairaXorBscSccpBurnRecordZkIvmRequest = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR BSC burn-record ZK IVM request input must be an object");
+  }
+  const contract = buildTairaXorBscSccpBurnRecordContractPayload(input);
+  const vkRef = normalizeTairaXorBurnRecordVkRef(
+    strictResultField(input, "vkRef", "vkRef", "vk_ref"),
+  );
+  const authority = normalizeTairaXorBurnRecordAuthority(
+    input,
+    contract.descriptor.payload.sender,
+  );
+  const bytecode = normalizeTairaXorBurnRecordBytecode(input);
+  const metadataInput = strictOptionalResultField(input, "metadata", "metadata");
+  if (
+    metadataInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    (metadataInput === null || typeof metadataInput !== "object" || Array.isArray(metadataInput))
+  ) {
+    throw new TypeError("metadata must be an object");
+  }
+  const metadata = {
+    ...(metadataInput === SCCP_OPTIONAL_FIELD_MISSING ? {} : metadataInput),
+    gas_limit: normalizeTairaXorBurnRecordGasLimit(input),
+    contract_entrypoint: SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+    contract_payload: contract.payload,
+  };
+  return Object.freeze({
+    version: 1,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
     asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
     descriptor: contract.descriptor,
     contract,
@@ -7408,6 +7739,30 @@ export function wrapBscMainnetSccpDestinationProofResult(proofBytes, request) {
   return wrapEvmSccpProofResult(proofBytes, request);
 }
 
+const requireBscTestnetProofRequest = (request) => {
+  requireProductionEvmProofRequest(request);
+  if (
+    request.targetDomain !== SCCP_DOMAIN_BSC ||
+    request.publicInputs?.targetDomain !== SCCP_DOMAIN_BSC
+  ) {
+    throw new RangeError("BSC testnet SCCP proofs must target BSC");
+  }
+  const binding = bscTestnetSccpDestinationBinding(request.destinationBinding);
+  if (request.destinationBindingHash !== binding.bindingHash) {
+    throw new TypeError("destinationBindingHash must match BSC testnet destinationBinding");
+  }
+  return request;
+};
+
+export function buildBscTestnetSccpDestinationProofRequest(input) {
+  return requireBscTestnetProofRequest(buildEvmSccpProofRequest(input));
+}
+
+export function wrapBscTestnetSccpDestinationProofResult(proofBytes, request) {
+  requireBscTestnetProofRequest(request);
+  return wrapEvmSccpProofResult(proofBytes, request);
+}
+
 const sccpMessageProofContractEntrypointV1 =
   "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)";
 
@@ -7843,6 +8198,34 @@ export function buildBscMainnetSccpDestinationSubmission(input) {
   return submission;
 }
 
+export function buildBscTestnetSccpDestinationSubmission(input) {
+  const submission = buildEvmSccpSubmission(input);
+  if (submission.targetDomain !== SCCP_DOMAIN_BSC) {
+    throw new RangeError("BSC testnet SCCP submissions must target BSC");
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC testnet SCCP submission input must be an object");
+  }
+  const proofResult = strictResultField(input, "proofResult", "proofResult", "proof_result");
+  if (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult)) {
+    throw new TypeError(
+      "BSC testnet SCCP submission requires a wrapped proofResult with destinationBinding",
+    );
+  }
+  const destinationBinding = bscTestnetSccpDestinationBinding(
+    strictResultField(
+      proofResult,
+      "proofResult.destinationBinding",
+      "destinationBinding",
+      "destination_binding",
+    ),
+  );
+  if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
+    throw new TypeError("submission destinationBindingHash must match BSC testnet destinationBinding");
+  }
+  return submission;
+}
+
 const localAdmissionInputField = (input, proofResult, submissionPackage, label, ...names) => {
   const direct = strictOptionalResultField(input, label, ...names);
   if (direct !== SCCP_OPTIONAL_FIELD_MISSING) return direct;
@@ -8087,6 +8470,14 @@ export function buildBscMainnetSccpLocalAdmissionSubmission(input) {
   });
 }
 
+export function buildBscTestnetSccpLocalAdmissionSubmission(input) {
+  return buildEvmFamilyMainnetSccpLocalAdmissionSubmission(input, {
+    label: "BSC testnet",
+    expectedSourceDomain: SCCP_DOMAIN_BSC,
+    sourceDomainName: "BSC",
+  });
+}
+
 export class EvmSccpProver {
   constructor(options = {}) {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -8181,6 +8572,53 @@ export class BscMainnetSccpProver {
   }
 }
 
+export class BscTestnetSccpProver {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("BscTestnetSccpProver options must be an object");
+    }
+    this.witnessProvider = strictOptionalConstructorOption(
+      options,
+      "BSC testnet SCCP prover witnessProvider",
+      "witnessProvider",
+      "witness_provider",
+    );
+    this.proveFn = strictOptionalConstructorOption(
+      options,
+      "BSC testnet SCCP prover prove",
+      "prove",
+      "proveFn",
+      "prove_fn",
+    );
+  }
+
+  async buildRequest(input, options = {}) {
+    const witness = await resolveSccpWitness(
+      this.witnessProvider,
+      input,
+      options,
+      "BSC testnet SCCP",
+    );
+    return buildBscTestnetSccpDestinationProofRequest(witness);
+  }
+
+  async prove(input, options = {}) {
+    const request = await this.buildRequest(input, options);
+    if (typeof this.proveFn !== "function") {
+      const error = new Error(
+        "BSC testnet SCCP Groth16 prover is not linked; provide a browser-safe prove function before generating production proofs",
+      );
+      error.code = "ERR_SCCP_BSC_TESTNET_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    requireBscTestnetProofRequest(request);
+    return normalizeEvmProofResult(
+      await this.proveFn(immutableGroth16ProofRequest(request), options),
+      request,
+    );
+  }
+}
+
 const normalizeEthereumMainnetChainId = (chainId) => {
   if (typeof chainId === "bigint") {
     return chainId;
@@ -8237,6 +8675,22 @@ const requireBscMainnetRpcChainId = (chainId) => {
   const normalized = normalizeEvmRpcChainId(chainId);
   if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
     throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
+  }
+  return normalized;
+};
+
+const requireBscTestnetChainId = (chainId) => {
+  const normalized = normalizeEthereumMainnetChainId(chainId);
+  if (normalized !== BigInt(SCCP_BSC_TESTNET_EVM_CHAIN_ID)) {
+    throw new RangeError("BSC testnet SCCP requires eth_chainId == 0x61");
+  }
+  return normalized;
+};
+
+const requireBscTestnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
+  if (normalized !== BigInt(SCCP_BSC_TESTNET_EVM_CHAIN_ID)) {
+    throw new RangeError("BSC testnet SCCP requires eth_chainId == 0x61");
   }
   return normalized;
 };
@@ -8320,6 +8774,9 @@ const ethereumJsonRpcRequest = (provider, method, params = []) =>
 
 const bscJsonRpcRequest = (provider, method, params = []) =>
   evmJsonRpcRequest(provider, method, params, "BSC mainnet SCCP");
+
+const bscTestnetJsonRpcRequest = (provider, method, params = []) =>
+  evmJsonRpcRequest(provider, method, params, "BSC testnet SCCP");
 
 export const evmSccpSourceEventTopic = () =>
   bytesToHex(keccak_256(textEncoder.encode(SCCP_EVM_SOURCE_EVENT_ABI_V1)));
@@ -10581,6 +11038,15 @@ const wrappedBscMainnetProofResultBridgeAddress = (input) => {
   return bscMainnetSccpDestinationBinding(destinationBinding).bridgeAddress;
 };
 
+const wrappedBscTestnetProofResultBridgeAddress = (input) => {
+  const proofResult = input?.proofResult ?? input?.proof_result;
+  const destinationBinding = proofResult?.destinationBinding ?? proofResult?.destination_binding;
+  if (destinationBinding === undefined || destinationBinding === null) {
+    return undefined;
+  }
+  return bscTestnetSccpDestinationBinding(destinationBinding).bridgeAddress;
+};
+
 const wrappedEthereumMainnetProofResultBridgeAddress = (input) => {
   const proofResult = input?.proofResult ?? input?.proof_result;
   const destinationBinding = proofResult?.destinationBinding ?? proofResult?.destination_binding;
@@ -10772,6 +11238,38 @@ const requireBscMainnetSubmission = (submission, input) => {
   );
   if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
     throw new TypeError("submission destinationBindingHash must match BSC mainnet destinationBinding");
+  }
+  return submission;
+};
+
+const requireBscTestnetOutboundRequest = (request) => {
+  requireBscTestnetProofRequest(request);
+  return request;
+};
+
+const requireBscTestnetSubmission = (submission, input) => {
+  if (submission.targetDomain !== SCCP_DOMAIN_BSC) {
+    throw new RangeError("BscTestnetSccp calldata must target BSC testnet");
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BscTestnetSccp calldata input must be an object");
+  }
+  const proofResult = strictResultField(input, "proofResult", "proofResult", "proof_result");
+  if (!proofResult || typeof proofResult !== "object" || Array.isArray(proofResult)) {
+    throw new TypeError(
+      "BscTestnetSccp calldata requires a wrapped proofResult with destinationBinding",
+    );
+  }
+  const destinationBinding = bscTestnetSccpDestinationBinding(
+    strictResultField(
+      proofResult,
+      "proofResult.destinationBinding",
+      "destinationBinding",
+      "destination_binding",
+    ),
+  );
+  if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
+    throw new TypeError("submission destinationBindingHash must match BSC testnet destinationBinding");
   }
   return submission;
 };
@@ -11653,12 +12151,19 @@ export class BscMainnetSccp {
       options.submit_outbound_to_bsc ??
       options.submitToBsc ??
       this.submitOutboundFn;
+    const provider =
+      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
+    let providerValidated = false;
+    if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      providerValidated = true;
+    }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
-    const provider =
-      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
-    await this.validateExecutionProviderMainnet({ executionProvider: provider });
+    if (!providerValidated) {
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+    }
     const boundBridgeAddress = wrappedBscMainnetProofResultBridgeAddress(input);
     const explicitTo =
       options.to ??
@@ -11686,6 +12191,361 @@ export class BscMainnetSccp {
       ...(from === undefined || from === SCCP_OPTIONAL_FIELD_MISSING ? {} : { from }),
     };
     return bscJsonRpcRequest(provider, "eth_sendTransaction", [tx]);
+  }
+}
+
+export class BscTestnetSccp {
+  constructor(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("BscTestnetSccp options must be an object");
+    }
+    this.executionProvider = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp executionProvider",
+      "executionProvider",
+      "execution_provider",
+    );
+    this.consensusProvider = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp consensusProvider",
+      "consensusProvider",
+      "consensus_provider",
+    );
+    this.inboundProveFn = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp proveInbound",
+      "proveInbound",
+      "proveInboundToSora",
+      "prove_inbound",
+    );
+    this.submitInboundFn = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp submitInboundToIroha",
+      "submitInboundToIroha",
+      "submit_inbound_to_iroha",
+      "submitToIroha",
+    );
+    this.submitOutboundFn = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp submitOutboundToBsc",
+      "submitOutboundToBsc",
+      "submit_outbound_to_bsc",
+      "submitToBsc",
+    );
+    this.destinationBinding = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp destinationBinding",
+      "destinationBinding",
+      "destination_binding",
+    );
+    this.sourceVerifierMaterial = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp sourceVerifierMaterial",
+      "sourceVerifierMaterial",
+      "source_verifier_material",
+    );
+    this.sourceBridgeEmitterAddress = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp sourceBridgeEmitterAddress",
+      "sourceBridgeEmitterAddress",
+      "source_bridge_emitter_address",
+      "expectedSourceBridgeEmitterAddress",
+      "expected_source_bridge_emitter_address",
+      "bridgeAddress",
+      "bridge_address",
+    );
+    this.defaultFrom = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp from",
+      "from",
+      "account",
+    );
+    const configuredProver = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp outboundProver",
+      "outboundProver",
+      "outbound_prover",
+      "prover",
+    );
+    this.outboundProver =
+      configuredProver === SCCP_OPTIONAL_FIELD_MISSING
+        ? new BscTestnetSccpProver(options)
+        : configuredProver;
+  }
+
+  async validateExecutionProviderTestnet(options = {}) {
+    const provider =
+      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
+    const chainId = await bscTestnetJsonRpcRequest(provider, "eth_chainId", []);
+    requireBscTestnetRpcChainId(chainId);
+    return chainId;
+  }
+
+  async collectInboundEvidenceFromReceipt(input = {}, options = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new TypeError("BSC testnet inbound evidence input must be an object");
+    }
+    input = normalizeBscMainnetInboundEvidence(input);
+    const provider =
+      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
+    if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
+      await this.validateExecutionProviderTestnet({ executionProvider: provider });
+    }
+    const transactionHashInput = maybeStrictOptionalResultField(
+      input,
+      "transactionHash",
+      "transactionHash",
+      "transaction_hash",
+    );
+    let transactionHash =
+      transactionHashInput === undefined
+        ? undefined
+        : requireEthereumRpcHexData(transactionHashInput, "transactionHash", 32);
+    let receipt = maybeStrictOptionalResultField(input, "receipt", "receipt");
+    if (receipt === undefined && transactionHash !== undefined) {
+      receipt = await bscTestnetJsonRpcRequest(provider, "eth_getTransactionReceipt", [
+        transactionHash,
+      ]);
+    }
+    const receiptProofInput = maybeStrictOptionalResultField(
+      input,
+      "receiptProof",
+      "receiptProof",
+      "receipt_proof",
+    );
+    const receiptProofHashInput = input.receiptProofHash;
+    if (receipt === undefined && receiptProofInput === undefined && receiptProofHashInput === undefined) {
+      throw new TypeError(
+        "BSC testnet inbound evidence requires a receipt, receiptProof, receiptProofHash, or transactionHash",
+      );
+    }
+    let blockHash =
+      input.blockHash === undefined && input.block_hash === undefined
+        ? undefined
+        : requireEthereumRpcHexData(
+            input.blockHash ?? input.block_hash,
+            "blockHash",
+            32,
+          );
+    let receiptBlockNumber;
+    let executionReceiptsRoot;
+    let sourceEventDigest;
+    let sourceBridgeEmitterAddress;
+    if (receipt !== undefined) {
+      const normalizedReceipt = normalizeBscMainnetReceipt(receipt, transactionHash);
+      receipt = normalizedReceipt.receipt;
+      transactionHash = normalizedReceipt.transactionHash;
+      if (blockHash !== undefined && blockHash !== normalizedReceipt.blockHash) {
+        throw new TypeError("blockHash must match receipt.blockHash");
+      }
+      blockHash = normalizedReceipt.blockHash;
+      receiptBlockNumber = normalizedReceipt.blockNumber;
+      const sourceEvent = ethereumMainnetReceiptLogSourceEventDigest(
+        receipt,
+        bscMainnetReceiptSourceEventOptions(input, options, this),
+        {
+          transactionHash,
+          blockHash,
+          blockNumber: receiptBlockNumber,
+        },
+      );
+      sourceEventDigest = sourceEvent.sourceEventDigest;
+      sourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress;
+    } else if (bscMainnetReceiptSourceEventValidationRequested(input, options)) {
+      throw new TypeError(
+        "BSC testnet SCCP source event validation requires receipt logs",
+      );
+    }
+    let block = maybeStrictOptionalResultField(input, "block", "block");
+    if (block === undefined && blockHash !== undefined) {
+      block = await bscTestnetJsonRpcRequest(provider, "eth_getBlockByHash", [blockHash, false]);
+    }
+    if (block !== undefined) {
+      if (blockHash === undefined) {
+        blockHash = requireEthereumRpcHexData(block.hash, "block.hash", 32);
+      }
+      block = normalizeBscMainnetBlock(block, blockHash, receiptBlockNumber);
+      receiptBlockNumber = `0x${requireEthereumRpcQuantity(
+        block.number ?? block.blockNumber ?? block.block_number,
+        "block.number",
+      ).toString(16)}`;
+      executionReceiptsRoot = requireEthereumRpcHexData(
+        block.receiptsRoot ?? block.receipts_root,
+        "block.receiptsRoot",
+        32,
+      );
+    }
+    const consensusProvider =
+      options.consensusProvider ?? options.consensus_provider ?? this.consensusProvider;
+    const suppliedFinality =
+      input.parliaFinality ??
+      input.parlia_finality ??
+      input.finalityEvidence ??
+      input.finality_evidence;
+    const parliaFinality =
+      suppliedFinality !== undefined ||
+      !consensusProvider ||
+      typeof consensusProvider.collectFinalityEvidence !== "function"
+        ? suppliedFinality
+        : await consensusProvider.collectFinalityEvidence(
+            immutableProverCallbackValue({ receipt, block, transactionHash }),
+            options,
+          );
+    const normalizedParliaFinality =
+      parliaFinality === undefined
+        ? undefined
+        : normalizeBscMainnetParliaFinality(parliaFinality, {
+            expectedBlockHash: blockHash,
+            expectedBlockNumber: receiptBlockNumber,
+            expectedReceiptsRoot: executionReceiptsRoot,
+          });
+    requireBscMainnetReceiptProofMatchesEvidence(receiptProofInput, {
+      blockHash,
+      receiptBlockNumber,
+      executionReceiptsRoot,
+      parliaFinality: normalizedParliaFinality,
+      sourceEventDigest,
+    });
+    return immutableProverCallbackValue({
+      ...input,
+      sourceDomain: SCCP_DOMAIN_BSC,
+      targetDomain: SCCP_DOMAIN_SORA,
+      ...(transactionHash === undefined ? {} : { transactionHash }),
+      ...(receipt === undefined ? {} : { receipt }),
+      ...(block === undefined ? {} : { block }),
+      ...(sourceEventDigest === undefined ? {} : { sourceEventDigest }),
+      ...(sourceBridgeEmitterAddress === undefined ? {} : { sourceBridgeEmitterAddress }),
+      ...(normalizedParliaFinality === undefined ? {} : { parliaFinality: normalizedParliaFinality }),
+    });
+  }
+
+  async proveInboundToSora(input, options = {}) {
+    normalizeBscMainnetInboundEvidence(input);
+    const prove =
+      options.proveInbound ??
+      options.proveInboundToSora ??
+      options.prove_inbound ??
+      this.inboundProveFn;
+    if (typeof prove !== "function") {
+      const error = new Error(
+        "BSC testnet SCCP inbound prover is not linked; provide a local JS/native proveInbound function",
+      );
+      error.code = "ERR_SCCP_BSC_TESTNET_INBOUND_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    const evidence = await this.collectInboundEvidenceFromReceipt(input, options);
+    if (
+      evidence.parliaFinality == null ||
+      typeof evidence.parliaFinality !== "object" ||
+      Array.isArray(evidence.parliaFinality) ||
+      Object.keys(evidence.parliaFinality).length === 0
+    ) {
+      throw new TypeError("BSC testnet SCCP inbound proof requires parliaFinality");
+    }
+    requireBscMainnetInboundReceiptProof(evidence);
+    requireBscMainnetReceiptSourceEventForProof(evidence);
+    return normalizeInboundProofBytes(
+      await prove(immutableProverCallbackValue(evidence), options),
+      "proofBytes",
+    );
+  }
+
+  async submitInboundToIroha(input, options = {}) {
+    const submit =
+      options.submitInboundToIroha ??
+      options.submit_inbound_to_iroha ??
+      options.submitToIroha ??
+      this.submitInboundFn;
+    if (typeof submit !== "function") {
+      const error = new Error(
+        "BSC testnet SCCP inbound submission is not linked; provide submitInboundToIroha",
+      );
+      error.code = "ERR_SCCP_BSC_TESTNET_INBOUND_SUBMIT_UNAVAILABLE";
+      throw error;
+    }
+    return submit(normalizeInboundProofBytes(input, "proofBytes"), options);
+  }
+
+  buildLocalAdmissionSubmission(input) {
+    return buildBscTestnetSccpLocalAdmissionSubmission(input);
+  }
+
+  buildOutboundProofRequest(input) {
+    return requireBscTestnetOutboundRequest(buildBscTestnetSccpDestinationProofRequest(input));
+  }
+
+  async proveOutboundToBsc(input, options = {}) {
+    if (!this.outboundProver || typeof this.outboundProver.prove !== "function") {
+      const error = new Error(
+        "BSC testnet SCCP outbound prover is not linked; provide a local JS/native EVM prover",
+      );
+      error.code = "ERR_SCCP_BSC_TESTNET_OUTBOUND_PROVER_UNAVAILABLE";
+      throw error;
+    }
+    const request = this.buildOutboundProofRequest(input);
+    const proofResult = normalizeEvmProofResult(
+      await this.outboundProver.prove(immutableGroth16ProofRequest(request), options),
+      request,
+    );
+    requireBscTestnetSubmission(buildBscTestnetSccpDestinationSubmission({ proofResult }), {
+      proofResult,
+    });
+    return proofResult;
+  }
+
+  buildBscCalldata(input) {
+    return requireBscTestnetSubmission(buildBscTestnetSccpDestinationSubmission(input), input);
+  }
+
+  async submitOutboundToBsc(input, options = {}) {
+    const submission = this.buildBscCalldata(input);
+    const submit =
+      options.submitOutboundToBsc ??
+      options.submit_outbound_to_bsc ??
+      options.submitToBsc ??
+      this.submitOutboundFn;
+    const provider =
+      options.executionProvider ?? options.execution_provider ?? this.executionProvider;
+    let providerValidated = false;
+    if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
+      await this.validateExecutionProviderTestnet({ executionProvider: provider });
+      providerValidated = true;
+    }
+    if (typeof submit === "function") {
+      return submit(submission, options);
+    }
+    if (!providerValidated) {
+      await this.validateExecutionProviderTestnet({ executionProvider: provider });
+    }
+    const boundBridgeAddress = wrappedBscTestnetProofResultBridgeAddress(input);
+    const explicitTo =
+      options.to ??
+      options.bridgeAddress ??
+      options.bridge_address ??
+      input.to ??
+      input.bridgeAddress ??
+      input.bridge_address;
+    const to =
+      explicitTo === undefined || explicitTo === SCCP_OPTIONAL_FIELD_MISSING
+        ? boundBridgeAddress
+        : nonZeroHex(explicitTo, "BSC testnet SCCP outbound to", 20);
+    if (typeof to !== "string" || !/^0x[0-9a-f]{40}$/iu.test(to)) {
+      throw new TypeError("BSC testnet SCCP outbound submission requires a bridge address");
+    }
+    if (boundBridgeAddress !== undefined && to !== boundBridgeAddress) {
+      throw new TypeError(
+        "BSC testnet SCCP outbound to address must match proofResult.destinationBinding.bridgeAddress",
+      );
+    }
+    const from = options.from ?? input.from ?? this.defaultFrom;
+    const tx = {
+      to,
+      data: submission.callDataHex,
+      chainId: "0x61",
+      ...(from === undefined || from === SCCP_OPTIONAL_FIELD_MISSING ? {} : { from }),
+    };
+    requireBscTestnetChainId(tx.chainId);
+    return bscTestnetJsonRpcRequest(provider, "eth_sendTransaction", [tx]);
   }
 }
 
@@ -27451,6 +28311,74 @@ export function bscMainnetSccpDestinationBinding(input) {
 
 export function bscMainnetSccpDestinationBindingHash(input) {
   return bscMainnetSccpDestinationBinding(input).bindingHash;
+}
+
+export function bscTestnetSccpDestinationBinding(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC testnet SCCP destination binding must be an object");
+  }
+  const sourceDomainInput = strictOptionalResultField(
+    input,
+    "destinationBinding.sourceDomain",
+    "sourceDomain",
+    "source_domain",
+  );
+  if (
+    sourceDomainInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeSccpDomainId(sourceDomainInput, "destinationBinding.sourceDomain") !== SCCP_DOMAIN_SORA
+  ) {
+    throw new RangeError("BSC testnet destinationBinding.sourceDomain must be SORA");
+  }
+  const targetDomainInput = strictOptionalResultField(
+    input,
+    "destinationBinding.targetDomain",
+    "targetDomain",
+    "target_domain",
+  );
+  if (
+    targetDomainInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeSccpDomainId(targetDomainInput, "destinationBinding.targetDomain") !== SCCP_DOMAIN_BSC
+  ) {
+    throw new RangeError("BSC testnet destinationBinding.targetDomain must be BSC");
+  }
+  const networkIdInput = strictOptionalResultField(
+    input,
+    "destinationBinding.networkId",
+    "networkId",
+    "network_id",
+    "networkIdHex",
+    "network_id_hex",
+  );
+  const normalizedInput = { ...input };
+  for (const key of [
+    "sourceDomain",
+    "source_domain",
+    "targetDomain",
+    "target_domain",
+    "networkId",
+    "network_id",
+    "networkIdHex",
+    "network_id_hex",
+  ]) {
+    delete normalizedInput[key];
+  }
+  const binding = evmSccpDestinationBinding({
+    ...normalizedInput,
+    sourceDomain: SCCP_DOMAIN_SORA,
+    targetDomain: SCCP_DOMAIN_BSC,
+    networkId:
+      networkIdInput === SCCP_OPTIONAL_FIELD_MISSING
+        ? SCCP_BSC_TESTNET_NETWORK_ID
+        : networkIdInput,
+  });
+  if (binding.networkId !== SCCP_BSC_TESTNET_NETWORK_ID) {
+    throw new RangeError("BSC testnet destinationBinding.networkId must be chain id 97");
+  }
+  return binding;
+}
+
+export function bscTestnetSccpDestinationBindingHash(input) {
+  return bscTestnetSccpDestinationBinding(input).bindingHash;
 }
 
 export function tronSccpDestinationBinding(input) {

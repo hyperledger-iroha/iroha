@@ -34,6 +34,7 @@ _keccak_256 = load_sccp_module()._keccak_256
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_BSC = 2
 BSC_RPC_CHAIN_ID = 56
+BSC_TESTNET_RPC_CHAIN_ID = 97
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET = "fastpq-lane-balanced"
@@ -70,6 +71,34 @@ BSC_TEMPLATE_COMPONENTS = {
         BSC_FINALITY_POLICY_ID,
         "finality-policy",
     ),
+}
+BSC_NETWORK_PROFILES = {
+    "mainnet": {
+        "chain": "bsc",
+        "rpc_chain_id": BSC_RPC_CHAIN_ID,
+        "source_trust_anchor_id": BSC_SOURCE_TRUST_ANCHOR_ID,
+        "consensus_verifier_id": BSC_CONSENSUS_VERIFIER_ID,
+        "message_inclusion_verifier_id": BSC_MESSAGE_INCLUSION_VERIFIER_ID,
+        "source_bridge_emitter_id": BSC_SOURCE_BRIDGE_EMITTER_ID,
+        "finality_policy_id": BSC_FINALITY_POLICY_ID,
+    },
+    "testnet": {
+        "chain": "bsc-testnet",
+        "rpc_chain_id": BSC_TESTNET_RPC_CHAIN_ID,
+        "source_trust_anchor_id": (
+            "sccp:bsc:source-trust-anchor:bsc-testnet-validator-set:v1"
+        ),
+        "consensus_verifier_id": (
+            "sccp:bsc:consensus-verifier:validator-set-seal-testnet:v1"
+        ),
+        "message_inclusion_verifier_id": (
+            "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-testnet:v1"
+        ),
+        "source_bridge_emitter_id": "sccp:bsc:source-bridge-emitter:bsc-testnet:v1",
+        "finality_policy_id": (
+            "sccp:bsc:finality-policy:validator-set-finality-testnet:v1"
+        ),
+    },
 }
 BSC_TEMPLATE_TRANSCRIPT_PREFIXES = (
     b"sccp:bsc:receipt-proof:v1",
@@ -169,6 +198,71 @@ def parse_u32(value: str, *, label: str) -> int:
     return parsed
 
 
+def parse_bsc_network(value: str) -> str:
+    """Parse the BSC network profile selector."""
+
+    if value != value.strip():
+        raise argparse.ArgumentTypeError("BSC network must be mainnet or testnet")
+    normalized = value.lower().replace("_", "-")
+    aliases = {
+        "mainnet": "mainnet",
+        "bsc-mainnet": "mainnet",
+        "56": "mainnet",
+        "testnet": "testnet",
+        "bsc-testnet": "testnet",
+        "chapel": "testnet",
+        "97": "testnet",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise argparse.ArgumentTypeError(
+            "BSC network must be mainnet or testnet"
+        ) from exc
+
+
+def _bsc_network_from_value(value: str | None) -> str:
+    if value is None:
+        return "mainnet"
+    return parse_bsc_network(value)
+
+
+def bsc_profile(bsc_network: str | None = None) -> dict[str, object]:
+    """Return the BSC source profile selected for evidence rendering."""
+
+    return BSC_NETWORK_PROFILES[_bsc_network_from_value(bsc_network)]
+
+
+def _profile_from_args(args: argparse.Namespace) -> dict[str, object]:
+    return bsc_profile(getattr(args, "bsc_network", None))
+
+
+def bsc_template_components(
+    bsc_network: str | None = None,
+) -> dict[str, tuple[str, str]]:
+    """Return template component IDs for the selected BSC profile."""
+
+    profile = bsc_profile(bsc_network)
+    return {
+        "source_trust_anchor_hash": (
+            str(profile["source_trust_anchor_id"]),
+            "source-trust-anchor",
+        ),
+        "consensus_verifier_hash": (
+            str(profile["consensus_verifier_id"]),
+            "consensus-verifier",
+        ),
+        "message_inclusion_verifier_hash": (
+            str(profile["message_inclusion_verifier_id"]),
+            "message-inclusion-verifier",
+        ),
+        "finality_policy_hash": (
+            str(profile["finality_policy_id"]),
+            "finality-policy",
+        ),
+    }
+
+
 def _require_exact_u32(value: object, label: str) -> int:
     if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
         raise ValueError(f"{label} must be an exact u32")
@@ -247,11 +341,17 @@ def _block_tag_from_args(args: argparse.Namespace) -> str:
     return block_tag
 
 
-def _evm_family_template_component_hash(component_id: str, component_kind: str) -> bytes:
+def _evm_family_template_component_hash(
+    component_id: str,
+    component_kind: str,
+    *,
+    bsc_network: str | None = None,
+) -> bytes:
+    profile = bsc_profile(bsc_network)
     payload = bytearray()
     payload.append(1)
     payload.extend(SCCP_DOMAIN_BSC.to_bytes(4, "little"))
-    _push_vec(payload, b"bsc")
+    _push_vec(payload, str(profile["chain"]).encode("utf-8"))
     payload.append(2)  # BscValidatorSetReceiptProof
     payload.append(2)  # BscValidatorSet
     _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
@@ -267,9 +367,11 @@ def bsc_source_adapter_verifier_vk_hash(
     *,
     source_domain: int = SCCP_DOMAIN_BSC,
     target_domain: int = SCCP_DOMAIN_SORA,
+    bsc_network: str | None = None,
 ) -> bytes:
     """Compute Rust's canonical OpenVerify vk hash for BSC -> SORA."""
 
+    profile = bsc_profile(bsc_network)
     source_domain = _require_exact_u32(source_domain, "source_domain")
     target_domain = _require_exact_u32(target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_BSC:
@@ -280,7 +382,7 @@ def bsc_source_adapter_verifier_vk_hash(
     verifier = bytearray()
     _push_u8(verifier, 1)
     _push_vec(verifier, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
-    _push_vec(verifier, b"bsc")
+    _push_vec(verifier, str(profile["chain"]).encode("utf-8"))
     _push_u32(verifier, source_domain)
     _push_u32(verifier, target_domain)
     _push_u8(verifier, BSC_SOURCE_PROOF_PLAN_CODE)
@@ -314,6 +416,7 @@ def bsc_source_adapter_verifier_vk_hash(
 def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
     """Compute Rust's canonical BSC source verifier material record hash."""
 
+    profile = _profile_from_args(args)
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     if source_domain != SCCP_DOMAIN_BSC:
         raise ValueError("source_domain must be BSC")
@@ -322,11 +425,11 @@ def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
     payload = bytearray()
     _push_u8(payload, 1)
     _push_u32(payload, source_domain)
-    _push_vec(payload, b"bsc")
+    _push_vec(payload, str(profile["chain"]).encode("utf-8"))
     _push_u8(payload, BSC_SOURCE_PROOF_PLAN_CODE)
     _push_u8(payload, BSC_FINALITY_MODEL_CODE)
     _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
-    _push_vec(payload, BSC_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["source_trust_anchor_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_trust_anchor_hash,
@@ -334,7 +437,7 @@ def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_CONSENSUS_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["consensus_verifier_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.consensus_verifier_hash,
@@ -342,7 +445,10 @@ def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_MESSAGE_INCLUSION_VERIFIER_ID.encode("utf-8"))
+    _push_vec(
+        payload,
+        str(profile["message_inclusion_verifier_id"]).encode("utf-8"),
+    )
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.message_inclusion_verifier_hash,
@@ -350,7 +456,7 @@ def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_FINALITY_POLICY_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["finality_policy_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.finality_policy_hash,
@@ -360,7 +466,7 @@ def bsc_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
     )
     _push_vec(payload, b"")
     payload.extend(bytes(32))
-    _push_vec(payload, BSC_SOURCE_BRIDGE_EMITTER_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["source_bridge_emitter_id"]).encode("utf-8"))
     _push_vec(
         payload,
         _require_nonzero_fixed_bytes(
@@ -391,6 +497,7 @@ def bsc_source_adapter_engine_deployment_record_hash(
 ) -> bytes:
     """Compute Rust's canonical BSC source-adapter deployment record hash."""
 
+    profile = _profile_from_args(args)
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     target_domain = _require_exact_u32(args.target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_BSC:
@@ -407,6 +514,7 @@ def bsc_source_adapter_engine_deployment_record_hash(
     expected_adapter_verifier_vk_hash = bsc_source_adapter_verifier_vk_hash(
         source_domain=source_domain,
         target_domain=target_domain,
+        bsc_network=getattr(args, "bsc_network", None),
     )
     if adapter_verifier_vk_hash != expected_adapter_verifier_vk_hash:
         raise ValueError(
@@ -418,13 +526,13 @@ def bsc_source_adapter_engine_deployment_record_hash(
     _push_u8(payload, 1)
     _push_u32(payload, source_domain)
     _push_u32(payload, target_domain)
-    _push_vec(payload, b"bsc")
+    _push_vec(payload, str(profile["chain"]).encode("utf-8"))
     _push_u8(payload, BSC_SOURCE_PROOF_PLAN_CODE)
     _push_u8(payload, BSC_FINALITY_MODEL_CODE)
     _push_vec(payload, SCCP_PROOF_FAMILY_STARK_FRI.encode("utf-8"))
     _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
     payload.extend(adapter_verifier_vk_hash)
-    _push_vec(payload, BSC_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["source_trust_anchor_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_trust_anchor_hash,
@@ -432,7 +540,7 @@ def bsc_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_CONSENSUS_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["consensus_verifier_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.consensus_verifier_hash,
@@ -440,7 +548,10 @@ def bsc_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_MESSAGE_INCLUSION_VERIFIER_ID.encode("utf-8"))
+    _push_vec(
+        payload,
+        str(profile["message_inclusion_verifier_id"]).encode("utf-8"),
+    )
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.message_inclusion_verifier_hash,
@@ -448,7 +559,7 @@ def bsc_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, BSC_FINALITY_POLICY_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["finality_policy_id"]).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.finality_policy_hash,
@@ -458,7 +569,7 @@ def bsc_source_adapter_engine_deployment_record_hash(
     )
     _push_vec(payload, b"")
     payload.extend(bytes(32))
-    _push_vec(payload, BSC_SOURCE_BRIDGE_EMITTER_ID.encode("utf-8"))
+    _push_vec(payload, str(profile["source_bridge_emitter_id"]).encode("utf-8"))
     _push_vec(
         payload,
         _require_nonzero_fixed_bytes(
@@ -516,10 +627,13 @@ def _require_bsc_sora_lane(args: argparse.Namespace) -> None:
 
 
 def _require_live_component_hashes(args: argparse.Namespace) -> None:
-    for field, (component_id, component_kind) in BSC_TEMPLATE_COMPONENTS.items():
+    for field, (component_id, component_kind) in bsc_template_components(
+        getattr(args, "bsc_network", None)
+    ).items():
         if getattr(args, field) == _evm_family_template_component_hash(
             component_id,
             component_kind,
+            bsc_network=getattr(args, "bsc_network", None),
         ):
             label = field.replace("_", " ")
             raise ValueError(
@@ -532,6 +646,7 @@ def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> Non
     expected_hash = bsc_source_adapter_verifier_vk_hash(
         source_domain=args.source_domain,
         target_domain=args.target_domain,
+        bsc_network=getattr(args, "bsc_network", None),
     )
     if args.adapter_verifier_vk_hash != expected_hash:
         raise ValueError(
@@ -753,66 +868,74 @@ def _component_hash_args() -> tuple[str, ...]:
 
 
 def _material_lines(args: argparse.Namespace) -> Iterable[str]:
+    profile = _profile_from_args(args)
     yield "[[zk.sccp_source_verifier_materials]]"
     yield _toml_line("version", 1)
     yield _toml_line("source_domain", args.source_domain)
-    yield _toml_line("source_chain", "bsc")
+    yield _toml_line("source_chain", str(profile["chain"]))
     yield _toml_line("source_proof_plan", "BscValidatorSetReceiptProof")
     yield _toml_line("finality_model", "BscValidatorSet")
     yield _toml_line("adapter_circuit_id", "sccp-source-adapter-v1")
-    yield _toml_line("source_trust_anchor_id", BSC_SOURCE_TRUST_ANCHOR_ID)
+    yield _toml_line("source_trust_anchor_id", str(profile["source_trust_anchor_id"]))
     yield _toml_line("source_trust_anchor_hash", _hex(args.source_trust_anchor_hash))
-    yield _toml_line("consensus_verifier_id", BSC_CONSENSUS_VERIFIER_ID)
+    yield _toml_line("consensus_verifier_id", str(profile["consensus_verifier_id"]))
     yield _toml_line("consensus_verifier_hash", _hex(args.consensus_verifier_hash))
     yield _toml_line(
         "message_inclusion_verifier_id",
-        BSC_MESSAGE_INCLUSION_VERIFIER_ID,
+        str(profile["message_inclusion_verifier_id"]),
     )
     yield _toml_line(
         "message_inclusion_verifier_hash",
         _hex(args.message_inclusion_verifier_hash),
     )
-    yield _toml_line("source_bridge_emitter_id", BSC_SOURCE_BRIDGE_EMITTER_ID)
+    yield _toml_line(
+        "source_bridge_emitter_id",
+        str(profile["source_bridge_emitter_id"]),
+    )
     yield _toml_line("source_bridge_emitter_address", _hex(args.bridge_address))
     yield _toml_line(
         "source_bridge_emitter_code_hash",
         _hex(args.source_bridge_emitter_code_hash),
     )
-    yield _toml_line("finality_policy_id", BSC_FINALITY_POLICY_ID)
+    yield _toml_line("finality_policy_id", str(profile["finality_policy_id"]))
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("placeholder_material", False)
 
 
 def _deployment_lines(args: argparse.Namespace) -> Iterable[str]:
+    profile = _profile_from_args(args)
     yield "[[zk.sccp_source_adapter_engine_deployments]]"
     yield _toml_line("version", 1)
     yield _toml_line("source_domain", args.source_domain)
     yield _toml_line("target_domain", args.target_domain)
-    yield _toml_line("source_chain", "bsc")
+    yield _toml_line("source_chain", str(profile["chain"]))
     yield _toml_line("source_proof_plan", "BscValidatorSetReceiptProof")
     yield _toml_line("finality_model", "BscValidatorSet")
     yield _toml_line("adapter_proof_family", SCCP_PROOF_FAMILY_STARK_FRI)
     yield _toml_line("adapter_circuit_id", "sccp-source-adapter-v1")
     yield _toml_line("adapter_verifier_vk_hash", _hex(args.adapter_verifier_vk_hash))
-    yield _toml_line("source_trust_anchor_id", BSC_SOURCE_TRUST_ANCHOR_ID)
+    yield _toml_line("source_trust_anchor_id", str(profile["source_trust_anchor_id"]))
     yield _toml_line("source_trust_anchor_hash", _hex(args.source_trust_anchor_hash))
-    yield _toml_line("consensus_verifier_id", BSC_CONSENSUS_VERIFIER_ID)
+    yield _toml_line("consensus_verifier_id", str(profile["consensus_verifier_id"]))
     yield _toml_line("consensus_verifier_hash", _hex(args.consensus_verifier_hash))
     yield _toml_line(
         "message_inclusion_verifier_id",
-        BSC_MESSAGE_INCLUSION_VERIFIER_ID,
+        str(profile["message_inclusion_verifier_id"]),
     )
     yield _toml_line(
         "message_inclusion_verifier_hash",
         _hex(args.message_inclusion_verifier_hash),
     )
-    yield _toml_line("source_bridge_emitter_id", BSC_SOURCE_BRIDGE_EMITTER_ID)
+    yield _toml_line(
+        "source_bridge_emitter_id",
+        str(profile["source_bridge_emitter_id"]),
+    )
     yield _toml_line("source_bridge_emitter_address", _hex(args.bridge_address))
     yield _toml_line(
         "source_bridge_emitter_code_hash",
         _hex(args.source_bridge_emitter_code_hash),
     )
-    yield _toml_line("finality_policy_id", BSC_FINALITY_POLICY_ID)
+    yield _toml_line("finality_policy_id", str(profile["finality_policy_id"]))
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("deployment_receipt_hash", _hex(args.deployment_receipt_hash))
 
@@ -822,6 +945,7 @@ def render_toml(args: argparse.Namespace) -> str:
 
     apply_runtime_bytecode_hash(args)
     _validate_bsc_source_evidence_args(args)
+    profile = _profile_from_args(args)
     material_hash = bsc_source_verifier_material_record_hash(args)
     deployment_hash = bsc_source_adapter_engine_deployment_record_hash(args)
     _require_expected_record_hashes(args, output="toml")
@@ -829,7 +953,8 @@ def render_toml(args: argparse.Namespace) -> str:
     _require_toml_runtime_bytecode_metadata(args, output="toml")
     block_tag = _block_tag_from_args(args)
     comments = [
-        "# sccp_evm_source_rpc_chain_id = " + json.dumps(str(BSC_RPC_CHAIN_ID)),
+        "# sccp_evm_source_rpc_chain_id = "
+        + json.dumps(str(profile["rpc_chain_id"])),
         "# sccp_evm_source_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_source_bridge_address = "
         + json.dumps(_hex(args.bridge_address)),
@@ -885,6 +1010,7 @@ def render_toml(args: argparse.Namespace) -> str:
 def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     apply_runtime_bytecode_hash(args)
     _validate_bsc_source_evidence_args(args)
+    profile = _profile_from_args(args)
     material_hash = bsc_source_verifier_material_record_hash(args)
     deployment_hash = bsc_source_adapter_engine_deployment_record_hash(args)
     expected_material_matches = (
@@ -899,11 +1025,18 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     summary = {
         "source_domain": args.source_domain,
         "target_domain": args.target_domain,
-        "source_chain": "bsc",
+        "source_chain": str(profile["chain"]),
+        "rpc_chain_id": profile["rpc_chain_id"],
         "block_tag": _block_tag_from_args(args),
         "source_proof_plan": "BscValidatorSetReceiptProof",
         "finality_model": "BscValidatorSet",
-        "source_bridge_emitter_id": BSC_SOURCE_BRIDGE_EMITTER_ID,
+        "source_trust_anchor_id": str(profile["source_trust_anchor_id"]),
+        "consensus_verifier_id": str(profile["consensus_verifier_id"]),
+        "message_inclusion_verifier_id": str(
+            profile["message_inclusion_verifier_id"]
+        ),
+        "source_bridge_emitter_id": str(profile["source_bridge_emitter_id"]),
+        "finality_policy_id": str(profile["finality_policy_id"]),
         "source_bridge_emitter_address": _hex(args.bridge_address),
         "source_bridge_emitter_code_hash": _hex(args.source_bridge_emitter_code_hash),
         "adapter_verifier_vk_hash": _hex(args.adapter_verifier_vk_hash),
@@ -955,6 +1088,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=SCCP_DOMAIN_BSC,
         type=lambda value: parse_u32(value, label="source domain"),
         help="SCCP source domain. Defaults to BSC (2).",
+    )
+    parser.add_argument(
+        "--bsc-network",
+        default="mainnet",
+        type=parse_bsc_network,
+        help=(
+            "BSC network profile for source evidence: mainnet or testnet. "
+            "Defaults to mainnet."
+        ),
     )
     parser.add_argument(
         "--target-domain",

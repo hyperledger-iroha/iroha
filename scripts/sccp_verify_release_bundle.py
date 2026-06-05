@@ -167,6 +167,57 @@ EVM_EXPECTED_RPC_CHAIN_IDS = {
     SCCP_DOMAIN_ETH: 1,
     SCCP_DOMAIN_BSC: 56,
 }
+BSC_CHAIN_PROFILES = {
+    "bsc": {
+        "rpc_chain_id": 56,
+        "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
+    },
+    "bsc-testnet": {
+        "rpc_chain_id": 97,
+        "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-testnet:v1",
+    },
+}
+
+
+def _chain_matches_domain(domain: int, chain: str) -> bool:
+    if domain == SCCP_DOMAIN_BSC:
+        return chain in BSC_CHAIN_PROFILES
+    return chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+
+
+def _expected_chain_label(domain: int) -> str | None:
+    if domain == SCCP_DOMAIN_BSC:
+        return "bsc or bsc-testnet"
+    return ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+
+
+def _bsc_profile_for_chain(chain: Any) -> dict[str, Any]:
+    if chain == "bsc-testnet":
+        return BSC_CHAIN_PROFILES["bsc-testnet"]
+    return BSC_CHAIN_PROFILES["bsc"]
+
+
+def _expected_evm_rpc_chain_id(domain: int, chain: Any = None) -> int:
+    if domain == SCCP_DOMAIN_BSC:
+        return int(_bsc_profile_for_chain(chain)["rpc_chain_id"])
+    return EVM_EXPECTED_RPC_CHAIN_IDS[domain]
+
+
+def _route_allowlist_chain_and_id(
+    domain: int,
+    chain: Any = None,
+) -> tuple[str, str] | None:
+    if domain == SCCP_DOMAIN_BSC:
+        selected_chain = "bsc-testnet" if chain == "bsc-testnet" else "bsc"
+        return (
+            selected_chain,
+            str(BSC_CHAIN_PROFILES[selected_chain]["route_allowlist_id"]),
+        )
+    route_chain = ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+    route_allowlist_id = ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN.get(domain)
+    if route_chain is None or route_allowlist_id is None:
+        return None
+    return route_chain, route_allowlist_id
 SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 SOLANA_BASE58_INDEX = {
     symbol: index for index, symbol in enumerate(SOLANA_BASE58_ALPHABET)
@@ -2803,7 +2854,7 @@ CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
             "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
             "const bscMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(56), 32);",
             'callExceptionWithReason("Network id must be ETH mainnet")',
-            'callExceptionWithReason("Network id must be BSC mainnet")',
+            'callExceptionWithReason("Network id must be BSC mainnet or testnet")',
             "networkId = ethMainnetNetworkId",
             "const networkId = ethMainnetNetworkId;",
             "assert.equal(acceptedGroth16Logs[0].args.networkId, networkId);",
@@ -6796,11 +6847,12 @@ def _canonical_route_allowlist_hash(
     source_verifier_material_hash: bytes,
     source_adapter_engine_deployment_hash: bytes,
     destination_binding_hash: bytes,
+    chain: Any = None,
 ) -> str | None:
-    chain = ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
-    route_allowlist_id = ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN.get(domain)
-    if chain is None or route_allowlist_id is None:
+    route_profile = _route_allowlist_chain_and_id(domain, chain)
+    if route_profile is None:
         return None
+    route_chain, route_allowlist_id = route_profile
     if len(
         {
             source_verifier_material_hash,
@@ -6813,7 +6865,7 @@ def _canonical_route_allowlist_hash(
     payload = bytearray()
     _push_u8(payload, 1)
     _push_u32(payload, domain)
-    _push_vec(payload, chain.encode("utf-8"))
+    _push_vec(payload, route_chain.encode("utf-8"))
     _push_vec(payload, b"GovernanceAllowlist")
     _push_vec(payload, route_allowlist_id.encode("utf-8"))
     payload.extend(source_verifier_material_hash)
@@ -6967,12 +7019,19 @@ def _cryptographic_evidence_row_schema_errors(
                 and (
                     not _is_canonical_decimal_text(row.get(field), positive=True)
                     or int(row[field], 10)
-                    != EVM_EXPECTED_RPC_CHAIN_IDS[SCCP_DOMAIN_BSC]
+                    != _expected_evm_rpc_chain_id(SCCP_DOMAIN_BSC, row.get("chain"))
                 )
             ):
+                expected_chain_id = _expected_evm_rpc_chain_id(
+                    SCCP_DOMAIN_BSC,
+                    row.get("chain"),
+                )
+                expected_chain = (
+                    "bsc-testnet" if row.get("chain") == "bsc-testnet" else "bsc"
+                )
                 errors.append(
                     "readiness report cryptographic evidence row "
-                    f"{field} must be BSC mainnet chain id 56"
+                    f"{field} must be BSC chain id {expected_chain_id} for {expected_chain}"
                 )
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
             if (
@@ -6983,7 +7042,7 @@ def _cryptographic_evidence_row_schema_errors(
             ):
                 errors.append(
                     "readiness report cryptographic evidence row "
-                    f"{field} must be non-empty for BSC mainnet"
+                    f"{field} must be non-empty for BSC EVM evidence"
                 )
     elif domain in ALL_LANES_CHAIN_BY_DOMAIN:
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
@@ -7389,12 +7448,12 @@ def _cryptographic_evidence_inventory_errors(crypto: list[Any]) -> list[str]:
             errors.append(f"{label} contains duplicate domain: {domain}")
         else:
             seen_domains.add(domain)
-        expected_chain = ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        expected_chain = _expected_chain_label(domain)
         if expected_chain is None:
             errors.append(f"{label} contains unknown domain: {domain}")
             continue
         chain = row.get("chain")
-        if isinstance(chain, str) and chain and chain != expected_chain:
+        if isinstance(chain, str) and chain and not _chain_matches_domain(domain, chain):
             errors.append(
                 f"{label} chain mismatch for domain {domain}: "
                 f"expected {expected_chain}, got {chain!r}"
@@ -8074,6 +8133,7 @@ def _route_allowlist_recompute_errors(
         return errors
     expected = _canonical_route_allowlist_hash(
         domain=lane.get("domain"),
+        chain=lane.get("chain"),
         source_verifier_material_hash=source_verifier_material_hash,
         source_adapter_engine_deployment_hash=source_adapter_engine_deployment_hash,
         destination_binding_hash=destination_binding_hash,
@@ -8659,18 +8719,17 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if "domain" in lane and type(lane.get("domain")) is not int:
             errors.append(f"{lane_label} domain must be an integer")
         domain = lane.get("domain")
-        expected_chain = (
-            ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
-            if type(domain) is int
-            else None
-        )
+        expected_chain = _expected_chain_label(domain) if type(domain) is int else None
         if type(domain) is int and expected_chain is None:
             errors.append(f"{lane_label} domain must be a production remote domain")
         if "chain" in lane and (
             not isinstance(lane.get("chain"), str) or not lane.get("chain")
         ):
             errors.append(f"{lane_label} chain must be a non-empty string")
-        elif expected_chain is not None and lane.get("chain") != expected_chain:
+        elif expected_chain is not None and not _chain_matches_domain(
+            domain,
+            lane.get("chain"),
+        ):
             errors.append(f"{lane_label} chain must be {expected_chain}")
         if domain == ACTIVE_LAUNCH_DOMAIN:
             errors.extend(_true_field_errors(lane_label, lane, "production_ready"))
@@ -8864,7 +8923,10 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 ):
                     if not evm_metadata.get(field):
                         errors.append(f"{metadata_label} {field} must be present")
-                expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[domain]
+                expected_chain_id = _expected_evm_rpc_chain_id(
+                    domain,
+                    lane.get("chain"),
+                )
                 for field in ("source_rpc_chain_id", "destination_rpc_chain_id"):
                     value = evm_metadata.get(field)
                     if isinstance(value, str) and (

@@ -16,6 +16,7 @@ contract SccpMessageBridge {
     uint32 private constant SCCP_DOMAIN_BSC = 2;
     bytes32 private constant ETH_MAINNET_NETWORK_ID = bytes32(uint256(1));
     bytes32 private constant BSC_MAINNET_NETWORK_ID = bytes32(uint256(56));
+    bytes32 private constant BSC_TESTNET_NETWORK_ID = bytes32(uint256(97));
     bytes32 private constant DESTINATION_BINDING_DOMAIN_SEPARATOR =
         keccak256("iroha:sccp:evm-destination-binding:v1");
     bytes32 private constant PRODUCTION_GROTH16_BACKEND_HASH =
@@ -87,8 +88,9 @@ contract SccpMessageBridge {
         }
         if (configuredTargetDomain == SCCP_DOMAIN_BSC) {
             require(
-                configuredNetworkId == BSC_MAINNET_NETWORK_ID,
-                "Network id must be BSC mainnet"
+                configuredNetworkId == BSC_MAINNET_NETWORK_ID ||
+                    configuredNetworkId == BSC_TESTNET_NETWORK_ID,
+                "Network id must be BSC mainnet or testnet"
             );
         }
         require(

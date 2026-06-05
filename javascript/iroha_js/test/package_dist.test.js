@@ -18,6 +18,8 @@ import {
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -120,11 +122,18 @@ import {
   verifyEthereumMainnetNativeEvmProverArtifacts,
   BscMainnetSccp,
   BscMainnetSccpProver,
+  BscTestnetSccp,
+  BscTestnetSccpProver,
   bscMainnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
   buildBscMainnetSccpDestinationSubmission,
+  buildBscTestnetSccpDestinationProofRequest,
+  buildBscTestnetSccpDestinationSubmission,
+  buildBscTestnetSccpLocalAdmissionSubmission,
   evmSccpDestinationBinding,
   wrapBscMainnetSccpDestinationProofResult,
+  wrapBscTestnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
@@ -4284,6 +4293,53 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   })).targetDomain, SCCP_DOMAIN_BSC);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
+  const bscTestnetBinding = bscTestnetSccpDestinationBinding({
+    verifierAddress: `0x${"33".repeat(20)}`,
+    bridgeAddress: `0x${"44".repeat(20)}`,
+    verifierCodeHash: `0x${"dd".repeat(32)}`,
+    verifierKeyHash: `0x${"ee".repeat(32)}`,
+  });
+  assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
+  assert.equal(SCCP_BSC_TESTNET_NETWORK_ID, bscTestnetBinding.networkId);
+  const bscTestnetRequest = buildBscTestnetSccpDestinationProofRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  });
+  const bscTestnetProofResult = wrapBscTestnetSccpDestinationProofResult(proofBytes, bscTestnetRequest);
+  assert.equal(
+    buildBscTestnetSccpDestinationSubmission({ proofResult: bscTestnetProofResult }).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(new BscTestnetSccp().buildBscCalldata({
+    proofResult: bscTestnetProofResult,
+  }).destinationBindingHash, bscTestnetRequest.destinationBindingHash);
+  assert.equal((await new BscTestnetSccpProver().buildRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  })).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+  assert.equal(buildBscTestnetSccpLocalAdmissionSubmission({
+    source_domain: SCCP_DOMAIN_BSC,
+    target_domain: SCCP_DOMAIN_SORA,
+    proof_bytes: new Uint8Array([1, 2, 3]),
+    public_inputs_bytes: new Uint8Array([4, 5, 6]),
+    bundle_bytes: new Uint8Array([7, 8, 9]),
+    envelope_bytes: new Uint8Array([10, 11, 12]),
+    statement_hash: `0x${"66".repeat(32)}`,
+    source_verifier_material_hash: `0x${"77".repeat(32)}`,
+    source_adapter_engine_deployment_hash: `0x${"88".repeat(32)}`,
+  }).sourceDomain, SCCP_DOMAIN_BSC);
+  assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpLocalAdmissionSubmission/u);
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),

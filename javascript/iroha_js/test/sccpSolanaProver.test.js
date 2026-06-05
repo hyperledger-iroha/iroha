@@ -59,6 +59,7 @@ import {
   SCCP_TAIRA_CHAIN_ID_V1,
   SCCP_TAIRA_NETWORK_PREFIX_V1,
   SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
   SCCP_TAIRA_XOR_ASSET_KEY_V1,
   SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
   SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
@@ -320,13 +321,19 @@ import {
   tairaXorRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
+  buildTairaXorBscTransferPayload,
   buildTairaXorTronToTairaTransferPayload,
   buildTairaXorSccpRecordDescriptor,
+  buildTairaXorBscSccpRecordDescriptor,
   buildRecordSccpMessageInstructionBytes,
   buildTairaXorSccpBurnRecordContractPayload,
+  buildTairaXorBscSccpBurnRecordContractPayload,
   buildTairaXorSccpBurnRecordZkIvmRequest,
+  buildTairaXorBscSccpBurnRecordZkIvmRequest,
   tairaXorCanonicalTransferPayloadBytes,
+  tairaXorBscCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
+  tairaXorBscTransferMessageId,
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
   tairaXorTronToTairaTransferMessageId,
   tairaXorTransferPayloadHash,
@@ -14086,6 +14093,108 @@ test("builds canonical TAIRA XOR outbound transfer payloads and message ids", ()
   );
 });
 
+test("builds canonical TAIRA XOR BSC-destination transfer payloads and message ids", () => {
+  const sender = TAIRA_ACCOUNT_ID;
+  const recipient = `0x${"11".repeat(20)}`;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const payload = buildTairaXorBscTransferPayload({
+    tairaAccountId: sender,
+    bscRecipient: recipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_BSC,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender,
+    recipient_codec: SCCP_CODEC_EVM_HEX,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  });
+
+  const expectedCanonical = testConcatBytes(
+    testU8(1),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU32Le(SCCP_DOMAIN_BSC),
+    testU64Le(nonce),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_XOR_ASSET_KEY_V1)),
+    testU128Le(amount),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(sender)),
+    testU8(SCCP_CODEC_EVM_HEX),
+    testVecBytes(testTextEncoder.encode(recipient)),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1)),
+  );
+  assert.deepEqual(canonicalSccpTransferPayloadBytes(payload), expectedCanonical);
+  assert.deepEqual(
+    tairaXorBscCanonicalTransferPayloadBytes({
+      tairaSender: sender,
+      recipientAddress: recipient.toUpperCase(),
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+    }),
+    expectedCanonical,
+  );
+
+  const expectedMessageId = testBytesToHex(
+    keccak_256(testConcatBytes(testTextEncoder.encode("sccp:transfer:v1"), expectedCanonical)),
+  );
+  assert.equal(sccpTransferMessageId(payload), expectedMessageId);
+  assert.equal(
+    tairaXorBscTransferMessageId({
+      sender,
+      evmRecipient: recipient,
+      amount,
+      nonce,
+    }),
+    expectedMessageId,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        amount,
+        nonce,
+      }),
+    /recipientAddress/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: `0x${"00".repeat(20)}`,
+        amount,
+        nonce,
+      }),
+    /recipientAddress/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: recipient,
+        amount,
+        nonce,
+        routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_bsc_xor/u,
+  );
+});
+
 test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
   const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const tairaRecipient = TAIRA_ACCOUNT_ID;
@@ -14131,7 +14240,9 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const messageBundle = {
     version: 1,
     commitmentRoot: HEX32_D,
@@ -14403,7 +14514,9 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const sourceEventDigest = tairaXorBurnSourceEventDigest({
     bridgeAddress,
     burnerAddress: tronSender,
@@ -14634,6 +14747,59 @@ test("builds a proof-gated TAIRA XOR SCCP record descriptor", () => {
   assert.deepEqual(descriptor.canonicalPayloadBytes, expectedPayloadBytes);
 });
 
+test("builds a proof-gated TAIRA XOR BSC SCCP record descriptor", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 25_000_000_000_000_000n,
+    nonce: 42n,
+  };
+  const expectedPayloadBytes = tairaXorBscCanonicalTransferPayloadBytes(input);
+  const expectedPayloadHex = testBytesToHex(expectedPayloadBytes);
+  const expectedMessageId = tairaXorBscTransferMessageId(input);
+  const descriptor = buildTairaXorBscSccpRecordDescriptor({
+    ...input,
+    expectedMessageId,
+    expectedCanonicalPayloadHex: expectedPayloadHex,
+  });
+
+  assert.equal(Object.isFrozen(descriptor), true);
+  assert.equal(descriptor.execution_kind, SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1);
+  assert.equal(descriptor.chain_id, SCCP_TAIRA_CHAIN_ID_V1);
+  assert.equal(descriptor.network_prefix, SCCP_TAIRA_NETWORK_PREFIX_V1);
+  assert.equal(descriptor.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
+  assert.equal(descriptor.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
+  assert.equal(descriptor.message_kind, "Transfer");
+  assert.equal(descriptor.source_domain, SCCP_DOMAIN_SORA);
+  assert.equal(descriptor.dest_domain, SCCP_DOMAIN_BSC);
+  assert.equal(descriptor.message_id, expectedMessageId);
+  assert.equal(descriptor.canonical_payload_hex, expectedPayloadHex);
+  assert.equal(descriptor.payload.recipient_codec, SCCP_CODEC_EVM_HEX);
+  assert.equal(descriptor.payload.recipient, input.recipientAddress);
+  assert.deepEqual(descriptor.canonicalPayloadBytes, expectedPayloadBytes);
+  assert.deepEqual(descriptor.record_instruction, {
+    kind: "RecordSccpMessage",
+    payload_bytes_hex: expectedPayloadHex,
+  });
+  assert.deepEqual(descriptor.execution_requirements, {
+    executable: "IvmProved",
+    overlay_instruction: "RecordSccpMessage",
+    settlement_instruction: "Burn<Numeric, Asset>",
+    settlement_asset_selector: "nexus.fees.fee_asset_id",
+    settlement_asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    settlement_account_binding: "burn.destination.account == payload.sender",
+    settlement_amount_binding: "sum(whole-unit burns) >= sum(recorded amounts) per sender",
+    proof_gate: "sccp_recording_proof_verified",
+    normal_transaction_supported: false,
+  });
+
+  const mutableCopy = descriptor.canonicalPayloadBytes;
+  mutableCopy[0] ^= 0xff;
+  assert.deepEqual(descriptor.canonicalPayloadBytes, expectedPayloadBytes);
+});
+
 test("rejects stale TAIRA XOR SCCP record descriptor bindings", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
@@ -14686,6 +14852,65 @@ test("rejects stale TAIRA XOR SCCP record descriptor bindings", () => {
   assert.throws(
     () =>
       buildTairaXorSccpRecordDescriptor({
+        ...input,
+        assetKey: "xor#universal",
+      }),
+    /assetKey must be xor/,
+  );
+});
+
+test("rejects stale TAIRA XOR BSC SCCP record descriptor bindings", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 1000n,
+    nonce: 7n,
+  };
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        expectedMessageId: HEX32_A,
+      }),
+    /expectedMessageId must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        expectedCanonicalPayloadBytes: Uint8Array.from([1, 2, 3]),
+      }),
+    /expectedCanonicalPayloadBytes must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        chainId: "00000000-0000-0000-0000-000000000000",
+      }),
+    /chainId must be TAIRA/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        networkPrefix: 753,
+      }),
+    /networkPrefix must be TAIRA/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_bsc_xor/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
         ...input,
         assetKey: "xor#universal",
       }),
@@ -14810,6 +15035,59 @@ test("builds a TAIRA XOR burn-record contract payload and ZK IVM request", () =>
   assert.deepEqual(request.request.metadata.contract_payload, contract.payload);
 });
 
+test("builds a TAIRA XOR BSC burn-record contract payload and ZK IVM request", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: "25000000000000000",
+    nonce: 42,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+  };
+  const contract = buildTairaXorBscSccpBurnRecordContractPayload(input);
+  assert.equal(contract.entrypoint, SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1);
+  assert.equal(contract.descriptor.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
+  assert.equal(contract.descriptor.dest_domain, SCCP_DOMAIN_BSC);
+  assert.equal(contract.descriptor.payload.recipient_codec, SCCP_CODEC_EVM_HEX);
+  assert.equal(contract.payload.sender, input.sender);
+  assert.equal(contract.payload.settlement_asset, input.settlementAssetDefinitionId);
+  assert.equal(contract.payload.amount, input.amount);
+  assert.match(contract.payload.record_instruction, /^0x[0-9a-f]+$/u);
+  assert.equal(
+    contract.payload.record_instruction,
+    contract.record_instruction_hex,
+  );
+  const descriptorContract = buildTairaXorBscSccpBurnRecordContractPayload({
+    descriptor: contract.descriptor,
+    settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+    authority: input.sender,
+  });
+  assert.deepEqual(descriptorContract.payload, contract.payload);
+
+  const request = buildTairaXorBscSccpBurnRecordZkIvmRequest({
+    ...input,
+    authority: input.sender,
+    vkRef: { backend: "stark/fri", name: "ivm-exec-v1" },
+    contractArtifact: { artifact_b64: "AQIDBA==" },
+    gasLimit: 3000000,
+  });
+  assert.equal(request.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
+  assert.equal(request.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
+  assert.deepEqual(request.request.vkRef, {
+    backend: "stark/fri",
+    name: "ivm-exec-v1",
+  });
+  assert.equal(request.request.authority, input.sender);
+  assert.equal(request.request.bytecode, "AQIDBA==");
+  assert.equal(request.request.metadata.gas_limit, 3000000);
+  assert.equal(
+    request.request.metadata.contract_entrypoint,
+    SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+  );
+  assert.deepEqual(request.request.metadata.contract_payload, contract.payload);
+});
+
 test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
   const input = {
     chainId: SCCP_TAIRA_CHAIN_ID_V1,
@@ -14868,6 +15146,79 @@ test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
         gasLimit: 0,
       }),
     /gasLimit must be greater than zero/,
+  );
+});
+
+test("rejects unsafe TAIRA XOR BSC burn-record ZK request bindings", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 1000,
+    nonce: 7,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    vkRef: { backend: "stark/fri", name: "ivm-exec-v1" },
+    bytecode: "AQIDBA==",
+  };
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        authority: TAIRA_OTHER_ACCOUNT_ID,
+      }),
+    /authority must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        ...input,
+        settlementAssetDefinitionId: "xor#universal",
+      }),
+    /not an alias/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        amount: (1n << 63n).toString(),
+      }),
+    /amount must fit i64/,
+  );
+  const bscDescriptor = buildTairaXorBscSccpRecordDescriptor(input);
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        descriptor: {
+          ...bscDescriptor,
+          record_instruction: {
+            kind: "RecordSccpMessage",
+            payload_bytes_hex: HEX32_A,
+          },
+        },
+        settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+      }),
+    /payload_bytes_hex must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        gasLimit: 0,
+      }),
+    /gasLimit must be greater than zero/,
+  );
+  const tronDescriptor = buildTairaXorSccpRecordDescriptor({
+    ...input,
+    recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+  });
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        descriptor: tronDescriptor,
+        settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+      }),
+    /descriptor\.route_id must be taira_bsc_xor/u,
   );
 });
 
@@ -14978,7 +15329,17 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
       amount,
       nonce: 42n,
     }),
-    payloadHash: sccpPayloadHash(canonicalPayloadBytes),
+    payloadHash: sccpPayloadHash(
+      canonicalSccpPayloadEnvelopeBytes({
+        kind: "Transfer",
+        value: buildTairaXorTransferPayload({
+          sender: TAIRA_ACCOUNT_ID,
+          recipientAddress,
+          amount,
+          nonce: 42n,
+        }),
+      }),
+    ),
     targetDomain: SCCP_DOMAIN_TRON,
     commitmentRoot: HEX32_C,
     finalityHeight: 9,
@@ -15457,7 +15818,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         statementHash: HEX32_E,
         canonicalPayloadBytes: finalizePayload,
       }),
-    /payloadHash must match canonicalPayloadBytes/,
+    /payloadHash must match canonical SCCP payload envelope/,
   );
   assert.throws(
     () =>

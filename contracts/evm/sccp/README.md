@@ -56,7 +56,8 @@ and rejects empty verifier-backend/proof-family labels, a zero network id, a
 non-SORA source domain, a target domain outside ETH/BSC, and same-domain
 deployments. ETH-targeted deployments must use the bytes32 EIP-155 chain-id
 word for Ethereum mainnet (`1`), and BSC-targeted deployments must use the
-bytes32 EIP-155 chain-id word for BNB Smart Chain mainnet (`56`).
+bytes32 EIP-155 chain-id word for BNB Smart Chain mainnet (`56`) or BSC
+testnet (`97`).
 The wrapper enforces the expected source/target domains, rejects zero SCCP
 statement/public-input fields before calling the verifier, and checks the
 returned `messageId` and `commitmentRoot` against the supplied public inputs.

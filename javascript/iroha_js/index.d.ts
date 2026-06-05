@@ -605,6 +605,8 @@ export const SCCP_ETH_MAINNET_EVM_CHAIN_ID: 1;
 export const SCCP_ETH_MAINNET_NETWORK_ID: string;
 export const SCCP_BSC_MAINNET_EVM_CHAIN_ID: 56;
 export const SCCP_BSC_MAINNET_NETWORK_ID: string;
+export const SCCP_BSC_TESTNET_EVM_CHAIN_ID: 97;
+export const SCCP_BSC_TESTNET_NETWORK_ID: string;
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
 export const SCCP_SOURCE_STATE_MAX_PROOF_BYTES: number;
 export const SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES: number;
@@ -671,6 +673,7 @@ export const SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1: "tron-groth16-bn254-v1";
 export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
+export const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1: "taira_bsc_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
 export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1: 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
@@ -734,6 +737,13 @@ export interface TairaXorTransferPayloadInput {
   recipient?: string;
   amount: string | number | bigint;
   nonce: string | number | bigint;
+}
+
+export interface TairaXorBscTransferPayloadInput extends TairaXorTransferPayloadInput {
+  bscRecipient?: string;
+  bsc_recipient?: string;
+  evmRecipient?: string;
+  evm_recipient?: string;
 }
 
 export interface TairaXorTronToTairaTransferPayloadInput {
@@ -881,6 +891,14 @@ export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPaylo
   expected_payload_bytes?: BinaryLike | number[];
 }
 
+export interface TairaXorBscSccpRecordDescriptorInput
+  extends TairaXorSccpRecordDescriptorInput {
+  bscRecipient?: string;
+  bsc_recipient?: string;
+  evmRecipient?: string;
+  evm_recipient?: string;
+}
+
 export interface TairaXorSccpRecordDescriptor {
   readonly version: 1;
   readonly kind: "TairaXorSccpRecordDescriptor";
@@ -913,10 +931,27 @@ export interface TairaXorSccpRecordDescriptor {
   }>;
 }
 
+export interface TairaXorBscSccpRecordDescriptor
+  extends Omit<TairaXorSccpRecordDescriptor, "route_id"> {
+  readonly route_id: "taira_bsc_xor";
+}
+
 export interface TairaXorSccpBurnRecordInput extends TairaXorSccpRecordDescriptorInput {
   descriptor?: TairaXorSccpRecordDescriptor;
   recordDescriptor?: TairaXorSccpRecordDescriptor;
   record_descriptor?: TairaXorSccpRecordDescriptor;
+  settlementAssetDefinitionId?: string;
+  settlement_asset_definition_id?: string;
+  settlementAsset?: string;
+  settlement_asset?: string;
+  authority?: string;
+}
+
+export interface TairaXorBscSccpBurnRecordInput
+  extends TairaXorBscSccpRecordDescriptorInput {
+  descriptor?: TairaXorBscSccpRecordDescriptor;
+  recordDescriptor?: TairaXorBscSccpRecordDescriptor;
+  record_descriptor?: TairaXorBscSccpRecordDescriptor;
   settlementAssetDefinitionId?: string;
   settlement_asset_definition_id?: string;
   settlementAsset?: string;
@@ -937,8 +972,28 @@ export interface TairaXorSccpBurnRecordContractPayload {
   readonly record_instruction_hex: string;
 }
 
+export interface TairaXorBscSccpBurnRecordContractPayload
+  extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
+  readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
+}
+
 export interface TairaXorSccpBurnRecordZkIvmRequestInput
   extends TairaXorSccpBurnRecordInput {
+  vkRef?: { backend?: string; name?: string };
+  vk_ref?: { backend?: string; name?: string };
+  bytecode?: string;
+  artifactB64?: string;
+  artifact_b64?: string;
+  contractArtifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  contract_artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  gasLimit?: string | number | bigint;
+  gas_limit?: string | number | bigint;
+  metadata?: Record<string, JsonValue>;
+}
+
+export interface TairaXorBscSccpBurnRecordZkIvmRequestInput
+  extends TairaXorBscSccpBurnRecordInput {
   vkRef?: { backend?: string; name?: string };
   vk_ref?: { backend?: string; name?: string };
   bytecode?: string;
@@ -964,6 +1019,13 @@ export interface TairaXorSccpBurnRecordZkIvmRequest {
     metadata: Readonly<Record<string, JsonValue>>;
     bytecode: string;
   }>;
+}
+
+export interface TairaXorBscSccpBurnRecordZkIvmRequest
+  extends Omit<TairaXorSccpBurnRecordZkIvmRequest, "route_id" | "descriptor" | "contract"> {
+  readonly route_id: "taira_bsc_xor";
+  readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
+  readonly contract: Readonly<TairaXorBscSccpBurnRecordContractPayload>;
 }
 
 export interface SccpTokenAddPayload {
@@ -4124,6 +4186,10 @@ export type BscMainnetLocalAdmissionSubmissionInput =
   EvmMainnetLocalAdmissionSubmissionInput;
 export type BscMainnetLocalAdmissionSubmission =
   EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
+export type BscTestnetLocalAdmissionSubmissionInput =
+  EvmMainnetLocalAdmissionSubmissionInput;
+export type BscTestnetLocalAdmissionSubmission =
+  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
 
 export function buildEthereumMainnetSccpLocalAdmissionSubmission(
   input: EthereumMainnetLocalAdmissionSubmissionInput,
@@ -4131,6 +4197,9 @@ export function buildEthereumMainnetSccpLocalAdmissionSubmission(
 export function buildBscMainnetSccpLocalAdmissionSubmission(
   input: BscMainnetLocalAdmissionSubmissionInput,
 ): BscMainnetLocalAdmissionSubmission;
+export function buildBscTestnetSccpLocalAdmissionSubmission(
+  input: BscTestnetLocalAdmissionSubmissionInput,
+): BscTestnetLocalAdmissionSubmission;
 
 export interface TronSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -4539,6 +4608,16 @@ export type BscMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
   );
 export type BscMainnetSccpSubmission = EvmSccpSubmission;
 export type BscMainnetSccpProverOptions = EvmSccpProverOptions;
+export type BscTestnetSccpProofRequestInput = EvmSccpProofRequestInput;
+export type BscTestnetSccpProofRequest = EvmSccpProofRequest;
+export type BscTestnetSccpProofResult = EvmSccpProofResult;
+export type BscTestnetSccpSubmissionInput = EvmSccpSubmissionInput &
+  (
+    | { proofResult: EvmSccpProofResult }
+    | { proof_result: EvmSccpProofResult }
+  );
+export type BscTestnetSccpSubmission = EvmSccpSubmission;
+export type BscTestnetSccpProverOptions = EvmSccpProverOptions;
 
 export class BscMainnetSccpProver {
   constructor(options?: BscMainnetSccpProverOptions);
@@ -4550,6 +4629,18 @@ export class BscMainnetSccpProver {
     input: BscMainnetSccpProofRequestInput,
     options?: Record<string, unknown>,
   ): Promise<BscMainnetSccpProofResult>;
+}
+
+export class BscTestnetSccpProver {
+  constructor(options?: BscTestnetSccpProverOptions);
+  buildRequest(
+    input: BscTestnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscTestnetSccpProofRequest>;
+  prove(
+    input: BscTestnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscTestnetSccpProofResult>;
 }
 
 export type EthereumMainnetExecutionProvider =
@@ -5064,6 +5155,124 @@ export class BscMainnetSccp {
   ): Promise<unknown>;
 }
 
+export type BscTestnetExecutionProvider = BscMainnetExecutionProvider;
+export type BscTestnetParliaFinalityEvidenceInput =
+  BscMainnetParliaFinalityEvidenceInput;
+export type BscTestnetParliaFinalityEvidence =
+  BscMainnetParliaFinalityEvidence;
+export type BscTestnetConsensusProviderInput =
+  BscMainnetConsensusProviderInput;
+export type BscTestnetConsensusProvider = BscMainnetConsensusProvider;
+export type BscTestnetInboundEvidenceInput = BscMainnetInboundEvidenceInput;
+export type BscTestnetInboundEvidence = BscMainnetInboundEvidence;
+
+export type BscTestnetInboundProveFn = (
+  evidence: BscTestnetInboundEvidence,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscTestnetSubmitInboundFn = (
+  proofOrPayload: unknown,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscTestnetSubmitOutboundFn = (
+  submission: EvmSccpSubmission,
+  options?: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+export type BscTestnetSccpOptions = BscTestnetSccpProverOptions & {
+  executionProvider?: BscTestnetExecutionProvider;
+  execution_provider?: BscTestnetExecutionProvider;
+  consensusProvider?: BscTestnetConsensusProvider;
+  consensus_provider?: BscTestnetConsensusProvider;
+  proveInbound?: BscTestnetInboundProveFn;
+  proveInboundToSora?: BscTestnetInboundProveFn;
+  prove_inbound?: BscTestnetInboundProveFn;
+  submitInboundToIroha?: BscTestnetSubmitInboundFn;
+  submit_inbound_to_iroha?: BscTestnetSubmitInboundFn;
+  submitToIroha?: BscTestnetSubmitInboundFn;
+  submitOutboundToBsc?: BscTestnetSubmitOutboundFn;
+  submit_outbound_to_bsc?: BscTestnetSubmitOutboundFn;
+  submitToBsc?: BscTestnetSubmitOutboundFn;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+  outboundProver?: BscTestnetSccpProver;
+  outbound_prover?: BscTestnetSccpProver;
+  prover?: BscTestnetSccpProver;
+  from?: string;
+  account?: string;
+};
+
+export class BscTestnetSccp {
+  constructor(options?: BscTestnetSccpOptions);
+  validateExecutionProviderTestnet(options?: {
+    executionProvider?: BscTestnetExecutionProvider;
+    execution_provider?: BscTestnetExecutionProvider;
+  }): Promise<unknown>;
+  collectInboundEvidenceFromReceipt(
+    input?: BscTestnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: BscTestnetExecutionProvider;
+      execution_provider?: BscTestnetExecutionProvider;
+      consensusProvider?: BscTestnetConsensusProvider;
+      consensus_provider?: BscTestnetConsensusProvider;
+    } & Record<string, unknown>,
+  ): Promise<BscTestnetInboundEvidence>;
+  proveInboundToSora(
+    input: BscTestnetInboundEvidenceInput,
+    options?: {
+      executionProvider?: BscTestnetExecutionProvider;
+      execution_provider?: BscTestnetExecutionProvider;
+      consensusProvider?: BscTestnetConsensusProvider;
+      consensus_provider?: BscTestnetConsensusProvider;
+      proveInbound?: BscTestnetInboundProveFn;
+      proveInboundToSora?: BscTestnetInboundProveFn;
+      prove_inbound?: BscTestnetInboundProveFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  submitInboundToIroha(
+    input: unknown,
+    options?: {
+      submitInboundToIroha?: BscTestnetSubmitInboundFn;
+      submit_inbound_to_iroha?: BscTestnetSubmitInboundFn;
+      submitToIroha?: BscTestnetSubmitInboundFn;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+  buildLocalAdmissionSubmission(
+    input: BscTestnetLocalAdmissionSubmissionInput,
+  ): BscTestnetLocalAdmissionSubmission;
+  buildOutboundProofRequest(input: BscTestnetSccpProofRequestInput): BscTestnetSccpProofRequest;
+  proveOutboundToBsc(
+    input: BscTestnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscTestnetSccpProofResult>;
+  buildBscCalldata(input: BscTestnetSccpSubmissionInput): BscTestnetSccpSubmission;
+  submitOutboundToBsc(
+    input: BscTestnetSccpSubmissionInput & {
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+    },
+    options?: {
+      executionProvider?: BscTestnetExecutionProvider;
+      execution_provider?: BscTestnetExecutionProvider;
+      submitOutboundToBsc?: BscTestnetSubmitOutboundFn;
+      submit_outbound_to_bsc?: BscTestnetSubmitOutboundFn;
+      submitToBsc?: BscTestnetSubmitOutboundFn;
+      destinationBinding?: EvmSccpDestinationBindingInput;
+      destination_binding?: EvmSccpDestinationBindingInput;
+      to?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
+      from?: string;
+    } & Record<string, unknown>,
+  ): Promise<unknown>;
+}
+
 export type TronSccpWitnessProvider =
   SccpWitnessProviderResolverOption<TronSccpProofRequestInput>;
 
@@ -5277,6 +5486,16 @@ export function wrapBscMainnetSccpDestinationProofResult(
 export function buildBscMainnetSccpDestinationSubmission(
   input: BscMainnetSccpSubmissionInput,
 ): BscMainnetSccpSubmission;
+export function buildBscTestnetSccpDestinationProofRequest(
+  input: BscTestnetSccpProofRequestInput,
+): BscTestnetSccpProofRequest;
+export function wrapBscTestnetSccpDestinationProofResult(
+  proofBytes: BinaryLike,
+  request: BscTestnetSccpProofRequest,
+): BscTestnetSccpProofResult;
+export function buildBscTestnetSccpDestinationSubmission(
+  input: BscTestnetSccpSubmissionInput,
+): BscTestnetSccpSubmission;
 export function buildTronSccpProofRequest(input: TronSccpProofRequestInput): TronSccpProofRequest;
 export function wrapTronSccpProofResult(
   proofBytes: BinaryLike,
@@ -5801,6 +6020,10 @@ export function bscMainnetSccpDestinationBinding(
   input: EvmSccpDestinationBindingInput,
 ): EvmSccpDestinationBinding;
 export function bscMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function bscTestnetSccpDestinationBinding(
+  input: EvmSccpDestinationBindingInput,
+): EvmSccpDestinationBinding;
+export function bscTestnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
 export function tronSccpDestinationBinding(input: TronSccpDestinationBindingInput): TronSccpDestinationBinding;
 export function tronSccpDestinationBindingHash(input: TronSccpDestinationBindingInput): string;
 
@@ -5891,24 +6114,39 @@ export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHa
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorBscTransferPayload(input: TairaXorBscTransferPayloadInput): Readonly<SccpTransferPayload>;
 export function buildTairaXorTronToTairaTransferPayload(
   input: TairaXorTronToTairaTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
 ): Readonly<TairaXorSccpRecordDescriptor>;
+export function buildTairaXorBscSccpRecordDescriptor(
+  input: TairaXorBscSccpRecordDescriptorInput,
+): Readonly<TairaXorBscSccpRecordDescriptor>;
 export function buildRecordSccpMessageInstructionBytes(
   payloadBytes: BinaryLike | number[],
 ): Uint8Array;
 export function buildTairaXorSccpBurnRecordContractPayload(
   input: TairaXorSccpBurnRecordInput,
 ): Readonly<TairaXorSccpBurnRecordContractPayload>;
+export function buildTairaXorBscSccpBurnRecordContractPayload(
+  input: TairaXorBscSccpBurnRecordInput,
+): Readonly<TairaXorBscSccpBurnRecordContractPayload>;
 export function buildTairaXorSccpBurnRecordZkIvmRequest(
   input: TairaXorSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorSccpBurnRecordZkIvmRequest>;
+export function buildTairaXorBscSccpBurnRecordZkIvmRequest(
+  input: TairaXorBscSccpBurnRecordZkIvmRequestInput,
+): Readonly<TairaXorBscSccpBurnRecordZkIvmRequest>;
 export function tairaXorCanonicalTransferPayloadBytes(input: TairaXorTransferPayloadInput): Uint8Array;
 export function tairaXorTransferMessageId(
   input: TairaXorTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorBscCanonicalTransferPayloadBytes(input: TairaXorBscTransferPayloadInput): Uint8Array;
+export function tairaXorBscTransferMessageId(
+  input: TairaXorBscTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
 export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
