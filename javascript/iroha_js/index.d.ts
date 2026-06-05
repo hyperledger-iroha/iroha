@@ -74,7 +74,10 @@ export interface PrivacyAlgorithmDescriptor {
   readonly pqLayers: PrivacyPqLayers;
   readonly implementationStage?: string | null;
   readonly recommendedFor?: readonly string[];
-  readonly sourceReferences?: readonly Readonly<{ label: string; url: string }>[];
+  readonly sourceReferences?: readonly Readonly<{
+    label: string;
+    url: string;
+  }>[];
   readonly securityNotes?: readonly string[];
   readonly requiredState?: readonly string[];
   readonly failureModes?: readonly string[];
@@ -212,12 +215,16 @@ export interface CurveSupportOptions {
 export function configureCurveSupport(options?: CurveSupportOptions): void;
 
 export class AccountAddress {
-  static fromAccount(
-    options: {
-      publicKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | number[] | string;
-      algorithm?: string;
-    },
-  ): AccountAddress;
+  static fromAccount(options: {
+    publicKey:
+      | Buffer
+      | Uint8Array
+      | ArrayBuffer
+      | ArrayBufferView
+      | number[]
+      | string;
+    algorithm?: string;
+  }): AccountAddress;
   static fromCanonicalBytes(
     bytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
   ): AccountAddress;
@@ -237,7 +244,9 @@ export class AccountAddress {
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toString(): string;
-  displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
+  displayFormats(
+    chainDiscriminant?: number | string | bigint,
+  ): AccountAddressDisplay;
 }
 
 export function encodeI105AccountAddress(
@@ -278,9 +287,19 @@ export class MultisigSpec {
   readonly signatories: ReadonlyMap<string, number>;
   readonly quorum: number;
   readonly transactionTtlMs: number;
-  previewProposalExpiry(options?: { requestedTtlMs?: number | bigint | null; nowMs?: number | bigint }): MultisigProposalTtlPreview;
-  enforceProposalTtl(options?: { requestedTtlMs?: number | bigint | null; nowMs?: number | bigint }): MultisigProposalTtlPreview;
-  toPayload(): { signatories: Record<string, number>; quorum: number; transaction_ttl_ms: number };
+  previewProposalExpiry(options?: {
+    requestedTtlMs?: number | bigint | null;
+    nowMs?: number | bigint;
+  }): MultisigProposalTtlPreview;
+  enforceProposalTtl(options?: {
+    requestedTtlMs?: number | bigint | null;
+    nowMs?: number | bigint;
+  }): MultisigProposalTtlPreview;
+  toPayload(): {
+    signatories: Record<string, number>;
+    quorum: number;
+    transaction_ttl_ms: number;
+  };
   toJSON(prettyPrinted?: boolean): string;
 }
 
@@ -341,14 +360,17 @@ export interface MultisigExecuteTriggerOptions {
   argPreset?: MultisigTriggerArgsPreset;
   preset?: MultisigTriggerArgsPreset;
   argInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
-  presetInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+  presetInput?:
+    | MultisigLifecycleTriggerArgsInput
+    | MultisigLookupTriggerArgsInput;
   signerAccountId?: string;
   multisigSpec?: MultisigSpecLike;
   spec?: MultisigSpecLike;
   strictSignerCheck?: boolean;
 }
 
-export interface ProposeMultisigExecuteTriggerOptions extends MultisigExecuteTriggerOptions {
+export interface ProposeMultisigExecuteTriggerOptions
+  extends MultisigExecuteTriggerOptions {
   accountId: string;
   spec: MultisigSpecLike;
   transactionTtlMs?: number | null;
@@ -403,7 +425,8 @@ export interface MultisigProposePayload {
   private_key?: string | BinaryLike;
 }
 
-export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
+export interface MultisigContractCallProposeRequest
+  extends MultisigAccountSelector {
   signerAccountId: string;
   contractAddress?: string;
   contractAlias?: string;
@@ -455,7 +478,8 @@ export interface MultisigContractCallProposePayload {
   private_key?: string | BinaryLike;
 }
 
-export interface MultisigContractCallApproveRequest extends MultisigAccountSelector {
+export interface MultisigContractCallApproveRequest
+  extends MultisigAccountSelector {
   signerAccountId: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
@@ -741,7 +765,8 @@ export interface TairaXorTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
-export interface TairaXorBscTransferPayloadInput extends TairaXorTransferPayloadInput {
+export interface TairaXorBscTransferPayloadInput
+  extends TairaXorTransferPayloadInput {
   bscRecipient?: string;
   bsc_recipient?: string;
   evmRecipient?: string;
@@ -774,10 +799,50 @@ export interface TairaXorTronToTairaTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
+export interface TairaXorBscToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  bscSender?: string;
+  bsc_sender?: string;
+  evmSender?: string;
+  evm_sender?: string;
+  sender?: string;
+  senderAddress?: string;
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
 export interface TairaXorTronToTairaSettlementFragment {
   entrypoint?: "finalize_inbound";
   route?: "taira_tron_xor";
   route_id?: "taira_tron_xor";
+  payload?: never;
+  payload_json?: never;
+  payloadJson?: never;
+  payload_bytes?: never;
+  payloadBytes?: never;
+  [key: string]: unknown;
+}
+
+export interface TairaXorBscToTairaSettlementFragment {
+  entrypoint?: "finalize_inbound";
+  route?: "taira_bsc_xor";
+  route_id?: "taira_bsc_xor";
   payload?: never;
   payload_json?: never;
   payloadJson?: never;
@@ -816,12 +881,50 @@ export interface TairaXorTronToTairaSourceProofPackageInput {
   settlement_defaults?: TairaXorTronToTairaSettlementFragment;
 }
 
+export interface TairaXorBscToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  bscSender?: string;
+  bsc_sender?: string;
+  evmSender?: string;
+  evm_sender?: string;
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  /** Optional BSC bridge contract address; when supplied, sourceEventDigest is bound to the burn event. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  bscBridgeAddress?: string | BinaryLike | number[];
+  bsc_bridge_address?: string | BinaryLike | number[];
+  evmBridgeAddress?: string | BinaryLike | number[];
+  evm_bridge_address?: string | BinaryLike | number[];
+  settlementDefaults?: TairaXorBscToTairaSettlementFragment;
+  settlement_defaults?: TairaXorBscToTairaSettlementFragment;
+}
+
 export interface TairaXorTronToTairaBoundSourceProofPackage {
   readonly messageBundle: Record<string, unknown>;
-  readonly settlement: Readonly<Record<string, unknown> & {
-    entrypoint: "finalize_inbound";
-    route: "taira_tron_xor";
-  }>;
+  readonly settlement: Readonly<
+    Record<string, unknown> & {
+      entrypoint: "finalize_inbound";
+      route: "taira_tron_xor";
+    }
+  >;
   readonly sourceEventDigest: string;
   readonly txId: string;
   readonly messageId: string;
@@ -829,7 +932,23 @@ export interface TairaXorTronToTairaBoundSourceProofPackage {
   readonly amount: string;
 }
 
-export interface TairaXorTronBurnStartedEventInput extends TairaXorRouteHashInput {
+export interface TairaXorBscToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<
+    Record<string, unknown> & {
+      entrypoint: "finalize_inbound";
+      route: "taira_bsc_xor";
+    }
+  >;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
+}
+
+export interface TairaXorTronBurnStartedEventInput
+  extends TairaXorRouteHashInput {
   event: Record<string, unknown>;
   sourceEventDigest?: string;
   source_event_digest?: string;
@@ -872,7 +991,8 @@ export interface TairaXorTronBoundBurnStartedEvent {
   readonly nonce: string;
 }
 
-export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
+export interface TairaXorSccpRecordDescriptorInput
+  extends TairaXorTransferPayloadInput {
   chainId?: string;
   chain_id?: string;
   tairaChainId?: string;
@@ -938,7 +1058,8 @@ export interface TairaXorBscSccpRecordDescriptor
   readonly route_id: "taira_bsc_xor";
 }
 
-export interface TairaXorSccpBurnRecordInput extends TairaXorSccpRecordDescriptorInput {
+export interface TairaXorSccpBurnRecordInput
+  extends TairaXorSccpRecordDescriptorInput {
   descriptor?: TairaXorSccpRecordDescriptor;
   recordDescriptor?: TairaXorSccpRecordDescriptor;
   record_descriptor?: TairaXorSccpRecordDescriptor;
@@ -986,8 +1107,16 @@ export interface TairaXorSccpBurnRecordZkIvmRequestInput
   bytecode?: string;
   artifactB64?: string;
   artifact_b64?: string;
-  contractArtifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
-  contract_artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  contractArtifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  contract_artifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
   artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
   gasLimit?: string | number | bigint;
   gas_limit?: string | number | bigint;
@@ -1001,8 +1130,16 @@ export interface TairaXorBscSccpBurnRecordZkIvmRequestInput
   bytecode?: string;
   artifactB64?: string;
   artifact_b64?: string;
-  contractArtifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
-  contract_artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  contractArtifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  contract_artifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
   artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
   gasLimit?: string | number | bigint;
   gas_limit?: string | number | bigint;
@@ -1024,7 +1161,10 @@ export interface TairaXorSccpBurnRecordZkIvmRequest {
 }
 
 export interface TairaXorBscSccpBurnRecordZkIvmRequest
-  extends Omit<TairaXorSccpBurnRecordZkIvmRequest, "route_id" | "descriptor" | "contract"> {
+  extends Omit<
+    TairaXorSccpBurnRecordZkIvmRequest,
+    "route_id" | "descriptor" | "contract"
+  > {
   readonly route_id: "taira_bsc_xor";
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
   readonly contract: Readonly<TairaXorBscSccpBurnRecordContractPayload>;
@@ -1123,7 +1263,8 @@ export interface SccpBundleSurfaceValidation {
   checks: Record<string, boolean>;
 }
 
-export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurfaceValidation {
+export interface SccpGovernanceBundleSurfaceValidation
+  extends SccpBundleSurfaceValidation {
   expectedCertificateHash: string;
 }
 
@@ -1170,8 +1311,20 @@ export interface SolanaSccpWitnessInput {
   accounts_lt_hash?: BinaryLike;
   messageProofHash?: string;
   message_proof_hash?: string;
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
   transactionSignature?: string;
   transaction_signature?: string;
   emitterProgramId?: string;
@@ -1245,7 +1398,8 @@ export interface SolanaSccpEpochStakeRootInput {
   validator_stakes?: readonly (string | number | bigint)[];
 }
 
-export interface SolanaSccpStakeActivationInput extends SolanaSccpEpochStakeRootInput {
+export interface SolanaSccpStakeActivationInput
+  extends SolanaSccpEpochStakeRootInput {
   validatorActivationEpochs?: readonly (string | number | bigint)[];
   validator_activation_epochs?: readonly (string | number | bigint)[];
   activationEpochs?: readonly (string | number | bigint)[];
@@ -1296,7 +1450,9 @@ export function solanaSccpAccountsLtHashFromOpenings(
   openings: readonly SolanaSccpAccountOpeningInput[],
   rawDataValues: readonly BinaryLike[],
 ): Uint8Array;
-export function solanaSccpAccountsLtHashChecksum(accountsLtHash: BinaryLike): string;
+export function solanaSccpAccountsLtHashChecksum(
+  accountsLtHash: BinaryLike,
+): string;
 export interface SolanaSccpAccountsLtHashOpenedContributionsInput {
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
@@ -1448,41 +1604,43 @@ export type SccpSourceStateProofBytesResultMetadata =
       proof: BinaryLike | number[];
     };
 
-export type SccpSourceStateProofCapsuleMetadata<CircuitId extends string = string> =
-  SccpSourceStateOptionalVersionResultMetadata
-    & SccpSourceStateOptionalResultAlias<
-      "proofFamily",
-      "proof_family",
-      typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
-    >
-    & SccpSourceStateResultAlias<"circuitId", "circuit_id", CircuitId>
-    & SccpSourceStateProofBytesResultMetadata
-    & SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
+export type SccpSourceStateProofCapsuleMetadata<
+  CircuitId extends string = string,
+> = SccpSourceStateOptionalVersionResultMetadata &
+  SccpSourceStateOptionalResultAlias<
+    "proofFamily",
+    "proof_family",
+    typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
+  > &
+  SccpSourceStateResultAlias<"circuitId", "circuit_id", CircuitId> &
+  SccpSourceStateProofBytesResultMetadata &
+  SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
 
-export type SccpSourceStateProverResultProofMetadata<CircuitId extends string = string> =
-  SccpSourceStateOptionalVersionResultMetadata
-    & SccpSourceStateOptionalResultAlias<
-      "proofFamily",
-      "proof_family",
-      typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
-    >
-    & SccpSourceStateOptionalResultAlias<"circuitId", "circuit_id", CircuitId>
-    & SccpSourceStateProofBytesResultMetadata
-    & SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
+export type SccpSourceStateProverResultProofMetadata<
+  CircuitId extends string = string,
+> = SccpSourceStateOptionalVersionResultMetadata &
+  SccpSourceStateOptionalResultAlias<
+    "proofFamily",
+    "proof_family",
+    typeof SCCP_STARK_FRI_PROOF_FAMILY_V1
+  > &
+  SccpSourceStateOptionalResultAlias<"circuitId", "circuit_id", CircuitId> &
+  SccpSourceStateProofBytesResultMetadata &
+  SccpSourceStateOptionalResultAlias<"proofBase64", "proof_base64", string>;
 
 export type SccpSourceStateFastpqPublicInputsResultMetadata = {
   dsid: string;
   slot: string | number | bigint;
-} & SccpSourceStateResultAlias<"oldRoot", "old_root", string>
-  & SccpSourceStateResultAlias<"newRoot", "new_root", string>
-  & SccpSourceStateResultAlias<"permRoot", "perm_root", string>
-  & SccpSourceStateResultAlias<"txSetHash", "tx_set_hash", string>;
+} & SccpSourceStateResultAlias<"oldRoot", "old_root", string> &
+  SccpSourceStateResultAlias<"newRoot", "new_root", string> &
+  SccpSourceStateResultAlias<"permRoot", "perm_root", string> &
+  SccpSourceStateResultAlias<"txSetHash", "tx_set_hash", string>;
 
 export type SccpSourceStateFastpqTransitionResultMetadata = {
   key: string;
   operation: string;
-} & SccpSourceStateResultAlias<"oldValue", "old_value", BinaryLike>
-  & SccpSourceStateResultAlias<"newValue", "new_value", BinaryLike>;
+} & SccpSourceStateResultAlias<"oldValue", "old_value", BinaryLike> &
+  SccpSourceStateResultAlias<"newValue", "new_value", BinaryLike>;
 
 export interface SolanaSccpAccountsLtHashProofRequest {
   readonly version: 1;
@@ -1503,7 +1661,9 @@ export interface SolanaSccpAccountsLtHashProofRequest {
   readonly schemaDescriptor: Uint8Array;
   readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
   readonly fastpqPublicInputs: Readonly<SolanaSccpAccountsLtHashFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;
+  readonly fastpqTransitions: ReadonlyArray<
+    Readonly<SolanaSccpAccountsLtHashFastpqTransition>
+  >;
 }
 
 export function canonicalSolanaSccpAccountsLtHashCommitmentBytes(
@@ -1544,7 +1704,9 @@ export interface WrappedSolanaSccpSourceStateVerificationProof {
 
 export function wrapSolanaSccpSourceStateVerificationProof(
   proofBytes: BinaryLike | number[],
-  request: SolanaSccpAccountsLtHashProofRequest | SolanaSccpFullLightClientAuditProofRequest,
+  request:
+    | SolanaSccpAccountsLtHashProofRequest
+    | SolanaSccpFullLightClientAuditProofRequest,
 ): WrappedSolanaSccpSourceStateVerificationProof;
 
 export type SolanaSccpSourceStateProofRequest =
@@ -1558,59 +1720,59 @@ export type SolanaSccpSourceStateProverResultObject =
     | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
     | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1
   > & {
-  parameterSet?: "fastpq-lane-balanced";
-  parameter_set?: "fastpq-lane-balanced";
-  sourceDomain?: typeof SCCP_DOMAIN_SOL;
-  source_domain?: typeof SCCP_DOMAIN_SOL;
-  finalizedSlot?: string | number | bigint;
-  finalized_slot?: string | number | bigint;
-  sourceStateVerifierId?: string;
-  source_state_verifier_id?: string;
-  sourceStateVerifierHash?: string;
-  source_state_verifier_hash?: string;
-  accountsLtHashProofPublicInputsHash?: string;
-  accounts_lt_hash_proof_public_inputs_hash?: string;
-  openedAccountsLtHashContributionsHash?: string;
-  opened_accounts_lt_hash_contributions_hash?: string;
-  openedAccountsLtHashResidualChecksum?: string;
-  opened_accounts_lt_hash_residual_checksum?: string;
-  role?: SolanaSccpFullLightClientAuditRole;
-  audit_role?: SolanaSccpFullLightClientAuditRole;
-  roleCode?: 1 | 2 | 3 | string | number | bigint;
-  role_code?: 1 | 2 | 3 | string | number | bigint;
-  verifierId?: string;
-  verifier_id?: string;
-  verifierHash?: string;
-  verifier_hash?: string;
-  sourceVerifierMaterialHash?: string;
-  source_verifier_material_hash?: string;
-  sourceAdapterDeploymentHash?: string;
-  source_adapter_deployment_hash?: string;
-  fullLightClientGateHash?: string;
-  full_light_client_gate_hash?: string;
-  finalityContextHash?: string;
-  finality_context_hash?: string;
-  voteMessageHash?: string;
-  vote_message_hash?: string;
-  accountsLtHashProofHash?: string;
-  accounts_lt_hash_proof_hash?: string;
-  auditStatementHash?: string;
-  audit_statement_hash?: string;
-  publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
-  public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
-  fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
-  fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
-  fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
-  fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
-  statementBytes?: BinaryLike | number[];
-  statement_bytes?: BinaryLike | number[];
-  accountCommitmentBytes?: BinaryLike | number[];
-  account_commitment_bytes?: BinaryLike | number[];
-  verificationContextBytes?: BinaryLike | number[];
-  verification_context_bytes?: BinaryLike | number[];
-  schemaDescriptor?: BinaryLike | number[];
-  schema_descriptor?: BinaryLike | number[];
-};
+    parameterSet?: "fastpq-lane-balanced";
+    parameter_set?: "fastpq-lane-balanced";
+    sourceDomain?: typeof SCCP_DOMAIN_SOL;
+    source_domain?: typeof SCCP_DOMAIN_SOL;
+    finalizedSlot?: string | number | bigint;
+    finalized_slot?: string | number | bigint;
+    sourceStateVerifierId?: string;
+    source_state_verifier_id?: string;
+    sourceStateVerifierHash?: string;
+    source_state_verifier_hash?: string;
+    accountsLtHashProofPublicInputsHash?: string;
+    accounts_lt_hash_proof_public_inputs_hash?: string;
+    openedAccountsLtHashContributionsHash?: string;
+    opened_accounts_lt_hash_contributions_hash?: string;
+    openedAccountsLtHashResidualChecksum?: string;
+    opened_accounts_lt_hash_residual_checksum?: string;
+    role?: SolanaSccpFullLightClientAuditRole;
+    audit_role?: SolanaSccpFullLightClientAuditRole;
+    roleCode?: 1 | 2 | 3 | string | number | bigint;
+    role_code?: 1 | 2 | 3 | string | number | bigint;
+    verifierId?: string;
+    verifier_id?: string;
+    verifierHash?: string;
+    verifier_hash?: string;
+    sourceVerifierMaterialHash?: string;
+    source_verifier_material_hash?: string;
+    sourceAdapterDeploymentHash?: string;
+    source_adapter_deployment_hash?: string;
+    fullLightClientGateHash?: string;
+    full_light_client_gate_hash?: string;
+    finalityContextHash?: string;
+    finality_context_hash?: string;
+    voteMessageHash?: string;
+    vote_message_hash?: string;
+    accountsLtHashProofHash?: string;
+    accounts_lt_hash_proof_hash?: string;
+    auditStatementHash?: string;
+    audit_statement_hash?: string;
+    publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
+    public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
+    fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+    fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+    fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+    fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+    statementBytes?: BinaryLike | number[];
+    statement_bytes?: BinaryLike | number[];
+    accountCommitmentBytes?: BinaryLike | number[];
+    account_commitment_bytes?: BinaryLike | number[];
+    verificationContextBytes?: BinaryLike | number[];
+    verification_context_bytes?: BinaryLike | number[];
+    schemaDescriptor?: BinaryLike | number[];
+    schema_descriptor?: BinaryLike | number[];
+  };
 
 export type SolanaSccpSourceStateProveResult =
   | BinaryLike
@@ -1620,7 +1782,9 @@ export type SolanaSccpSourceStateProveResult =
 export type SolanaSccpSourceStateProveFn = (
   request: SolanaSccpSourceStateProofRequest,
   options?: Record<string, unknown>,
-) => SolanaSccpSourceStateProveResult | Promise<SolanaSccpSourceStateProveResult>;
+) =>
+  | SolanaSccpSourceStateProveResult
+  | Promise<SolanaSccpSourceStateProveResult>;
 
 export type SolanaSccpSourceStateProverOptions =
   SccpProverProveOption<SolanaSccpSourceStateProveFn>;
@@ -1761,7 +1925,10 @@ export interface SolanaSccpFullLightClientAuditProofRequest {
     | typeof SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1
     | typeof SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
   readonly parameterSet: "fastpq-lane-balanced";
-  readonly role: "tower_replay" | "full_accountsdb_lattice" | "bank_fork_choice";
+  readonly role:
+    | "tower_replay"
+    | "full_accountsdb_lattice"
+    | "bank_fork_choice";
   readonly roleCode: 1 | 2 | 3;
   readonly sourceDomain: typeof SCCP_DOMAIN_SOL;
   readonly finalizedSlot: string;
@@ -1781,7 +1948,9 @@ export interface SolanaSccpFullLightClientAuditProofRequest {
   readonly schemaDescriptor: Uint8Array;
   readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
   readonly fastpqPublicInputs: Readonly<SolanaSccpAccountsLtHashFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;
+  readonly fastpqTransitions: ReadonlyArray<
+    Readonly<SolanaSccpAccountsLtHashFastpqTransition>
+  >;
 }
 
 export function canonicalSolanaSccpSourceStateVerificationProofBytes(
@@ -1911,7 +2080,8 @@ export interface SolanaSccpParsedStakeStateV2StakeAccountData {
   stakeFlags: bigint;
 }
 
-export interface SolanaSccpStakeAccountStateInput extends SolanaSccpStakeActivationInput {
+export interface SolanaSccpStakeAccountStateInput
+  extends SolanaSccpStakeActivationInput {
   validatorVoteAccountAddresses?: readonly BinaryLike[];
   validator_vote_account_addresses?: readonly BinaryLike[];
   voteAccountAddresses?: readonly BinaryLike[];
@@ -1937,7 +2107,8 @@ export interface SolanaSccpStakeHistoryEntryInput {
   deactivating: string | number | bigint;
 }
 
-export interface SolanaSccpStakeHistoryInput extends SolanaSccpStakeAccountStateInput {
+export interface SolanaSccpStakeHistoryInput
+  extends SolanaSccpStakeAccountStateInput {
   validatorDelegatedStakes?: readonly (string | number | bigint)[];
   validator_delegated_stakes?: readonly (string | number | bigint)[];
   delegatedStakes?: readonly (string | number | bigint)[];
@@ -2024,7 +2195,8 @@ export interface SolanaSccpBankForkInput {
   accounts_lt_hash_root?: string;
 }
 
-export type SolanaSccpAccountsLtHashProofPublicInputsInput = SolanaSccpBankForkInput;
+export type SolanaSccpAccountsLtHashProofPublicInputsInput =
+  SolanaSccpBankForkInput;
 
 export interface SolanaSccpAgaveBankHashInput {
   parentBankHash?: string;
@@ -2043,8 +2215,14 @@ export interface SolanaSccpProofContextInput {
   statement_hash?: string;
   destinationBindingHash?: string;
   destination_binding_hash?: string;
-  destinationBinding?: TonSccpDestinationBindingInput | EvmSccpDestinationBindingInput | TronSccpDestinationBindingInput;
-  destination_binding?: TonSccpDestinationBindingInput | EvmSccpDestinationBindingInput | TronSccpDestinationBindingInput;
+  destinationBinding?:
+    | TonSccpDestinationBindingInput
+    | EvmSccpDestinationBindingInput
+    | TronSccpDestinationBindingInput;
+  destination_binding?:
+    | TonSccpDestinationBindingInput
+    | EvmSccpDestinationBindingInput
+    | TronSccpDestinationBindingInput;
 }
 
 export interface SolanaSccpProofContext {
@@ -2074,7 +2252,11 @@ export interface SccpSourceAdapterDeploymentBinding {
 
 export type SccpDestinationBindingDomainInput =
   | SccpDomainIdInput
-  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
+  | {
+      targetDomain?: SccpDomainIdInput;
+      target_domain?: SccpDomainIdInput;
+      domain?: SccpDomainIdInput;
+    };
 
 export interface EvmSccpDestinationBindingInput {
   version?: SccpVersionInput;
@@ -2287,8 +2469,20 @@ export interface SolanaSccpMessageProofInput {
   transaction_signature?: string;
   emitterProgramId?: string;
   emitter_program_id?: string;
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface TonSccpShardProofInput {
@@ -2322,10 +2516,34 @@ export interface TonSccpShardProofInput {
   transaction_lt?: string | number | bigint;
   shardStateLeafIndex?: string | number | bigint;
   shard_state_leaf_index?: string | number | bigint;
-  shardStateInclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  shard_state_inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  shardStateInclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  shard_state_inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
   shardStateProofBoc?: BinaryLike;
   shard_state_proof_boc?: BinaryLike;
   shardStateDictionaryRoot?: string;
@@ -2458,7 +2676,9 @@ export interface TonShardStateProofRequest {
   readonly schemaDescriptor: Uint8Array;
   readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
   readonly fastpqPublicInputs: Readonly<TonShardStateFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;
+  readonly fastpqTransitions: ReadonlyArray<
+    Readonly<TonShardStateFastpqTransition>
+  >;
 }
 
 export type TonSccpFullLightClientAuditRole =
@@ -2514,7 +2734,10 @@ export interface TonSccpFullLightClientAuditProofRequest {
     | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
     | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1;
   readonly parameterSet: "fastpq-lane-balanced";
-  readonly role: "masterchain_config" | "validator_set_transition" | "shard_accounts_dictionary";
+  readonly role:
+    | "masterchain_config"
+    | "validator_set_transition"
+    | "shard_accounts_dictionary";
   readonly roleCode: 1 | 2 | 3;
   readonly sourceDomain: typeof SCCP_DOMAIN_TON;
   readonly masterchainSeqno: string;
@@ -2534,7 +2757,9 @@ export interface TonSccpFullLightClientAuditProofRequest {
   readonly schemaDescriptor: Uint8Array;
   readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
   readonly fastpqPublicInputs: Readonly<TonShardStateFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;
+  readonly fastpqTransitions: ReadonlyArray<
+    Readonly<TonShardStateFastpqTransition>
+  >;
 }
 
 export interface TonValidatorSetPayloadInput {
@@ -2560,7 +2785,8 @@ export interface TonMasterchainConfigLeafInput {
   validator_set_payload_hash?: string;
 }
 
-export interface TonMasterchainConfigProofInput extends TonMasterchainConfigLeafInput {
+export interface TonMasterchainConfigProofInput
+  extends TonMasterchainConfigLeafInput {
   configRoot?: string;
   config_root?: string;
   configLeafHash?: string;
@@ -2569,10 +2795,32 @@ export interface TonMasterchainConfigProofInput extends TonMasterchainConfigLeaf
   config_leaf_index?: string | number | bigint;
   configValueHash?: string;
   config_value_hash?: string;
-  configDictionaryProofBoc?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  config_dictionary_proof_boc?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  configInclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  config_inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  configDictionaryProofBoc?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  config_dictionary_proof_boc?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  configInclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  config_inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface TonMasterchainBlockMessageInput {
@@ -2633,8 +2881,18 @@ export interface TonValidatorSetTransitionMessageInput {
   parent_validator_set_hash?: string;
   nextValidatorSetHash?: string;
   next_validator_set_hash?: string;
-  nextValidatorSetPayload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  next_validator_set_payload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextValidatorSetPayload?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  next_validator_set_payload?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
   nextValidatorSetPayloadHash?: string;
   next_validator_set_payload_hash?: string;
   nextValidatorSetConfigHash?: string;
@@ -2655,9 +2913,25 @@ export interface TonValidatorSignatureProofInput {
   validator_weights?: readonly (string | number | bigint)[];
   validatorSetHash?: string;
   validator_set_hash?: string;
-  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  signatures?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  signersBitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  signers_bitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  signatures?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface TonValidatorSetTransitionSignatureInput
@@ -2696,19 +2970,67 @@ export interface EvmSccpReceiptProofInput {
   sync_committee_root?: string;
   receiptRootIndex?: string | number | bigint;
   receipt_root_index?: string | number | bigint;
-  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receiptTrieProofNodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  receipt_trie_proof_nodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface EthSyncCommitteePayloadInput {
-  syncCommitteePublicKeys?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  sync_committee_public_keys?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  syncCommitteePublicKeys?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  sync_committee_public_keys?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
   syncCommitteeWeights?: readonly (string | number | bigint)[];
   sync_committee_weights?: readonly (string | number | bigint)[];
-  syncCommitteePops?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  sync_committee_pops?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  syncCommitteePops?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  sync_committee_pops?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface EthBeaconBlockHeaderRootInput {
@@ -2748,15 +3070,26 @@ export interface EthSyncCommitteeTransitionMessageInput {
   parent_sync_committee_hash?: string;
   nextSyncCommitteeHash?: string;
   next_sync_committee_hash?: string;
-  nextSyncCommitteePayload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  next_sync_committee_payload?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextSyncCommitteePayload?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  next_sync_committee_payload?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
   nextSyncCommitteePayloadHash?: string;
   next_sync_committee_payload_hash?: string;
   nextSyncCommitteeBranchHash?: string;
   next_sync_committee_branch_hash?: string;
 }
 
-export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloadInput {
+export interface EthBeaconSyncCommitteeProofInput
+  extends EthSyncCommitteePayloadInput {
   version?: SccpVersionInput;
   totalWeight?: string | number | bigint;
   total_weight?: string | number | bigint;
@@ -2764,10 +3097,30 @@ export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloa
   signed_weight?: string | number | bigint;
   syncCommitteeMessageHash?: string;
   sync_committee_message_hash?: string;
-  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  aggregateSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  aggregate_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  signersBitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  signers_bitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  aggregateSignature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  aggregate_signature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
 }
 
 export interface EthSyncCommitteeTransitionSignatureInput
@@ -2804,10 +3157,34 @@ export interface BscSccpReceiptProofInput {
   commit_seal_hash?: string;
   receiptRootIndex?: string | number | bigint;
   receipt_root_index?: string | number | bigint;
-  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receiptTrieProofNodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  receipt_trie_proof_nodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface BscValidatorSetPayloadInput {
@@ -2918,7 +3295,8 @@ export interface SubstrateAuthoritySetPayloadInput {
   authority_weights?: readonly (string | number | bigint)[];
 }
 
-export interface SubstrateGrandpaJustificationProofInput extends SubstrateAuthoritySetPayloadInput {
+export interface SubstrateGrandpaJustificationProofInput
+  extends SubstrateAuthoritySetPayloadInput {
   version?: SccpVersionInput;
   totalWeight?: string | number | bigint;
   total_weight?: string | number | bigint;
@@ -2972,26 +3350,64 @@ export interface TronSccpReceiptProofInput {
   receipt_or_message_root?: string;
   transactionRoot?: string;
   transaction_root?: string;
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
-export interface TronSccpReceiptStateProofInput extends TronSccpReceiptProofInput {
+export interface TronSccpReceiptStateProofInput
+  extends TronSccpReceiptProofInput {
   receiptRootIndex?: string | number | bigint;
   receipt_root_index?: string | number | bigint;
-  receiptTrieProofNodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  receipt_trie_proof_nodes?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  receiptTrieProofNodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  receipt_trie_proof_nodes?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
-export interface TronSccpTransactionSourceProofInput extends TronSccpReceiptProofInput {
+export interface TronSccpTransactionSourceProofInput
+  extends TronSccpReceiptProofInput {
   transactionIndex?: string | number | bigint;
   transaction_index?: string | number | bigint;
   transactionCount?: string | number | bigint;
   transaction_count?: string | number | bigint;
   transactionBytes?: BinaryLike;
   transaction_bytes?: BinaryLike;
-  transactionMerkleBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  transaction_merkle_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  transactionMerkleBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  transaction_merkle_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface TronRawBlockHeaderInput {
@@ -3016,12 +3432,42 @@ export interface TronSolidBlockHeaderProofInput {
   version?: SccpVersionInput;
   rawData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
   raw_data?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  witnessSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  witness_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  parentRawData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  parent_raw_data?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  parentWitnessSignature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  parent_witness_signature?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  witnessSignature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  witness_signature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  parentRawData?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  parent_raw_data?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  parentWitnessSignature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  parent_witness_signature?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
   rawDataHash?: string;
   raw_data_hash?: string;
   parentRawDataHash?: string;
@@ -3075,13 +3521,41 @@ export interface TronWitnessSealInput {
   signed_weight?: string | number | bigint;
   solidBlockMessageHash?: string;
   solid_block_message_hash?: string;
-  witnessAddresses?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  witness_addresses?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  witnessAddresses?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  witness_addresses?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
   witnessWeights?: readonly (string | number | bigint)[];
   witness_weights?: readonly (string | number | bigint)[];
-  signersBitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  signers_bitmap?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  signatures?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  signersBitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  signers_bitmap?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  signatures?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface TronWitnessScheduleTransitionMessageInput {
@@ -3100,13 +3574,26 @@ export interface TronWitnessScheduleTransitionMessageInput {
   parent_witness_schedule_hash?: string;
   nextWitnessScheduleHash?: string;
   next_witness_schedule_hash?: string;
-  nextWitnessSchedulePayload?: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  next_witness_schedule_payload?: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  nextWitnessSchedulePayload?:
+    | TronWitnessSchedulePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  next_witness_schedule_payload?:
+    | TronWitnessSchedulePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
   nextWitnessSchedulePayloadHash?: string;
   next_witness_schedule_payload_hash?: string;
 }
 
-export interface TronWitnessScheduleTransitionSealInput extends TronWitnessScheduleTransitionMessageInput {
+export interface TronWitnessScheduleTransitionSealInput
+  extends TronWitnessScheduleTransitionMessageInput {
   transitionMessageHash?: string;
   transition_message_hash?: string;
   sealProof?: TronWitnessSealInput;
@@ -3140,8 +3627,20 @@ export interface SubstrateSccpStorageProofInput {
   events_root?: string;
   receiptOrMessageRoot?: string;
   receipt_or_message_root?: string;
-  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
-  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusionBranch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
+  inclusion_branch?: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[];
 }
 
 export interface SubstrateSccpRuntimeStorageProofRequestInput
@@ -3187,7 +3686,9 @@ export interface SubstrateSccpRuntimeStorageProofRequest {
   readonly schemaDescriptor: Uint8Array;
   readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
   readonly fastpqPublicInputs: Readonly<SubstrateSccpRuntimeStorageFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<Readonly<SubstrateSccpRuntimeStorageFastpqTransition>>;
+  readonly fastpqTransitions: ReadonlyArray<
+    Readonly<SubstrateSccpRuntimeStorageFastpqTransition>
+  >;
 }
 
 export interface SolanaSccpProofPublicInputs {
@@ -3512,24 +4013,24 @@ export interface SolanaSccpSubmissionInputBase {
   proof_context?: SolanaSccpProofContextInput;
 }
 
-export type SolanaSccpSubmissionInput =
-  SolanaSccpSubmissionInputBase &
-    (
-      {
+export type SolanaSccpSubmissionInput = SolanaSccpSubmissionInputBase &
+  (
+    | {
         proofResult: SolanaSccpProofResult;
         proof_result?: never;
-      } |
-      {
+      }
+    | {
         proofResult?: never;
         proof_result: SolanaSccpProofResult;
       }
-    );
+  );
 
-export interface SolanaSccpSubmissionInputWithProofResult extends SolanaSccpSubmissionInputBase {
+export interface SolanaSccpSubmissionInputWithProofResult
+  extends SolanaSccpSubmissionInputBase {
   /**
    * Wrapped result returned by wrapSolanaSccpProofResult or SolanaSccpProver.prove.
    * Its source public inputs, proof bytes, and recomputed envelope hash must
-  * match the transparent publicInputs and proof bytes submitted on-chain.
+   * match the transparent publicInputs and proof bytes submitted on-chain.
    */
   proofResult: SolanaSccpProofResult;
   proof_result?: never;
@@ -3541,15 +4042,17 @@ export interface SolanaSccpSubmission {
   readonly submissionKind: "program_instruction";
   readonly verifierEntrypoint: "submit_sccp_message_proof";
   readonly proofBytes: Uint8Array;
-  readonly publicInputs: Readonly<Required<{
-    version: number;
-    messageId: string;
-    payloadHash: string;
-    targetDomain: number;
-    commitmentRoot: string;
-    finalityHeight: string;
-    finalityBlockHash: string;
-  }>>;
+  readonly publicInputs: Readonly<
+    Required<{
+      version: number;
+      messageId: string;
+      payloadHash: string;
+      targetDomain: number;
+      commitmentRoot: string;
+      finalityHeight: string;
+      finalityBlockHash: string;
+    }>
+  >;
   readonly publicInputsBytes: Uint8Array;
   readonly bundleBytes: Uint8Array;
   readonly statementHash: string;
@@ -3678,20 +4181,20 @@ export interface TonSccpMessageBodyInputBase extends TonSccpProofRequestInput {
   query_id?: string | number | bigint;
 }
 
-export type TonSccpMessageBodyInput =
-  TonSccpMessageBodyInputBase &
-    (
-      {
+export type TonSccpMessageBodyInput = TonSccpMessageBodyInputBase &
+  (
+    | {
         proofResult: TonSccpProofResult;
         proof_result?: TonSccpProofResult;
-      } |
-      {
+      }
+    | {
         proofResult?: TonSccpProofResult;
         proof_result: TonSccpProofResult;
       }
-    );
+  );
 
-export interface TonSccpMessageBodyInputWithProofResult extends TonSccpMessageBodyInputBase {
+export interface TonSccpMessageBodyInputWithProofResult
+  extends TonSccpMessageBodyInputBase {
   /**
    * Wrapped result returned by wrapTonSccpProofResult or TonSccpProver.prove.
    * TON native-recursive proof bytes are only accepted when they match this
@@ -3706,15 +4209,17 @@ export interface TonSccpProofRequest {
   readonly backend: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;
   readonly sourceDomain: typeof SCCP_DOMAIN_TON;
   readonly targetDomain: number;
-  readonly publicInputs: Readonly<Required<{
-    version: number;
-    messageId: string;
-    payloadHash: string;
-    targetDomain: number;
-    commitmentRoot: string;
-    finalityHeight: string;
-    finalityBlockHash: string;
-  }>>;
+  readonly publicInputs: Readonly<
+    Required<{
+      version: number;
+      messageId: string;
+      payloadHash: string;
+      targetDomain: number;
+      commitmentRoot: string;
+      finalityHeight: string;
+      finalityBlockHash: string;
+    }>
+  >;
   readonly publicInputsBytes: Uint8Array;
   readonly bundleBytes: Uint8Array;
   readonly sourceProofBytes: Uint8Array;
@@ -3849,7 +4354,12 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
 
 export interface EthereumMainnetNativeEvmProverBundleSdkArtifact {
   readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
-  readonly implementation: "native-csharp" | "native-java" | "native-kotlin" | "native-swift" | "pure-typescript";
+  readonly implementation:
+    | "native-csharp"
+    | "native-java"
+    | "native-kotlin"
+    | "native-swift"
+    | "pure-typescript";
   readonly proofArtifactHash: string;
   readonly proofArtifact: string;
   readonly provingKeyHash: string;
@@ -3948,8 +4458,18 @@ export interface EthereumMainnetNativeEvmProverParityFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
-  sdkResults?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverParitySdkResultInput>>;
-  sdk_results?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverParitySdkResultInput>>;
+  sdkResults?: Partial<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      EthereumMainnetNativeEvmProverParitySdkResultInput
+    >
+  >;
+  sdk_results?: Partial<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      EthereumMainnetNativeEvmProverParitySdkResultInput
+    >
+  >;
 }
 
 export interface EthereumMainnetNativeEvmProverParitySdkResult {
@@ -3975,7 +4495,12 @@ export interface EthereumMainnetNativeEvmProverParityFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
-  readonly sdkResults: Readonly<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", Readonly<EthereumMainnetNativeEvmProverParitySdkResult>>>;
+  readonly sdkResults: Readonly<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      Readonly<EthereumMainnetNativeEvmProverParitySdkResult>
+    >
+  >;
 }
 
 export function validateEthereumMainnetNativeEvmProverParityFixture(
@@ -4038,8 +4563,18 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
-  sdkResults?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverSelfTestSdkResultInput>>;
-  sdk_results?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverSelfTestSdkResultInput>>;
+  sdkResults?: Partial<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      EthereumMainnetNativeEvmProverSelfTestSdkResultInput
+    >
+  >;
+  sdk_results?: Partial<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      EthereumMainnetNativeEvmProverSelfTestSdkResultInput
+    >
+  >;
 }
 
 export interface EthereumMainnetNativeEvmProverSelfTestSdkResult {
@@ -4068,7 +4603,12 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
-  readonly sdkResults: Readonly<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", Readonly<EthereumMainnetNativeEvmProverSelfTestSdkResult>>>;
+  readonly sdkResults: Readonly<
+    Record<
+      "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
+      Readonly<EthereumMainnetNativeEvmProverSelfTestSdkResult>
+    >
+  >;
 }
 
 export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
@@ -4137,7 +4677,12 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly nativeProverSelfTestHash: string;
   readonly nativeProverSelfTest: Readonly<EthereumMainnetNativeEvmProverSelfTestFixture>;
   readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
-  readonly implementation: "native-csharp" | "native-java" | "native-kotlin" | "native-swift" | "pure-typescript";
+  readonly implementation:
+    | "native-csharp"
+    | "native-java"
+    | "native-kotlin"
+    | "native-swift"
+    | "pure-typescript";
   readonly implementationHash: string;
 }
 
@@ -4155,10 +4700,27 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
 
 export interface EthereumMainnetNativeEvmProverArtifactResolverMetadata {
   readonly path: string;
-  readonly label: "crossSdkFixtureParityBytes" | "implementationBytes" | "nativeProverSelfTestBytes" | "proofArtifactBytes" | "provingKeyBytes" | "verifierKeyBytes";
-  readonly role: "crossSdkFixtureParityArtifact" | "implementationArtifact" | "nativeProverSelfTestArtifact" | "proofArtifact" | "provingKey" | "verifierKey";
+  readonly label:
+    | "crossSdkFixtureParityBytes"
+    | "implementationBytes"
+    | "nativeProverSelfTestBytes"
+    | "proofArtifactBytes"
+    | "provingKeyBytes"
+    | "verifierKeyBytes";
+  readonly role:
+    | "crossSdkFixtureParityArtifact"
+    | "implementationArtifact"
+    | "nativeProverSelfTestArtifact"
+    | "proofArtifact"
+    | "provingKey"
+    | "verifierKey";
   readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
-  readonly implementation: "native-csharp" | "native-java" | "native-kotlin" | "native-swift" | "pure-typescript";
+  readonly implementation:
+    | "native-csharp"
+    | "native-java"
+    | "native-kotlin"
+    | "native-swift"
+    | "pure-typescript";
   readonly nativeProverBundle: Readonly<EthereumMainnetNativeEvmProverBundle>;
 }
 
@@ -4264,15 +4826,17 @@ export interface EvmSccpProofRequest {
   readonly backend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
   readonly sourceDomain: number;
   readonly targetDomain: number;
-  readonly publicInputs: Readonly<Required<{
-    version: number;
-    messageId: string;
-    payloadHash: string;
-    targetDomain: number;
-    commitmentRoot: string;
-    finalityHeight: string;
-    finalityBlockHash: string;
-  }>>;
+  readonly publicInputs: Readonly<
+    Required<{
+      version: number;
+      messageId: string;
+      payloadHash: string;
+      targetDomain: number;
+      commitmentRoot: string;
+      finalityHeight: string;
+      finalityBlockHash: string;
+    }>
+  >;
   readonly publicInputsBytes: Uint8Array;
   readonly publicSignalWords: readonly string[];
   readonly bundleBytes: Uint8Array;
@@ -4355,11 +4919,13 @@ export interface EvmSccpSubmission {
   readonly publicInputWordsBytes: Uint8Array;
   readonly statementHash: string;
   readonly destinationBindingHash: string;
-  readonly arguments: ReadonlyArray<Readonly<{
-    key: "proof_bytes" | "public_inputs" | "statement_hash";
-    encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
-    bytes: string;
-  }>>;
+  readonly arguments: ReadonlyArray<
+    Readonly<{
+      key: "proof_bytes" | "public_inputs" | "statement_hash";
+      encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
+      bytes: string;
+    }>
+  >;
   readonly callData: Uint8Array;
   readonly callDataHex: string;
   readonly envelopeBytes: Uint8Array;
@@ -4367,10 +4933,7 @@ export interface EvmSccpSubmission {
 }
 
 export type EthereumMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
-  (
-    | { proofResult: EvmSccpProofResult }
-    | { proof_result: EvmSccpProofResult }
-  );
+  ({ proofResult: EvmSccpProofResult } | { proof_result: EvmSccpProofResult });
 
 export interface EvmMainnetLocalAdmissionSubmissionInput {
   proofResult?: {
@@ -4466,15 +5029,21 @@ export interface EvmMainnetLocalAdmissionSubmission {
 export type EthereumMainnetLocalAdmissionSubmissionInput =
   EvmMainnetLocalAdmissionSubmissionInput;
 export type EthereumMainnetLocalAdmissionSubmission =
-  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_ETH };
+  EvmMainnetLocalAdmissionSubmission & {
+    readonly sourceDomain: typeof SCCP_DOMAIN_ETH;
+  };
 export type BscMainnetLocalAdmissionSubmissionInput =
   EvmMainnetLocalAdmissionSubmissionInput;
 export type BscMainnetLocalAdmissionSubmission =
-  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
+  EvmMainnetLocalAdmissionSubmission & {
+    readonly sourceDomain: typeof SCCP_DOMAIN_BSC;
+  };
 export type BscTestnetLocalAdmissionSubmissionInput =
   EvmMainnetLocalAdmissionSubmissionInput;
 export type BscTestnetLocalAdmissionSubmission =
-  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
+  EvmMainnetLocalAdmissionSubmission & {
+    readonly sourceDomain: typeof SCCP_DOMAIN_BSC;
+  };
 
 export function buildEthereumMainnetSccpLocalAdmissionSubmission(
   input: EthereumMainnetLocalAdmissionSubmissionInput,
@@ -4511,15 +5080,17 @@ export interface TronSccpProofRequest {
   readonly backend: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
   readonly sourceDomain: number;
   readonly targetDomain: number;
-  readonly publicInputs: Readonly<Required<{
-    version: number;
-    messageId: string;
-    payloadHash: string;
-    targetDomain: number;
-    commitmentRoot: string;
-    finalityHeight: string;
-    finalityBlockHash: string;
-  }>>;
+  readonly publicInputs: Readonly<
+    Required<{
+      version: number;
+      messageId: string;
+      payloadHash: string;
+      targetDomain: number;
+      commitmentRoot: string;
+      finalityHeight: string;
+      finalityBlockHash: string;
+    }>
+  >;
   readonly publicInputsBytes: Uint8Array;
   readonly publicSignalWords: readonly string[];
   readonly bundleBytes: Uint8Array;
@@ -4590,11 +5161,13 @@ export interface TronSccpSubmission {
   readonly publicInputWordsBytes: Uint8Array;
   readonly statementHash: string;
   readonly destinationBindingHash: string;
-  readonly arguments: ReadonlyArray<Readonly<{
-    key: "proof_bytes" | "public_inputs" | "statement_hash";
-    encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
-    bytes: string;
-  }>>;
+  readonly arguments: ReadonlyArray<
+    Readonly<{
+      key: "proof_bytes" | "public_inputs" | "statement_hash";
+      encoding: "raw_bytes" | "abi_bytes32x6" | "abi_bytes32";
+      bytes: string;
+    }>
+  >;
   readonly callData: Uint8Array;
   readonly callDataHex: string;
   readonly envelopeBytes: Uint8Array;
@@ -4660,15 +5233,17 @@ export interface SubstrateSccpProofRequest {
   readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
   readonly sourceDomain: number;
   readonly targetDomain: number;
-  readonly publicInputs: Readonly<Required<{
-    version: number;
-    messageId: string;
-    payloadHash: string;
-    targetDomain: number;
-    commitmentRoot: string;
-    finalityHeight: string;
-    finalityBlockHash: string;
-  }>>;
+  readonly publicInputs: Readonly<
+    Required<{
+      version: number;
+      messageId: string;
+      payloadHash: string;
+      targetDomain: number;
+      commitmentRoot: string;
+      finalityHeight: string;
+      finalityBlockHash: string;
+    }>
+  >;
   readonly publicInputsBytes: Uint8Array;
   readonly bundleBytes: Uint8Array;
   readonly sourceProofBytes: Uint8Array;
@@ -4736,11 +5311,13 @@ export interface SubstrateSccpSubmission {
   readonly proofBytes: Uint8Array;
   readonly publicInputsBytes: Uint8Array;
   readonly bundleBytes: Uint8Array;
-  readonly arguments: ReadonlyArray<Readonly<{
-    key: "proof_bytes" | "public_inputs" | "bundle_bytes";
-    encoding: "raw_bytes";
-    bytes: string;
-  }>>;
+  readonly arguments: ReadonlyArray<
+    Readonly<{
+      key: "proof_bytes" | "public_inputs" | "bundle_bytes";
+      encoding: "raw_bytes";
+      bytes: string;
+    }>
+  >;
   readonly runtimeCall: Uint8Array;
   readonly runtimeCallHex: string;
   readonly envelopeBytes: Uint8Array;
@@ -4812,9 +5389,11 @@ export type TonSccpProveFn = (
   options?: Record<string, unknown>,
 ) => TonSccpProveResult | Promise<TonSccpProveResult>;
 
-export type TonSccpProverOptions =
-  SccpProverWitnessProviderOption<TonSccpWitnessProvider, TonSccpProofRequestInput> &
-    SccpProverProveOption<TonSccpProveFn>;
+export type TonSccpProverOptions = SccpProverWitnessProviderOption<
+  TonSccpWitnessProvider,
+  TonSccpProofRequestInput
+> &
+  SccpProverProveOption<TonSccpProveFn>;
 
 export class TonSccpProver {
   constructor(options?: TonSccpProverOptions);
@@ -4867,9 +5446,11 @@ export type EvmSccpProveFn = (
   options?: Record<string, unknown>,
 ) => EvmSccpProveResult | Promise<EvmSccpProveResult>;
 
-export type EvmSccpProverOptions =
-  SccpProverWitnessProviderOption<EvmSccpWitnessProvider, EvmSccpProofRequestInput> &
-    SccpProverProveOption<EvmSccpProveFn>;
+export type EvmSccpProverOptions = SccpProverWitnessProviderOption<
+  EvmSccpWitnessProvider,
+  EvmSccpProofRequestInput
+> &
+  SccpProverProveOption<EvmSccpProveFn>;
 
 export class EvmSccpProver {
   constructor(options?: EvmSccpProverOptions);
@@ -4887,20 +5468,14 @@ export type BscMainnetSccpProofRequestInput = EvmSccpProofRequestInput;
 export type BscMainnetSccpProofRequest = EvmSccpProofRequest;
 export type BscMainnetSccpProofResult = EvmSccpProofResult;
 export type BscMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
-  (
-    | { proofResult: EvmSccpProofResult }
-    | { proof_result: EvmSccpProofResult }
-  );
+  ({ proofResult: EvmSccpProofResult } | { proof_result: EvmSccpProofResult });
 export type BscMainnetSccpSubmission = EvmSccpSubmission;
 export type BscMainnetSccpProverOptions = EvmSccpProverOptions;
 export type BscTestnetSccpProofRequestInput = EvmSccpProofRequestInput;
 export type BscTestnetSccpProofRequest = EvmSccpProofRequest;
 export type BscTestnetSccpProofResult = EvmSccpProofResult;
 export type BscTestnetSccpSubmissionInput = EvmSccpSubmissionInput &
-  (
-    | { proofResult: EvmSccpProofResult }
-    | { proof_result: EvmSccpProofResult }
-  );
+  ({ proofResult: EvmSccpProofResult } | { proof_result: EvmSccpProofResult });
 export type BscTestnetSccpSubmission = EvmSccpSubmission;
 export type BscTestnetSccpProverOptions = EvmSccpProverOptions;
 
@@ -4930,12 +5505,21 @@ export class BscTestnetSccpProver {
 
 export type EthereumMainnetExecutionProvider =
   | {
-      request(args: { method: string; params?: readonly unknown[] }): unknown | Promise<unknown>;
+      request(args: {
+        method: string;
+        params?: readonly unknown[];
+      }): unknown | Promise<unknown>;
     }
   | {
-      send(method: string, params?: readonly unknown[]): unknown | Promise<unknown>;
+      send(
+        method: string,
+        params?: readonly unknown[],
+      ): unknown | Promise<unknown>;
     }
-  | ((args: { method: string; params?: readonly unknown[] }) => unknown | Promise<unknown>);
+  | ((args: {
+      method: string;
+      params?: readonly unknown[];
+    }) => unknown | Promise<unknown>);
 
 export type EthereumMainnetBeaconRestFetchResponse = {
   readonly ok?: boolean;
@@ -4947,7 +5531,9 @@ export type EthereumMainnetBeaconRestFetchResponse = {
 export type EthereumMainnetBeaconRestFetch = (
   input: string,
   init?: { method?: string; headers?: unknown },
-) => EthereumMainnetBeaconRestFetchResponse | Promise<EthereumMainnetBeaconRestFetchResponse>;
+) =>
+  | EthereumMainnetBeaconRestFetchResponse
+  | Promise<EthereumMainnetBeaconRestFetchResponse>;
 
 export interface EthereumMainnetBeaconRestConsensusProviderOptions {
   endpoint?: string | URL;
@@ -5047,12 +5633,17 @@ export type EthereumMainnetConsensusProvider = {
   collectFinalityEvidence(
     input: EthereumMainnetConsensusProviderInput,
     options?: Record<string, unknown>,
-  ): EthereumMainnetBeaconFinalityEvidenceInput | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
+  ):
+    | EthereumMainnetBeaconFinalityEvidenceInput
+    | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
 };
 
 export class EthereumMainnetBeaconRestConsensusProvider
-  implements EthereumMainnetConsensusProvider {
-  constructor(options: EthereumMainnetBeaconRestConsensusProviderOptions | string | URL);
+  implements EthereumMainnetConsensusProvider
+{
+  constructor(
+    options: EthereumMainnetBeaconRestConsensusProviderOptions | string | URL,
+  );
   collectFinalityEvidence(
     input: EthereumMainnetConsensusProviderInput,
     options?: {
@@ -5245,7 +5836,9 @@ export class EthereumMainnetSccp {
   buildLocalAdmissionSubmission(
     input: EthereumMainnetLocalAdmissionSubmissionInput,
   ): EthereumMainnetLocalAdmissionSubmission;
-  buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
+  buildOutboundProofRequest(
+    input: EvmSccpProofRequestInput,
+  ): EvmSccpProofRequest;
   proveOutboundToEthereum(
     input: EvmSccpProofRequestInput,
     options?: {
@@ -5259,7 +5852,9 @@ export class EthereumMainnetSccp {
       self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
     } & Record<string, unknown>,
   ): Promise<EvmSccpProofResult>;
-  buildEthereumCalldata(input: EthereumMainnetSccpSubmissionInput): EvmSccpSubmission;
+  buildEthereumCalldata(
+    input: EthereumMainnetSccpSubmissionInput,
+  ): EvmSccpSubmission;
   submitOutboundToEthereum(
     input: EthereumMainnetSccpSubmissionInput & {
       to?: string;
@@ -5324,7 +5919,9 @@ export type BscMainnetConsensusProvider = {
   collectFinalityEvidence(
     input: BscMainnetConsensusProviderInput,
     options?: Record<string, unknown>,
-  ): BscMainnetParliaFinalityEvidenceInput | Promise<BscMainnetParliaFinalityEvidenceInput>;
+  ):
+    | BscMainnetParliaFinalityEvidenceInput
+    | Promise<BscMainnetParliaFinalityEvidenceInput>;
 };
 
 export interface BscMainnetInboundEvidenceInput {
@@ -5433,12 +6030,16 @@ export class BscMainnetSccp {
   buildLocalAdmissionSubmission(
     input: BscMainnetLocalAdmissionSubmissionInput,
   ): BscMainnetLocalAdmissionSubmission;
-  buildOutboundProofRequest(input: BscMainnetSccpProofRequestInput): BscMainnetSccpProofRequest;
+  buildOutboundProofRequest(
+    input: BscMainnetSccpProofRequestInput,
+  ): BscMainnetSccpProofRequest;
   proveOutboundToBsc(
     input: BscMainnetSccpProofRequestInput,
     options?: Record<string, unknown>,
   ): Promise<BscMainnetSccpProofResult>;
-  buildBscCalldata(input: BscMainnetSccpSubmissionInput): BscMainnetSccpSubmission;
+  buildBscCalldata(
+    input: BscMainnetSccpSubmissionInput,
+  ): BscMainnetSccpSubmission;
   submitOutboundToBsc(
     input: BscMainnetSccpSubmissionInput & {
       to?: string;
@@ -5467,10 +6068,8 @@ export class BscMainnetSccp {
 export type BscTestnetExecutionProvider = BscMainnetExecutionProvider;
 export type BscTestnetParliaFinalityEvidenceInput =
   BscMainnetParliaFinalityEvidenceInput;
-export type BscTestnetParliaFinalityEvidence =
-  BscMainnetParliaFinalityEvidence;
-export type BscTestnetConsensusProviderInput =
-  BscMainnetConsensusProviderInput;
+export type BscTestnetParliaFinalityEvidence = BscMainnetParliaFinalityEvidence;
+export type BscTestnetConsensusProviderInput = BscMainnetConsensusProviderInput;
 export type BscTestnetConsensusProvider = BscMainnetConsensusProvider;
 export type BscTestnetInboundEvidenceInput = BscMainnetInboundEvidenceInput;
 export type BscTestnetInboundEvidence = BscMainnetInboundEvidence;
@@ -5551,12 +6150,16 @@ export class BscTestnetSccp {
   buildLocalAdmissionSubmission(
     input: BscTestnetLocalAdmissionSubmissionInput,
   ): BscTestnetLocalAdmissionSubmission;
-  buildOutboundProofRequest(input: BscTestnetSccpProofRequestInput): BscTestnetSccpProofRequest;
+  buildOutboundProofRequest(
+    input: BscTestnetSccpProofRequestInput,
+  ): BscTestnetSccpProofRequest;
   proveOutboundToBsc(
     input: BscTestnetSccpProofRequestInput,
     options?: Record<string, unknown>,
   ): Promise<BscTestnetSccpProofResult>;
-  buildBscCalldata(input: BscTestnetSccpSubmissionInput): BscTestnetSccpSubmission;
+  buildBscCalldata(
+    input: BscTestnetSccpSubmissionInput,
+  ): BscTestnetSccpSubmission;
   submitOutboundToBsc(
     input: BscTestnetSccpSubmissionInput & {
       to?: string;
@@ -5613,9 +6216,11 @@ export type TronSccpProveFn = (
   options?: Record<string, unknown>,
 ) => TronSccpProveResult | Promise<TronSccpProveResult>;
 
-export type TronSccpProverOptions =
-  SccpProverWitnessProviderOption<TronSccpWitnessProvider, TronSccpProofRequestInput> &
-    SccpProverProveOption<TronSccpProveFn>;
+export type TronSccpProverOptions = SccpProverWitnessProviderOption<
+  TronSccpWitnessProvider,
+  TronSccpProofRequestInput
+> &
+  SccpProverProveOption<TronSccpProveFn>;
 
 export class TronSccpProver {
   constructor(options?: TronSccpProverOptions);
@@ -5658,12 +6263,11 @@ export type SubstrateSccpProveFn = (
   options?: Record<string, unknown>,
 ) => SubstrateSccpProveResult | Promise<SubstrateSccpProveResult>;
 
-export type SubstrateSccpProverOptions =
-  SccpProverWitnessProviderOption<
-    SubstrateSccpWitnessProvider,
-    SubstrateSccpProofRequestInput
-  > &
-    SccpProverProveOption<SubstrateSccpProveFn>;
+export type SubstrateSccpProverOptions = SccpProverWitnessProviderOption<
+  SubstrateSccpWitnessProvider,
+  SubstrateSccpProofRequestInput
+> &
+  SccpProverProveOption<SubstrateSccpProveFn>;
 
 export class SubstrateSccpProver {
   constructor(options?: SubstrateSccpProverOptions);
@@ -5712,9 +6316,11 @@ export type SolanaSccpProveFn = (
   options?: Record<string, unknown>,
 ) => SolanaSccpProveResult | Promise<SolanaSccpProveResult>;
 
-export type SolanaSccpProverOptions =
-  SccpProverWitnessProviderOption<SolanaSccpWitnessProvider, SolanaSccpWitnessInput> &
-    SccpProverProveOption<SolanaSccpProveFn>;
+export type SolanaSccpProverOptions = SccpProverWitnessProviderOption<
+  SolanaSccpWitnessProvider,
+  SolanaSccpWitnessInput
+> &
+  SccpProverProveOption<SolanaSccpProveFn>;
 
 export class SolanaSccpProver {
   constructor(options?: SolanaSccpProverOptions);
@@ -5747,9 +6353,15 @@ export function sccpTonSubmissionQueryId(
 export function canonicalSccpTonSubmissionMetadataBytes(
   input: TonSccpMessageBodyInput & { manifest: TonSccpManifestInput },
 ): Uint8Array;
-export function buildSccpTonMessageBodyBoc(input: TonSccpMessageBodyInput): Uint8Array;
-export function tonConfigValidatorSetPayloadFromProofBoc(input: BinaryLike): Uint8Array | null;
-export function tonConfigValidatorSetPayloadHashFromProofBoc(input: BinaryLike): string | null;
+export function buildSccpTonMessageBodyBoc(
+  input: TonSccpMessageBodyInput,
+): Uint8Array;
+export function tonConfigValidatorSetPayloadFromProofBoc(
+  input: BinaryLike,
+): Uint8Array | null;
+export function tonConfigValidatorSetPayloadHashFromProofBoc(
+  input: BinaryLike,
+): string | null;
 export function tonHashmapECellRefValueHash(
   input: BinaryLike,
   key: BinaryLike,
@@ -5770,18 +6382,26 @@ export function tonShardStateProofRootHash(input: BinaryLike): string;
 export function tonShardStateAccountsRootHash(input: BinaryLike): string;
 export function tonBocRootHashes(input: BinaryLike): string[];
 export function tonBocSingleRootHash(input: BinaryLike): string;
-export function buildTonSccpProofRequest(input: TonSccpProofRequestInput): TonSccpProofRequest;
+export function buildTonSccpProofRequest(
+  input: TonSccpProofRequestInput,
+): TonSccpProofRequest;
 export function wrapTonSccpProofResult(
   proofBytes: BinaryLike,
   request: TonSccpProofRequest,
 ): TonSccpProofResult;
-export function buildTonSccpSubmission(input: TonSccpMessageBodyInput): TonSccpSubmission;
-export function buildEvmSccpProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
+export function buildTonSccpSubmission(
+  input: TonSccpMessageBodyInput,
+): TonSccpSubmission;
+export function buildEvmSccpProofRequest(
+  input: EvmSccpProofRequestInput,
+): EvmSccpProofRequest;
 export function wrapEvmSccpProofResult(
   proofBytes: BinaryLike,
   request: EvmSccpProofRequest,
 ): EvmSccpProofResult;
-export function buildEvmSccpSubmission(input: EvmSccpSubmissionInput): EvmSccpSubmission;
+export function buildEvmSccpSubmission(
+  input: EvmSccpSubmissionInput,
+): EvmSccpSubmission;
 export function buildEvmSccpBridgeProofSubmitPayload(
   input: EvmSccpBridgeProofSubmitPayloadInput,
 ): ToriiBridgeProofSubmitPayload;
@@ -5805,12 +6425,16 @@ export function wrapBscTestnetSccpDestinationProofResult(
 export function buildBscTestnetSccpDestinationSubmission(
   input: BscTestnetSccpSubmissionInput,
 ): BscTestnetSccpSubmission;
-export function buildTronSccpProofRequest(input: TronSccpProofRequestInput): TronSccpProofRequest;
+export function buildTronSccpProofRequest(
+  input: TronSccpProofRequestInput,
+): TronSccpProofRequest;
 export function wrapTronSccpProofResult(
   proofBytes: BinaryLike,
   request: TronSccpProofRequest,
 ): TronSccpProofResult;
-export function buildTronSccpSubmission(input: TronSccpSubmissionInput): TronSccpSubmission;
+export function buildTronSccpSubmission(
+  input: TronSccpSubmissionInput,
+): TronSccpSubmission;
 export function buildTronSccpBridgeProofSubmitPayload(
   input: TronSccpBridgeProofSubmitPayloadInput,
 ): ToriiBridgeProofSubmitPayload;
@@ -5824,13 +6448,24 @@ export function wrapSubstrateSccpProofResult(
 export function buildSubstrateSccpSubmission(
   input: SubstrateSccpSubmissionInput,
 ): SubstrateSccpSubmission;
-export function canonicalEvmSccpReceiptProofBytes(input: EvmSccpReceiptProofInput): Uint8Array;
-export function evmSccpReceiptProofHash(input: EvmSccpReceiptProofInput): string;
-export function canonicalEvmReceiptRlp(receipt: Record<string, unknown>): Uint8Array;
-export function evmReceiptTrieKey(transactionIndex: number | bigint | string): string;
+export function canonicalEvmSccpReceiptProofBytes(
+  input: EvmSccpReceiptProofInput,
+): Uint8Array;
+export function evmSccpReceiptProofHash(
+  input: EvmSccpReceiptProofInput,
+): string;
+export function canonicalEvmReceiptRlp(
+  receipt: Record<string, unknown>,
+): Uint8Array;
+export function evmReceiptTrieKey(
+  transactionIndex: number | bigint | string,
+): string;
 export function buildEvmReceiptTrieProofFromReceipts(
   receipts: readonly Record<string, unknown>[],
-  options: { transactionIndex?: number | bigint | string; transaction_index?: number | bigint | string },
+  options: {
+    transactionIndex?: number | bigint | string;
+    transaction_index?: number | bigint | string;
+  },
 ): {
   readonly receiptsRoot: string;
   readonly receiptRlp: string;
@@ -5838,27 +6473,55 @@ export function buildEvmReceiptTrieProofFromReceipts(
   readonly receiptTrieProofNodes: readonly Uint8Array[];
 };
 export function evmSccpSourceEventTopic(): string;
-export function canonicalEvmReceiptRootMptValue(receiptRoot: string): Uint8Array;
-export function canonicalEthSyncCommitteePayloadBytes(input: EthSyncCommitteePayloadInput): Uint8Array;
-export function ethSyncCommitteeHash(input: EthSyncCommitteePayloadInput): string;
+export function canonicalEvmReceiptRootMptValue(
+  receiptRoot: string,
+): Uint8Array;
+export function canonicalEthSyncCommitteePayloadBytes(
+  input: EthSyncCommitteePayloadInput,
+): Uint8Array;
+export function ethSyncCommitteeHash(
+  input: EthSyncCommitteePayloadInput,
+): string;
 export function ethSyncCommitteeHashFromPayload(
-  input: EthSyncCommitteePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | EthSyncCommitteePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function ethSyncCommitteePayloadHash(
-  input: EthSyncCommitteePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | EthSyncCommitteePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function ethExecutionPayloadHeaderRootFromRlp(
   headerRlp: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
 ): string;
 export function ethBeaconBodyRootFromExecutionPayloadBranch(
   executionPayloadHeaderRoot: string,
-  executionPayloadBranch: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[],
+  executionPayloadBranch: readonly (
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[]
+  )[],
 ): string;
-export function ethBeaconBlockHeaderRoot(input: EthBeaconBlockHeaderRootInput): string;
+export function ethBeaconBlockHeaderRoot(
+  input: EthBeaconBlockHeaderRootInput,
+): string;
 export const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH: 32;
 export const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD: 256;
 export const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: 8192;
-export function ethMainnetSyncCommitteePeriodForSlot(slot: string | number | bigint): bigint;
+export function ethMainnetSyncCommitteePeriodForSlot(
+  slot: string | number | bigint,
+): bigint;
 export function canonicalEthSyncCommitteeTransitionMessageBytes(
   input: EthSyncCommitteeTransitionMessageInput,
 ): Uint8Array;
@@ -5871,14 +6534,32 @@ export function canonicalEthSyncCommitteeTransitionSignatureBytes(
 export function ethSyncCommitteeTransitionSignatureHash(
   input: EthSyncCommitteeTransitionSignatureInput,
 ): string;
-export function canonicalBscSccpReceiptProofBytes(input: BscSccpReceiptProofInput): Uint8Array;
-export function bscSccpReceiptProofHash(input: BscSccpReceiptProofInput): string;
-export function canonicalBscValidatorSetPayloadBytes(input: BscValidatorSetPayloadInput): Uint8Array;
+export function canonicalBscSccpReceiptProofBytes(
+  input: BscSccpReceiptProofInput,
+): Uint8Array;
+export function bscSccpReceiptProofHash(
+  input: BscSccpReceiptProofInput,
+): string;
+export function canonicalBscValidatorSetPayloadBytes(
+  input: BscValidatorSetPayloadInput,
+): Uint8Array;
 export function bscValidatorSetPayloadHash(
-  input: BscValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | BscValidatorSetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function bscValidatorSetHashFromPayload(
-  input: BscValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | BscValidatorSetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function bscValidatorSetStorageValueHash(input: BinaryLike): string;
 export function canonicalBscValidatorSetMetadataProofBytes(
@@ -5893,26 +6574,60 @@ export function canonicalBscValidatorSetTransitionMessageBytes(
 export function bscValidatorSetTransitionMessageHash(
   input: BscValidatorSetTransitionMessageInput,
 ): string;
-export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
+export function canonicalBscCommitMessageBytes(
+  input: BscCommitMessageInput,
+): Uint8Array;
 export function bscCommitMessageHash(input: BscCommitMessageInput): string;
-export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
+export function canonicalBscCommitSealBytes(
+  input: BscCommitSealInput,
+): Uint8Array;
 export function bscCommitSealHash(input: BscCommitSealInput): string;
-export function bscValidatorSetPayloadFromParliaExtra(extraData: BinaryLike): Uint8Array;
-export function bscValidatorSetPayloadFromHeaderRlp(headerRlp: BinaryLike): Uint8Array;
-export function canonicalSolanaSccpMessageProofBytes(input: SolanaSccpMessageProofInput): Uint8Array;
-export function solanaSccpMessageProofHash(input: SolanaSccpMessageProofInput): string;
-export function canonicalSolanaSccpTransactionStatusLeafBytes(input: SolanaSccpMessageProofInput): Uint8Array;
-export function solanaSccpTransactionStatusLeafHash(input: SolanaSccpMessageProofInput): string;
-export function solanaSccpTransactionStatusRootFromBranch(input: SolanaSccpMessageProofInput): string;
-export function canonicalTonSccpShardProofBytes(input: TonSccpShardProofInput): Uint8Array;
+export function bscValidatorSetPayloadFromParliaExtra(
+  extraData: BinaryLike,
+): Uint8Array;
+export function bscValidatorSetPayloadFromHeaderRlp(
+  headerRlp: BinaryLike,
+): Uint8Array;
+export function canonicalSolanaSccpMessageProofBytes(
+  input: SolanaSccpMessageProofInput,
+): Uint8Array;
+export function solanaSccpMessageProofHash(
+  input: SolanaSccpMessageProofInput,
+): string;
+export function canonicalSolanaSccpTransactionStatusLeafBytes(
+  input: SolanaSccpMessageProofInput,
+): Uint8Array;
+export function solanaSccpTransactionStatusLeafHash(
+  input: SolanaSccpMessageProofInput,
+): string;
+export function solanaSccpTransactionStatusRootFromBranch(
+  input: SolanaSccpMessageProofInput,
+): string;
+export function canonicalTonSccpShardProofBytes(
+  input: TonSccpShardProofInput,
+): Uint8Array;
 export function tonSccpShardProofHash(input: TonSccpShardProofInput): string;
-export function canonicalTonShardStateProofPublicInputsBytes(input: TonShardStateProofRequestInput): Uint8Array;
-export function tonShardStateProofPublicInputsHash(input: TonShardStateProofRequestInput): string;
-export function canonicalTonShardStateWitnessCommitmentBytes(input: TonShardStateProofRequestInput): Uint8Array;
-export function canonicalTonShardStateVerificationContextBytes(input: TonShardStateProofRequestInput): Uint8Array;
-export function tonShardStatePublicInputColumns(input: TonShardStateProofRequestInput): string[][];
-export function tonShardStateOpenVerifySchemaDescriptor(input: TonShardStateProofRequestInput): Uint8Array;
-export function buildTonShardStateProofRequest(input: TonShardStateProofRequestInput): TonShardStateProofRequest;
+export function canonicalTonShardStateProofPublicInputsBytes(
+  input: TonShardStateProofRequestInput,
+): Uint8Array;
+export function tonShardStateProofPublicInputsHash(
+  input: TonShardStateProofRequestInput,
+): string;
+export function canonicalTonShardStateWitnessCommitmentBytes(
+  input: TonShardStateProofRequestInput,
+): Uint8Array;
+export function canonicalTonShardStateVerificationContextBytes(
+  input: TonShardStateProofRequestInput,
+): Uint8Array;
+export function tonShardStatePublicInputColumns(
+  input: TonShardStateProofRequestInput,
+): string[][];
+export function tonShardStateOpenVerifySchemaDescriptor(
+  input: TonShardStateProofRequestInput,
+): Uint8Array;
+export function buildTonShardStateProofRequest(
+  input: TonShardStateProofRequestInput,
+): TonShardStateProofRequest;
 export function tonSccpShardStateVerificationProofHash(
   input: TonSccpSourceStateVerificationProof,
 ): string;
@@ -5967,53 +6682,53 @@ export type TonSccpSourceStateProverResultObject =
     | typeof SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1
     | typeof SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1
   > & {
-  parameterSet?: "fastpq-lane-balanced";
-  parameter_set?: "fastpq-lane-balanced";
-  sourceDomain?: typeof SCCP_DOMAIN_TON;
-  source_domain?: typeof SCCP_DOMAIN_TON;
-  masterchainSeqno?: string | number | bigint;
-  masterchain_seqno?: string | number | bigint;
-  shardSeqno?: string | number | bigint;
-  shard_seqno?: string | number | bigint;
-  sourceStateVerifierId?: string;
-  source_state_verifier_id?: string;
-  sourceStateVerifierHash?: string;
-  source_state_verifier_hash?: string;
-  shardStateProofPublicInputsHash?: string;
-  shard_state_proof_public_inputs_hash?: string;
-  shardStateVerificationProofHash?: string;
-  shard_state_verification_proof_hash?: string;
-  role?: TonSccpFullLightClientAuditRole;
-  audit_role?: TonSccpFullLightClientAuditRole;
-  roleCode?: 1 | 2 | 3 | string | number | bigint;
-  role_code?: 1 | 2 | 3 | string | number | bigint;
-  verifierId?: string;
-  verifier_id?: string;
-  verifierHash?: string;
-  verifier_hash?: string;
-  sourceVerifierMaterialHash?: string;
-  source_verifier_material_hash?: string;
-  sourceAdapterDeploymentHash?: string;
-  source_adapter_deployment_hash?: string;
-  fullLightClientGateHash?: string;
-  full_light_client_gate_hash?: string;
-  auditStatementHash?: string;
-  audit_statement_hash?: string;
-  publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
-  public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
-  fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
-  fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
-  fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
-  fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
-  statementBytes?: BinaryLike | number[];
-  statement_bytes?: BinaryLike | number[];
-  witnessCommitmentBytes?: BinaryLike | number[];
-  witness_commitment_bytes?: BinaryLike | number[];
-  verificationContextBytes?: BinaryLike | number[];
-  verification_context_bytes?: BinaryLike | number[];
-  schemaDescriptor?: BinaryLike | number[];
-  schema_descriptor?: BinaryLike | number[];
-};
+    parameterSet?: "fastpq-lane-balanced";
+    parameter_set?: "fastpq-lane-balanced";
+    sourceDomain?: typeof SCCP_DOMAIN_TON;
+    source_domain?: typeof SCCP_DOMAIN_TON;
+    masterchainSeqno?: string | number | bigint;
+    masterchain_seqno?: string | number | bigint;
+    shardSeqno?: string | number | bigint;
+    shard_seqno?: string | number | bigint;
+    sourceStateVerifierId?: string;
+    source_state_verifier_id?: string;
+    sourceStateVerifierHash?: string;
+    source_state_verifier_hash?: string;
+    shardStateProofPublicInputsHash?: string;
+    shard_state_proof_public_inputs_hash?: string;
+    shardStateVerificationProofHash?: string;
+    shard_state_verification_proof_hash?: string;
+    role?: TonSccpFullLightClientAuditRole;
+    audit_role?: TonSccpFullLightClientAuditRole;
+    roleCode?: 1 | 2 | 3 | string | number | bigint;
+    role_code?: 1 | 2 | 3 | string | number | bigint;
+    verifierId?: string;
+    verifier_id?: string;
+    verifierHash?: string;
+    verifier_hash?: string;
+    sourceVerifierMaterialHash?: string;
+    source_verifier_material_hash?: string;
+    sourceAdapterDeploymentHash?: string;
+    source_adapter_deployment_hash?: string;
+    fullLightClientGateHash?: string;
+    full_light_client_gate_hash?: string;
+    auditStatementHash?: string;
+    audit_statement_hash?: string;
+    publicInputColumns?: ReadonlyArray<ReadonlyArray<string>>;
+    public_input_columns?: ReadonlyArray<ReadonlyArray<string>>;
+    fastpqPublicInputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+    fastpq_public_inputs?: SccpSourceStateFastpqPublicInputsResultMetadata;
+    fastpqTransitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+    fastpq_transitions?: ReadonlyArray<SccpSourceStateFastpqTransitionResultMetadata>;
+    statementBytes?: BinaryLike | number[];
+    statement_bytes?: BinaryLike | number[];
+    witnessCommitmentBytes?: BinaryLike | number[];
+    witness_commitment_bytes?: BinaryLike | number[];
+    verificationContextBytes?: BinaryLike | number[];
+    verification_context_bytes?: BinaryLike | number[];
+    schemaDescriptor?: BinaryLike | number[];
+    schema_descriptor?: BinaryLike | number[];
+  };
 
 export type TonSccpSourceStateProveResult =
   | BinaryLike
@@ -6046,27 +6761,49 @@ export class TonSccpSourceStateProver {
     }>
   >;
 }
-export function canonicalTonValidatorSetBytes(input: TonValidatorSetPayloadInput): Uint8Array;
-export function canonicalTonValidatorSetPayloadBytes(input: TonValidatorSetPayloadInput): Uint8Array;
+export function canonicalTonValidatorSetBytes(
+  input: TonValidatorSetPayloadInput,
+): Uint8Array;
+export function canonicalTonValidatorSetPayloadBytes(
+  input: TonValidatorSetPayloadInput,
+): Uint8Array;
 export function tonValidatorSetHash(input: TonValidatorSetPayloadInput): string;
 export function tonValidatorSetHashFromPayload(
-  input: TonValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | TonValidatorSetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function tonValidatorSetPayloadHash(
-  input: TonValidatorSetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | TonValidatorSetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function canonicalTonMasterchainConfigLeafBytes(
   input: TonMasterchainConfigLeafInput,
 ): Uint8Array;
-export function tonMasterchainConfigLeafHash(input: TonMasterchainConfigLeafInput): string;
+export function tonMasterchainConfigLeafHash(
+  input: TonMasterchainConfigLeafInput,
+): string;
 export function canonicalTonMasterchainConfigProofBytes(
   input: TonMasterchainConfigProofInput,
 ): Uint8Array;
-export function tonMasterchainConfigProofHash(input: TonMasterchainConfigProofInput): string;
+export function tonMasterchainConfigProofHash(
+  input: TonMasterchainConfigProofInput,
+): string;
 export function canonicalTonMasterchainBlockMessageBytes(
   input: TonMasterchainBlockMessageInput,
 ): Uint8Array;
-export function tonMasterchainBlockMessageHash(input: TonMasterchainBlockMessageInput): string;
+export function tonMasterchainBlockMessageHash(
+  input: TonMasterchainBlockMessageInput,
+): string;
 export function canonicalTonMasterchainValidatorSignaturesBytes(
   input: TonValidatorSignatureProofInput,
 ): Uint8Array;
@@ -6085,22 +6822,45 @@ export function canonicalTonValidatorSetTransitionSignatureBytes(
 export function tonValidatorSetTransitionSignatureHash(
   input: TonValidatorSetTransitionSignatureInput,
 ): string;
-export function canonicalTronReceiptRootMptValue(receiptRoot: string): Uint8Array;
-export function canonicalTronSccpReceiptProofBytes(input: TronSccpReceiptProofInput): Uint8Array;
-export function tronSccpReceiptProofHash(input: TronSccpReceiptProofInput): string;
+export function canonicalTronReceiptRootMptValue(
+  receiptRoot: string,
+): Uint8Array;
+export function canonicalTronSccpReceiptProofBytes(
+  input: TronSccpReceiptProofInput,
+): Uint8Array;
+export function tronSccpReceiptProofHash(
+  input: TronSccpReceiptProofInput,
+): string;
 export function canonicalTronSccpReceiptStateProofBytes(
   input: TronSccpReceiptStateProofInput,
 ): Uint8Array;
-export function tronSccpReceiptStateProofHash(input: TronSccpReceiptStateProofInput): string;
+export function tronSccpReceiptStateProofHash(
+  input: TronSccpReceiptStateProofInput,
+): string;
 export function tronSccpSourceMessageCallData(
   sourceDomain: number,
   targetDomain: number,
   sourceEventDigest: string,
 ): Uint8Array;
 export interface TronTriggerSmartContractRawDataParseOptions {
-  readonly expectedOwnerAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  readonly expectedContractAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
-  readonly expectedCallData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  readonly expectedOwnerAddress?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  readonly expectedContractAddress?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
+  readonly expectedCallData?:
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[];
 }
 export interface TronTriggerSmartContractRawDataView {
   readonly rawDataHash: string;
@@ -6121,24 +6881,55 @@ export function parseTronTriggerSmartContractRawData(
 export function canonicalTronSccpTransactionSourceProofBytes(
   input: TronSccpTransactionSourceProofInput,
 ): Uint8Array;
-export function tronSccpTransactionSourceProofHash(input: TronSccpTransactionSourceProofInput): string;
-export function canonicalTronRawBlockHeaderBytes(input: TronRawBlockHeaderInput): Uint8Array;
+export function tronSccpTransactionSourceProofHash(
+  input: TronSccpTransactionSourceProofInput,
+): string;
+export function canonicalTronRawBlockHeaderBytes(
+  input: TronRawBlockHeaderInput,
+): Uint8Array;
 export function tronRawBlockHeaderHash(
   rawData: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
 ): string;
-export function tronBlockIdFromRawDataHash(number: string | number | bigint, rawDataHash: string): string;
-export function canonicalTronSolidBlockHeaderProofBytes(input: TronSolidBlockHeaderProofInput): Uint8Array;
-export function tronSolidBlockHeaderProofHash(input: TronSolidBlockHeaderProofInput): string;
-export function canonicalTronWitnessSchedulePayloadBytes(input: TronWitnessSchedulePayloadInput): Uint8Array;
+export function tronBlockIdFromRawDataHash(
+  number: string | number | bigint,
+  rawDataHash: string,
+): string;
+export function canonicalTronSolidBlockHeaderProofBytes(
+  input: TronSolidBlockHeaderProofInput,
+): Uint8Array;
+export function tronSolidBlockHeaderProofHash(
+  input: TronSolidBlockHeaderProofInput,
+): string;
+export function canonicalTronWitnessSchedulePayloadBytes(
+  input: TronWitnessSchedulePayloadInput,
+): Uint8Array;
 export function tronWitnessSchedulePayloadHash(
-  input: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | TronWitnessSchedulePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function tronWitnessScheduleHashFromPayload(
-  input: TronWitnessSchedulePayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | TronWitnessSchedulePayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
-export function canonicalTronSolidBlockMessageBytes(input: TronSolidBlockMessageInput): Uint8Array;
-export function tronSolidBlockMessageHash(input: TronSolidBlockMessageInput): string;
-export function canonicalTronWitnessSealBytes(input: TronWitnessSealInput): Uint8Array;
+export function canonicalTronSolidBlockMessageBytes(
+  input: TronSolidBlockMessageInput,
+): Uint8Array;
+export function tronSolidBlockMessageHash(
+  input: TronSolidBlockMessageInput,
+): string;
+export function canonicalTronWitnessSealBytes(
+  input: TronWitnessSealInput,
+): Uint8Array;
 export function tronWitnessSealHash(input: TronWitnessSealInput): string;
 export function canonicalTronWitnessScheduleTransitionMessageBytes(
   input: TronWitnessScheduleTransitionMessageInput,
@@ -6152,8 +6943,12 @@ export function canonicalTronWitnessScheduleTransitionSealBytes(
 export function tronWitnessScheduleTransitionSealHash(
   input: TronWitnessScheduleTransitionSealInput,
 ): string;
-export function canonicalSubstrateSccpStorageProofBytes(input: SubstrateSccpStorageProofInput): Uint8Array;
-export function substrateSccpStorageProofHash(input: SubstrateSccpStorageProofInput): string;
+export function canonicalSubstrateSccpStorageProofBytes(
+  input: SubstrateSccpStorageProofInput,
+): Uint8Array;
+export function substrateSccpStorageProofHash(
+  input: SubstrateSccpStorageProofInput,
+): string;
 export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
   input: SubstrateSccpRuntimeStorageProofRequestInput,
 ): Uint8Array;
@@ -6167,17 +6962,35 @@ export function substrateSccpRuntimeStoragePublicInputColumns(
   input: SubstrateSccpRuntimeStorageProofRequestInput,
 ): string[][];
 export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(
-  input: SubstrateSccpRuntimeStorageProofRequestInput | number | string | bigint,
+  input:
+    | SubstrateSccpRuntimeStorageProofRequestInput
+    | number
+    | string
+    | bigint,
 ): Uint8Array;
 export function buildSubstrateSccpRuntimeStorageProofRequest(
   input: SubstrateSccpRuntimeStorageProofRequestInput,
 ): SubstrateSccpRuntimeStorageProofRequest;
-export function canonicalSubstrateAuthoritySetPayloadBytes(input: SubstrateAuthoritySetPayloadInput): Uint8Array;
+export function canonicalSubstrateAuthoritySetPayloadBytes(
+  input: SubstrateAuthoritySetPayloadInput,
+): Uint8Array;
 export function substrateAuthoritySetPayloadHash(
-  input: SubstrateAuthoritySetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | SubstrateAuthoritySetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function substrateAuthoritySetHashFromPayload(
-  input: SubstrateAuthoritySetPayloadInput | string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  input:
+    | SubstrateAuthoritySetPayloadInput
+    | string
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | number[],
 ): string;
 export function canonicalSubstrateAuthoritySetTransitionMessageBytes(
   input: SubstrateAuthoritySetTransitionMessageInput,
@@ -6191,29 +7004,42 @@ export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
 export function substrateAuthoritySetTransitionJustificationHash(
   input: SubstrateAuthoritySetTransitionJustificationInput,
 ): string;
-export function solanaSccpMainnetEpochForSlot(slot: string | number | bigint): bigint;
+export function solanaSccpMainnetEpochForSlot(
+  slot: string | number | bigint,
+): bigint;
 export function canonicalSolanaSccpEpochStakeRootBytes(
   input: SolanaSccpEpochStakeRootInput,
 ): Uint8Array;
-export function solanaSccpEpochStakeRoot(input: SolanaSccpEpochStakeRootInput): string;
+export function solanaSccpEpochStakeRoot(
+  input: SolanaSccpEpochStakeRootInput,
+): string;
 export function canonicalSolanaSccpStakeActivationBytes(
   input: SolanaSccpStakeActivationInput,
 ): Uint8Array;
-export function solanaSccpStakeActivationHash(input: SolanaSccpStakeActivationInput): string;
+export function solanaSccpStakeActivationHash(
+  input: SolanaSccpStakeActivationInput,
+): string;
 export function canonicalSolanaSccpAccountOpeningBytes(
   input: SolanaSccpAccountOpeningInput,
 ): Uint8Array;
-export function solanaSccpAccountOpeningHash(input: SolanaSccpAccountOpeningInput): string;
+export function solanaSccpAccountOpeningHash(
+  input: SolanaSccpAccountOpeningInput,
+): string;
 export function solanaSccpAccountRawDataHash(rawData: BinaryLike): string;
 export function canonicalSolanaSccpAccountInclusionLeafBytes(
   input: SolanaSccpAccountInclusionLeafInput,
 ): Uint8Array;
-export function solanaSccpAccountInclusionLeafHash(input: SolanaSccpAccountInclusionLeafInput): string;
+export function solanaSccpAccountInclusionLeafHash(
+  input: SolanaSccpAccountInclusionLeafInput,
+): string;
 export function canonicalSolanaSccpAccountInclusionNodeBytes(
   left: BinaryLike,
   right: BinaryLike,
 ): Uint8Array;
-export function solanaSccpAccountInclusionNodeHash(left: BinaryLike, right: BinaryLike): string;
+export function solanaSccpAccountInclusionNodeHash(
+  left: BinaryLike,
+  right: BinaryLike,
+): string;
 export function solanaSccpAccountInclusionRootFromBranch(
   leaf: BinaryLike,
   siblings?: readonly BinaryLike[],
@@ -6224,7 +7050,9 @@ export function solanaSccpAccountInclusionRootAndBranches(
 export function canonicalSolanaSccpVoteAccountDataBytes(
   input: SolanaSccpVoteAccountDataInput,
 ): Uint8Array;
-export function solanaSccpVoteAccountDataHash(input: SolanaSccpVoteAccountDataInput): string;
+export function solanaSccpVoteAccountDataHash(
+  input: SolanaSccpVoteAccountDataInput,
+): string;
 export function solanaSccpVoteAccountDataFromRawVoteState(
   rawData: BinaryLike,
   epoch: string | number | bigint,
@@ -6248,32 +7076,48 @@ export function solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(
 export function canonicalSolanaSccpStakeAccountDataBytes(
   input: SolanaSccpStakeAccountDataInput,
 ): Uint8Array;
-export function solanaSccpStakeAccountDataHash(input: SolanaSccpStakeAccountDataInput): string;
+export function solanaSccpStakeAccountDataHash(
+  input: SolanaSccpStakeAccountDataInput,
+): string;
 export function solanaSccpStakeAccountDataFromRawStakeStateV2(
   rawData: BinaryLike,
 ): SolanaSccpParsedStakeStateV2StakeAccountData;
-export function solanaSccpStakeAccountDataHashFromRawStakeStateV2(rawData: BinaryLike): string;
+export function solanaSccpStakeAccountDataHashFromRawStakeStateV2(
+  rawData: BinaryLike,
+): string;
 export function canonicalSolanaSccpStakeAccountStateBytes(
   input: SolanaSccpStakeAccountStateInput,
 ): Uint8Array;
-export function solanaSccpStakeAccountStateHash(input: SolanaSccpStakeAccountStateInput): string;
+export function solanaSccpStakeAccountStateHash(
+  input: SolanaSccpStakeAccountStateInput,
+): string;
 export function canonicalSolanaSccpStakeHistorySysvarDataBytes(
   input: SolanaSccpStakeHistorySysvarDataInput,
 ): Uint8Array;
-export function solanaSccpStakeHistorySysvarDataHash(input: SolanaSccpStakeHistorySysvarDataInput): string;
-export function solanaSccpStakeHistorySysvarDataHashFromRawData(rawData: BinaryLike): string;
+export function solanaSccpStakeHistorySysvarDataHash(
+  input: SolanaSccpStakeHistorySysvarDataInput,
+): string;
+export function solanaSccpStakeHistorySysvarDataHashFromRawData(
+  rawData: BinaryLike,
+): string;
 export function canonicalSolanaSccpStakeHistoryBytes(
   input: SolanaSccpStakeHistoryInput,
 ): Uint8Array;
-export function solanaSccpStakeHistoryHash(input: SolanaSccpStakeHistoryInput): string;
+export function solanaSccpStakeHistoryHash(
+  input: SolanaSccpStakeHistoryInput,
+): string;
 export function canonicalSolanaSccpTowerLockoutBytes(
   input: SolanaSccpTowerLockoutInput,
 ): Uint8Array;
-export function solanaSccpTowerLockoutHash(input: SolanaSccpTowerLockoutInput): string;
+export function solanaSccpTowerLockoutHash(
+  input: SolanaSccpTowerLockoutInput,
+): string;
 export function canonicalSolanaSccpTowerReplayBytes(
   input: SolanaSccpTowerReplayInput,
 ): Uint8Array;
-export function solanaSccpTowerReplayHash(input: SolanaSccpTowerReplayInput): string;
+export function solanaSccpTowerReplayHash(
+  input: SolanaSccpTowerReplayInput,
+): string;
 export function canonicalSolanaSccpBankForkBytes(
   input: SolanaSccpBankForkInput,
 ): Uint8Array;
@@ -6284,12 +7128,24 @@ export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(
 export function solanaSccpAccountsLtHashProofPublicInputsHash(
   input: SolanaSccpAccountsLtHashProofPublicInputsInput,
 ): string;
-export function solanaSccpAgaveBankHash(input: SolanaSccpAgaveBankHashInput): string;
-export function normalizeSolanaSccpWitness(input: SolanaSccpWitnessInput): SolanaSccpWitness;
-export function canonicalSolanaSccpWitnessBytes(input: SolanaSccpWitnessInput): Uint8Array;
-export function normalizeSolanaSccpProofContext(input: SolanaSccpProofContextInput): SolanaSccpProofContext;
-export function canonicalSolanaSccpProofContextBytes(input: SolanaSccpProofContextInput): Uint8Array;
-export function solanaSccpProofContextHash(input: SolanaSccpProofContextInput): string;
+export function solanaSccpAgaveBankHash(
+  input: SolanaSccpAgaveBankHashInput,
+): string;
+export function normalizeSolanaSccpWitness(
+  input: SolanaSccpWitnessInput,
+): SolanaSccpWitness;
+export function canonicalSolanaSccpWitnessBytes(
+  input: SolanaSccpWitnessInput,
+): Uint8Array;
+export function normalizeSolanaSccpProofContext(
+  input: SolanaSccpProofContextInput,
+): SolanaSccpProofContext;
+export function canonicalSolanaSccpProofContextBytes(
+  input: SolanaSccpProofContextInput,
+): Uint8Array;
+export function solanaSccpProofContextHash(
+  input: SolanaSccpProofContextInput,
+): string;
 export function normalizeSccpSourceAdapterDeploymentBinding(
   input?: SccpSourceAdapterDeploymentBindingInput,
 ): SccpSourceAdapterDeploymentBinding;
@@ -6299,8 +7155,12 @@ export function canonicalSccpSourceAdapterDeploymentBindingBytes(
 export function sccpSourceAdapterDeploymentBindingHash(
   input: SccpSourceAdapterDeploymentBindingInput,
 ): string;
-export function sccpDestinationBindingKey(input: SccpDestinationBindingDomainInput): string;
-export function sccpDestinationBindingHash(input: SccpDestinationBindingDomainInput): string;
+export function sccpDestinationBindingKey(
+  input: SccpDestinationBindingDomainInput,
+): string;
+export function sccpDestinationBindingHash(
+  input: SccpDestinationBindingDomainInput,
+): string;
 export function canonicalSolanaSccpRouteCanaryEvidenceBytes(
   input: SolanaSccpRouteCanaryEvidenceInput,
 ): Uint8Array;
@@ -6319,22 +7179,36 @@ export function canonicalTronSccpRouteCanaryEvidenceBytes(
 export function tronSccpRouteCanaryEvidenceHash(
   input: TronSccpRouteCanaryEvidenceInput,
 ): string;
-export function evmSccpDestinationBinding(input: EvmSccpDestinationBindingInput): EvmSccpDestinationBinding;
-export function evmSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function evmSccpDestinationBinding(
+  input: EvmSccpDestinationBindingInput,
+): EvmSccpDestinationBinding;
+export function evmSccpDestinationBindingHash(
+  input: EvmSccpDestinationBindingInput,
+): string;
 export function ethereumMainnetSccpDestinationBinding(
   input: EvmSccpDestinationBindingInput,
 ): EvmSccpDestinationBinding;
-export function ethereumMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function ethereumMainnetSccpDestinationBindingHash(
+  input: EvmSccpDestinationBindingInput,
+): string;
 export function bscMainnetSccpDestinationBinding(
   input: EvmSccpDestinationBindingInput,
 ): EvmSccpDestinationBinding;
-export function bscMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
+export function bscMainnetSccpDestinationBindingHash(
+  input: EvmSccpDestinationBindingInput,
+): string;
 export function bscTestnetSccpDestinationBinding(
   input: EvmSccpDestinationBindingInput,
 ): EvmSccpDestinationBinding;
-export function bscTestnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
-export function tronSccpDestinationBinding(input: TronSccpDestinationBindingInput): TronSccpDestinationBinding;
-export function tronSccpDestinationBindingHash(input: TronSccpDestinationBindingInput): string;
+export function bscTestnetSccpDestinationBindingHash(
+  input: EvmSccpDestinationBindingInput,
+): string;
+export function tronSccpDestinationBinding(
+  input: TronSccpDestinationBindingInput,
+): TronSccpDestinationBinding;
+export function tronSccpDestinationBindingHash(
+  input: TronSccpDestinationBindingInput,
+): string;
 
 export interface TairaXorRouteHashInput {
   routeId?: string;
@@ -6347,9 +7221,11 @@ export interface TairaXorRouteHashInput {
   asset_key_hash?: string;
 }
 
-export interface TairaXorTransferPayloadHashInput extends TairaXorTransferPayloadInput {}
+export interface TairaXorTransferPayloadHashInput
+  extends TairaXorTransferPayloadInput {}
 
-export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
+export interface TairaXorBurnSourceEventDigestInput
+  extends TairaXorRouteHashInput {
   bridgeAddress?: string | BinaryLike | number[];
   bridge_address?: string | BinaryLike | number[];
   burnerAddress?: string | BinaryLike | number[];
@@ -6373,7 +7249,8 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   burn_nonce?: string | number | bigint;
 }
 
-export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXorTransferPayloadInput> {
+export interface TairaXorFinalizeFromTairaCallDataInput
+  extends Partial<TairaXorTransferPayloadInput> {
   proofBytes?: BinaryLike | number[];
   proof_bytes?: BinaryLike | number[];
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -6394,7 +7271,8 @@ export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXor
   payload_bytes?: BinaryLike | number[];
 }
 
-export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
+export interface TairaXorBurnToTairaCallDataInput
+  extends TairaXorRouteHashInput {
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
   /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
@@ -6408,7 +7286,8 @@ export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput
   amount: string | number | bigint;
 }
 
-export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHashInput {
+export interface TairaXorBurnToTairaAccountCallDataInput
+  extends TairaXorRouteHashInput {
   /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
   tairaRecipient?: string;
   /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
@@ -6420,12 +7299,26 @@ export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHa
   amount: string | number | bigint;
 }
 
+export interface TairaXorBscBurnToTairaCallDataInput
+  extends TairaXorBurnToTairaCallDataInput {}
+
+export interface TairaXorBscBurnToTairaAccountCallDataInput
+  extends TairaXorBurnToTairaAccountCallDataInput {}
+
 export function tairaXorRouteIdHash(routeId?: string): string;
+export function tairaXorBscRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
-export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
-export function buildTairaXorBscTransferPayload(input: TairaXorBscTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorTransferPayload(
+  input: TairaXorTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
+export function buildTairaXorBscTransferPayload(
+  input: TairaXorBscTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorTronToTairaTransferPayload(
   input: TairaXorTronToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
+export function buildTairaXorBscToTairaTransferPayload(
+  input: TairaXorBscToTairaTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
@@ -6448,14 +7341,25 @@ export function buildTairaXorSccpBurnRecordZkIvmRequest(
 export function buildTairaXorBscSccpBurnRecordZkIvmRequest(
   input: TairaXorBscSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorBscSccpBurnRecordZkIvmRequest>;
-export function tairaXorCanonicalTransferPayloadBytes(input: TairaXorTransferPayloadInput): Uint8Array;
+export function tairaXorCanonicalTransferPayloadBytes(
+  input: TairaXorTransferPayloadInput,
+): Uint8Array;
 export function tairaXorTransferMessageId(
   input: TairaXorTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
-export function tairaXorBscCanonicalTransferPayloadBytes(input: TairaXorBscTransferPayloadInput): Uint8Array;
+export function tairaXorBscCanonicalTransferPayloadBytes(
+  input: TairaXorBscTransferPayloadInput,
+): Uint8Array;
 export function tairaXorBscTransferMessageId(
   input: TairaXorBscTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorBscToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorBscToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorBscToTairaTransferMessageId(
+  input: TairaXorBscToTairaTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
 export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
@@ -6469,10 +7373,31 @@ export function tairaXorTransferPayloadHash(
   input: TairaXorTransferPayloadHashInput,
   options?: { prefix?: boolean },
 ): string;
-export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
-export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
-export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
-export function tairaXorBurnToTairaAccountCallData(input: TairaXorBurnToTairaAccountCallDataInput): string;
+export function tairaXorBscToTairaTransferPayloadHash(
+  input: TairaXorBscToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorBurnSourceEventDigest(
+  input: TairaXorBurnSourceEventDigestInput,
+): string;
+export function tairaXorBscBurnSourceEventDigest(
+  input: TairaXorBurnSourceEventDigestInput,
+): string;
+export function tairaXorFinalizeFromTairaCallData(
+  input: TairaXorFinalizeFromTairaCallDataInput,
+): string;
+export function tairaXorBurnToTairaCallData(
+  input: TairaXorBurnToTairaCallDataInput,
+): string;
+export function tairaXorBurnToTairaAccountCallData(
+  input: TairaXorBurnToTairaAccountCallDataInput,
+): string;
+export function tairaXorBscBurnToTairaCallData(
+  input: TairaXorBscBurnToTairaCallDataInput,
+): string;
+export function tairaXorBscBurnToTairaAccountCallData(
+  input: TairaXorBscBurnToTairaAccountCallDataInput,
+): string;
 export function isTairaXorTronBurnStartedEventName(value: unknown): boolean;
 export function bindTairaXorTronBurnStartedEvent(
   input: TairaXorTronBurnStartedEventInput,
@@ -6480,6 +7405,9 @@ export function bindTairaXorTronBurnStartedEvent(
 export function bindTairaXorTronToTairaSourceProofPackage(
   input: TairaXorTronToTairaSourceProofPackageInput,
 ): Readonly<TairaXorTronToTairaBoundSourceProofPackage>;
+export function bindTairaXorBscToTairaSourceProofPackage(
+  input: TairaXorBscToTairaSourceProofPackageInput,
+): Readonly<TairaXorBscToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;
@@ -6505,27 +7433,58 @@ export function sccpTonFullLightClientGateHash(
   input: SccpSourceAdapterEngineDeploymentInput,
 ): string;
 export function sccpSourceAdapterVerifierVkHash(
-  input: SccpDomainIdInput | { sourceDomain?: SccpDomainIdInput; source_domain?: SccpDomainIdInput; targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput },
+  input:
+    | SccpDomainIdInput
+    | {
+        sourceDomain?: SccpDomainIdInput;
+        source_domain?: SccpDomainIdInput;
+        targetDomain?: SccpDomainIdInput;
+        target_domain?: SccpDomainIdInput;
+      },
 ): string;
 export function sccpGroth16Bn254PublicSignalWords(
   input: SccpGroth16Bn254PublicSignalsInput,
 ): string[];
-export function buildSolanaSccpProofRequest(input: SolanaSccpWitnessInput): SolanaSccpProofRequest;
+export function buildSolanaSccpProofRequest(
+  input: SolanaSccpWitnessInput,
+): SolanaSccpProofRequest;
 export function wrapSolanaSccpProofResult(
   proofBytes: BinaryLike,
   request: SolanaSccpProofRequest,
 ): SolanaSccpProofResult;
-export function buildSolanaSccpSubmission(input: SolanaSccpSubmissionInput): SolanaSccpSubmission;
-export function canonicalSccpTransferPayloadBytes(payload: SccpTransferPayload): Uint8Array;
-export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
-export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
-export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
-export function canonicalSccpTokenMessagePayloadBytes(payload: SccpTokenMessagePayload): Uint8Array;
-export function canonicalSccpGovernancePayloadBytes(payload: SccpGovernancePayload): Uint8Array;
-export function canonicalSccpCommitmentBytes(commitment: SccpHubCommitment): Uint8Array;
-export function canonicalSccpPayloadEnvelopeBytes(payload: Record<string, unknown>): Uint8Array;
-export function canonicalSccpMerkleProofBytes(proof: Record<string, unknown>): Uint8Array;
-export function canonicalSccpMessageProofBundleBytes(bundle: Record<string, unknown>): Uint8Array;
+export function buildSolanaSccpSubmission(
+  input: SolanaSccpSubmissionInput,
+): SolanaSccpSubmission;
+export function canonicalSccpTransferPayloadBytes(
+  payload: SccpTransferPayload,
+): Uint8Array;
+export function canonicalSccpBurnPayloadBytes(
+  payload: SccpBurnPayload,
+): Uint8Array;
+export function canonicalSccpTokenAddPayloadBytes(
+  payload: SccpTokenAddPayload,
+): Uint8Array;
+export function canonicalSccpTokenControlPayloadBytes(
+  payload: SccpTokenControlPayload,
+): Uint8Array;
+export function canonicalSccpTokenMessagePayloadBytes(
+  payload: SccpTokenMessagePayload,
+): Uint8Array;
+export function canonicalSccpGovernancePayloadBytes(
+  payload: SccpGovernancePayload,
+): Uint8Array;
+export function canonicalSccpCommitmentBytes(
+  commitment: SccpHubCommitment,
+): Uint8Array;
+export function canonicalSccpPayloadEnvelopeBytes(
+  payload: Record<string, unknown>,
+): Uint8Array;
+export function canonicalSccpMerkleProofBytes(
+  proof: Record<string, unknown>,
+): Uint8Array;
+export function canonicalSccpMessageProofBundleBytes(
+  bundle: Record<string, unknown>,
+): Uint8Array;
 export function sccpBurnMessageId(
   payload: SccpBurnPayload,
   options?: { prefix?: boolean },
@@ -6554,7 +7513,9 @@ export function sccpGovernanceMessageId(
   payload: SccpGovernancePayload,
   options?: { prefix?: boolean },
 ): string;
-export function sccpTokenMessageTargetDomain(payload: SccpTokenMessagePayload): number;
+export function sccpTokenMessageTargetDomain(
+  payload: SccpTokenMessagePayload,
+): number;
 export function sccpParliamentCertificateHash(
   certificate: Uint8Array | ArrayBufferView | ArrayBuffer | string,
   options?: { prefix?: boolean },
@@ -6572,7 +7533,9 @@ export function sccpMerkleRootFromCommitment(
   proof: SccpMerkleProof,
   options?: { prefix?: boolean },
 ): string;
-export function validateSccpBurnBundleSurface(bundle: SccpBurnBundle): SccpBundleSurfaceValidation;
+export function validateSccpBurnBundleSurface(
+  bundle: SccpBurnBundle,
+): SccpBundleSurfaceValidation;
 export function validateSccpTokenMessageBundleSurface(
   bundle: SccpTokenMessageBundle,
 ): SccpBundleSurfaceValidation;
@@ -6651,8 +7614,12 @@ export interface SampleIsoMessageOptions {
   creationDateTime?: string | Date;
   settlementDate?: string | Date;
 }
-export function buildSamplePacs008Message(options?: SampleIsoMessageOptions): string;
-export function buildSamplePacs009Message(options?: SampleIsoMessageOptions): string;
+export function buildSamplePacs008Message(
+  options?: SampleIsoMessageOptions,
+): string;
+export function buildSamplePacs009Message(
+  options?: SampleIsoMessageOptions,
+): string;
 export interface CamtReportBalance {
   typeCode?: string;
   amount: IsoBridgeAmount;
@@ -6716,9 +7683,13 @@ export interface BuildCamt056Options {
 }
 export type SampleCamtMessageOptions = SampleIsoMessageOptions;
 export function buildCamt052Message(options: BuildCamt052Options): string;
-export function buildSampleCamt052Message(options?: SampleCamtMessageOptions): string;
+export function buildSampleCamt052Message(
+  options?: SampleCamtMessageOptions,
+): string;
 export function buildCamt056Message(options: BuildCamt056Options): string;
-export function buildSampleCamt056Message(options?: SampleCamtMessageOptions): string;
+export function buildSampleCamt056Message(
+  options?: SampleCamtMessageOptions,
+): string;
 
 /**
  * Numeric values accepted by builder helpers. Prefer decimal strings for exact
@@ -6871,7 +7842,8 @@ export interface ZkAtPolicyCommitment {
   policy_digest: number[] | null;
 }
 
-export interface ZkAtAuthenticatorEnvelopeInput extends ZkAtPolicyCommitmentInput {
+export interface ZkAtAuthenticatorEnvelopeInput
+  extends ZkAtPolicyCommitmentInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -7272,7 +8244,10 @@ export interface SilentThresholdCredentialDevProofFixture {
   production: false;
   proof_bytes: number[];
   proofBytes: Buffer;
-  commitments: Omit<SilentThresholdCredentialCommitments, "commitment_kinds" | "source_digests" | "version">;
+  commitments: Omit<
+    SilentThresholdCredentialCommitments,
+    "commitment_kinds" | "source_digests" | "version"
+  >;
   public_inputs: SilentThresholdCredentialPublicInputs;
   publicInputBytes: Buffer;
   envelope: Buffer;
@@ -7419,7 +8394,10 @@ export interface ZkX509IdentityDevProofFixture {
   production: false;
   proof_bytes: number[];
   proofBytes: Buffer;
-  commitments: Omit<ZkX509IdentityCommitments, "commitment_kinds" | "source_digests" | "version">;
+  commitments: Omit<
+    ZkX509IdentityCommitments,
+    "commitment_kinds" | "source_digests" | "version"
+  >;
   public_inputs: ZkX509IdentityPublicInputs;
   publicInputBytes: Buffer;
   envelope: Buffer;
@@ -7728,7 +8706,10 @@ export interface SisHintsCredentialDevProofFixture {
   production: false;
   proof_bytes: number[];
   proofBytes: Buffer;
-  commitments: Omit<SisHintsCredentialCommitments, "commitment_kinds" | "source_digests" | "version">;
+  commitments: Omit<
+    SisHintsCredentialCommitments,
+    "commitment_kinds" | "source_digests" | "version"
+  >;
   public_inputs: SisHintsCredentialPublicInputs;
   publicInputBytes: Buffer;
   envelope: Buffer;
@@ -8155,7 +9136,13 @@ export interface ContractEventStreamOptions {
 
 export interface CanonicalRequestAuth {
   accountId: string;
-  privateKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | string | number[];
+  privateKey:
+    | Buffer
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView
+    | string
+    | number[];
 }
 
 export interface PermissionedIterableOptions {
@@ -8230,7 +9217,8 @@ export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
   assetId?: string;
 }
 
-export interface AccountTransactionIteratorOptions extends PaginationIteratorOptions {
+export interface AccountTransactionIteratorOptions
+  extends PaginationIteratorOptions {
   assetId?: string;
 }
 
@@ -8349,7 +9337,8 @@ export interface SubscriptionPlanListOptions {
   signal?: AbortSignal;
 }
 
-export interface SubscriptionPlanIteratorOptions extends SubscriptionPlanListOptions {
+export interface SubscriptionPlanIteratorOptions
+  extends SubscriptionPlanListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
@@ -8519,7 +9508,8 @@ export interface CaptureSumeragiTelemetryOptions {
   timestamp?: number;
 }
 
-export interface AppendSumeragiTelemetryOptions extends CaptureSumeragiTelemetryOptions {
+export interface AppendSumeragiTelemetryOptions
+  extends CaptureSumeragiTelemetryOptions {
   fs?: {
     mkdir?: typeof import("node:fs/promises").mkdir;
     appendFile?: typeof import("node:fs/promises").appendFile;
@@ -8562,7 +9552,11 @@ export interface ToriiAccountListItem {
 export type ToriiDomainListItem = ToriiAccountListItem;
 export interface ToriiAssetDefinitionAliasBinding {
   alias: string;
-  status: "permanent" | "leased_active" | "leased_grace" | "expired_pending_cleanup";
+  status:
+    | "permanent"
+    | "leased_active"
+    | "leased_grace"
+    | "expired_pending_cleanup";
   lease_expiry_ms?: number | null;
   grace_until_ms?: number | null;
   bound_at_ms: number;
@@ -9264,7 +10258,10 @@ export interface ToriiOtherEvent {
   summary: string;
 }
 
-export type ToriiEventPayload = ToriiPipelineEvent | ToriiDataEvent | ToriiOtherEvent;
+export type ToriiEventPayload =
+  | ToriiPipelineEvent
+  | ToriiDataEvent
+  | ToriiOtherEvent;
 
 export interface ToriiSseEvent<T = ToriiEventPayload> {
   event: string | null;
@@ -9336,14 +10333,22 @@ export class ConnectError extends Error implements ConnectErrorConvertible {
   readonly httpStatus?: number;
   readonly underlying?: string;
 
-  telemetryAttributes(options?: ConnectErrorTelemetryOptions): Record<string, string>;
+  telemetryAttributes(
+    options?: ConnectErrorTelemetryOptions,
+  ): Record<string, string>;
   toConnectError(): ConnectError;
 }
 
 export type ConnectQueueErrorKind = "overflow" | "expired";
 
-export class ConnectQueueError extends Error implements ConnectErrorConvertible {
-  constructor(kind: ConnectQueueErrorKind, options?: { limit?: number; ttlMs?: number });
+export class ConnectQueueError
+  extends Error
+  implements ConnectErrorConvertible
+{
+  constructor(
+    kind: ConnectQueueErrorKind,
+    options?: { limit?: number; ttlMs?: number },
+  );
 
   readonly kind: ConnectQueueErrorKind;
   readonly limit?: number;
@@ -9645,7 +10650,13 @@ export interface SorafsGatewayFetchOptions {
   manifestCidHex?: string;
   clientId?: string;
   telemetryRegion?: string;
-  rolloutPhase?: "canary" | "ramp" | "default" | "stage-a" | "stage-b" | "stage-c";
+  rolloutPhase?:
+    | "canary"
+    | "ramp"
+    | "default"
+    | "stage-a"
+    | "stage-b"
+    | "stage-c";
   maxPeers?: number;
   retryBudget?: number;
   transportPolicy?: "soranet-first" | "soranet-strict" | "direct-only";
@@ -9727,7 +10738,11 @@ export interface SorafsGatewayChunkReceipt {
   bytes: number;
 }
 
-export type SorafsGatewayProviderMix = "mixed" | "direct-only" | "gateway-only" | "none";
+export type SorafsGatewayProviderMix =
+  | "mixed"
+  | "direct-only"
+  | "gateway-only"
+  | "none";
 
 export interface SorafsGatewayScoreboardMetadata {
   providerCount: number;
@@ -9882,10 +10897,7 @@ export class SorafsGatewayFetchError extends Error {
   readonly details: Record<string, unknown> | null;
   readonly original: Error | null;
   readonly payload: Record<string, unknown>;
-  constructor(
-    payload?: Record<string, unknown>,
-    original?: Error | null,
-  );
+  constructor(payload?: Record<string, unknown>, original?: Error | null);
 }
 
 export function sorafsGatewayFetch(
@@ -9978,9 +10990,15 @@ export class SoranetPuzzleError extends Error {
 export class SoranetPuzzleClient {
   constructor(baseUrl: string, options?: SoranetPuzzleClientOptions);
   readonly baseUrl: string;
-  getPuzzleConfig(options?: SoranetPuzzleMintOptions): Promise<SoranetPuzzleConfigSnapshot>;
-  mintPuzzleTicket(options?: SoranetPuzzleMintOptions): Promise<SoranetPuzzleTicketResponse>;
-  getTokenConfig(options?: SoranetPuzzleMintOptions): Promise<SoranetTokenConfigSnapshot>;
+  getPuzzleConfig(
+    options?: SoranetPuzzleMintOptions,
+  ): Promise<SoranetPuzzleConfigSnapshot>;
+  mintPuzzleTicket(
+    options?: SoranetPuzzleMintOptions,
+  ): Promise<SoranetPuzzleTicketResponse>;
+  getTokenConfig(
+    options?: SoranetPuzzleMintOptions,
+  ): Promise<SoranetTokenConfigSnapshot>;
   mintAdmissionToken(
     transcriptHashHex: string,
     options?: SoranetTokenMintOptions,
@@ -9989,7 +11007,9 @@ export class SoranetPuzzleClient {
 
 export interface ToriiClientConfigSource extends ToriiClientRetryOptions {
   retryTelemetryHook?: (event: ToriiRetryTelemetryEvent) => void;
-  insecureTransportTelemetryHook?: (event: InsecureTransportTelemetryEvent) => void;
+  insecureTransportTelemetryHook?: (
+    event: InsecureTransportTelemetryEvent,
+  ) => void;
   torii?: {
     apiTokens?: ReadonlyArray<string>;
   };
@@ -10009,7 +11029,9 @@ export interface ResolvedToriiClientConfig {
   apiToken: string | null;
   retryProfiles: Record<string, ToriiResolvedRetryProfile>;
   retryTelemetryHook: ((event: ToriiRetryTelemetryEvent) => void) | null;
-  insecureTransportTelemetryHook: ((event: InsecureTransportTelemetryEvent) => void) | null;
+  insecureTransportTelemetryHook:
+    | ((event: InsecureTransportTelemetryEvent) => void)
+    | null;
 }
 
 export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
@@ -10023,7 +11045,9 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   sorafsGatewayFetch?: typeof sorafsGatewayFetch;
   generateDaProofSummary?: typeof generateDaProofSummary;
   retryTelemetryHook?: (event: ToriiRetryTelemetryEvent) => void;
-  insecureTransportTelemetryHook?: (event: InsecureTransportTelemetryEvent) => void;
+  insecureTransportTelemetryHook?: (
+    event: InsecureTransportTelemetryEvent,
+  ) => void;
 }
 
 export interface TransactionStatusPollOptions {
@@ -10202,7 +11226,11 @@ export function createConnectSessionPreview(
   options: ConnectSessionPreviewOptions,
 ): ConnectSessionPreview;
 
-export type ConnectQueueState = "healthy" | "throttled" | "quarantined" | "disabled";
+export type ConnectQueueState =
+  | "healthy"
+  | "throttled"
+  | "quarantined"
+  | "disabled";
 
 export interface ConnectQueueDirectionStats {
   depth: number;
@@ -10271,18 +11299,22 @@ export interface ConnectQueueRootOptions {
   allowEnvOverride?: boolean;
 }
 
-export function defaultConnectQueueRoot(options?: ConnectQueueRootOptions): string;
+export function defaultConnectQueueRoot(
+  options?: ConnectQueueRootOptions,
+): string;
 
 export function deriveConnectSessionDirectory(
   options: { sid: BinaryLike | string } & ConnectQueueRootOptions,
 ): string;
 
-export function readConnectQueueSnapshot(options: {
-  sid?: BinaryLike | string;
-  snapshotPath?: string;
-  warningWatermark?: number;
-  dropWatermark?: number;
-} & ConnectQueueRootOptions): Promise<{ snapshot: ConnectQueueSnapshot; statePath: string }>;
+export function readConnectQueueSnapshot(
+  options: {
+    sid?: BinaryLike | string;
+    snapshotPath?: string;
+    warningWatermark?: number;
+    dropWatermark?: number;
+  } & ConnectQueueRootOptions,
+): Promise<{ snapshot: ConnectQueueSnapshot; statePath: string }>;
 
 export function writeConnectQueueSnapshot(
   snapshot: ConnectQueueSnapshot,
@@ -10294,7 +11326,10 @@ export function updateConnectQueueSnapshot(
   updater:
     | Partial<ConnectQueueSnapshot>
     | ((snapshot: ConnectQueueSnapshot) => ConnectQueueSnapshot | void),
-  options?: ConnectQueueRootOptions & { warningWatermark?: number; dropWatermark?: number },
+  options?: ConnectQueueRootOptions & {
+    warningWatermark?: number;
+    dropWatermark?: number;
+  },
 ): Promise<ConnectQueueSnapshot>;
 
 export function appendConnectQueueMetric(
@@ -10309,7 +11344,8 @@ export function exportConnectQueueEvidence(
   options?: ConnectQueueRootOptions,
 ): Promise<ConnectQueueEvidenceExportResult>;
 
-export interface BootstrapConnectPreviewOptions extends ConnectSessionPreviewOptions {
+export interface BootstrapConnectPreviewOptions
+  extends ConnectSessionPreviewOptions {
   register?: boolean;
   sessionOptions?: {
     node?: string | null;
@@ -10319,7 +11355,12 @@ export interface BootstrapConnectPreviewOptions extends ConnectSessionPreviewOpt
 export interface BootstrapConnectPreviewResult {
   preview: ConnectSessionPreview;
   session: ConnectSessionResponse | null;
-  tokens: { wallet: string; app: string; management: string; relay: string } | null;
+  tokens: {
+    wallet: string;
+    app: string;
+    management: string;
+    relay: string;
+  } | null;
 }
 
 export function bootstrapConnectPreviewSession(
@@ -10435,19 +11476,25 @@ export interface ConnectWebSocketParams {
   allowInsecure?: boolean;
 }
 
-export interface ConnectWebSocketDialOptions<T = unknown> extends ConnectWebSocketParams {
+export interface ConnectWebSocketDialOptions<T = unknown>
+  extends ConnectWebSocketParams {
   baseUrl: string;
   protocols?: ConnectWebSocketProtocols;
   websocketOptions?: unknown;
   WebSocketImpl?: ConnectWebSocketConstructor<T>;
-  insecureTransportTelemetryHook?: (event: InsecureTransportTelemetryEvent) => void;
+  insecureTransportTelemetryHook?: (
+    event: InsecureTransportTelemetryEvent,
+  ) => void;
 }
 
-export interface ClientConnectWebSocketOptions<T = unknown> extends ConnectWebSocketParams {
+export interface ClientConnectWebSocketOptions<T = unknown>
+  extends ConnectWebSocketParams {
   protocols?: ConnectWebSocketProtocols;
   websocketOptions?: unknown;
   WebSocketImpl?: ConnectWebSocketConstructor<T>;
-  insecureTransportTelemetryHook?: (event: InsecureTransportTelemetryEvent) => void;
+  insecureTransportTelemetryHook?: (
+    event: InsecureTransportTelemetryEvent,
+  ) => void;
 }
 
 export interface ToriiSumeragiMembershipSnapshot {
@@ -10615,7 +11662,11 @@ export interface ToriiGovernanceStatusSnapshot {
   sealed_lane_aliases: ReadonlyArray<string>;
 }
 
-export type ToriiGovernanceProposalStatus = "Proposed" | "Approved" | "Rejected" | "Enacted";
+export type ToriiGovernanceProposalStatus =
+  | "Proposed"
+  | "Approved"
+  | "Rejected"
+  | "Enacted";
 
 export interface ToriiGovernanceDeployContractProposal {
   contract_address: string;
@@ -10890,7 +11941,8 @@ export interface ToriiGovernanceZkBallotProofRequest {
   ballot: JsonValue;
 }
 
-export interface ToriiGovernanceBallotResponse extends ToriiGovernanceDraftResponse {
+export interface ToriiGovernanceBallotResponse
+  extends ToriiGovernanceDraftResponse {
   accepted: boolean;
   reason: string | null;
 }
@@ -11160,7 +12212,9 @@ export interface ToriiPipelinePreflight {
     successful_claim_fee_exempt_authorities: string[];
   };
   raw: Readonly<Record<string, unknown>>;
-  isStatusStalled(status: ToriiStatusPayload | Record<string, unknown>): boolean;
+  isStatusStalled(
+    status: ToriiStatusPayload | Record<string, unknown>,
+  ): boolean;
 }
 
 export function statusLivenessElapsedMs(
@@ -11527,7 +12581,12 @@ export interface ToriiSccpCounterpartySubmissionTemplate {
   requiredArguments: ReadonlyArray<ToriiSccpSubmissionArgument>;
 }
 
-export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron" | "Substrate";
+export type ToriiSccpChainFamily =
+  | "Evm"
+  | "Solana"
+  | "Ton"
+  | "Tron"
+  | "Substrate";
 
 export type ToriiSccpNormalizedCodecValue =
   | { kind: "TextUtf8"; value: string }
@@ -12048,7 +13107,8 @@ export interface SumeragiEvidenceRecordBase {
   recorded_ms: number;
 }
 
-export interface SumeragiDoubleVoteEvidenceRecord extends SumeragiEvidenceRecordBase {
+export interface SumeragiDoubleVoteEvidenceRecord
+  extends SumeragiEvidenceRecordBase {
   kind: "DoublePrepare" | "DoubleCommit";
   phase: "Prepare" | "Commit" | "NewView";
   height: number;
@@ -12059,7 +13119,8 @@ export interface SumeragiDoubleVoteEvidenceRecord extends SumeragiEvidenceRecord
   block_hash_2: string;
 }
 
-export interface SumeragiInvalidQcEvidenceRecord extends SumeragiEvidenceRecordBase {
+export interface SumeragiInvalidQcEvidenceRecord
+  extends SumeragiEvidenceRecordBase {
   kind: "InvalidQc";
   height: number;
   view: number;
@@ -12069,7 +13130,8 @@ export interface SumeragiInvalidQcEvidenceRecord extends SumeragiEvidenceRecordB
   reason: string;
 }
 
-export interface SumeragiInvalidProposalEvidenceRecord extends SumeragiEvidenceRecordBase {
+export interface SumeragiInvalidProposalEvidenceRecord
+  extends SumeragiEvidenceRecordBase {
   kind: "InvalidProposal";
   height: number;
   view: number;
@@ -12079,7 +13141,8 @@ export interface SumeragiInvalidProposalEvidenceRecord extends SumeragiEvidenceR
   reason: string;
 }
 
-export interface SumeragiCensorshipEvidenceRecord extends SumeragiEvidenceRecordBase {
+export interface SumeragiCensorshipEvidenceRecord
+  extends SumeragiEvidenceRecordBase {
   kind: "Censorship";
   tx_hash: string;
   receipt_count: number;
@@ -12088,7 +13151,8 @@ export interface SumeragiCensorshipEvidenceRecord extends SumeragiEvidenceRecord
   signers: ReadonlyArray<string>;
 }
 
-export interface SumeragiUnknownEvidenceRecord extends SumeragiEvidenceRecordBase {
+export interface SumeragiUnknownEvidenceRecord
+  extends SumeragiEvidenceRecordBase {
   detail?: string;
 }
 
@@ -12183,7 +13247,9 @@ export interface KaigiRelayHealthEvent {
   call: KaigiRelayEventCallRef;
 }
 
-export type KaigiRelayEventPayload = KaigiRelayRegistrationEvent | KaigiRelayHealthEvent;
+export type KaigiRelayEventPayload =
+  | KaigiRelayRegistrationEvent
+  | KaigiRelayHealthEvent;
 
 export interface KaigiRelayEventsOptions {
   domain?: string;
@@ -12269,7 +13335,9 @@ export interface KaigiCallEndedEvent {
   ended_at_ms: number;
 }
 
-export type KaigiCallEventPayload = KaigiCallRosterUpdatedEvent | KaigiCallEndedEvent;
+export type KaigiCallEventPayload =
+  | KaigiCallRosterUpdatedEvent
+  | KaigiCallEndedEvent;
 
 export interface KaigiCallEventsOptions {
   kind?: string | ReadonlyArray<string>;
@@ -12727,7 +13795,8 @@ type MintAndTransferVariants = ExclusiveSingleOrMany<
   ReadonlyArray<MintTransferSpec>
 >;
 
-export type MintAndTransferInput = MintAndTransferInputBase & MintAndTransferVariants;
+export type MintAndTransferInput = MintAndTransferInputBase &
+  MintAndTransferVariants;
 
 /**
  * Parameters for {@link buildRegisterDomainAndMintTransaction}. Supply either
@@ -12756,7 +13825,8 @@ type RegisterDomainMintOptions = ExclusiveSingleOrManyOptional<
   ReadonlyArray<DomainMintSpec>
 >;
 
-export type RegisterDomainAndMintInput = RegisterDomainAndMintInputBase & RegisterDomainMintOptions;
+export type RegisterDomainAndMintInput = RegisterDomainAndMintInputBase &
+  RegisterDomainMintOptions;
 
 /**
  * Parameters for {@link buildRegisterAccountAndTransferTransaction}. Provide
@@ -12842,8 +13912,8 @@ type RegisterAssetDefinitionTransferOptions = ExclusiveSingleOrManyOptional<
 
 export type RegisterAssetDefinitionMintAndTransferInput =
   RegisterAssetDefinitionAndMintInputBase &
-  RegisterAssetDefinitionMintRequired &
-  RegisterAssetDefinitionTransferOptions;
+    RegisterAssetDefinitionMintRequired &
+    RegisterAssetDefinitionTransferOptions;
 
 export type KaigiIdLike =
   | string
@@ -12859,7 +13929,11 @@ export type KaigiPrivacyModeValue = {
   state?: unknown;
 };
 
-export type KaigiPrivacyModeInput = string | KaigiPrivacyModeValue | null | undefined;
+export type KaigiPrivacyModeInput =
+  | string
+  | KaigiPrivacyModeValue
+  | null
+  | undefined;
 
 export interface KaigiRelayHopInput {
   relayId: string;
@@ -13170,7 +14244,13 @@ export interface FinalizeElectionInstructionInput {
 }
 
 export type IsoBridgeStatus = "Pending" | "Accepted" | "Rejected";
-export type Pacs002StatusCode = "ACTC" | "ACSP" | "ACSC" | "ACWC" | "PDNG" | "RJCT";
+export type Pacs002StatusCode =
+  | "ACTC"
+  | "ACSP"
+  | "ACSC"
+  | "ACWC"
+  | "PDNG"
+  | "RJCT";
 
 export interface IsoMessageSubmissionResponseBase {
   message_id: string;
@@ -13198,11 +14278,14 @@ export interface IsoMessageSubmissionResponseBase {
   asset_id: string | null;
 }
 
-export interface IsoPacs008SubmissionResponse extends IsoMessageSubmissionResponseBase {}
+export interface IsoPacs008SubmissionResponse
+  extends IsoMessageSubmissionResponseBase {}
 
-export interface IsoPacs009SubmissionResponse extends IsoMessageSubmissionResponseBase {}
+export interface IsoPacs009SubmissionResponse
+  extends IsoMessageSubmissionResponseBase {}
 
-export interface IsoMessageStatusResponse extends IsoMessageSubmissionResponseBase {
+export interface IsoMessageStatusResponse
+  extends IsoMessageSubmissionResponseBase {
   detail: string | null;
   updated_at_ms: number;
 }
@@ -14600,7 +15683,8 @@ export interface RemoveSmartContractBytesTransactionInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
-export interface SubmitTransactionAndWaitOptions extends TransactionStatusPollOptions {
+export interface SubmitTransactionAndWaitOptions
+  extends TransactionStatusPollOptions {
   hashHex: string;
 }
 
@@ -14674,8 +15758,12 @@ export declare class ToriiDataModelCompatibilityError extends Error {
   readonly cause?: unknown;
 }
 
-export declare function extractPipelineStatusKind(payload: unknown): string | null;
-export declare function extractPipelineRejectionReason(payload: unknown): string | null;
+export declare function extractPipelineStatusKind(
+  payload: unknown,
+): string | null;
+export declare function extractPipelineRejectionReason(
+  payload: unknown,
+): string | null;
 export declare function decodePdpCommitmentHeader(
   headers?:
     | Headers
@@ -14732,12 +15820,24 @@ export declare class ToriiBrowserHttpError extends Error {
 export declare class ToriiBrowserClient {
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
   listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerAccount(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAccount(
+    accountId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerDomain(domainId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerDomain(
+    domainId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerAsset(assetId: string, options?: Record<string, unknown>): Promise<unknown>;
-  listAccountAssets(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAsset(
+    assetId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listAccountAssets(
+    accountId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: TransactionQueryOptions,
@@ -14748,33 +15848,77 @@ export declare class ToriiBrowserClient {
   queryVisibleTransactions<T = ToriiAccountTransactionItem>(
     options?: TransactionQueryOptions,
   ): Promise<ToriiIterableListResponse<T>>;
-  listAssetHolders(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAssetHolders(
+    assetDefinitionId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
-  getAssetDefinition(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
-  listExplorerAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerAssetDefinitionEconometrics(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerAssetDefinitionSnapshot(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getAssetDefinition(
+    assetDefinitionId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listExplorerAssetDefinitions(
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getExplorerAssetDefinitionEconometrics(
+    assetDefinitionId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getExplorerAssetDefinitionSnapshot(
+    assetDefinitionId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerNft(nftId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerNft(
+    nftId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerRwa(rwaId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerRwa(
+    rwaId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerBlocks(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerBlock(identifier: string | number | bigint, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerBlock(
+    identifier: string | number | bigint,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
   listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
-  listLatestExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerTransaction(hash: string, options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerTransactions(
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getExplorerTransaction(
+    hash: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
-  listLatestExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerInstruction(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
-  getExplorerInstructionContractView(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerInstructions(
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getExplorerInstruction(
+    transactionHash: string,
+    index: number,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getExplorerInstructionContractView(
+    transactionHash: string,
+    index: number,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
-  getKaigiRelay(relayId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getKaigiRelay(
+    relayId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   getKaigiRelaysHealth(options?: Record<string, unknown>): Promise<unknown>;
-  deployContract(request: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
+  deployContract(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
 }
 
 export declare class ToriiClient {
@@ -14961,9 +16105,9 @@ export declare class ToriiClient {
     data: ArrayBufferView | ArrayBuffer | string,
     options: { contentType: string },
   ): Promise<ToriiAttachmentMetadata>;
-  listAttachments(
-    options?: { signal?: AbortSignal },
-  ): Promise<ReadonlyArray<ToriiAttachmentMetadata>>;
+  listAttachments(options?: {
+    signal?: AbortSignal;
+  }): Promise<ReadonlyArray<ToriiAttachmentMetadata>>;
   getAttachment(
     attachmentId: string,
     options?: { signal?: AbortSignal },
@@ -14994,8 +16138,13 @@ export declare class ToriiClient {
     payload: ToriiVerifyingKeyUpdatePayload,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
-  evaluateAliasVoprf(blindedElementHex: string): Promise<AliasVoprfEvaluateResponse>;
-  resolveAlias(alias: string, options?: CanonicalRequestOptions): Promise<AliasResolutionDto | null>;
+  evaluateAliasVoprf(
+    blindedElementHex: string,
+  ): Promise<AliasVoprfEvaluateResponse>;
+  resolveAlias(
+    alias: string,
+    options?: CanonicalRequestOptions,
+  ): Promise<AliasResolutionDto | null>;
   resolveAliasByIndex(
     index: number | string | bigint,
     options?: CanonicalRequestOptions,
@@ -15004,21 +16153,27 @@ export declare class ToriiClient {
     accountId: string,
     options?: AliasLookupByAccountOptions,
   ): Promise<AliasLookupByAccountResponse | null>;
-  listRamLfeProgramPolicies(
-    options?: { signal?: AbortSignal },
-  ): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
+  listRamLfeProgramPolicies(options?: {
+    signal?: AbortSignal;
+  }): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
   executeRamLfeProgram(
     programId: string,
     options: { encryptedInput: string; signal?: AbortSignal },
   ): Promise<Record<string, unknown> | null>;
-  verifyRamLfeReceipt(
-    options: { receipt: Record<string, unknown>; outputHex?: string; signal?: AbortSignal },
-  ): Promise<Record<string, unknown>>;
-  listSorafsPinManifests(options?: SorafsPinListOptions): Promise<SorafsPinListResponse>;
+  verifyRamLfeReceipt(options: {
+    receipt: Record<string, unknown>;
+    outputHex?: string;
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown>>;
+  listSorafsPinManifests(
+    options?: SorafsPinListOptions,
+  ): Promise<SorafsPinListResponse>;
   iterateSorafsPinManifests(
     options?: SorafsPinListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsManifestRecord, void, unknown>;
-  listSorafsAliases(options?: SorafsAliasListOptions): Promise<SorafsAliasListResponse>;
+  listSorafsAliases(
+    options?: SorafsAliasListOptions,
+  ): Promise<SorafsAliasListResponse>;
   iterateSorafsAliases(
     options?: SorafsAliasListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsAliasRecord, void, unknown>;
@@ -15054,9 +16209,9 @@ export declare class ToriiClient {
     providerIdHex?: string | Buffer | ArrayBuffer | ArrayBufferView | null;
     signal?: AbortSignal;
   }): Promise<SorafsFetchResponse>;
-  getSorafsStorageState(
-    options?: { signal?: AbortSignal },
-  ): Promise<SorafsStorageStateResponse>;
+  getSorafsStorageState(options?: {
+    signal?: AbortSignal;
+  }): Promise<SorafsStorageStateResponse>;
   getSorafsManifest(
     manifestIdHex: string,
     options?: { signal?: AbortSignal },
@@ -15067,7 +16222,12 @@ export declare class ToriiClient {
   ): Promise<DaManifestFetchResponse>;
   getDaManifestToDir(
     storageTicketHex: string,
-    options?: { outputDir?: string; signal?: AbortSignal; label?: string; blockHashHex?: string },
+    options?: {
+      outputDir?: string;
+      signal?: AbortSignal;
+      label?: string;
+      blockHashHex?: string;
+    },
   ): Promise<{
     manifest: DaManifestFetchResponse;
     paths: DaManifestPersistedPaths;
@@ -15150,7 +16310,9 @@ export declare class ToriiClient {
     request: RevokeSpaceDirectoryManifestRequest,
     options?: { signal?: AbortSignal },
   ): Promise<unknown | null>;
-  submitTransaction(payload: ArrayBufferView | ArrayBuffer | Buffer): Promise<unknown>;
+  submitTransaction(
+    payload: ArrayBufferView | ArrayBuffer | Buffer,
+  ): Promise<unknown>;
   getTransactionStatus(
     hashHex: string,
     options?: {
@@ -15191,7 +16353,9 @@ export declare class ToriiClient {
   getPipelineRecoveryTyped(
     height: number | string | bigint,
   ): Promise<ToriiPipelineRecoverySidecar | null>;
-  getPipelinePreflight(options?: { signal?: AbortSignal }): Promise<ToriiPipelinePreflight>;
+  getPipelinePreflight(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiPipelinePreflight>;
   getPipelineRecoveryFastpqProofs(
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
@@ -15200,11 +16364,15 @@ export declare class ToriiClient {
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiPipelineRecoveryFastpqProofs | null>;
-  getHealth(options?: { signal?: AbortSignal }): Promise<ToriiHealthStatus | null>;
+  getHealth(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiHealthStatus | null>;
   getConfiguration(): Promise<unknown | null>;
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
   getConfidentialGasSchedule(): Promise<ConfidentialGasSchedule | null>;
-  getStatusSnapshot(options?: { signal?: AbortSignal }): Promise<ToriiStatusSnapshot>;
+  getStatusSnapshot(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiStatusSnapshot>;
   deploySoracloudAppInfra(
     request: SoracloudAppInfraRequest | Record<string, unknown>,
     options?: { signal?: AbortSignal },
@@ -15213,24 +16381,30 @@ export declare class ToriiClient {
     request: SoracloudAppInfraRequest | Record<string, unknown>,
     options?: { signal?: AbortSignal },
   ): Promise<unknown>;
-  getSoracloudAppInfraStatus(
-    options?: { appName?: string; auditLimit?: NumericLike; signal?: AbortSignal },
-  ): Promise<unknown>;
+  getSoracloudAppInfraStatus(options?: {
+    appName?: string;
+    auditLimit?: NumericLike;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
   getSoracloudNamedAppInfraStatus(
     appName: string,
     options?: { auditLimit?: NumericLike; signal?: AbortSignal },
   ): Promise<unknown>;
-  getNetworkTimeNow(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiNetworkTimeNow>;
-  getNetworkTimeStatus(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiNetworkTimeStatus>;
-  getNodeCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiNodeCapabilities>;
-  getSccpCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiSccpCapabilities>;
-  getSccpProofManifests(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiSccpProofManifestSet>;
+  getNetworkTimeNow(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiNetworkTimeNow>;
+  getNetworkTimeStatus(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiNetworkTimeStatus>;
+  getNodeCapabilities(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiNodeCapabilities>;
+  getSccpCapabilities(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSccpCapabilities>;
+  getSccpProofManifests(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSccpProofManifestSet>;
   submitBridgeProof(
     payload: ToriiBridgeProofSubmitPayload,
     options?: { signal?: AbortSignal },
@@ -15247,16 +16421,18 @@ export declare class ToriiClient {
     messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
     options?: ToriiSccpEvmDestinationQueryOptions,
   ): Promise<ToriiSccpCounterpartyProofJob>;
-  getRuntimeAbiActive(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiRuntimeAbiActiveResponse>;
-  getRuntimeAbiHash(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiRuntimeAbiHashResponse>;
-  getRuntimeMetrics(options?: { signal?: AbortSignal }): Promise<ToriiRuntimeMetrics>;
-  listRuntimeUpgrades(
-    options?: { signal?: AbortSignal },
-  ): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
+  getRuntimeAbiActive(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiRuntimeAbiActiveResponse>;
+  getRuntimeAbiHash(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiRuntimeAbiHashResponse>;
+  getRuntimeMetrics(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiRuntimeMetrics>;
+  listRuntimeUpgrades(options?: {
+    signal?: AbortSignal;
+  }): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
   proposeRuntimeUpgrade(
     manifest: ToriiRuntimeUpgradeManifestInput,
     options?: { signal?: AbortSignal },
@@ -15269,8 +16445,12 @@ export declare class ToriiClient {
     idHex: string | BinaryLike,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
-  listPeers(options?: { signal?: AbortSignal }): Promise<Array<Record<string, unknown>>>;
-  listPeersTyped(options?: { signal?: AbortSignal }): Promise<Array<ToriiPeerRecord>>;
+  listPeers(options?: {
+    signal?: AbortSignal;
+  }): Promise<Array<Record<string, unknown>>>;
+  listPeersTyped(options?: {
+    signal?: AbortSignal;
+  }): Promise<Array<ToriiPeerRecord>>;
   listTelemetryPeersInfo(options?: {
     signal?: AbortSignal;
   }): Promise<ReadonlyArray<ToriiTelemetryPeerInfo>>;
@@ -15283,7 +16463,9 @@ export declare class ToriiClient {
       signal?: AbortSignal;
     },
   ): Promise<ToriiExplorerAccountQrSnapshot>;
-  getVpnProfile(options?: { signal?: AbortSignal }): Promise<ToriiVpnProfile | null>;
+  getVpnProfile(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiVpnProfile | null>;
   createVpnQuote(
     request: {
       exitClass?: string;
@@ -15335,7 +16517,10 @@ export declare class ToriiClient {
     signal?: AbortSignal;
     canonicalAuth: CanonicalRequestAuth;
   }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
-  getSnsPolicy(suffixId: number, options?: { signal?: AbortSignal }): Promise<SnsSuffixPolicy>;
+  getSnsPolicy(
+    suffixId: number,
+    options?: { signal?: AbortSignal },
+  ): Promise<SnsSuffixPolicy>;
   getSnsRegistration(
     selector: string,
     options?: { signal?: AbortSignal },
@@ -15396,15 +16581,15 @@ export declare class ToriiClient {
     referendumId: string,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceLocksResult>;
-  getGovernanceUnlockStats(
-    options?: { signal?: AbortSignal },
-  ): Promise<Record<string, unknown> | null>;
-  getGovernanceUnlockStatsTyped(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceUnlockStats>;
-  getGovernanceCouncilCurrent(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilCurrentResponse>;
+  getGovernanceUnlockStats(options?: {
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown> | null>;
+  getGovernanceUnlockStatsTyped(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiGovernanceUnlockStats>;
+  getGovernanceCouncilCurrent(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiGovernanceCouncilCurrentResponse>;
   governanceDeriveCouncilVrf(
     payload: ToriiGovernanceCouncilDeriveRequest,
     options?: { signal?: AbortSignal },
@@ -15468,27 +16653,49 @@ export declare class ToriiClient {
     namespaces: string | string[],
     options?: { signal?: AbortSignal },
   ): Promise<ToriiProtectedNamespacesApplyResponse>;
-  getProtectedNamespaces(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiProtectedNamespacesGetResponse>;
-  getSumeragiStatus(options?: { signal?: AbortSignal }): Promise<Record<string, unknown>>;
-  getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
-  getSumeragiPacemaker(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiPacemakerResponse | null>;
-  getSumeragiQc(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiQcSnapshot>;
+  getProtectedNamespaces(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiProtectedNamespacesGetResponse>;
+  getSumeragiStatus(options?: {
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown>>;
+  getSumeragiStatusTyped(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiStatus>;
+  getSumeragiPacemaker(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiPacemakerResponse | null>;
+  getSumeragiQc(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiQcSnapshot>;
   getSumeragiCommitQc(
     blockHashHex: string,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSumeragiCommitQcRecord>;
-  getSumeragiPhases(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiPhasesSnapshot>;
-  getSumeragiBlsKeys(options?: { signal?: AbortSignal }): Promise<Record<string, string | null>>;
-  getSumeragiLeader(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiLeaderSnapshot>;
-  getSumeragiCollectors(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiCollectorsPlan>;
-  getSumeragiParams(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiParamsSnapshot>;
-  getSumeragiTelemetry(options?: { signal?: AbortSignal }): Promise<Record<string, unknown>>;
+  getSumeragiPhases(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiPhasesSnapshot>;
+  getSumeragiBlsKeys(options?: {
+    signal?: AbortSignal;
+  }): Promise<Record<string, string | null>>;
+  getSumeragiLeader(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiLeaderSnapshot>;
+  getSumeragiCollectors(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiCollectorsPlan>;
+  getSumeragiParams(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiParamsSnapshot>;
+  getSumeragiTelemetry(options?: {
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown>>;
   getSumeragiTelemetryTyped(options?: {
     signal?: AbortSignal;
   }): Promise<SumeragiTelemetrySnapshot>;
-  getSumeragiRbc(options?: { signal?: AbortSignal }): Promise<SumeragiRbcSnapshot | null>;
+  getSumeragiRbc(options?: {
+    signal?: AbortSignal;
+  }): Promise<SumeragiRbcSnapshot | null>;
   getSumeragiRbcSessions(options?: {
     signal?: AbortSignal;
   }): Promise<SumeragiRbcSessionsSnapshot | null>;
@@ -15500,14 +16707,21 @@ export declare class ToriiClient {
     view: number | string | bigint,
     options?: { signal?: AbortSignal },
   ): Promise<SumeragiRbcDeliveryStatus | null>;
-  sampleRbcChunks(options: RbcSampleRequestOptions): Promise<RbcSampleResponse | null>;
-  listSumeragiEvidence(options?: SumeragiEvidenceListOptions): Promise<SumeragiEvidenceListResponse>;
+  sampleRbcChunks(
+    options: RbcSampleRequestOptions,
+  ): Promise<RbcSampleResponse | null>;
+  listSumeragiEvidence(
+    options?: SumeragiEvidenceListOptions,
+  ): Promise<SumeragiEvidenceListResponse>;
   getSumeragiEvidenceCount(): Promise<SumeragiEvidenceCountResponse>;
   submitSumeragiEvidence(
     request: SumeragiEvidenceSubmitRequest,
   ): Promise<SumeragiEvidenceSubmitResponse>;
   getMetrics(options: { asText: true; signal?: AbortSignal }): Promise<string>;
-  getMetrics(options?: { asText?: boolean; signal?: AbortSignal }): Promise<unknown>;
+  getMetrics(options?: {
+    asText?: boolean;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
   getBlock(
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
@@ -15534,16 +16748,16 @@ export declare class ToriiClient {
     callId: string,
     options?: KaigiCallEventsOptions,
   ): AsyncGenerator<ToriiSseEvent<KaigiCallEventPayload>, void, unknown>;
-  listKaigiRelays(
-    options?: { signal?: AbortSignal },
-  ): Promise<KaigiRelaySummaryList>;
+  listKaigiRelays(options?: {
+    signal?: AbortSignal;
+  }): Promise<KaigiRelaySummaryList>;
   getKaigiRelay(
     relayId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KaigiRelayDetail | null>;
-  getKaigiRelaysHealth(
-    options?: { signal?: AbortSignal },
-  ): Promise<KaigiRelayHealthSnapshot>;
+  getKaigiRelaysHealth(options?: {
+    signal?: AbortSignal;
+  }): Promise<KaigiRelayHealthSnapshot>;
   streamKaigiRelayEvents(
     options?: KaigiRelayEventsOptions,
   ): AsyncGenerator<ToriiSseEvent<KaigiRelayEventPayload>, void, unknown>;
@@ -15573,11 +16787,21 @@ export declare class ToriiClient {
   ): Promise<number>;
   submitIsoPacs008(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
-    options?: { contentType?: string; profile?: string; signal?: AbortSignal; retryProfile?: string },
+    options?: {
+      contentType?: string;
+      profile?: string;
+      signal?: AbortSignal;
+      retryProfile?: string;
+    },
   ): Promise<IsoPacs008SubmissionResponse | null>;
   submitIsoPacs009(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
-    options?: { contentType?: string; profile?: string; signal?: AbortSignal; retryProfile?: string },
+    options?: {
+      contentType?: string;
+      profile?: string;
+      signal?: AbortSignal;
+      retryProfile?: string;
+    },
   ): Promise<IsoPacs009SubmissionResponse | null>;
   submitIsoPacs008AndWait(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
@@ -15602,7 +16826,9 @@ export declare class ToriiClient {
   submitIsoMessage(
     message: BuildPacs008Options | BuildPacs009Options,
     options?: SubmitIsoMessageOptions,
-  ): Promise<IsoMessageSubmissionResponseBase | IsoMessageStatusResponse | null>;
+  ): Promise<
+    IsoMessageSubmissionResponseBase | IsoMessageStatusResponse | null
+  >;
   getIsoMessageStatus(
     messageId: string,
     options?: { signal?: AbortSignal; retryProfile?: string },
@@ -15612,26 +16838,40 @@ export declare class ToriiClient {
     options?: IsoMessageWaitOptions,
   ): Promise<IsoMessageStatusResponse>;
   getConnectStatus(): Promise<ConnectStatusSnapshot | null>;
-  createConnectSession(input: { sid: string; node?: string | null }): Promise<ConnectSessionResponse>;
-  deleteConnectSession(input: { sid: string; tokenManagement?: string; token_management?: string }): Promise<boolean>;
-  listConnectApps(options?: ConnectAppListOptions): Promise<ConnectAppRegistryPage>;
+  createConnectSession(input: {
+    sid: string;
+    node?: string | null;
+  }): Promise<ConnectSessionResponse>;
+  deleteConnectSession(input: {
+    sid: string;
+    tokenManagement?: string;
+    token_management?: string;
+  }): Promise<boolean>;
+  listConnectApps(
+    options?: ConnectAppListOptions,
+  ): Promise<ConnectAppRegistryPage>;
   iterateConnectApps(
     options?: ConnectAppIteratorOptions,
   ): AsyncGenerator<ConnectAppRecord, void, unknown>;
-  getConnectApp(appId: string, options?: { signal?: AbortSignal }): Promise<ConnectAppRecord>;
+  getConnectApp(
+    appId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ConnectAppRecord>;
   registerConnectApp(
     record: ConnectAppUpsertInput,
     options?: { signal?: AbortSignal },
   ): Promise<ConnectAppRecord | null>;
   deleteConnectApp(appId: string): Promise<boolean>;
-  getConnectAppPolicy(options?: { signal?: AbortSignal }): Promise<ConnectAppPolicyControls>;
+  getConnectAppPolicy(options?: {
+    signal?: AbortSignal;
+  }): Promise<ConnectAppPolicyControls>;
   updateConnectAppPolicy(
     updates: ConnectAppPolicyUpdate,
     options?: { signal?: AbortSignal },
   ): Promise<ConnectAppPolicyControls>;
-  getConnectAdmissionManifest(
-    options?: { signal?: AbortSignal },
-  ): Promise<ConnectAdmissionManifest>;
+  getConnectAdmissionManifest(options?: {
+    signal?: AbortSignal;
+  }): Promise<ConnectAdmissionManifest>;
   setConnectAdmissionManifest(
     manifest: ConnectAdmissionManifestInput,
     options?: { signal?: AbortSignal },
@@ -15648,9 +16888,15 @@ export declare class ToriiClient {
     session: SumeragiRbcSession,
     overrides?: RbcSampleRequestOverrides,
   ): RbcSampleRequestOptions;
-  registerContractCode(request: RegisterContractCodeRequest): Promise<unknown | null>;
-  deployContract(request: DeployContractRequest): Promise<DeployContractResponse | null>;
-  setContractAlias(request: SetContractAliasRequest): Promise<SetContractAliasResponse | null>;
+  registerContractCode(
+    request: RegisterContractCodeRequest,
+  ): Promise<unknown | null>;
+  deployContract(
+    request: DeployContractRequest,
+  ): Promise<DeployContractResponse | null>;
+  setContractAlias(
+    request: SetContractAliasRequest,
+  ): Promise<SetContractAliasResponse | null>;
   callContract(
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
@@ -15682,8 +16928,12 @@ export declare class ToriiClient {
     },
     options?: { signal?: AbortSignal },
   ): Promise<MultisigProposalGetResponse>;
-  getContractManifest(codeHashHex: string): Promise<ContractManifestRecord | null>;
-  getContractCodeBytes(codeHashHex: string): Promise<ContractCodeBytesRecord | null>;
+  getContractManifest(
+    codeHashHex: string,
+  ): Promise<ContractManifestRecord | null>;
+  getContractCodeBytes(
+    codeHashHex: string,
+  ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,
     options?: { signal?: AbortSignal },
@@ -15726,7 +16976,9 @@ export declare class ToriiClient {
     request: SubscriptionPlanCreateRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionPlanCreateResponse>;
-  listSubscriptions(options?: SubscriptionListOptions): Promise<SubscriptionListResponse>;
+  listSubscriptions(
+    options?: SubscriptionListOptions,
+  ): Promise<SubscriptionListResponse>;
   iterateSubscriptions(
     options?: SubscriptionIteratorOptions,
   ): AsyncGenerator<SubscriptionListItem, void, unknown>;
@@ -15768,9 +17020,9 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineReadiness(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineReadinessResponse>;
+  getOfflineReadiness(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiOfflineReadinessResponse>;
 }
 
 export interface NoritoRpcClientOptions {
@@ -15780,7 +17032,9 @@ export interface NoritoRpcClientOptions {
   allowInsecure?: boolean;
   authToken?: string | null;
   apiToken?: string | null;
-  insecureTransportTelemetryHook?: (event: InsecureTransportTelemetryEvent) => void;
+  insecureTransportTelemetryHook?: (
+    event: InsecureTransportTelemetryEvent,
+  ) => void;
 }
 
 export interface NoritoRpcCallOptions {
@@ -15813,7 +17067,9 @@ export declare class NoritoRpcError extends Error {
 
 export function supportedCryptoAlgorithms(): CryptoAlgorithm[];
 
-export function normalizeCryptoAlgorithm(algorithm?: string | null): CryptoAlgorithm;
+export function normalizeCryptoAlgorithm(
+  algorithm?: string | null,
+): CryptoAlgorithm;
 
 export function generateKeyPair(options?: {
   seed?: ArrayBufferView | ArrayBuffer | Buffer;
@@ -15902,7 +17158,9 @@ export function verifyEd25519(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): boolean;
 
-export function canonicalQueryString(query?: string | URLSearchParams | null): string;
+export function canonicalQueryString(
+  query?: string | URLSearchParams | null,
+): string;
 
 export function canonicalRequestMessage(params: {
   method: string;
@@ -15961,7 +17219,10 @@ export function buildCanonicalJsonRequest(params: {
   baseUrl?: string;
   query?: string | URLSearchParams;
   body?: unknown;
-  headers?: Headers | ReadonlyArray<readonly [string, string]> | Record<string, string>;
+  headers?:
+    | Headers
+    | ReadonlyArray<readonly [string, string]>
+    | Record<string, string>;
   privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
   sign?: (
     input: CanonicalJsonRequestSignerInput,
@@ -15978,7 +17239,9 @@ export function deriveConfidentialKeyset(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): ConfidentialKeyset;
 
-export function deriveConfidentialKeysetFromHex(spendKeyHex: string): ConfidentialKeyset;
+export function deriveConfidentialKeysetFromHex(
+  spendKeyHex: string,
+): ConfidentialKeyset;
 
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -16020,14 +17283,10 @@ export function deriveConfidentialNullifierV2(input: {
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
-export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
-  "kagemusha-recursive-aggregation-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
-  "kagemusha-recursive-spend-lineage-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1:
-  "kagemusha-recursive-spend-lineage-onehop-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1:
-  "kagemusha-recursive-spend-lineage-append-v1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true;
@@ -16035,20 +17294,13 @@ export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
 export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN:
-  "iroha:kagemusha:v1:recursive-spend-transition-profile";
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN:
-  "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN:
-  "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1:
-  "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1:
-  "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1:
-  "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1:
-  "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 export type KagemushaOfflineSpendMode =
   | "recursive_spend_v1"
   | "checked_prefold_v1";
@@ -16110,7 +17362,9 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
 ): boolean;
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
-export function kagemushaRecursiveSpendAppend(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendAppend(
+  requestArchive: BinaryLike,
+): Buffer;
 export function kagemushaRecursiveSpendTransitionProfileInit(
   requestArchive: BinaryLike,
 ): Buffer;
@@ -16129,13 +17383,21 @@ export function kagemushaRecursiveSpendLineageWitnessAppendResult(
   requestArchive: BinaryLike,
   bundleArchive: BinaryLike,
 ): Buffer;
-export function kagemushaRecursiveSpendVerify(requestArchive: BinaryLike): Buffer;
-export function kagemushaRecursiveSpendRedeem(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendVerify(
+  requestArchive: BinaryLike,
+): Buffer;
+export function kagemushaRecursiveSpendRedeem(
+  requestArchive: BinaryLike,
+): Buffer;
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
 export function isPrivacyNativeAvailable(): boolean;
 export function privacyCapabilitiesV1(): Buffer;
-export function privacyBuildProofV1(requestArchive: PrivacyNativeArchiveLike): Buffer;
-export function privacyVerifyProofV1(requestArchive: PrivacyNativeArchiveLike): Buffer;
+export function privacyBuildProofV1(
+  requestArchive: PrivacyNativeArchiveLike,
+): Buffer;
+export function privacyVerifyProofV1(
+  requestArchive: PrivacyNativeArchiveLike,
+): Buffer;
 
 export interface Sm2Fixture {
   distid: string;
@@ -16158,9 +17420,7 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
-export function noritoEncodePrivacyProofEnvelope(
-  envelope: object,
-): Buffer;
+export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
 export function noritoDecodePrivacyProofEnvelope(
   bytes: ArrayBufferView | ArrayBuffer | Buffer | string,
 ): object;
@@ -16331,7 +17591,11 @@ export class OfflineQrStreamOptions {
   chunkSize: number;
   parityGroup: number;
   payloadKind: number;
-  constructor(options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number });
+  constructor(options?: {
+    chunkSize?: number;
+    parityGroup?: number;
+    payloadKind?: number;
+  });
 }
 
 export class OfflineQrStreamEnvelope {
@@ -16357,7 +17621,9 @@ export class OfflineQrStreamEnvelope {
   });
   get streamId(): Buffer;
   encode(): Buffer;
-  static decode(bytes: ArrayBufferView | ArrayBuffer | Buffer): OfflineQrStreamEnvelope;
+  static decode(
+    bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  ): OfflineQrStreamEnvelope;
 }
 
 export class OfflineQrStreamFrame {
@@ -16374,24 +17640,32 @@ export class OfflineQrStreamFrame {
     payload?: ArrayBufferView | ArrayBuffer | Buffer;
   });
   encode(): Buffer;
-  static decode(bytes: ArrayBufferView | ArrayBuffer | Buffer): OfflineQrStreamFrame;
+  static decode(
+    bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  ): OfflineQrStreamFrame;
 }
 
 export class OfflineQrStreamEncoder {
   static encodeFrames(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
-    options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number },
+    options?: {
+      chunkSize?: number;
+      parityGroup?: number;
+      payloadKind?: number;
+    },
   ): OfflineQrStreamFrame[];
   static encodeFrameBytes(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
-    options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number },
+    options?: {
+      chunkSize?: number;
+      parityGroup?: number;
+      payloadKind?: number;
+    },
   ): Buffer[];
 }
 
 export class OfflineQrStreamDecoder {
-  ingest(
-    frameBytes: ArrayBufferView | ArrayBuffer | Buffer,
-  ): {
+  ingest(frameBytes: ArrayBufferView | ArrayBuffer | Buffer): {
     payload: Buffer | null;
     receivedChunks: number;
     totalChunks: number;
@@ -16491,7 +17765,9 @@ export function decodeQrFrameText(
 ): Buffer;
 
 export function scanQrStreamFrames(
-  frames: AsyncIterable<string | ArrayBufferView | ArrayBuffer | Buffer> | Iterable<string | ArrayBufferView | ArrayBuffer | Buffer>,
+  frames:
+    | AsyncIterable<string | ArrayBufferView | ArrayBuffer | Buffer>
+    | Iterable<string | ArrayBufferView | ArrayBuffer | Buffer>,
   options?: {
     session?: OfflineQrStreamScanSession;
     frameEncoding?: "binary" | "base64";
@@ -16514,7 +17790,9 @@ export function buildRegisterDomainTransaction(
  * instruction array must be non-empty; each entry should be either a builder
  * result or a Norito JSON string.
  */
-export function buildTransaction(input: TransactionAssemblyInput): SignedTransactionResult;
+export function buildTransaction(
+  input: TransactionAssemblyInput,
+): SignedTransactionResult;
 
 /**
  * Assemble and sign a transaction whose executable is `Executable::IvmProved`
@@ -16528,12 +17806,16 @@ export function buildIvmProvedTransaction(
  * Build and sign a transaction containing a single `Mint::Asset` instruction.
  * Validates the quantity and asset identifier before serialising to Norito.
  */
-export function buildMintAssetTransaction(input: MintAssetInput): SignedTransactionResult;
+export function buildMintAssetTransaction(
+  input: MintAssetInput,
+): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::Asset` instruction.
  * Throws if the quantity is non-positive or the asset identifier is empty.
  */
-export function buildBurnAssetTransaction(input: BurnAssetInput): SignedTransactionResult;
+export function buildBurnAssetTransaction(
+  input: BurnAssetInput,
+): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::TriggerRepetitions`
  * instruction. Throws when repetitions are not positive integers.
@@ -16541,7 +17823,9 @@ export function buildBurnAssetTransaction(input: BurnAssetInput): SignedTransact
 export function buildBurnTriggerTransaction(
   input: BurnTriggerInput,
 ): SignedTransactionResult;
-export function buildMintTriggerTransaction(input: MintTriggerInput): SignedTransactionResult;
+export function buildMintTriggerTransaction(
+  input: MintTriggerInput,
+): SignedTransactionResult;
 export function buildTransferAssetTransaction(
   input: TransferAssetInput,
 ): SignedTransactionResult;
@@ -16645,7 +17929,9 @@ export interface CommitTriggerActionOptions {
   metadata?: Record<string, unknown> | string | null;
 }
 
-export function buildTimeTriggerAction(options: TimeTriggerActionOptions): string;
+export function buildTimeTriggerAction(
+  options: TimeTriggerActionOptions,
+): string;
 export function buildPrecommitTriggerAction(
   options: CommitTriggerActionOptions,
 ): string;
@@ -16989,8 +18275,12 @@ export function buildMultisigContractCallProposeRequest(
     args?: JsonValue;
     argPreset?: MultisigTriggerArgsPreset;
     preset?: MultisigTriggerArgsPreset;
-    argInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
-    presetInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+    argInput?:
+      | MultisigLifecycleTriggerArgsInput
+      | MultisigLookupTriggerArgsInput;
+    presetInput?:
+      | MultisigLifecycleTriggerArgsInput
+      | MultisigLookupTriggerArgsInput;
     multisigSpec?: MultisigSpecLike;
     spec?: MultisigSpecLike;
     strictSignerCheck?: boolean;
@@ -17041,10 +18331,14 @@ export function buildTransferNftInstruction({
   destinationAccountId: string;
 }): object;
 
-export function buildRegisterRwaInstruction(options: {
-  rwa?: RegisterRwaPayloadInput | string;
-  rwaJson?: RegisterRwaPayloadInput | string;
-} | RegisterRwaPayloadInput): object;
+export function buildRegisterRwaInstruction(
+  options:
+    | {
+        rwa?: RegisterRwaPayloadInput | string;
+        rwaJson?: RegisterRwaPayloadInput | string;
+      }
+    | RegisterRwaPayloadInput,
+): object;
 
 export function buildTransferRwaInstruction({
   sourceAccountId,
@@ -17058,10 +18352,14 @@ export function buildTransferRwaInstruction({
   destinationAccountId: string;
 }): object;
 
-export function buildMergeRwasInstruction(options: {
-  merge?: MergeRwasPayloadInput | string;
-  mergeJson?: MergeRwasPayloadInput | string;
-} | MergeRwasPayloadInput): object;
+export function buildMergeRwasInstruction(
+  options:
+    | {
+        merge?: MergeRwasPayloadInput | string;
+        mergeJson?: MergeRwasPayloadInput | string;
+      }
+    | MergeRwasPayloadInput,
+): object;
 
 export function buildRedeemRwaInstruction({
   rwaId,
@@ -17073,7 +18371,11 @@ export function buildRedeemRwaInstruction({
 
 export function buildFreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
 
-export function buildUnfreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
+export function buildUnfreezeRwaInstruction({
+  rwaId,
+}: {
+  rwaId: string;
+}): object;
 
 export function buildHoldRwaInstruction({
   rwaId,
@@ -17169,9 +18471,9 @@ export function buildPersistCouncilForEpochInstruction(
   input: PersistCouncilForEpochInstructionInput,
 ): object;
 
-export function buildSubmitAgendaProposalInstruction(
-  input: { proposal: Record<string, unknown> },
-): object;
+export function buildSubmitAgendaProposalInstruction(input: {
+  proposal: Record<string, unknown>;
+}): object;
 
 export interface ClaimTwitterFollowRewardInstructionInput {
   bindingHash:
@@ -17234,7 +18536,10 @@ export function buildZkAtAuthenticatorEnvelope(
 ): Buffer;
 
 export function buildZkAtDevProofFixture(
-  input: Omit<ZkAtAuthenticatorEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    ZkAtAuthenticatorEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): ZkAtDevProofFixture;
 
 export function verifyZkAtAuthenticatorLocally(
@@ -17250,7 +18555,10 @@ export function buildZkAmsAdmissionProofEnvelope(
 ): Buffer;
 
 export function buildZkAmsAdmissionDevProofFixture(
-  input: Omit<ZkAmsAdmissionProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    ZkAmsAdmissionProofEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): ZkAmsAdmissionDevProofFixture;
 
 export function verifyZkAmsAdmissionProofLocally(
@@ -17266,7 +18574,10 @@ export function buildVegaCredentialProofEnvelope(
 ): Buffer;
 
 export function buildVegaCredentialDevProofFixture(
-  input: Omit<VegaCredentialProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    VegaCredentialProofEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): VegaCredentialDevProofFixture;
 
 export function verifyVegaCredentialProofLocally(
@@ -17282,7 +18593,10 @@ export function buildSilentThresholdCredentialEnvelope(
 ): Buffer;
 
 export function buildSilentThresholdCredentialDevProofFixture(
-  input: Omit<SilentThresholdCredentialEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    SilentThresholdCredentialEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): SilentThresholdCredentialDevProofFixture;
 
 export function verifySilentThresholdCredentialProofLocally(
@@ -17298,7 +18612,10 @@ export function buildZkX509IdentityEnvelope(
 ): Buffer;
 
 export function buildZkX509IdentityDevProofFixture(
-  input: Omit<ZkX509IdentityEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    ZkX509IdentityEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): ZkX509IdentityDevProofFixture;
 
 export function verifyZkX509IdentityProofLocally(
@@ -17314,7 +18631,10 @@ export function buildJindoLatticeProofEnvelope(
 ): Buffer;
 
 export function buildJindoLatticeDevProofFixture(
-  input: Omit<JindoLatticeProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    JindoLatticeProofEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): JindoLatticeDevProofFixture;
 
 export function verifyJindoLatticeProofLocally(
@@ -17330,7 +18650,10 @@ export function buildSisHintsCredentialEnvelope(
 ): Buffer;
 
 export function buildSisHintsCredentialDevProofFixture(
-  input: Omit<SisHintsCredentialEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+  input: Omit<
+    SisHintsCredentialEnvelopeInput,
+    "proof" | "proofBytes" | "proof_bytes"
+  >,
 ): SisHintsCredentialDevProofFixture;
 
 export function verifySisHintsCredentialProofLocally(
@@ -17429,7 +18752,9 @@ export function buildRegisterAssetHiddenZkPoolInstruction(
   input: RegisterAssetHiddenZkPoolInstructionInput,
 ): object;
 
-export function buildUnshieldInstruction(input: UnshieldInstructionInput): object;
+export function buildUnshieldInstruction(
+  input: UnshieldInstructionInput,
+): object;
 
 export function buildCreateElectionInstruction(
   input: CreateElectionInstructionInput,
@@ -17469,7 +18794,9 @@ export const DEFAULT_TORII_CLIENT_CONFIG: {
   authToken: string | null;
   apiToken: string | null;
   retryTelemetryHook: ((event: ToriiRetryTelemetryEvent) => void) | null;
-  insecureTransportTelemetryHook: ((event: InsecureTransportTelemetryEvent) => void) | null;
+  insecureTransportTelemetryHook:
+    | ((event: InsecureTransportTelemetryEvent) => void)
+    | null;
 };
 
 export const DEFAULT_RETRY_PROFILE_PIPELINE: ToriiRetryProfileOptions;
@@ -17482,9 +18809,11 @@ export function resolveToriiClientConfig(input?: {
   overrides?: ToriiClientConfigSource;
 }): ResolvedToriiClientConfig;
 
-export function extractToriiFeatureConfig(input?: {
-  config?: Record<string, unknown>;
-} & Record<string, unknown>): ToriiFeatureConfigSnapshot;
+export function extractToriiFeatureConfig(
+  input?: {
+    config?: Record<string, unknown>;
+  } & Record<string, unknown>,
+): ToriiFeatureConfigSnapshot;
 
 export type SoracloudStorageClass = "hot" | "warm" | "cold";
 

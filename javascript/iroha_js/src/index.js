@@ -4,7 +4,10 @@
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.
  */
-export { compileKotodamaProgram, compileKotodamaStudioProgram } from "./kotodamaCompiler/index.js";
+export {
+  compileKotodamaProgram,
+  compileKotodamaStudioProgram,
+} from "./kotodamaCompiler/index.js";
 export * from "./kotodamaCompiler/parity.js";
 export {
   AccountAddress,
@@ -37,7 +40,10 @@ export {
   openConnectWebSocket,
   verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
-export { ToriiBrowserClient, ToriiBrowserHttpError } from "./toriiBrowserClient.js";
+export {
+  ToriiBrowserClient,
+  ToriiBrowserHttpError,
+} from "./toriiBrowserClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
   CRYPTO_ALGORITHMS,
@@ -823,6 +829,7 @@ export {
   tronSccpDestinationBinding,
   tronSccpDestinationBindingHash,
   tairaXorRouteIdHash,
+  tairaXorBscRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
   buildTairaXorBscTransferPayload,
@@ -834,6 +841,7 @@ export {
   buildTairaXorSccpBurnRecordZkIvmRequest,
   buildTairaXorBscSccpBurnRecordZkIvmRequest,
   buildTairaXorTronToTairaTransferPayload,
+  buildTairaXorBscToTairaTransferPayload,
   canonicalSccpTransferPayloadBytes,
   canonicalSccpPayloadEnvelopeBytes,
   canonicalSccpMerkleProofBytes,
@@ -841,18 +849,25 @@ export {
   tairaXorCanonicalTransferPayloadBytes,
   tairaXorBscCanonicalTransferPayloadBytes,
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
+  tairaXorBscToTairaCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
   tairaXorBscTransferMessageId,
   tairaXorTronToTairaTransferMessageId,
+  tairaXorBscToTairaTransferMessageId,
   sccpTransferMessageId,
   tairaXorTransferPayloadHash,
+  tairaXorBscToTairaTransferPayloadHash,
   tairaXorBurnSourceEventDigest,
+  tairaXorBscBurnSourceEventDigest,
   tairaXorFinalizeFromTairaCallData,
   tairaXorBurnToTairaCallData,
   tairaXorBurnToTairaAccountCallData,
+  tairaXorBscBurnToTairaCallData,
+  tairaXorBscBurnToTairaAccountCallData,
   isTairaXorTronBurnStartedEventName,
   bindTairaXorTronBurnStartedEvent,
   bindTairaXorTronToTairaSourceProofPackage,
+  bindTairaXorBscToTairaSourceProofPackage,
   normalizeSccpSourceVerifierMaterial,
   canonicalSccpSourceVerifierMaterialBytes,
   sccpSourceVerifierMaterialHash,
@@ -872,7 +887,11 @@ export {
   validateSccpTokenMessageBundleSurface,
   validateSccpGovernanceBundleSurface,
 } from "./sccp.js";
-export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } from "./sorafs.js";
+export {
+  decodeReplicationOrder,
+  SorafsGatewayFetchError,
+  sorafsGatewayFetch,
+} from "./sorafs.js";
 export {
   queryOracleFeeds,
   queryOracleFeedHistory,
@@ -895,7 +914,10 @@ export {
   connectErrorFrom,
   ConnectQueueError,
 } from "./connectError.js";
-export { generateConnectSid, createConnectSessionPreview } from "./connectSession.js";
+export {
+  generateConnectSid,
+  createConnectSessionPreview,
+} from "./connectSession.js";
 export { bootstrapConnectPreviewSession } from "./connectPreviewFlow.js";
 export {
   appendConnectQueueMetric,
@@ -912,7 +934,10 @@ export {
   ConnectJournalRecord,
   ConnectJournalError,
 } from "./connectJournalRecord.js";
-export { SoranetPuzzleClient, SoranetPuzzleError } from "./soranetPuzzleClient.js";
+export {
+  SoranetPuzzleClient,
+  SoranetPuzzleError,
+} from "./soranetPuzzleClient.js";
 export {
   deriveGatewayHosts as deriveSoradnsGatewayHosts,
   hostPatternsCoverDerivedHosts,
