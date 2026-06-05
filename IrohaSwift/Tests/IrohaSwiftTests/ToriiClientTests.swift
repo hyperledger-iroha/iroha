@@ -13697,12 +13697,12 @@ id: 88
             let root = self.bodyJSON(from: request)
             XCTAssertEqual(root["authority"] as? String, "alice@boi")
             XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
-            let chunker = root["chunker"] as? [String: Any]
-            XCTAssertEqual(chunker?["profile_id"] as? Int, 1)
-            XCTAssertEqual(chunker?["namespace"] as? String, "sorafs")
-            XCTAssertEqual(chunker?["name"] as? String, "sf1")
-            XCTAssertEqual(chunker?["semver"] as? String, "1.0.0")
-            XCTAssertEqual(chunker?["multihash_code"] as? Int, 0)
+            XCTAssertNil(root["chunker"])
+            XCTAssertEqual(root["chunker_profile_id"] as? Int, 1)
+            XCTAssertEqual(root["chunker_namespace"] as? String, "sorafs")
+            XCTAssertEqual(root["chunker_name"] as? String, "sf1")
+            XCTAssertEqual(root["chunker_semver"] as? String, "1.0.0")
+            XCTAssertEqual(root["chunker_multihash_code"] as? Int, 0)
             let pinPolicy = root["pin_policy"] as? [String: Any]
             XCTAssertEqual(pinPolicy?["min_replicas"] as? Int, 3)
             let storageClass = pinPolicy?["storage_class"] as? [String: Any]

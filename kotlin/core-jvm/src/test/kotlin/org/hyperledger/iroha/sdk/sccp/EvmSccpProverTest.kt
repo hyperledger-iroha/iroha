@@ -786,6 +786,27 @@ class EvmSccpProverTest {
             "artifacts/eth-mainnet/kotlin-implementation.bin",
             parsedNativeProverBundle.nativeSdkArtifacts.first { it.sdk == "kotlin" }.implementationArtifact,
         )
+        val parityFixture = SccpEvm.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+            sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle),
+            nativeProverBundle,
+        )
+        assertEquals(SccpEvm.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1, parityFixture.schema)
+        assertEquals(binding.hash, parityFixture.destinationBindingHash)
+        assertEquals(9, parityFixture.publicSignalWords.size)
+        assertEquals(
+            parityFixture.toriiSubmitPayloadHash,
+            parityFixture.sdkResults.getValue("kotlin").toriiSubmitPayloadHash,
+        )
+        val driftedParityFixture = sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle,
+            kotlinCalldataHash = "0x" + "96".repeat(32),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+                driftedParityFixture,
+                nativeProverBundle,
+            )
+        }
         assertFailsWith<IllegalArgumentException> {
             SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
                 sampleEthereumNativeEvmProverBundleJson(binding.hash, noWasm = false),
@@ -883,7 +904,7 @@ class EvmSccpProverTest {
                 expectedDestinationBindingHash = binding.hash,
             )
         }.also { error ->
-            assertTrue(error.message?.contains("auditHashes[0]") == true)
+            assertTrue(error.message?.contains("auditHashes.circuit_security_audit") == true)
             assertTrue(error.message?.contains("canonical lowercase") == true)
         }
         assertFailsWith<IllegalArgumentException> {
@@ -893,7 +914,7 @@ class EvmSccpProverTest {
                 expectedDestinationBindingHash = binding.hash,
             )
         }.also { error ->
-            assertTrue(error.message?.contains("auditHashes[0]") == true)
+            assertTrue(error.message?.contains("auditHashes.circuit_security_audit") == true)
             assertTrue(error.message?.contains("proofArtifactHash") == true)
             assertTrue(error.message?.contains("role-separated") == true)
         }
@@ -932,9 +953,12 @@ class EvmSccpProverTest {
             destinationBindingHash = artifactBinding.hash,
             destinationBinding = artifactBinding,
         )
-        val verifiedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+        val draftVerifiedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
             proofArtifactHash = proofArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
             provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
             verifierKeyHash = verifierKeyHash,
             destinationBindingHash = artifactBinding.hash,
             nativeSdkArtifacts = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
@@ -953,7 +977,31 @@ class EvmSccpProverTest {
                         },
                     )
                 },
-            auditHashes = listOf("0x" + "a1".repeat(32)),
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes(),
+            expectedDestinationBindingHash = artifactBinding.hash,
+        )
+        val parityFixtureBytes = sampleEthereumNativeEvmProverParityFixtureJson(draftVerifiedBundle)
+            .toByteArray(Charsets.UTF_8)
+        val parityFixtureHash = sha256Hex(parityFixtureBytes)
+        val selfTestFixtureBytes = sampleEthereumNativeEvmProverSelfTestFixtureJson(draftVerifiedBundle)
+            .toByteArray(Charsets.UTF_8)
+        val selfTestFixtureHash = sha256Hex(selfTestFixtureBytes)
+        val verifiedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash = proofArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash = verifierKeyHash,
+            destinationBindingHash = artifactBinding.hash,
+            nativeSdkArtifacts = draftVerifiedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes() +
+                ("cross_sdk_fixture_parity" to parityFixtureHash) +
+                ("native_prover_self_test" to selfTestFixtureHash),
             expectedDestinationBindingHash = artifactBinding.hash,
         )
         val verifiedArtifacts = verifiedBundle.verifiedArtifacts(
@@ -962,13 +1010,56 @@ class EvmSccpProverTest {
             verifierKeyBytes = verifierKeyBytes,
             sdk = "kotlin",
             implementationBytes = implementationBytes,
+            crossSdkFixtureParityBytes = parityFixtureBytes,
+            nativeProverSelfTestBytes = selfTestFixtureBytes,
         )
         assertEquals(SccpEvm.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1, verifiedArtifacts.hashAlgorithm)
         assertEquals(proofArtifactHash, verifiedArtifacts.proofArtifactHash)
         assertEquals(provingKeyHash, verifiedArtifacts.provingKeyHash)
         assertEquals(verifierKeyHash, verifiedArtifacts.verifierKeyHash)
+        assertEquals(parityFixtureHash, verifiedArtifacts.crossSdkFixtureParityHash)
+        assertEquals("0x" + "d3".repeat(32), verifiedArtifacts.crossSdkFixtureParity?.calldataHash)
+        assertEquals(selfTestFixtureHash, verifiedArtifacts.nativeProverSelfTestHash)
+        assertEquals("0x" + "e4".repeat(32), verifiedArtifacts.nativeProverSelfTest?.proofHash)
         assertEquals("native-kotlin", verifiedArtifacts.implementation)
         assertEquals(implementationHash, verifiedArtifacts.implementationHash)
+        val kotlinImplementationPath = verifiedBundle.nativeSdkArtifacts
+            .first { it.sdk == "kotlin" }
+            .implementationArtifact
+        val artifactBytesByPath = mapOf(
+            verifiedBundle.proofArtifact to proofArtifactBytes,
+            verifiedBundle.provingKey to provingKeyBytes,
+            verifiedBundle.verifierKey to verifierKeyBytes,
+            verifiedBundle.crossSdkFixtureParityArtifact to parityFixtureBytes,
+            verifiedBundle.nativeProverSelfTestArtifact to selfTestFixtureBytes,
+            kotlinImplementationPath to implementationBytes,
+        )
+        val verifiedFromResolver = verifiedBundle.verifiedArtifacts("kotlin") { path ->
+            artifactBytesByPath[path] ?: throw IllegalArgumentException(path)
+        }
+        assertEquals(implementationHash, verifiedFromResolver.implementationHash)
+        assertEquals(parityFixtureHash, verifiedFromResolver.crossSdkFixtureParityHash)
+        assertEquals(selfTestFixtureHash, verifiedFromResolver.nativeProverSelfTestHash)
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts("kotlin") { path ->
+                if (path == verifiedBundle.crossSdkFixtureParityArtifact) {
+                    throw IllegalArgumentException("crossSdkFixtureParityArtifact")
+                }
+                artifactBytesByPath.getValue(path)
+            }
+        }.also { error ->
+            assertTrue(error.message?.contains("crossSdkFixtureParityArtifact") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts("kotlin") { path ->
+                if (path == verifiedBundle.nativeProverSelfTestArtifact) {
+                    throw IllegalArgumentException("nativeProverSelfTestArtifact")
+                }
+                artifactBytesByPath.getValue(path)
+            }
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverSelfTestArtifact") == true)
+        }
         var missingArtifactsProverCalled = false
         val missingArtifactsFacade = EthereumMainnetSccp(
             proofEngine = EvmSccpProofEngine {
@@ -983,6 +1074,7 @@ class EvmSccpProverTest {
         }
         assertFalse(missingArtifactsProverCalled)
         var artifactBoundRequest: EvmSccpProofRequest? = null
+        var artifactBoundSelfTestCalled = false
         val artifactBoundFacade = EthereumMainnetSccp(
             proofEngine = EvmSccpProofEngine { callbackRequest ->
                 artifactBoundRequest = callbackRequest
@@ -990,18 +1082,90 @@ class EvmSccpProverTest {
                 assertEquals(provingKeyHash, callbackRequest.provingKeyHash)
                 proofBytes
             },
+            nativeProverSelfTest = EthereumMainnetNativeProverSelfTest { fixture, expected, artifacts ->
+                artifactBoundSelfTestCalled = true
+                assertEquals("0x" + "e4".repeat(32), fixture.proofHash)
+                assertEquals(selfTestFixtureHash, artifacts.nativeProverSelfTestHash)
+                expected
+            },
             nativeProverArtifacts = verifiedArtifacts,
         )
         val artifactBoundResult = artifactBoundFacade.proveOutboundToEthereum(artifactInput)
+        assertTrue(artifactBoundSelfTestCalled)
         assertEquals(proofArtifactHash, artifactBoundRequest?.proofArtifactHash)
         assertEquals(proofArtifactHash, artifactBoundResult.proofArtifactHash)
         assertEquals(provingKeyHash, artifactBoundResult.provingKeyHash)
+        var missingSelfTestHookProverCalled = false
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                proofEngine = EvmSccpProofEngine {
+                    missingSelfTestHookProverCalled = true
+                    proofBytes
+                },
+                nativeProverArtifacts = verifiedArtifacts,
+            ).proveOutboundToEthereum(artifactInput)
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverSelfTest runner") == true)
+        }
+        assertFalse(missingSelfTestHookProverCalled)
+        var driftingSelfTestHookProverCalled = false
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                proofEngine = EvmSccpProofEngine {
+                    driftingSelfTestHookProverCalled = true
+                    proofBytes
+                },
+                nativeProverSelfTest = EthereumMainnetNativeProverSelfTest { _, expected, _ ->
+                    expected.copy(proofHash = "0x" + "97".repeat(32))
+                },
+                nativeProverArtifacts = verifiedArtifacts,
+            ).proveOutboundToEthereum(artifactInput)
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverSelfTest result") == true)
+        }
+        assertFalse(driftingSelfTestHookProverCalled)
+        var factoryBoundRequest: EvmSccpProofRequest? = null
+        val factoryBoundFacade = EthereumMainnetSccp.fromNativeProverBundle(
+            proofEngine = EvmSccpProofEngine { callbackRequest ->
+                factoryBoundRequest = callbackRequest
+                proofBytes
+            },
+            nativeProverSelfTest = EthereumMainnetNativeProverSelfTest { _, expected, _ -> expected },
+            nativeProverBundle = verifiedBundle,
+            sdk = "kotlin",
+            artifactResolver = SccpEvm.NativeEvmProverArtifactResolver { path ->
+                artifactBytesByPath[path] ?: throw IllegalArgumentException(path)
+            },
+        )
+        val factoryBoundResult = factoryBoundFacade.proveOutboundToEthereum(artifactInput)
+        assertEquals(proofArtifactHash, factoryBoundRequest?.proofArtifactHash)
+        assertEquals(provingKeyHash, factoryBoundRequest?.provingKeyHash)
+        assertEquals(proofArtifactHash, factoryBoundResult.proofArtifactHash)
+        assertEquals(provingKeyHash, factoryBoundResult.provingKeyHash)
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp.fromNativeProverBundle(
+                nativeProverBundle = verifiedBundle,
+                sdk = "kotlin",
+                artifactResolver = SccpEvm.NativeEvmProverArtifactResolver { path ->
+                    if (path == verifiedBundle.crossSdkFixtureParityArtifact) {
+                        throw IllegalArgumentException("crossSdkFixtureParityArtifact")
+                    }
+                    artifactBytesByPath.getValue(path)
+                },
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("crossSdkFixtureParityArtifact") == true)
+        }
         val implementationUnboundArtifacts = SccpEvm.EthereumMainnetNativeEvmProverArtifacts(
             hashAlgorithm = SccpEvm.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
             nativeProverBundle = verifiedBundle,
             proofArtifactHash = proofArtifactHash,
             provingKeyHash = provingKeyHash,
             verifierKeyHash = verifierKeyHash,
+            crossSdkFixtureParityHash = parityFixtureHash,
+            crossSdkFixtureParity = verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash = selfTestFixtureHash,
+            nativeProverSelfTest = verifiedArtifacts.nativeProverSelfTest,
             sdk = "kotlin",
             implementation = "native-kotlin",
             implementationHash = null,
@@ -1029,6 +1193,10 @@ class EvmSccpProverTest {
             proofArtifactHash = proofArtifactHash,
             provingKeyHash = provingKeyHash,
             verifierKeyHash = "0x" + "ef".repeat(32),
+            crossSdkFixtureParityHash = parityFixtureHash,
+            crossSdkFixtureParity = verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash = selfTestFixtureHash,
+            nativeProverSelfTest = verifiedArtifacts.nativeProverSelfTest,
             sdk = "kotlin",
             implementation = "native-kotlin",
             implementationHash = implementationHash,
@@ -1062,6 +1230,8 @@ class EvmSccpProverTest {
                 proofArtifactBytes = proofArtifactBytes,
                 provingKeyBytes = provingKeyBytes,
                 verifierKeyBytes = verifierKeyBytes,
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+                nativeProverSelfTestBytes = selfTestFixtureBytes,
                 implementationBytes = implementationBytes,
             )
         }.also { error ->
@@ -1072,6 +1242,8 @@ class EvmSccpProverTest {
                 proofArtifactBytes = proofArtifactBytes,
                 provingKeyBytes = provingKeyBytes,
                 verifierKeyBytes = verifierKeyBytes,
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+                nativeProverSelfTestBytes = selfTestFixtureBytes,
                 sdk = "kotlin",
             )
         }.also { error ->
@@ -1084,15 +1256,68 @@ class EvmSccpProverTest {
                 verifierKeyBytes = verifierKeyBytes,
                 sdk = "kotlin",
                 implementationBytes = "tampered".toByteArray(),
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+                nativeProverSelfTestBytes = selfTestFixtureBytes,
             )
         }.also { error ->
             assertTrue(error.message?.contains("implementationBytes sha256") == true)
         }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("crossSdkFixtureParityBytes") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverSelfTestBytes") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = "{}".toByteArray(),
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("crossSdkFixtureParityBytes sha256") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+                nativeProverSelfTestBytes = "{}".toByteArray(),
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverSelfTestBytes sha256") == true)
+        }
         val flaggedArtifactBytes = byteArrayOf(0x77, 0x61, 0x73, 0x6d)
         val flaggedArtifactHash = sha256Hex(flaggedArtifactBytes)
-        val flaggedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+        val draftFlaggedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
             proofArtifactHash = flaggedArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
             provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
             verifierKeyHash = verifierKeyHash,
             destinationBindingHash = artifactBinding.hash,
             nativeSdkArtifacts = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
@@ -1111,7 +1336,29 @@ class EvmSccpProverTest {
                         },
                     )
                 },
-            auditHashes = listOf("0x" + "a1".repeat(32)),
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes(),
+            expectedDestinationBindingHash = artifactBinding.hash,
+        )
+        val flaggedParityFixtureBytes = sampleEthereumNativeEvmProverParityFixtureJson(draftFlaggedBundle)
+            .toByteArray(Charsets.UTF_8)
+        val flaggedSelfTestFixtureBytes = sampleEthereumNativeEvmProverSelfTestFixtureJson(draftFlaggedBundle)
+            .toByteArray(Charsets.UTF_8)
+        val flaggedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash = flaggedArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash = verifierKeyHash,
+            destinationBindingHash = artifactBinding.hash,
+            nativeSdkArtifacts = draftFlaggedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes() +
+                ("cross_sdk_fixture_parity" to sha256Hex(flaggedParityFixtureBytes)) +
+                ("native_prover_self_test" to sha256Hex(flaggedSelfTestFixtureBytes)),
             expectedDestinationBindingHash = artifactBinding.hash,
         )
         assertFailsWith<IllegalArgumentException> {
@@ -1119,6 +1366,8 @@ class EvmSccpProverTest {
                 proofArtifactBytes = flaggedArtifactBytes,
                 provingKeyBytes = provingKeyBytes,
                 verifierKeyBytes = verifierKeyBytes,
+                crossSdkFixtureParityBytes = flaggedParityFixtureBytes,
+                nativeProverSelfTestBytes = flaggedSelfTestFixtureBytes,
             )
         }.also { error ->
             assertTrue(error.message?.contains("proofArtifactBytes contains forbidden") == true)
@@ -4307,10 +4556,21 @@ class EvmSccpProverTest {
             noWasm = noWasm,
             remoteProverRequired = remoteProverRequired,
             nativeSdkArtifacts = artifacts,
-            auditHashes = listOf("0x" + "a1".repeat(32), "0x" + "a2".repeat(32)),
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes(),
             expectedDestinationBindingHash = expectedDestinationBindingHash,
         )
     }
+
+    private fun sampleEthereumNativeAuditHashes(): Map<String, String> = mapOf(
+        "circuit_security_audit" to "0x" + "a1".repeat(32),
+        "native_implementation_audit" to "0x" + "a2".repeat(32),
+        "reproducible_build_attestation" to "0x" + "a3".repeat(32),
+        "cross_sdk_fixture_parity" to "0x" + "a4".repeat(32),
+        "native_prover_self_test" to "0x" + "a5".repeat(32),
+        "no_wasm_no_remote_scan" to "0x" + "a6".repeat(32),
+    )
 
     private fun sampleEthereumNativeEvmProverBundleJson(
         destinationBindingHash: String,
@@ -4354,7 +4614,123 @@ class EvmSccpProverTest {
               "remote_prover_required": $remoteProverRequired,
               "browser_implementation": "pure-typescript",
               "native_sdk_artifacts": [$artifacts],
-              "audit_hashes": ["0x${"a1".repeat(32)}", "0x${"a2".repeat(32)}"]
+              "cross_sdk_fixture_parity_artifact": "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+              "native_prover_self_test_artifact": "artifacts/eth-mainnet/native-prover-self-test.json",
+              "audit_hashes": {
+                "circuit_security_audit": "0x${"a1".repeat(32)}",
+                "native_implementation_audit": "0x${"a2".repeat(32)}",
+                "reproducible_build_attestation": "0x${"a3".repeat(32)}",
+                "cross_sdk_fixture_parity": "0x${"a4".repeat(32)}",
+                "native_prover_self_test": "0x${"a5".repeat(32)}",
+                "no_wasm_no_remote_scan": "0x${"a6".repeat(32)}"
+              }
+            }
+        """.trimIndent()
+    }
+
+    private fun sampleEthereumNativeEvmProverParityFixtureJson(
+        nativeProverBundle: SccpEvm.EthereumMainnetNativeEvmProverBundle,
+        kotlinCalldataHash: String? = null,
+    ): String {
+        val publicSignalWords = (0 until 9).map { index ->
+            "0x" + (index + 0x10).toString(16).padStart(2, '0').repeat(32)
+        }
+        fun sdkResult(calldataHash: String = "0x" + "d3".repeat(32)): String =
+            """
+            {
+              "receipt_proof_hash": "0x${"d1".repeat(32)}",
+              "source_proof_hash": "0x${"d2".repeat(32)}",
+              "destination_binding_hash": "${nativeProverBundle.destinationBindingHash}",
+              "public_signal_words": [${publicSignalWords.joinToString(",") { "\"$it\"" }}],
+              "calldata_hash": "$calldataHash",
+              "torii_submit_payload_hash": "0x${"d4".repeat(32)}"
+            }
+            """.trimIndent()
+        val defaultCalldataHash = "0x" + "d3".repeat(32)
+        val sdkResults = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
+            .keys
+            .sorted()
+            .joinToString(",") { sdk ->
+                val calldataHash = if (sdk == "kotlin") {
+                    kotlinCalldataHash ?: defaultCalldataHash
+                } else {
+                    defaultCalldataHash
+                }
+                "\"$sdk\": ${sdkResult(calldataHash)}"
+            }
+        return """
+            {
+              "schema": "${SccpEvm.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}",
+              "domain": ${SccpEvm.DOMAIN_ETH},
+              "chain": "eth",
+              "proof_backend": "${SccpEvm.GROTH16_BN254_PROOF_BACKEND_V1}",
+              "proof_artifact_hash": "${nativeProverBundle.proofArtifactHash}",
+              "proving_key_hash": "${nativeProverBundle.provingKeyHash}",
+              "verifier_key_hash": "${nativeProverBundle.verifierKeyHash}",
+              "destination_binding_hash": "${nativeProverBundle.destinationBindingHash}",
+              "receipt_proof_hash": "0x${"d1".repeat(32)}",
+              "source_proof_hash": "0x${"d2".repeat(32)}",
+              "public_signal_words": [${publicSignalWords.joinToString(",") { "\"$it\"" }}],
+              "calldata_hash": "$defaultCalldataHash",
+              "torii_submit_payload_hash": "0x${"d4".repeat(32)}",
+              "sdk_results": {
+                $sdkResults
+              }
+            }
+        """.trimIndent()
+    }
+
+    private fun sampleEthereumNativeEvmProverSelfTestFixtureJson(
+        nativeProverBundle: SccpEvm.EthereumMainnetNativeEvmProverBundle,
+        kotlinProofHash: String? = null,
+    ): String {
+        val publicSignalWords = (0 until 9).map { index ->
+            "0x" + (index + 0x20).toString(16).padStart(2, '0').repeat(32)
+        }
+        fun sdkResult(proofHash: String = "0x" + "e4".repeat(32)): String =
+            """
+            {
+              "request_hash": "0x${"e1".repeat(32)}",
+              "witness_hash": "0x${"e2".repeat(32)}",
+              "source_proof_hash": "0x${"e3".repeat(32)}",
+              "proof_hash": "$proofHash",
+              "public_signal_words": [${publicSignalWords.joinToString(",") { "\"$it\"" }}],
+              "calldata_hash": "0x${"e5".repeat(32)}",
+              "torii_submit_payload_hash": "0x${"e6".repeat(32)}"
+            }
+            """.trimIndent()
+        val defaultProofHash = "0x" + "e4".repeat(32)
+        val sdkResults = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
+            .keys
+            .sorted()
+            .joinToString(",") { sdk ->
+                val proofHash = if (sdk == "kotlin") {
+                    kotlinProofHash ?: defaultProofHash
+                } else {
+                    defaultProofHash
+                }
+                "\"$sdk\": ${sdkResult(proofHash)}"
+            }
+        return """
+            {
+              "schema": "${SccpEvm.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1}",
+              "domain": ${SccpEvm.DOMAIN_ETH},
+              "chain": "eth",
+              "proof_backend": "${SccpEvm.GROTH16_BN254_PROOF_BACKEND_V1}",
+              "proof_artifact_hash": "${nativeProverBundle.proofArtifactHash}",
+              "proving_key_hash": "${nativeProverBundle.provingKeyHash}",
+              "verifier_key_hash": "${nativeProverBundle.verifierKeyHash}",
+              "destination_binding_hash": "${nativeProverBundle.destinationBindingHash}",
+              "request_hash": "0x${"e1".repeat(32)}",
+              "witness_hash": "0x${"e2".repeat(32)}",
+              "source_proof_hash": "0x${"e3".repeat(32)}",
+              "proof_hash": "$defaultProofHash",
+              "public_signal_words": [${publicSignalWords.joinToString(",") { "\"$it\"" }}],
+              "calldata_hash": "0x${"e5".repeat(32)}",
+              "torii_submit_payload_hash": "0x${"e6".repeat(32)}",
+              "sdk_results": {
+                $sdkResults
+              }
             }
         """.trimIndent()
     }

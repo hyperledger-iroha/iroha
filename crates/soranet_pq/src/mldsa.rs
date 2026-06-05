@@ -6,13 +6,13 @@ use pqcrypto_traits::{
         VerificationError,
     },
 };
-use rand_core::RngCore;
+use rand_core::{RngCore, TryCryptoRng};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
-    hedged_chacha20_rng_from_os,
+    hedged_chacha20_rng_from_rng,
 };
 
 #[path = "mldsa_backend.rs"]
@@ -288,7 +288,21 @@ pub fn generate_mldsa_keypair(
 /// # Errors
 /// Returns [`MlDsaError::Rng`] when the initial OS seed draw fails.
 pub fn generate_mldsa_keypair_from_os(suite: MlDsaSuite) -> Result<MlDsaKeyPair, MlDsaError> {
-    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:keypair")?;
+    let mut rng = rand::rngs::OsRng;
+    generate_mldsa_keypair_from_rng(suite, &mut rng)
+}
+
+/// Generate an ML-DSA keypair using caller-supplied seed entropy plus live OS
+/// entropy when available.
+///
+/// # Errors
+/// Returns [`MlDsaError::Rng`] when the required seed draw fails, or a backend
+/// error when generated material fails validation.
+pub fn generate_mldsa_keypair_from_rng<R: TryCryptoRng + ?Sized>(
+    suite: MlDsaSuite,
+    rng: &mut R,
+) -> Result<MlDsaKeyPair, MlDsaError> {
+    let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mldsa:keypair", rng)?;
     generate_mldsa_keypair(suite, &mut rng)
 }
 
@@ -336,11 +350,27 @@ pub fn sign_mldsa_from_os(
     context: &[u8],
     message: &[u8],
 ) -> Result<MlDsaSignature, MlDsaError> {
+    let mut rng = rand::rngs::OsRng;
+    sign_mldsa_from_rng(suite, secret_key, context, message, &mut rng)
+}
+
+/// Sign using caller-supplied seed entropy plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlDsaError::Rng`] when the required seed draw fails, or a backend
+/// error when the secret-key encoding is invalid.
+pub fn sign_mldsa_from_rng<R: TryCryptoRng + ?Sized>(
+    suite: MlDsaSuite,
+    secret_key: &[u8],
+    context: &[u8],
+    message: &[u8],
+    rng: &mut R,
+) -> Result<MlDsaSignature, MlDsaError> {
     if context.len() > ML_DSA_CONTEXT_MAX_LEN {
         return Err(MlDsaError::ContextTooLong { len: context.len() });
     }
     suite.validate_secret_key(secret_key)?;
-    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:sign")?;
+    let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mldsa:sign", rng)?;
     sign_mldsa(suite, secret_key, context, message, &mut rng)
 }
 
@@ -427,11 +457,45 @@ pub fn validate_mldsa_signature(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), M
 
 #[cfg(test)]
 mod tests {
+    use rand_core::{TryCryptoRng, TryRngCore};
+
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
 
     use super::*;
 
     const ML_DSA_SECRET_TR_OFFSET: usize = 64;
+
+    #[derive(Debug)]
+    struct FailingPqSeedRng;
+
+    #[derive(Debug)]
+    struct FailingPqSeedRngError;
+
+    impl core::fmt::Display for FailingPqSeedRngError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("failing ML-DSA seed RNG")
+        }
+    }
+
+    impl std::error::Error for FailingPqSeedRngError {}
+
+    impl TryRngCore for FailingPqSeedRng {
+        type Error = FailingPqSeedRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingPqSeedRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingPqSeedRng {}
 
     fn seeded_keypair(suite: MlDsaSuite, seed: u8, personalization: &'static [u8]) -> MlDsaKeyPair {
         generate_mldsa_keypair_from_seed(
@@ -506,6 +570,29 @@ mod tests {
             signature.as_bytes(),
         )
         .expect("OS-backed ML-DSA signature verifies");
+    }
+
+    #[test]
+    fn from_rng_keypair_reports_seed_failure() {
+        let mut rng = FailingPqSeedRng;
+        match generate_mldsa_keypair_from_rng(MlDsaSuite::MlDsa44, &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA keypair seed RNG failure must be reported"),
+            Err(other) => panic!("expected ML-DSA RNG error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_rng_signing_reports_seed_failure() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xA4, b"failing-sign-seed-keygen");
+        let mut rng = FailingPqSeedRng;
+
+        match sign_mldsa_from_rng(suite, keypair.secret_key(), b"", b"message", &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA signing seed RNG failure must be reported"),
+            Err(other) => panic!("expected ML-DSA signing RNG error, got {other:?}"),
+        }
     }
 
     #[test]

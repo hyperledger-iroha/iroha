@@ -386,6 +386,28 @@ public sealed class SccpEthereumMainnetTests
         }
     }
 
+    private sealed class NativeProverSelfTestStub(
+        Func<
+            EthereumMainnetNativeEvmProverSelfTestFixture,
+            EthereumMainnetNativeEvmProverSelfTestSdkResult,
+            EthereumMainnetNativeEvmProverArtifacts,
+            EthereumMainnetNativeEvmProverSelfTestSdkResult>? run = null)
+        : IEthereumMainnetNativeProverSelfTest
+    {
+        public bool Called { get; private set; }
+
+        public ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult> RunAsync(
+            EthereumMainnetNativeEvmProverSelfTestFixture fixture,
+            EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult,
+            EthereumMainnetNativeEvmProverArtifacts artifacts,
+            CancellationToken cancellationToken = default)
+        {
+            Called = true;
+            Assert.Equal(expectedResult.ProofHash, fixture.ProofHash);
+            return ValueTask.FromResult(run?.Invoke(fixture, expectedResult, artifacts) ?? expectedResult);
+        }
+    }
+
     private sealed class MutatingOutboundProverStub(byte[] proofBytes) : IEthereumMainnetOutboundProver
     {
         public EthereumMainnetOutboundProofRequest? Request { get; private set; }
@@ -497,14 +519,27 @@ public sealed class SccpEthereumMainnetTests
             "0x" + new string('c', 64),
             destinationBindingHash,
             artifacts,
-            ["0x" + new string('d', 64), "0x" + new string('e', 64)],
+            SampleNativeAuditHashes(),
             noWasm: noWasm,
             remoteProverRequired: remoteProverRequired,
             expectedDestinationBindingHash: expectedDestinationBindingHash,
             proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
             provingKey: "artifacts/eth-mainnet/proving-key.bin",
-            verifierKey: "artifacts/eth-mainnet/verifier-key.bin");
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json");
     }
+
+    private static IReadOnlyDictionary<string, string> SampleNativeAuditHashes()
+        => new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["circuit_security_audit"] = "0x" + new string('d', 64),
+            ["native_implementation_audit"] = "0x" + new string('e', 64),
+            ["reproducible_build_attestation"] = "0x" + new string('f', 64),
+            ["cross_sdk_fixture_parity"] = "0x" + new string('1', 64),
+            ["native_prover_self_test"] = "0x" + new string('2', 64),
+            ["no_wasm_no_remote_scan"] = "0x" + new string('3', 64),
+        };
 
     private static string Sha256Hex(byte[] value) =>
         "0x" + Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
@@ -550,7 +585,121 @@ public sealed class SccpEthereumMainnetTests
           "remote_prover_required": {{remoteProverRequired.ToString().ToLowerInvariant()}},
           "browser_implementation": "pure-typescript",
           "native_sdk_artifacts": [{{artifacts}}],
-          "audit_hashes": ["0x{{new string('d', 64)}}", "0x{{new string('e', 64)}}"]
+          "cross_sdk_fixture_parity_artifact": "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+          "native_prover_self_test_artifact": "artifacts/eth-mainnet/native-prover-self-test.json",
+          "audit_hashes": {
+            "circuit_security_audit": "0x{{new string('d', 64)}}",
+            "native_implementation_audit": "0x{{new string('e', 64)}}",
+            "reproducible_build_attestation": "0x{{new string('f', 64)}}",
+            "cross_sdk_fixture_parity": "0x{{new string('1', 64)}}",
+            "native_prover_self_test": "0x{{new string('2', 64)}}",
+            "no_wasm_no_remote_scan": "0x{{new string('3', 64)}}"
+          }
+        }
+        """;
+    }
+
+    private static string SampleNativeEvmProverParityFixtureJson(
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string? dotnetCalldataHash = null)
+    {
+        var defaultCalldataHash = "0x" + new string('3', 64);
+        var publicSignalWords = string.Join(
+            ",",
+            Enumerable.Range(0, 9)
+                .Select(index => $"\"0x{string.Concat(Enumerable.Repeat((index + 0x10).ToString("x2"), 32))}\""));
+        var sdkResults = string.Join(
+            ",",
+            EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry =>
+                {
+                    var calldataHash = entry.Key == "dotnet"
+                        ? dotnetCalldataHash ?? defaultCalldataHash
+                        : defaultCalldataHash;
+                    return $$"""
+                    "{{entry.Key}}": {
+                      "receipt_proof_hash": "0x{{new string('1', 64)}}",
+                      "source_proof_hash": "0x{{new string('2', 64)}}",
+                      "destination_binding_hash": "{{nativeProverBundle.DestinationBindingHash}}",
+                      "public_signal_words": [{{publicSignalWords}}],
+                      "calldata_hash": "{{calldataHash}}",
+                      "torii_submit_payload_hash": "0x{{new string('4', 64)}}"
+                    }
+                    """;
+                }));
+        return $$"""
+        {
+          "schema": "{{EthereumMainnetSccp.EthNativeEvmProverParityFixtureSchemaV1}}",
+          "domain": {{EthereumMainnetSccp.DomainEthereum}},
+          "chain": "eth",
+          "proof_backend": "{{EthereumMainnetSccp.EvmGroth16Bn254ProofBackend}}",
+          "proof_artifact_hash": "{{nativeProverBundle.ProofArtifactHash}}",
+          "proving_key_hash": "{{nativeProverBundle.ProvingKeyHash}}",
+          "verifier_key_hash": "{{nativeProverBundle.VerifierKeyHash}}",
+          "destination_binding_hash": "{{nativeProverBundle.DestinationBindingHash}}",
+          "receipt_proof_hash": "0x{{new string('1', 64)}}",
+          "source_proof_hash": "0x{{new string('2', 64)}}",
+          "public_signal_words": [{{publicSignalWords}}],
+          "calldata_hash": "{{defaultCalldataHash}}",
+          "torii_submit_payload_hash": "0x{{new string('4', 64)}}",
+          "sdk_results": {
+            {{sdkResults}}
+          }
+        }
+        """;
+    }
+
+    private static string SampleNativeEvmProverSelfTestFixtureJson(
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string? dotnetProofHash = null)
+    {
+        var defaultProofHash = "0x" + new string('8', 64);
+        var publicSignalWords = string.Join(
+            ",",
+            Enumerable.Range(0, 9)
+                .Select(index => $"\"0x{string.Concat(Enumerable.Repeat((index + 0x20).ToString("x2"), 32))}\""));
+        var sdkResults = string.Join(
+            ",",
+            EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry =>
+                {
+                    var proofHash = entry.Key == "dotnet"
+                        ? dotnetProofHash ?? defaultProofHash
+                        : defaultProofHash;
+                    return $$"""
+                    "{{entry.Key}}": {
+                      "request_hash": "0x{{new string('5', 64)}}",
+                      "witness_hash": "0x{{new string('6', 64)}}",
+                      "source_proof_hash": "0x{{new string('7', 64)}}",
+                      "proof_hash": "{{proofHash}}",
+                      "public_signal_words": [{{publicSignalWords}}],
+                      "calldata_hash": "0x{{new string('9', 64)}}",
+                      "torii_submit_payload_hash": "0x{{new string('a', 64)}}"
+                    }
+                    """;
+                }));
+        return $$"""
+        {
+          "schema": "{{EthereumMainnetSccp.EthNativeEvmProverSelfTestSchemaV1}}",
+          "domain": {{EthereumMainnetSccp.DomainEthereum}},
+          "chain": "eth",
+          "proof_backend": "{{EthereumMainnetSccp.EvmGroth16Bn254ProofBackend}}",
+          "proof_artifact_hash": "{{nativeProverBundle.ProofArtifactHash}}",
+          "proving_key_hash": "{{nativeProverBundle.ProvingKeyHash}}",
+          "verifier_key_hash": "{{nativeProverBundle.VerifierKeyHash}}",
+          "destination_binding_hash": "{{nativeProverBundle.DestinationBindingHash}}",
+          "request_hash": "0x{{new string('5', 64)}}",
+          "witness_hash": "0x{{new string('6', 64)}}",
+          "source_proof_hash": "0x{{new string('7', 64)}}",
+          "proof_hash": "{{defaultProofHash}}",
+          "public_signal_words": [{{publicSignalWords}}],
+          "calldata_hash": "0x{{new string('9', 64)}}",
+          "torii_submit_payload_hash": "0x{{new string('a', 64)}}",
+          "sdk_results": {
+            {{sdkResults}}
+          }
         }
         """;
     }
@@ -3684,6 +3833,40 @@ public sealed class SccpEthereumMainnetTests
             parsedNativeProverBundle.NativeSdkArtifacts,
             artifact => artifact.Sdk == "dotnet"
                 && artifact.ImplementationArtifact == "artifacts/eth-mainnet/dotnet-implementation.bin");
+        var parityFixture = EthereumMainnetNativeEvmProverParityFixture.FromJson(
+            SampleNativeEvmProverParityFixtureJson(nativeProverBundle),
+            nativeProverBundle);
+        Assert.Equal(EthereumMainnetSccp.EthNativeEvmProverParityFixtureSchemaV1, parityFixture.Schema);
+        Assert.Equal(ExpectedBindingHash, parityFixture.DestinationBindingHash);
+        Assert.Equal(9, parityFixture.PublicSignalWords.Count);
+        Assert.Equal(
+            parityFixture.ToriiSubmitPayloadHash,
+            parityFixture.SdkResults["dotnet"].ToriiSubmitPayloadHash);
+        Assert.Contains(
+            "sdkResults.dotnet",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverParityFixture.FromJson(
+                    SampleNativeEvmProverParityFixtureJson(
+                        nativeProverBundle,
+                        dotnetCalldataHash: "0x" + new string('9', 64)),
+                    nativeProverBundle)).Message);
+        var selfTestFixture = EthereumMainnetNativeEvmProverSelfTestFixture.FromJson(
+            SampleNativeEvmProverSelfTestFixtureJson(nativeProverBundle),
+            nativeProverBundle);
+        Assert.Equal(EthereumMainnetSccp.EthNativeEvmProverSelfTestSchemaV1, selfTestFixture.Schema);
+        Assert.Equal(ExpectedBindingHash, selfTestFixture.DestinationBindingHash);
+        Assert.Equal(9, selfTestFixture.PublicSignalWords.Count);
+        Assert.Equal(
+            selfTestFixture.ProofHash,
+            selfTestFixture.SdkResults["dotnet"].ProofHash);
+        Assert.Contains(
+            "sdkResults.dotnet",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverSelfTestFixture.FromJson(
+                    SampleNativeEvmProverSelfTestFixtureJson(
+                        nativeProverBundle,
+                        dotnetProofHash: "0x" + new string('9', 64)),
+                    nativeProverBundle)).Message);
         Assert.Contains(
             "noWasm",
             Assert.Throws<ArgumentException>(
@@ -3758,7 +3941,7 @@ public sealed class SccpEthereumMainnetTests
                     "\"0x" + new string('D', 64) + "\"",
                     StringComparison.Ordinal),
                 ExpectedBindingHash));
-        Assert.Contains("auditHashes[0]", noncanonicalAuditHash.Message);
+        Assert.Contains("auditHashes.circuit_security_audit", noncanonicalAuditHash.Message);
         Assert.Contains("canonical lowercase", noncanonicalAuditHash.Message);
         var replayedAuditHash = Assert.Throws<ArgumentException>(
             () => EthereumMainnetNativeEvmProverBundle.FromJson(
@@ -3767,7 +3950,7 @@ public sealed class SccpEthereumMainnetTests
                     "\"0x" + new string('9', 64) + "\"",
                     StringComparison.Ordinal),
                 ExpectedBindingHash));
-        Assert.Contains("auditHashes[0]", replayedAuditHash.Message);
+        Assert.Contains("auditHashes.circuit_security_audit", replayedAuditHash.Message);
         Assert.Contains("proofArtifactHash", replayedAuditHash.Message);
         Assert.Contains("role-separated", replayedAuditHash.Message);
         var bundledRequest = EthereumMainnetSccp.BuildOutboundProofRequest(input, nativeProverBundle);
@@ -3801,7 +3984,7 @@ public sealed class SccpEthereumMainnetTests
             "0x" + new string('b', 64),
             verifierKeyHash);
         var artifactInput = SampleOutboundInput(artifactBinding, publicInputs);
-        var verifiedBundle = new EthereumMainnetNativeEvmProverBundle(
+        var draftVerifiedBundle = new EthereumMainnetNativeEvmProverBundle(
             proofArtifactHash,
             provingKeyHash,
             verifierKeyHash,
@@ -3817,36 +4000,189 @@ public sealed class SccpEthereumMainnetTests
                         ? implementationHash
                         : "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32))))
                 .ToArray(),
-            ["0x" + new string('d', 64)],
-            expectedDestinationBindingHash: artifactBinding.BindingHash);
+            SampleNativeAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.BindingHash,
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json");
+        var parityFixtureBytes = Encoding.UTF8.GetBytes(
+            SampleNativeEvmProverParityFixtureJson(draftVerifiedBundle));
+        var parityFixtureHash = Sha256Hex(parityFixtureBytes);
+        var selfTestFixtureBytes = Encoding.UTF8.GetBytes(
+            SampleNativeEvmProverSelfTestFixtureJson(draftVerifiedBundle));
+        var selfTestFixtureHash = Sha256Hex(selfTestFixtureBytes);
+        var verifiedAuditHashes = SampleNativeAuditHashes()
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        verifiedAuditHashes["cross_sdk_fixture_parity"] = parityFixtureHash;
+        verifiedAuditHashes["native_prover_self_test"] = selfTestFixtureHash;
+        var verifiedBundle = new EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.BindingHash,
+            draftVerifiedBundle.NativeSdkArtifacts,
+            verifiedAuditHashes,
+            expectedDestinationBindingHash: artifactBinding.BindingHash,
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json");
         var verifiedArtifacts = verifiedBundle.VerifiedArtifacts(
             proofArtifactBytes,
             provingKeyBytes,
             verifierKeyBytes,
             "dotnet",
-            implementationBytes);
+            implementationBytes,
+            parityFixtureBytes,
+            selfTestFixtureBytes);
         Assert.Equal(EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1, verifiedArtifacts.HashAlgorithm);
         Assert.Equal(proofArtifactHash, verifiedArtifacts.ProofArtifactHash);
         Assert.Equal(provingKeyHash, verifiedArtifacts.ProvingKeyHash);
         Assert.Equal(verifierKeyHash, verifiedArtifacts.VerifierKeyHash);
+        Assert.Equal(parityFixtureHash, verifiedArtifacts.CrossSdkFixtureParityHash);
+        Assert.Equal("0x" + new string('3', 64), verifiedArtifacts.CrossSdkFixtureParity?.CalldataHash);
+        Assert.Equal(selfTestFixtureHash, verifiedArtifacts.NativeProverSelfTestHash);
+        Assert.Equal("0x" + new string('8', 64), verifiedArtifacts.NativeProverSelfTest?.ProofHash);
         Assert.Equal("native-csharp", verifiedArtifacts.Implementation);
         Assert.Equal(implementationHash, verifiedArtifacts.ImplementationHash);
+        var dotnetImplementationArtifact = Assert.Single(
+            verifiedBundle.NativeSdkArtifacts,
+            row => row.Sdk == "dotnet").ImplementationArtifact!;
+        var artifactBytesByPath = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [verifiedBundle.ProofArtifact!] = proofArtifactBytes,
+            [verifiedBundle.ProvingKey!] = provingKeyBytes,
+            [verifiedBundle.VerifierKey!] = verifierKeyBytes,
+            [verifiedBundle.CrossSdkFixtureParityArtifact!] = parityFixtureBytes,
+            [verifiedBundle.NativeProverSelfTestArtifact!] = selfTestFixtureBytes,
+            [dotnetImplementationArtifact] = implementationBytes,
+        };
+        var verifiedFromResolver = verifiedBundle.VerifiedArtifacts(
+            "dotnet",
+            path => artifactBytesByPath.TryGetValue(path, out var bytes)
+                ? bytes
+                : throw new ArgumentException(path));
+        Assert.Equal(implementationHash, verifiedFromResolver.ImplementationHash);
+        Assert.Equal(parityFixtureHash, verifiedFromResolver.CrossSdkFixtureParityHash);
+        Assert.Equal(selfTestFixtureHash, verifiedFromResolver.NativeProverSelfTestHash);
+        Assert.Contains(
+            "crossSdkFixtureParityArtifact",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    "dotnet",
+                    path => path == verifiedBundle.CrossSdkFixtureParityArtifact
+                        ? throw new ArgumentException("crossSdkFixtureParityArtifact")
+                        : artifactBytesByPath[path])).Message);
+        Assert.Contains(
+            "nativeProverSelfTestArtifact",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    "dotnet",
+                    path => path == verifiedBundle.NativeProverSelfTestArtifact
+                        ? throw new ArgumentException("nativeProverSelfTestArtifact")
+                        : artifactBytesByPath[path])).Message);
         var artifactBoundProver = new OutboundProverStub(Groth16ProofBytes());
+        var artifactBoundSelfTest = new NativeProverSelfTestStub(
+            (fixture, expected, artifacts) =>
+            {
+                Assert.Equal(selfTestFixtureHash, artifacts.NativeProverSelfTestHash);
+                return expected;
+            });
         var artifactBoundResult = await EthereumMainnetSccp.ProveOutboundToEthereumAsync(
             artifactInput,
             artifactBoundProver,
-            verifiedArtifacts);
+            verifiedArtifacts,
+            artifactBoundSelfTest);
+        Assert.True(artifactBoundSelfTest.Called);
         Assert.NotNull(artifactBoundProver.Request);
         Assert.Equal(proofArtifactHash, artifactBoundProver.Request!.ProofArtifactHash);
         Assert.Equal(provingKeyHash, artifactBoundProver.Request.ProvingKeyHash);
         Assert.Equal(proofArtifactHash, artifactBoundResult.ProofArtifactHash);
         Assert.Equal(provingKeyHash, artifactBoundResult.ProvingKeyHash);
+        var missingSelfTestHookProver = new OutboundProverStub(Groth16ProofBytes());
+        Assert.Contains(
+            "nativeProverSelfTest runner",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+                    artifactInput,
+                    missingSelfTestHookProver,
+                    verifiedArtifacts))).Message);
+        Assert.Null(missingSelfTestHookProver.Request);
+        var driftingSelfTestHookProver = new OutboundProverStub(Groth16ProofBytes());
+        var driftingSelfTestHook = new NativeProverSelfTestStub(
+            (_, expected, _) => new EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                expected.RequestHash,
+                expected.WitnessHash,
+                expected.SourceProofHash,
+                "0x" + new string('9', 64),
+                expected.PublicSignalWords,
+                expected.CalldataHash,
+                expected.ToriiSubmitPayloadHash));
+        Assert.Contains(
+            "nativeProverSelfTest result",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+                    artifactInput,
+                    driftingSelfTestHookProver,
+                    verifiedArtifacts,
+                    driftingSelfTestHook))).Message);
+        Assert.Null(driftingSelfTestHookProver.Request);
+        var factoryBoundProver = new OutboundProverStub(Groth16ProofBytes());
+        var factoryBoundSelfTest = new NativeProverSelfTestStub();
+        var factoryBoundResult = await EthereumMainnetSccp.ProveOutboundToEthereumFromNativeProverBundleAsync(
+            artifactInput,
+            factoryBoundProver,
+            verifiedBundle,
+            "dotnet",
+            path => artifactBytesByPath.TryGetValue(path, out var bytes)
+                ? bytes
+                : throw new ArgumentException(path),
+            factoryBoundSelfTest);
+        Assert.True(factoryBoundSelfTest.Called);
+        Assert.NotNull(factoryBoundProver.Request);
+        Assert.Equal(proofArtifactHash, factoryBoundProver.Request!.ProofArtifactHash);
+        Assert.Equal(provingKeyHash, factoryBoundProver.Request.ProvingKeyHash);
+        Assert.Equal(proofArtifactHash, factoryBoundResult.ProofArtifactHash);
+        Assert.Equal(provingKeyHash, factoryBoundResult.ProvingKeyHash);
+        var missingFactoryParityProver = new OutboundProverStub(Groth16ProofBytes());
+        Assert.Contains(
+            "crossSdkFixtureParityArtifact",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                async () => await EthereumMainnetSccp.ProveOutboundToEthereumFromNativeProverBundleAsync(
+                    artifactInput,
+                    missingFactoryParityProver,
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.CrossSdkFixtureParityArtifact
+                        ? throw new ArgumentException("crossSdkFixtureParityArtifact")
+                        : artifactBytesByPath[path]))).Message);
+        Assert.Null(missingFactoryParityProver.Request);
+        var missingFactorySelfTestProver = new OutboundProverStub(Groth16ProofBytes());
+        Assert.Contains(
+            "nativeProverSelfTestArtifact",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                async () => await EthereumMainnetSccp.ProveOutboundToEthereumFromNativeProverBundleAsync(
+                    artifactInput,
+                    missingFactorySelfTestProver,
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.NativeProverSelfTestArtifact
+                        ? throw new ArgumentException("nativeProverSelfTestArtifact")
+                        : artifactBytesByPath[path]))).Message);
+        Assert.Null(missingFactorySelfTestProver.Request);
         var implementationUnboundArtifacts = new EthereumMainnetNativeEvmProverArtifacts(
             EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1,
             verifiedBundle,
             proofArtifactHash,
             provingKeyHash,
             verifierKeyHash,
+            parityFixtureHash,
+            verifiedArtifacts.CrossSdkFixtureParity,
+            selfTestFixtureHash,
+            verifiedArtifacts.NativeProverSelfTest,
             "dotnet",
             "native-csharp",
             null);
@@ -3865,6 +4201,10 @@ public sealed class SccpEthereumMainnetTests
             proofArtifactHash,
             provingKeyHash,
             "0x" + new string('e', 64),
+            parityFixtureHash,
+            verifiedArtifacts.CrossSdkFixtureParity,
+            selfTestFixtureHash,
+            verifiedArtifacts.NativeProverSelfTest,
             "dotnet",
             "native-csharp",
             implementationHash);
@@ -3891,7 +4231,9 @@ public sealed class SccpEthereumMainnetTests
                     proofArtifactBytes,
                     provingKeyBytes,
                     verifierKeyBytes,
-                    implementationBytes: implementationBytes)).Message);
+                    implementationBytes: implementationBytes,
+                    crossSdkFixtureParityBytes: parityFixtureBytes,
+                    nativeProverSelfTestBytes: selfTestFixtureBytes)).Message);
         Assert.Contains(
             "implementationBytes are required",
             Assert.Throws<ArgumentException>(
@@ -3899,7 +4241,9 @@ public sealed class SccpEthereumMainnetTests
                     proofArtifactBytes,
                     provingKeyBytes,
                     verifierKeyBytes,
-                    "dotnet")).Message);
+                    "dotnet",
+                    crossSdkFixtureParityBytes: parityFixtureBytes,
+                    nativeProverSelfTestBytes: selfTestFixtureBytes)).Message);
         Assert.Contains(
             "implementationBytes sha256",
             Assert.Throws<ArgumentException>(
@@ -3908,10 +4252,52 @@ public sealed class SccpEthereumMainnetTests
                     provingKeyBytes,
                     verifierKeyBytes,
                     "dotnet",
-                    Encoding.UTF8.GetBytes("tampered"))).Message);
+                    Encoding.UTF8.GetBytes("tampered"),
+                    parityFixtureBytes,
+                    selfTestFixtureBytes)).Message);
+        Assert.Contains(
+            "crossSdkFixtureParityBytes",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes)).Message);
+        Assert.Contains(
+            "crossSdkFixtureParityBytes sha256",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    Encoding.UTF8.GetBytes("{}"))).Message);
+        Assert.Contains(
+            "nativeProverSelfTestBytes",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    parityFixtureBytes)).Message);
+        Assert.Contains(
+            "nativeProverSelfTestBytes sha256",
+            Assert.Throws<ArgumentException>(
+                () => verifiedBundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    parityFixtureBytes,
+                    Encoding.UTF8.GetBytes("{}"))).Message);
         var flaggedArtifactBytes = new byte[] { 0x77, 0x61, 0x73, 0x6D };
         var flaggedArtifactHash = Sha256Hex(flaggedArtifactBytes);
-        var flaggedBundle = new EthereumMainnetNativeEvmProverBundle(
+        var draftFlaggedBundle = new EthereumMainnetNativeEvmProverBundle(
             flaggedArtifactHash,
             provingKeyHash,
             verifierKeyHash,
@@ -3927,7 +4313,23 @@ public sealed class SccpEthereumMainnetTests
                         ? implementationHash
                         : "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32))))
                 .ToArray(),
-            ["0x" + new string('d', 64)],
+            SampleNativeAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.BindingHash);
+        var flaggedParityFixtureBytes = Encoding.UTF8.GetBytes(
+            SampleNativeEvmProverParityFixtureJson(draftFlaggedBundle));
+        var flaggedSelfTestFixtureBytes = Encoding.UTF8.GetBytes(
+            SampleNativeEvmProverSelfTestFixtureJson(draftFlaggedBundle));
+        var flaggedAuditHashes = SampleNativeAuditHashes()
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        flaggedAuditHashes["cross_sdk_fixture_parity"] = Sha256Hex(flaggedParityFixtureBytes);
+        flaggedAuditHashes["native_prover_self_test"] = Sha256Hex(flaggedSelfTestFixtureBytes);
+        var flaggedBundle = new EthereumMainnetNativeEvmProverBundle(
+            flaggedArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.BindingHash,
+            draftFlaggedBundle.NativeSdkArtifacts,
+            flaggedAuditHashes,
             expectedDestinationBindingHash: artifactBinding.BindingHash);
         Assert.Contains(
             "proofArtifactBytes contains forbidden",
@@ -3935,7 +4337,9 @@ public sealed class SccpEthereumMainnetTests
                 () => flaggedBundle.VerifiedArtifacts(
                     flaggedArtifactBytes,
                     provingKeyBytes,
-                    verifierKeyBytes)).Message);
+                    verifierKeyBytes,
+                    crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
+                    nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes)).Message);
         Assert.Contains(
             "noWasm",
             Assert.Throws<ArgumentException>(
@@ -4012,6 +4416,34 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(676, submission.CallData.Length);
         Assert.Equal(submission.CallData, submission.EnvelopeBytes);
         Assert.Equal(submission.CallDataHex, submission.EnvelopeHex);
+        var resolverSubmission = EthereumMainnetSccp.BuildEthereumCalldataFromNativeProverBundle(
+            new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+            verifiedBundle,
+            "dotnet",
+            path => artifactBytesByPath.TryGetValue(path, out var bytes)
+                ? bytes
+                : throw new ArgumentException(path));
+        Assert.Equal(ExpectedCallDataHex, resolverSubmission.CallDataHex);
+        Assert.Contains(
+            "crossSdkFixtureParityArtifact",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetSccp.BuildEthereumCalldataFromNativeProverBundle(
+                    new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.CrossSdkFixtureParityArtifact
+                        ? throw new ArgumentException("crossSdkFixtureParityArtifact")
+                        : artifactBytesByPath[path])).Message);
+        Assert.Contains(
+            "nativeProverSelfTestArtifact",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetSccp.BuildEthereumCalldataFromNativeProverBundle(
+                    new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.NativeProverSelfTestArtifact
+                        ? throw new ArgumentException("nativeProverSelfTestArtifact")
+                        : artifactBytesByPath[path])).Message);
 
         var submitter = new OutboundSubmitterStub();
         Assert.Equal(
@@ -4022,6 +4454,45 @@ public sealed class SccpEthereumMainnetTests
                 verifiedArtifacts));
         Assert.NotNull(submitter.Submission);
         Assert.Equal(ExpectedCallDataHex, submitter.Submission.CallDataHex);
+        var resolverSubmitter = new OutboundSubmitterStub();
+        Assert.Equal(
+            "eth-submitted",
+            await EthereumMainnetSccp.SubmitOutboundToEthereumFromNativeProverBundleAsync(
+                new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+                resolverSubmitter,
+                verifiedBundle,
+                "dotnet",
+                path => artifactBytesByPath.TryGetValue(path, out var bytes)
+                    ? bytes
+                    : throw new ArgumentException(path)));
+        Assert.NotNull(resolverSubmitter.Submission);
+        Assert.Equal(ExpectedCallDataHex, resolverSubmitter.Submission.CallDataHex);
+        var missingParitySubmitter = new OutboundSubmitterStub();
+        Assert.Contains(
+            "crossSdkFixtureParityArtifact",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                async () => await EthereumMainnetSccp.SubmitOutboundToEthereumFromNativeProverBundleAsync(
+                    new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+                    missingParitySubmitter,
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.CrossSdkFixtureParityArtifact
+                        ? throw new ArgumentException("crossSdkFixtureParityArtifact")
+                        : artifactBytesByPath[path]))).Message);
+        Assert.Null(missingParitySubmitter.Submission);
+        var missingSelfTestSubmitter = new OutboundSubmitterStub();
+        Assert.Contains(
+            "nativeProverSelfTestArtifact",
+            (await Assert.ThrowsAsync<ArgumentException>(
+                async () => await EthereumMainnetSccp.SubmitOutboundToEthereumFromNativeProverBundleAsync(
+                    new EthereumMainnetSccpSubmissionInput(artifactBoundResult),
+                    missingSelfTestSubmitter,
+                    verifiedBundle,
+                    "dotnet",
+                    path => path == verifiedBundle.NativeProverSelfTestArtifact
+                        ? throw new ArgumentException("nativeProverSelfTestArtifact")
+                        : artifactBytesByPath[path]))).Message);
+        Assert.Null(missingSelfTestSubmitter.Submission);
 
         var guardedSubmitter = new OutboundSubmitterStub();
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(

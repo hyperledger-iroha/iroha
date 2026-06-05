@@ -126,6 +126,7 @@ public final class EthereumMainnetSccp {
   private final InboundProver inboundProver;
   private final InboundSubmitter inboundSubmitter;
   private final OutboundSubmitter outboundSubmitter;
+  private final NativeProverSelfTest nativeProverSelfTest;
   private final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle;
   private final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts;
   private final String sourceBridgeEmitterAddress;
@@ -250,6 +251,32 @@ public final class EthereumMainnetSccp {
       final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
       final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
       final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        nativeProverBundle,
+        nativeProverArtifacts,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+      final NativeProverSelfTest nativeProverSelfTest,
+      final String sourceBridgeEmitterAddress) {
     this.witnessProvider = witnessProvider;
     this.proofEngine = proofEngine;
     this.executionProvider = executionProvider;
@@ -257,10 +284,76 @@ public final class EthereumMainnetSccp {
     this.inboundProver = inboundProver;
     this.inboundSubmitter = inboundSubmitter;
     this.outboundSubmitter = outboundSubmitter;
+    this.nativeProverSelfTest = nativeProverSelfTest;
     this.nativeProverArtifacts = nativeProverArtifacts;
     this.nativeProverBundle =
         nativeProverArtifacts == null ? nativeProverBundle : nativeProverArtifacts.nativeProverBundle();
     this.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress;
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver) {
+    return fromNativeProverBundle(
+        null, null, null, null, null, null, null, nativeProverBundle, sdk, artifactResolver, null);
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver,
+      final String sourceBridgeEmitterAddress) {
+    return fromNativeProverBundle(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        null,
+        nativeProverBundle,
+        sdk,
+        artifactResolver,
+        sourceBridgeEmitterAddress);
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final NativeProverSelfTest nativeProverSelfTest,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver,
+      final String sourceBridgeEmitterAddress) {
+    Objects.requireNonNull(nativeProverBundle, "nativeProverBundle");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts =
+        nativeProverBundle.verifiedArtifacts(sdk, artifactResolver);
+    return new EthereumMainnetSccp(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        verifiedArtifacts.nativeProverBundle(),
+        verifiedArtifacts,
+        nativeProverSelfTest,
+        sourceBridgeEmitterAddress);
   }
 
   public static void requireMainnetChainId(final long chainId) {
@@ -738,6 +831,7 @@ public final class EthereumMainnetSccp {
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequest request = buildOutboundProofRequest(input);
     requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request);
+    requireNativeProverSelfTest(nativeProverArtifacts, nativeProverSelfTest);
     if (proofEngine == null) {
       throw new IllegalStateException("Ethereum mainnet SCCP Groth16 prover is not linked");
     }
@@ -764,6 +858,26 @@ public final class EthereumMainnetSccp {
     if (!artifacts.verifierKeyHash().equals(artifacts.nativeProverBundle().verifierKeyHash())) {
       throw new IllegalArgumentException(
           "nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.crossSdkFixtureParityHash(),
+            artifacts.nativeProverBundle().auditHashes().get("cross_sdk_fixture_parity"))
+        || artifacts.crossSdkFixtureParity() == null
+        || !Objects.equals(
+            artifacts.crossSdkFixtureParity().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.nativeProverSelfTestHash(),
+            artifacts.nativeProverBundle().auditHashes().get("native_prover_self_test"))
+        || artifacts.nativeProverSelfTest() == null
+        || !Objects.equals(
+            artifacts.nativeProverSelfTest().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle");
     }
     if (artifacts.sdk() == null
         || artifacts.sdk().isEmpty()
@@ -793,6 +907,30 @@ public final class EthereumMainnetSccp {
     }
   }
 
+  private static void requireNativeProverSelfTest(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+      final NativeProverSelfTest nativeProverSelfTest) {
+    Objects.requireNonNull(artifacts, "nativeProverArtifacts");
+    final String sdk = Objects.requireNonNull(artifacts.sdk(), "nativeProverArtifacts.sdk");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture fixture =
+        Objects.requireNonNull(
+            artifacts.nativeProverSelfTest(), "nativeProverArtifacts.nativeProverSelfTest");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult =
+        fixture.sdkResults().get(sdk);
+    if (expectedResult == null) {
+      throw new IllegalArgumentException("nativeProverSelfTest sdkResults must include " + sdk);
+    }
+    if (nativeProverSelfTest == null) {
+      throw new IllegalArgumentException("nativeProverSelfTest runner is required");
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult result =
+        nativeProverSelfTest.run(fixture, expectedResult, artifacts);
+    if (!expectedResult.equals(result)) {
+      throw new IllegalArgumentException(
+          "nativeProverSelfTest result must match nativeProverBundle fixture");
+    }
+  }
+
   private static void requireVerifiedNativeProverArtifacts(
       final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
       final EvmSccpProver.ProofResult proofResult) {
@@ -812,6 +950,26 @@ public final class EthereumMainnetSccp {
     if (!artifacts.verifierKeyHash().equals(artifacts.nativeProverBundle().verifierKeyHash())) {
       throw new IllegalArgumentException(
           "nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.crossSdkFixtureParityHash(),
+            artifacts.nativeProverBundle().auditHashes().get("cross_sdk_fixture_parity"))
+        || artifacts.crossSdkFixtureParity() == null
+        || !Objects.equals(
+            artifacts.crossSdkFixtureParity().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.nativeProverSelfTestHash(),
+            artifacts.nativeProverBundle().auditHashes().get("native_prover_self_test"))
+        || artifacts.nativeProverSelfTest() == null
+        || !Objects.equals(
+            artifacts.nativeProverSelfTest().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle");
     }
     if (artifacts.sdk() == null
         || artifacts.sdk().isEmpty()
@@ -2603,6 +2761,14 @@ public final class EthereumMainnetSccp {
   /** App-supplied Ethereum transaction submitter for locally generated outbound proof calldata. */
   public interface OutboundSubmitter {
     Object submit(EvmSccpProver.Submission submission);
+  }
+
+  /** App-linked native prover self-test runner for Ethereum mainnet outbound proofs. */
+  public interface NativeProverSelfTest {
+    EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult run(
+        EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture fixture,
+        EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult,
+        EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts);
   }
 
   /** Input for Ethereum mainnet -> SORA local-admission submission packaging. */

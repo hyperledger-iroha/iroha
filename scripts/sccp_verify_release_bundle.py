@@ -285,6 +285,71 @@ NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS = {
     "java-android": "native-java",
     "dotnet": "native-csharp",
 }
+NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES = (
+    "circuit_security_audit",
+    "native_implementation_audit",
+    "reproducible_build_attestation",
+    "cross_sdk_fixture_parity",
+    "native_prover_self_test",
+    "no_wasm_no_remote_scan",
+)
+NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA = (
+    "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"
+)
+NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS = {
+    "schema",
+    "domain",
+    "chain",
+    "proof_backend",
+    "proof_artifact_hash",
+    "proving_key_hash",
+    "verifier_key_hash",
+    "destination_binding_hash",
+    "receipt_proof_hash",
+    "source_proof_hash",
+    "public_signal_words",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+    "sdk_results",
+}
+NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS = {
+    "receipt_proof_hash",
+    "source_proof_hash",
+    "destination_binding_hash",
+    "public_signal_words",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+}
+NATIVE_EVM_PROVER_SELF_TEST_SCHEMA = (
+    "sccp-ethereum-mainnet-native-evm-prover-self-test-v1"
+)
+NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS = {
+    "schema",
+    "domain",
+    "chain",
+    "proof_backend",
+    "proof_artifact_hash",
+    "proving_key_hash",
+    "verifier_key_hash",
+    "destination_binding_hash",
+    "request_hash",
+    "witness_hash",
+    "source_proof_hash",
+    "proof_hash",
+    "public_signal_words",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+    "sdk_results",
+}
+NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS = {
+    "request_hash",
+    "witness_hash",
+    "source_proof_hash",
+    "proof_hash",
+    "public_signal_words",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+}
 NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS = {
     "schema",
     "bundle_id",
@@ -302,6 +367,8 @@ NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS = {
     "remote_prover_required",
     "browser_implementation",
     "native_sdk_artifacts",
+    "cross_sdk_fixture_parity_artifact",
+    "native_prover_self_test_artifact",
     "audit_hashes",
 }
 NATIVE_EVM_PROVER_SDK_ARTIFACT_KEYS = {
@@ -339,6 +406,8 @@ NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS = {
     "verifier_key_hash",
     "destination_binding_hash",
     "audit_hashes",
+    "cross_sdk_fixture_parity_artifact",
+    "native_prover_self_test_artifact",
     "sdk_artifacts",
     "validation_status",
     "validation_blockers",
@@ -2876,9 +2945,17 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
             "assert.equal(await groth16Bridge.verifierKeyHash(), groth16VerifierKeyHash);",
             'callExceptionWithReason("Destination binding hash is required")',
             'callExceptionWithReason("Unexpected Groth16 proof length")',
+            'callExceptionWithReason("Source domain overflow")',
+            'callExceptionWithReason("Target domain overflow")',
+            'callExceptionWithReason("Source and target domains must differ")',
             'callExceptionWithReason("G2 point is zero")',
             'callExceptionWithReason("G1 point is zero")',
             'callExceptionWithReason("Groth16 proof verification failed")',
+            "overflowTargetDomainGrothInputs",
+            "sameDomainGroth16ProofBytes",
+            "wrongDestinationBindingHash",
+            "crossDeploymentGroth16Bridge",
+            "crossDeploymentGroth16Tx",
             "await groth16Bridge.destinationBindingHash()",
             "assert.equal(acceptedGroth16Logs.length, 1);",
             "assert.equal(acceptedGroth16Logs[0].args.messageId, messageId);",
@@ -2896,11 +2973,19 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+            "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
+            "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
             "class DuplicateJsonKeyError",
             "object_pairs_hook=_reject_duplicate_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key",
             "def _native_evm_prover_forbidden_payload_blockers(",
             "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+            "def _native_evm_prover_parity_fixture_status(",
+            "def _native_evm_prover_self_test_status(",
+            "sha256 must match audit_hashes.cross_sdk_fixture_parity",
+            "sha256 must match audit_hashes.native_prover_self_test",
+            "native_prover_self_test_artifact",
+            "sdk_results missing sdk",
             "def _native_evm_prover_hash_role_blockers(",
             "must not be empty",
             "must not duplicate",
@@ -2917,6 +3002,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "object_pairs_hook=_reject_duplicate_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key",
             "def _native_evm_prover_payload_sources(",
+            "cross_sdk_fixture_parity_artifact",
         ),
     ),
     (
@@ -2956,6 +3042,13 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "nativeProverArtifacts artifact hashes must match proofResult",
             "BuildEthereumCalldataUnchecked",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
+            "requireEthereumMainnetNativeProverSelfTest",
+            "NativeProverSelfTestFunction",
+            "EthereumMainnetNativeProverSelfTest",
+            "NativeProverSelfTest",
+            "IEthereumMainnetNativeProverSelfTest",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
             '"javascript/iroha_js/dist/sccp.js"',
             '"javascript/iroha_js/dist/index.js"',
             '"javascript/iroha_js/index.d.ts"',
@@ -2969,6 +3062,9 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
+            "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
+            "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
+            "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
             "def test_release_readiness_native_local_prover_guard_covers_identifier_variants",
             '"remoteProver"',
@@ -2998,6 +3094,9 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
             "parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)",
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "EthereumMainnetNativeProverSelfTestFn",
+            "nativeProverSelfTestBytes",
+            "nativeProverSelfTest(context)",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "WebAssembly.compile(bytes)",
             "import './proof.wasm'",
@@ -3014,6 +3113,9 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
+            "def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
+            "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
+            "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
             "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
             "native proof artifact imports proof.wasm",
         ),
@@ -5185,6 +5287,16 @@ def _is_nonzero_hex32(value: Any) -> bool:
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
 
+def _is_hex32(value: Any) -> bool:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+        return False
+    try:
+        raw = bytes.fromhex(value[2:])
+    except ValueError:
+        return False
+    return len(raw) == 32 and value == f"0x{raw.hex()}"
+
+
 def _native_evm_manifest_relative_path(
     value: Any,
     label: str,
@@ -5359,6 +5471,329 @@ def _native_evm_prover_bundle_artifact_summary(
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 
 
+def _native_evm_prover_parity_fixture_status(
+    manifest_path: Path | None,
+    manifest_artifact: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    label = "cross_sdk_fixture_parity_artifact"
+    prefix = f"native EVM Groth16 prover bundle {label}"
+    relative_path, blockers = _native_evm_manifest_relative_path(
+        payload.get(label),
+        label,
+    )
+    if manifest_path is None or relative_path is None:
+        return None, blockers
+
+    artifact_path = manifest_path.parent.joinpath(*relative_path.parts)
+    try:
+        if not artifact_path.is_file():
+            blockers.append(
+                f"{prefix} file is missing or is not a regular file: "
+                f"{relative_path.as_posix()}"
+            )
+            return None, blockers
+        artifact = _artifact(artifact_path)
+    except OSError as exc:
+        blockers.append(f"{prefix} cannot be read: {exc}")
+        return None, blockers
+    except ValueError as exc:
+        blockers.append(f"{prefix} {exc}")
+        return None, blockers
+
+    if isinstance(manifest_artifact, dict):
+        manifest_artifact_path = manifest_artifact.get("path")
+        if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
+            manifest_relative_path = PurePosixPath(manifest_artifact_path)
+            artifact["path"] = (
+                manifest_relative_path.parent.joinpath(relative_path).as_posix()
+            )
+
+    if artifact["bytes"] == 0:
+        blockers.append(f"{prefix} must not be empty")
+
+    audit_hashes = payload.get("audit_hashes")
+    expected_hash = (
+        audit_hashes.get("cross_sdk_fixture_parity")
+        if isinstance(audit_hashes, dict)
+        else None
+    )
+    actual_hash = f"0x{artifact['sha256']}"
+    if isinstance(expected_hash, str) and actual_hash != expected_hash:
+        blockers.append(
+            f"{prefix} sha256 must match audit_hashes.cross_sdk_fixture_parity"
+        )
+
+    try:
+        fixture = _load_json(artifact_path)
+    except DuplicateJsonKeyError as exc:
+        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        fixture = {}
+    except json.JSONDecodeError as exc:
+        blockers.append(f"{prefix} is not valid JSON: {exc}")
+        fixture = {}
+    except UnicodeDecodeError as exc:
+        blockers.append(f"{prefix} is not UTF-8 text: {exc}")
+        fixture = {}
+    except OSError as exc:
+        blockers.append(f"{prefix} cannot be read as JSON: {exc}")
+        fixture = {}
+
+    if not isinstance(fixture, dict):
+        blockers.append(f"{prefix} must be a JSON object")
+        fixture = {}
+
+    for key in sorted(set(fixture) - NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS):
+        blockers.append(f"{prefix} contains unknown field: {key}")
+    for key in sorted(NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS - set(fixture)):
+        blockers.append(f"{prefix} missing field: {key}")
+
+    expected_fields = {
+        "schema": NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA,
+        "domain": ACTIVE_LAUNCH_DOMAIN,
+        "chain": ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": payload.get("proof_artifact_hash"),
+        "proving_key_hash": payload.get("proving_key_hash"),
+        "verifier_key_hash": payload.get("verifier_key_hash"),
+        "destination_binding_hash": payload.get("destination_binding_hash"),
+    }
+    for key, expected in expected_fields.items():
+        if key in fixture and fixture.get(key) != expected:
+            blockers.append(f"{prefix} {key} must match native prover bundle")
+
+    for key in (
+        "receipt_proof_hash",
+        "source_proof_hash",
+        "calldata_hash",
+        "torii_submit_payload_hash",
+    ):
+        if key in fixture and not _is_nonzero_hex32(fixture.get(key)):
+            blockers.append(
+                f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
+            )
+
+    public_signal_words = fixture.get("public_signal_words")
+    if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
+        blockers.append(f"{prefix} public_signal_words must contain 9 words")
+        public_signal_words = []
+    else:
+        for index, word in enumerate(public_signal_words):
+            if not _is_hex32(word):
+                blockers.append(
+                    f"{prefix} public_signal_words[{index}] must be a canonical 32-byte hex value"
+                )
+
+    sdk_results = fixture.get("sdk_results")
+    if not isinstance(sdk_results, dict) or not sdk_results:
+        blockers.append(f"{prefix} sdk_results must be a non-empty object")
+        sdk_results = {}
+    else:
+        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
+            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
+            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+        for sdk, result in sorted(sdk_results.items()):
+            result_label = f"{label} sdk_results.{sdk}"
+            if not isinstance(result, dict):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+                )
+                continue
+            for key in sorted(set(result) - NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                )
+            for key in sorted(NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS - set(result)):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+                )
+            for key in (
+                "receipt_proof_hash",
+                "source_proof_hash",
+                "destination_binding_hash",
+                "calldata_hash",
+                "torii_submit_payload_hash",
+            ):
+                if key in result and result.get(key) != fixture.get(key):
+                    blockers.append(
+                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
+                    )
+            if result.get("public_signal_words") != public_signal_words:
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                    "must match public_signal_words"
+                )
+
+    blockers.extend(
+        _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
+    )
+    return artifact, blockers
+
+
+def _native_evm_prover_self_test_status(
+    manifest_path: Path | None,
+    manifest_artifact: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    label = "native_prover_self_test_artifact"
+    prefix = f"native EVM Groth16 prover bundle {label}"
+    relative_path, blockers = _native_evm_manifest_relative_path(
+        payload.get(label),
+        label,
+    )
+    if manifest_path is None or relative_path is None:
+        return None, blockers
+
+    artifact_path = manifest_path.parent.joinpath(*relative_path.parts)
+    try:
+        if not artifact_path.is_file():
+            blockers.append(
+                f"{prefix} file is missing or is not a regular file: "
+                f"{relative_path.as_posix()}"
+            )
+            return None, blockers
+        artifact = _artifact(artifact_path)
+    except OSError as exc:
+        blockers.append(f"{prefix} cannot be read: {exc}")
+        return None, blockers
+    except ValueError as exc:
+        blockers.append(f"{prefix} {exc}")
+        return None, blockers
+
+    if isinstance(manifest_artifact, dict):
+        manifest_artifact_path = manifest_artifact.get("path")
+        if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
+            manifest_relative_path = PurePosixPath(manifest_artifact_path)
+            artifact["path"] = (
+                manifest_relative_path.parent.joinpath(relative_path).as_posix()
+            )
+
+    if artifact["bytes"] == 0:
+        blockers.append(f"{prefix} must not be empty")
+
+    audit_hashes = payload.get("audit_hashes")
+    expected_hash = (
+        audit_hashes.get("native_prover_self_test")
+        if isinstance(audit_hashes, dict)
+        else None
+    )
+    actual_hash = f"0x{artifact['sha256']}"
+    if isinstance(expected_hash, str) and actual_hash != expected_hash:
+        blockers.append(
+            f"{prefix} sha256 must match audit_hashes.native_prover_self_test"
+        )
+
+    try:
+        fixture = _load_json(artifact_path)
+    except DuplicateJsonKeyError as exc:
+        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        fixture = {}
+    except json.JSONDecodeError as exc:
+        blockers.append(f"{prefix} is not valid JSON: {exc}")
+        fixture = {}
+    except UnicodeDecodeError as exc:
+        blockers.append(f"{prefix} is not UTF-8 text: {exc}")
+        fixture = {}
+    except OSError as exc:
+        blockers.append(f"{prefix} cannot be read as JSON: {exc}")
+        fixture = {}
+
+    if not isinstance(fixture, dict):
+        blockers.append(f"{prefix} must be a JSON object")
+        fixture = {}
+
+    for key in sorted(set(fixture) - NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS):
+        blockers.append(f"{prefix} contains unknown field: {key}")
+    for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS - set(fixture)):
+        blockers.append(f"{prefix} missing field: {key}")
+
+    expected_fields = {
+        "schema": NATIVE_EVM_PROVER_SELF_TEST_SCHEMA,
+        "domain": ACTIVE_LAUNCH_DOMAIN,
+        "chain": ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": payload.get("proof_artifact_hash"),
+        "proving_key_hash": payload.get("proving_key_hash"),
+        "verifier_key_hash": payload.get("verifier_key_hash"),
+        "destination_binding_hash": payload.get("destination_binding_hash"),
+    }
+    for key, expected in expected_fields.items():
+        if key in fixture and fixture.get(key) != expected:
+            blockers.append(f"{prefix} {key} must match native prover bundle")
+
+    for key in (
+        "request_hash",
+        "witness_hash",
+        "source_proof_hash",
+        "proof_hash",
+        "calldata_hash",
+        "torii_submit_payload_hash",
+    ):
+        if key in fixture and not _is_nonzero_hex32(fixture.get(key)):
+            blockers.append(
+                f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
+            )
+
+    public_signal_words = fixture.get("public_signal_words")
+    if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
+        blockers.append(f"{prefix} public_signal_words must contain 9 words")
+        public_signal_words = []
+    else:
+        for index, word in enumerate(public_signal_words):
+            if not _is_hex32(word):
+                blockers.append(
+                    f"{prefix} public_signal_words[{index}] must be a canonical 32-byte hex value"
+                )
+
+    sdk_results = fixture.get("sdk_results")
+    if not isinstance(sdk_results, dict) or not sdk_results:
+        blockers.append(f"{prefix} sdk_results must be a non-empty object")
+        sdk_results = {}
+    else:
+        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
+            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
+            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+        for sdk, result in sorted(sdk_results.items()):
+            result_label = f"{label} sdk_results.{sdk}"
+            if not isinstance(result, dict):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+                )
+                continue
+            for key in sorted(set(result) - NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                )
+            for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS - set(result)):
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+                )
+            for key in (
+                "request_hash",
+                "witness_hash",
+                "source_proof_hash",
+                "proof_hash",
+                "calldata_hash",
+                "torii_submit_payload_hash",
+            ):
+                if key in result and result.get(key) != fixture.get(key):
+                    blockers.append(
+                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
+                    )
+            if result.get("public_signal_words") != public_signal_words:
+                blockers.append(
+                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                    "must match public_signal_words"
+                )
+
+    blockers.extend(
+        _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
+    )
+    return artifact, blockers
+
+
 def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
     roles = [
         ("proof_artifact_hash", payload.get("proof_artifact_hash")),
@@ -5454,10 +5889,22 @@ def _native_evm_prover_bundle_status_from_payload(
         )
 
     audit_hashes = payload.get("audit_hashes")
-    if not isinstance(audit_hashes, list) or not audit_hashes:
-        blockers.append("native EVM Groth16 prover bundle audit_hashes must be non-empty")
-        audit_hashes = []
+    if not isinstance(audit_hashes, dict) or not audit_hashes:
+        blockers.append(
+            "native EVM Groth16 prover bundle audit_hashes must be a non-empty object"
+        )
+        audit_hashes = {}
     else:
+        for key in sorted(set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)):
+            blockers.append(
+                "native EVM Groth16 prover bundle "
+                f"audit_hashes contains unexpected field: {key}"
+            )
+        for key in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
+            blockers.append(
+                "native EVM Groth16 prover bundle "
+                f"audit_hashes missing field: {key}"
+            )
         reserved_audit_hash_roles = {
             "proof_artifact_hash": payload.get("proof_artifact_hash"),
             "proving_key_hash": payload.get("proving_key_hash"),
@@ -5471,27 +5918,27 @@ def _native_evm_prover_bundle_status_from_payload(
                     reserved_audit_hash_roles[
                         f"native_sdk_artifacts[{sdk_index}].implementation_hash"
                     ] = sdk_artifact.get("implementation_hash")
-        seen_audit_hashes: dict[str, int] = {}
-        for index, audit_hash in enumerate(audit_hashes):
+        seen_audit_hashes: dict[str, str] = {}
+        for key, audit_hash in sorted(audit_hashes.items()):
             if not _is_nonzero_hex32(audit_hash):
                 blockers.append(
                     "native EVM Groth16 prover bundle "
-                    f"audit_hashes[{index}] must be a canonical non-zero 32-byte hex value"
+                    f"audit_hashes.{key} must be a canonical non-zero 32-byte hex value"
                 )
                 continue
-            previous_index = seen_audit_hashes.get(audit_hash)
-            if previous_index is not None:
+            previous_key = seen_audit_hashes.get(audit_hash)
+            if previous_key is not None:
                 blockers.append(
                     "native EVM Groth16 prover bundle "
-                    f"audit_hashes[{index}] must not duplicate "
-                    f"audit_hashes[{previous_index}]"
+                    f"audit_hashes.{key} must not duplicate "
+                    f"audit_hashes.{previous_key}"
                 )
-            seen_audit_hashes[audit_hash] = index
+            seen_audit_hashes[audit_hash] = key
             for role, role_hash in reserved_audit_hash_roles.items():
                 if audit_hash == role_hash:
                     blockers.append(
                         "native EVM Groth16 prover bundle "
-                        f"audit_hashes[{index}] must not reuse {role}"
+                        f"audit_hashes.{key} must not reuse {role}"
                     )
 
     proof_artifact, proof_artifact_blockers = _native_evm_prover_payload_artifact(
@@ -5530,6 +5977,18 @@ def _native_evm_prover_bundle_status_from_payload(
         artifact,
     )
     blockers.extend(sdk_blockers)
+    parity_artifact, parity_blockers = _native_evm_prover_parity_fixture_status(
+        manifest_path,
+        artifact,
+        payload,
+    )
+    blockers.extend(parity_blockers)
+    self_test_artifact, self_test_blockers = _native_evm_prover_self_test_status(
+        manifest_path,
+        artifact,
+        payload,
+    )
+    blockers.extend(self_test_blockers)
 
     return {
         "required": True,
@@ -5545,7 +6004,9 @@ def _native_evm_prover_bundle_status_from_payload(
         "verifier_key": verifier_key,
         "verifier_key_hash": payload.get("verifier_key_hash", ""),
         "destination_binding_hash": payload.get("destination_binding_hash", ""),
-        "audit_hashes": list(audit_hashes),
+        "audit_hashes": dict(sorted(audit_hashes.items())),
+        "cross_sdk_fixture_parity_artifact": parity_artifact,
+        "native_prover_self_test_artifact": self_test_artifact,
         "sdk_artifacts": sdk_artifacts,
         "validation_status": "passed" if not blockers else "blocked",
         "validation_blockers": blockers,
@@ -5667,13 +6128,91 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             and f"0x{artifact_hash}" != expected_hash
         ):
             errors.append(f"{label} {artifact_field} sha256 must match {hash_field}")
-    errors.extend(_string_list_field_errors(label, status, "audit_hashes", allow_empty=False))
+    parity_artifact = status.get("cross_sdk_fixture_parity_artifact")
+    if not isinstance(parity_artifact, dict):
+        errors.append(f"{label} cross_sdk_fixture_parity_artifact must be an object")
+    else:
+        for key in sorted(set(parity_artifact) - ARTIFACT_KEYS):
+            errors.append(
+                f"{label} cross_sdk_fixture_parity_artifact contains unknown field: {key}"
+            )
+        path_errors = _canonical_artifact_path(parity_artifact)[1]
+        errors.extend(
+            f"{label} cross_sdk_fixture_parity_artifact {error}"
+            for error in path_errors
+        )
+    self_test_artifact = status.get("native_prover_self_test_artifact")
+    if not isinstance(self_test_artifact, dict):
+        errors.append(f"{label} native_prover_self_test_artifact must be an object")
+    else:
+        for key in sorted(set(self_test_artifact) - ARTIFACT_KEYS):
+            errors.append(
+                f"{label} native_prover_self_test_artifact contains unknown field: {key}"
+            )
+        path_errors = _canonical_artifact_path(self_test_artifact)[1]
+        errors.extend(
+            f"{label} native_prover_self_test_artifact {error}"
+            for error in path_errors
+        )
     audit_hashes = status.get("audit_hashes")
-    if isinstance(audit_hashes, list):
-        for index, value in enumerate(audit_hashes):
+    if not isinstance(audit_hashes, dict) or not audit_hashes:
+        errors.append(f"{label} audit_hashes must be a non-empty object")
+    else:
+        for key in sorted(set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)):
+            errors.append(f"{label} audit_hashes contains unexpected field: {key}")
+        for key in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
+            errors.append(f"{label} audit_hashes missing field: {key}")
+        reserved_audit_hash_roles = {
+            "proof_artifact_hash": status.get("proof_artifact_hash"),
+            "proving_key_hash": status.get("proving_key_hash"),
+            "verifier_key_hash": status.get("verifier_key_hash"),
+            "destination_binding_hash": status.get("destination_binding_hash"),
+        }
+        for index, row in enumerate(status.get("sdk_artifacts", [])):
+            if isinstance(row, dict):
+                reserved_audit_hash_roles[
+                    f"sdk_artifacts[{index}].implementation_hash"
+                ] = row.get("implementation_hash")
+        seen_audit_hashes: dict[str, str] = {}
+        for key, value in sorted(audit_hashes.items()):
             if not _is_nonzero_hex32(value):
                 errors.append(
-                    f"{label} audit_hashes[{index}] must be a canonical non-zero 32-byte hex value"
+                    f"{label} audit_hashes.{key} must be a canonical non-zero 32-byte hex value"
+                )
+                continue
+            previous_key = seen_audit_hashes.get(value)
+            if previous_key is not None:
+                errors.append(
+                    f"{label} audit_hashes.{key} must not duplicate "
+                    f"audit_hashes.{previous_key}"
+                )
+            seen_audit_hashes[value] = key
+            for role, role_hash in reserved_audit_hash_roles.items():
+                if value == role_hash:
+                    errors.append(f"{label} audit_hashes.{key} must not reuse {role}")
+        if isinstance(parity_artifact, dict):
+            artifact_hash = parity_artifact.get("sha256")
+            parity_hash = audit_hashes.get("cross_sdk_fixture_parity")
+            if (
+                _is_canonical_sha256_text(artifact_hash)
+                and isinstance(parity_hash, str)
+                and f"0x{artifact_hash}" != parity_hash
+            ):
+                errors.append(
+                    f"{label} cross_sdk_fixture_parity_artifact sha256 must match "
+                    "audit_hashes.cross_sdk_fixture_parity"
+                )
+        if isinstance(self_test_artifact, dict):
+            artifact_hash = self_test_artifact.get("sha256")
+            self_test_hash = audit_hashes.get("native_prover_self_test")
+            if (
+                _is_canonical_sha256_text(artifact_hash)
+                and isinstance(self_test_hash, str)
+                and f"0x{artifact_hash}" != self_test_hash
+            ):
+                errors.append(
+                    f"{label} native_prover_self_test_artifact sha256 must match "
+                    "audit_hashes.native_prover_self_test"
                 )
     sdk_artifacts = status.get("sdk_artifacts")
     if not isinstance(sdk_artifacts, list) or not sdk_artifacts:
@@ -6084,9 +6623,10 @@ def _render_readiness_markdown(
     lines.extend(["", "## Native Prover Bundle", ""])
     lines.append(
         "| Required | Status | Artifact | SHA-256 | Proof Artifact | Proving Key | "
-        "Verifier Key | Destination Binding | SDK Artifacts | Blockers |"
+        "Verifier Key | Destination Binding | Parity Fixture | Self-Test | "
+        "SDK Artifacts | Blockers |"
     )
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     native_bundle = report["native_evm_prover_bundle"]
     native_artifact = native_bundle.get("artifact")
     artifact_path = "-"
@@ -6113,10 +6653,22 @@ def _render_readiness_markdown(
         sdk_cell = "-"
     native_blockers = native_bundle.get("validation_blockers") or []
     native_blocker_text = "<br>".join(native_blockers) if native_blockers else "-"
+    parity_artifact = native_bundle.get("cross_sdk_fixture_parity_artifact")
+    parity_cell = (
+        f"`{parity_artifact.get('path')}`<br>`{parity_artifact.get('sha256')}`"
+        if isinstance(parity_artifact, dict)
+        else "-"
+    )
+    self_test_artifact = native_bundle.get("native_prover_self_test_artifact")
+    self_test_cell = (
+        f"`{self_test_artifact.get('path')}`<br>`{self_test_artifact.get('sha256')}`"
+        if isinstance(self_test_artifact, dict)
+        else "-"
+    )
     lines.append(
         "| {required} | {status} | {artifact} | {artifact_hash} | "
         "{proof_artifact} | {proving_key} | {verifier_key} | {binding} | "
-        "{sdk_artifacts} | {blockers} |".format(
+        "{parity_fixture} | {self_test} | {sdk_artifacts} | {blockers} |".format(
             required="yes" if native_bundle.get("required") else "no",
             status=native_bundle.get("validation_status", "blocked"),
             artifact=artifact_path,
@@ -6141,6 +6693,8 @@ def _render_readiness_markdown(
                 if native_bundle.get("destination_binding_hash")
                 else "-"
             ),
+            parity_fixture=parity_cell,
+            self_test=self_test_cell,
             sdk_artifacts=sdk_cell,
             blockers=native_blocker_text,
         )
@@ -6645,7 +7199,13 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.append(artifact_path)
-        for artifact_field in ("proof_artifact", "proving_key", "verifier_key"):
+        for artifact_field in (
+            "proof_artifact",
+            "proving_key",
+            "verifier_key",
+            "cross_sdk_fixture_parity_artifact",
+            "native_prover_self_test_artifact",
+        ):
             artifact = native_bundle.get(artifact_field)
             if isinstance(artifact, dict):
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
@@ -9389,7 +9949,13 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.add(artifact_path)
-        for artifact_field in ("proof_artifact", "proving_key", "verifier_key"):
+        for artifact_field in (
+            "proof_artifact",
+            "proving_key",
+            "verifier_key",
+            "cross_sdk_fixture_parity_artifact",
+            "native_prover_self_test_artifact",
+        ):
             artifact = native_bundle.get(artifact_field)
             if isinstance(artifact, dict):
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
@@ -9823,7 +10389,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 report_native_bundle.get("artifact"),
                 label="readiness report native EVM prover bundle",
             )
-            for artifact_field in ("proof_artifact", "proving_key", "verifier_key"):
+            for artifact_field in (
+                "proof_artifact",
+                "proving_key",
+                "verifier_key",
+                "cross_sdk_fixture_parity_artifact",
+                "native_prover_self_test_artifact",
+            ):
                 _check_report_artifact(
                     errors,
                     manifest_artifacts,

@@ -615,6 +615,8 @@ export const SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-source-adapter
 export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced";
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
 export const SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1: "sccp-native-evm-groth16-prover-bundle-v1";
+export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1: Readonly<{
   javascript: "pure-typescript";
@@ -3776,6 +3778,24 @@ export interface EthereumMainnetNativeEvmProverBundleSdkArtifactInput {
   implementation_hash?: string;
 }
 
+export interface EthereumMainnetNativeEvmProverAuditHashesInput {
+  circuit_security_audit: string;
+  native_implementation_audit: string;
+  reproducible_build_attestation: string;
+  cross_sdk_fixture_parity: string;
+  native_prover_self_test: string;
+  no_wasm_no_remote_scan: string;
+}
+
+export interface EthereumMainnetNativeEvmProverAuditHashes {
+  readonly circuit_security_audit: string;
+  readonly native_implementation_audit: string;
+  readonly reproducible_build_attestation: string;
+  readonly cross_sdk_fixture_parity: string;
+  readonly native_prover_self_test: string;
+  readonly no_wasm_no_remote_scan: string;
+}
+
 export interface EthereumMainnetNativeEvmProverBundleInput {
   schema?: typeof SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1;
   bundleId?: typeof SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
@@ -3817,8 +3837,14 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
   native_sdk_artifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
   sdkArtifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
   sdk_artifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
-  auditHashes?: readonly string[];
-  audit_hashes?: readonly string[];
+  crossSdkFixtureParityArtifact?: string;
+  cross_sdk_fixture_parity_artifact?: string;
+  nativeProverSelfTestArtifact?: string;
+  native_prover_self_test_artifact?: string;
+  selfTestArtifact?: string;
+  self_test_artifact?: string;
+  auditHashes?: EthereumMainnetNativeEvmProverAuditHashesInput;
+  audit_hashes?: EthereumMainnetNativeEvmProverAuditHashesInput;
 }
 
 export interface EthereumMainnetNativeEvmProverBundleSdkArtifact {
@@ -3849,7 +3875,9 @@ export interface EthereumMainnetNativeEvmProverBundle {
   readonly remoteProverRequired: false;
   readonly browserImplementation: "pure-typescript";
   readonly nativeSdkArtifacts: readonly Readonly<EthereumMainnetNativeEvmProverBundleSdkArtifact>[];
-  readonly auditHashes: readonly string[];
+  readonly crossSdkFixtureParityArtifact: string;
+  readonly nativeProverSelfTestArtifact: string;
+  readonly auditHashes: Readonly<EthereumMainnetNativeEvmProverAuditHashes>;
 }
 
 export function validateEthereumMainnetNativeEvmProverBundle(
@@ -3876,6 +3904,197 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
   },
 ): EthereumMainnetNativeEvmProverBundle;
 
+export interface EthereumMainnetNativeEvmProverParitySdkResultInput {
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
+  sourceProofHash?: string;
+  source_proof_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+  calldataHash?: string;
+  calldata_hash?: string;
+  toriiSubmitPayloadHash?: string;
+  torii_submit_payload_hash?: string;
+}
+
+export interface EthereumMainnetNativeEvmProverParityFixtureInput {
+  schema?: typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  domain?: SccpDomainIdInput;
+  chain?: "eth";
+  proofBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  proof_backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  proofArtifactHash?: string;
+  proof_artifact_hash?: string;
+  proverArtifactHash?: string;
+  prover_artifact_hash?: string;
+  circuitArtifactHash?: string;
+  circuit_artifact_hash?: string;
+  provingKeyHash?: string;
+  proving_key_hash?: string;
+  verifierKeyHash?: string;
+  verifier_key_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
+  sourceProofHash?: string;
+  source_proof_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+  calldataHash?: string;
+  calldata_hash?: string;
+  toriiSubmitPayloadHash?: string;
+  torii_submit_payload_hash?: string;
+  sdkResults?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverParitySdkResultInput>>;
+  sdk_results?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverParitySdkResultInput>>;
+}
+
+export interface EthereumMainnetNativeEvmProverParitySdkResult {
+  readonly receiptProofHash: string;
+  readonly sourceProofHash: string;
+  readonly destinationBindingHash: string;
+  readonly publicSignalWords: readonly string[];
+  readonly calldataHash: string;
+  readonly toriiSubmitPayloadHash: string;
+}
+
+export interface EthereumMainnetNativeEvmProverParityFixture {
+  readonly schema: typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly domain: number;
+  readonly chain: "eth";
+  readonly proofBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofArtifactHash: string;
+  readonly provingKeyHash: string;
+  readonly verifierKeyHash: string;
+  readonly destinationBindingHash: string;
+  readonly receiptProofHash: string;
+  readonly sourceProofHash: string;
+  readonly publicSignalWords: readonly string[];
+  readonly calldataHash: string;
+  readonly toriiSubmitPayloadHash: string;
+  readonly sdkResults: Readonly<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", Readonly<EthereumMainnetNativeEvmProverParitySdkResult>>>;
+}
+
+export function validateEthereumMainnetNativeEvmProverParityFixture(
+  fixture: EthereumMainnetNativeEvmProverParityFixtureInput,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverParityFixture;
+
+export function parseEthereumMainnetNativeEvmProverParityFixture(
+  json: string,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverParityFixture;
+
+export interface EthereumMainnetNativeEvmProverSelfTestSdkResultInput {
+  requestHash?: string;
+  request_hash?: string;
+  witnessHash?: string;
+  witness_hash?: string;
+  sourceProofHash?: string;
+  source_proof_hash?: string;
+  proofHash?: string;
+  proof_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+  calldataHash?: string;
+  calldata_hash?: string;
+  toriiSubmitPayloadHash?: string;
+  torii_submit_payload_hash?: string;
+}
+
+export interface EthereumMainnetNativeEvmProverSelfTestFixtureInput {
+  schema?: typeof SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  domain?: SccpDomainIdInput;
+  chain?: "eth";
+  proofBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  proof_backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  proofArtifactHash?: string;
+  proof_artifact_hash?: string;
+  proverArtifactHash?: string;
+  prover_artifact_hash?: string;
+  circuitArtifactHash?: string;
+  circuit_artifact_hash?: string;
+  provingKeyHash?: string;
+  proving_key_hash?: string;
+  verifierKeyHash?: string;
+  verifier_key_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  requestHash?: string;
+  request_hash?: string;
+  witnessHash?: string;
+  witness_hash?: string;
+  sourceProofHash?: string;
+  source_proof_hash?: string;
+  proofHash?: string;
+  proof_hash?: string;
+  publicSignalWords?: readonly string[];
+  public_signal_words?: readonly string[];
+  calldataHash?: string;
+  calldata_hash?: string;
+  toriiSubmitPayloadHash?: string;
+  torii_submit_payload_hash?: string;
+  sdkResults?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverSelfTestSdkResultInput>>;
+  sdk_results?: Partial<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", EthereumMainnetNativeEvmProverSelfTestSdkResultInput>>;
+}
+
+export interface EthereumMainnetNativeEvmProverSelfTestSdkResult {
+  readonly requestHash: string;
+  readonly witnessHash: string;
+  readonly sourceProofHash: string;
+  readonly proofHash: string;
+  readonly publicSignalWords: readonly string[];
+  readonly calldataHash: string;
+  readonly toriiSubmitPayloadHash: string;
+}
+
+export interface EthereumMainnetNativeEvmProverSelfTestFixture {
+  readonly schema: typeof SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  readonly domain: number;
+  readonly chain: "eth";
+  readonly proofBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofArtifactHash: string;
+  readonly provingKeyHash: string;
+  readonly verifierKeyHash: string;
+  readonly destinationBindingHash: string;
+  readonly requestHash: string;
+  readonly witnessHash: string;
+  readonly sourceProofHash: string;
+  readonly proofHash: string;
+  readonly publicSignalWords: readonly string[];
+  readonly calldataHash: string;
+  readonly toriiSubmitPayloadHash: string;
+  readonly sdkResults: Readonly<Record<"dotnet" | "java-android" | "javascript" | "kotlin" | "swift", Readonly<EthereumMainnetNativeEvmProverSelfTestSdkResult>>>;
+}
+
+export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
+  fixture: EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverSelfTestFixture;
+
+export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
+  json: string,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverSelfTestFixture;
+
+export interface EthereumMainnetNativeProverSelfTestContext {
+  readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
+  readonly nativeProverArtifacts: Readonly<EthereumMainnetNativeEvmProverArtifacts>;
+  readonly nativeProverSelfTest: Readonly<EthereumMainnetNativeEvmProverSelfTestFixture>;
+  readonly expectedResult: Readonly<EthereumMainnetNativeEvmProverSelfTestSdkResult>;
+}
+
+export type EthereumMainnetNativeProverSelfTestFn = (
+  context: Readonly<EthereumMainnetNativeProverSelfTestContext>,
+  options?: Record<string, unknown>,
+) =>
+  | EthereumMainnetNativeEvmProverSelfTestSdkResultInput
+  | Promise<EthereumMainnetNativeEvmProverSelfTestSdkResultInput>;
+
 export interface EthereumMainnetNativeEvmProverArtifactsInput {
   nativeProverBundle?: EthereumMainnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: EthereumMainnetNativeEvmProverBundleInput | string;
@@ -3892,6 +4111,14 @@ export interface EthereumMainnetNativeEvmProverArtifactsInput {
   proving_key_bytes?: BinaryLike;
   verifierKeyBytes?: BinaryLike;
   verifier_key_bytes?: BinaryLike;
+  crossSdkFixtureParityBytes?: BinaryLike;
+  cross_sdk_fixture_parity_bytes?: BinaryLike;
+  parityFixtureBytes?: BinaryLike;
+  parity_fixture_bytes?: BinaryLike;
+  nativeProverSelfTestBytes?: BinaryLike;
+  native_prover_self_test_bytes?: BinaryLike;
+  selfTestBytes?: BinaryLike;
+  self_test_bytes?: BinaryLike;
   sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
   implementationBytes?: BinaryLike;
   implementation_bytes?: BinaryLike;
@@ -3905,6 +4132,10 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly proofArtifactHash: string;
   readonly provingKeyHash: string;
   readonly verifierKeyHash: string;
+  readonly crossSdkFixtureParityHash: string;
+  readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>;
+  readonly nativeProverSelfTestHash: string;
+  readonly nativeProverSelfTest: Readonly<EthereumMainnetNativeEvmProverSelfTestFixture>;
   readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
   readonly implementation: "native-csharp" | "native-java" | "native-kotlin" | "native-swift" | "pure-typescript";
   readonly implementationHash: string;
@@ -3921,6 +4152,60 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
     destination_binding?: EvmSccpDestinationBindingInput;
   },
 ): EthereumMainnetNativeEvmProverArtifacts;
+
+export interface EthereumMainnetNativeEvmProverArtifactResolverMetadata {
+  readonly path: string;
+  readonly label: "crossSdkFixtureParityBytes" | "implementationBytes" | "nativeProverSelfTestBytes" | "proofArtifactBytes" | "provingKeyBytes" | "verifierKeyBytes";
+  readonly role: "crossSdkFixtureParityArtifact" | "implementationArtifact" | "nativeProverSelfTestArtifact" | "proofArtifact" | "provingKey" | "verifierKey";
+  readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
+  readonly implementation: "native-csharp" | "native-java" | "native-kotlin" | "native-swift" | "pure-typescript";
+  readonly nativeProverBundle: Readonly<EthereumMainnetNativeEvmProverBundle>;
+}
+
+export interface EthereumMainnetNativeEvmProverArtifactBundleInput {
+  nativeProverBundle?: EthereumMainnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: EthereumMainnetNativeEvmProverBundleInput | string;
+  proverBundle?: EthereumMainnetNativeEvmProverBundleInput | string;
+  prover_bundle?: EthereumMainnetNativeEvmProverBundleInput | string;
+  manifest?: EthereumMainnetNativeEvmProverBundleInput | string;
+  sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
+  artifactResolver?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  artifact_resolver?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifact?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifactBytes?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact_bytes?: (
+    path: string,
+    metadata: EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+}
+
+export function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+  input: EthereumMainnetNativeEvmProverArtifactBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): Promise<EthereumMainnetNativeEvmProverArtifacts>;
 
 export interface EvmSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -4873,6 +5158,10 @@ export type EthereumMainnetSccpOptions = EvmSccpProverOptions & {
   submitOutboundToEthereum?: EthereumMainnetSubmitOutboundFn;
   submit_outbound_to_ethereum?: EthereumMainnetSubmitOutboundFn;
   submitToEthereum?: EthereumMainnetSubmitOutboundFn;
+  nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn;
+  native_prover_self_test?: EthereumMainnetNativeProverSelfTestFn;
+  selfTestNativeProver?: EthereumMainnetNativeProverSelfTestFn;
+  self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
   destinationBinding?: EvmSccpDestinationBindingInput;
   destination_binding?: EvmSccpDestinationBindingInput;
   nativeProverBundle?: EthereumMainnetNativeEvmProverBundleInput;
@@ -4894,7 +5183,23 @@ export type EthereumMainnetSccpOptions = EvmSccpProverOptions & {
   account?: string;
 };
 
+export type EthereumMainnetSccpNativeProverBundleOptions = Omit<
+  EthereumMainnetSccpOptions,
+  | "nativeProverBundle"
+  | "native_prover_bundle"
+  | "proverBundle"
+  | "prover_bundle"
+  | "nativeProverArtifacts"
+  | "native_prover_artifacts"
+  | "verifiedNativeProverArtifacts"
+  | "verified_native_prover_artifacts"
+> &
+  EthereumMainnetNativeEvmProverArtifactBundleInput;
+
 export class EthereumMainnetSccp {
+  static fromNativeProverBundle(
+    options: EthereumMainnetSccpNativeProverBundleOptions,
+  ): Promise<EthereumMainnetSccp>;
   constructor(options?: EthereumMainnetSccpOptions);
   validateExecutionProviderMainnet(options?: {
     executionProvider?: EthereumMainnetExecutionProvider;
@@ -4948,6 +5253,10 @@ export class EthereumMainnetSccp {
       native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
       verifiedNativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts;
       verified_native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
+      nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn;
+      native_prover_self_test?: EthereumMainnetNativeProverSelfTestFn;
+      selfTestNativeProver?: EthereumMainnetNativeProverSelfTestFn;
+      self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
     } & Record<string, unknown>,
   ): Promise<EvmSccpProofResult>;
   buildEthereumCalldata(input: EthereumMainnetSccpSubmissionInput): EvmSccpSubmission;

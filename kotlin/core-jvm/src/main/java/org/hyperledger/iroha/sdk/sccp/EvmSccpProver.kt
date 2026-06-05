@@ -40,6 +40,10 @@ object SccpEvm {
     const val GROTH16_BN254_PROOF_BACKEND_V1: String = "evm-groth16-bn254-v1"
     const val NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1: String =
         "sccp-native-evm-groth16-prover-bundle-v1"
+    const val ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: String =
+        "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"
+    const val ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: String =
+        "sccp-ethereum-mainnet-native-evm-prover-self-test-v1"
     const val ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: String =
         "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1"
     @JvmField
@@ -50,7 +54,21 @@ object SccpEvm {
         "java-android" to "native-java",
         "dotnet" to "native-csharp",
     )
+    @JvmField
+    val ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1: List<String> = listOf(
+        "circuit_security_audit",
+        "native_implementation_audit",
+        "reproducible_build_attestation",
+        "cross_sdk_fixture_parity",
+        "native_prover_self_test",
+        "no_wasm_no_remote_scan",
+    )
     const val NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1: String = "sha256"
+    /** Resolves manifest-declared native prover artifact paths from app-local storage. */
+    fun interface NativeEvmProverArtifactResolver {
+        fun resolveArtifact(path: String): ByteArray
+    }
+
     const val GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: Int = 384
     const val SOURCE_STATE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
     const val NATIVE_RECURSIVE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
@@ -116,6 +134,12 @@ object SccpEvm {
         "native_sdk_artifacts",
         "sdkArtifacts",
         "sdk_artifacts",
+        "crossSdkFixtureParityArtifact",
+        "cross_sdk_fixture_parity_artifact",
+        "nativeProverSelfTestArtifact",
+        "native_prover_self_test_artifact",
+        "selfTestArtifact",
+        "self_test_artifact",
         "auditHashes",
         "audit_hashes",
     )
@@ -134,6 +158,104 @@ object SccpEvm {
         "implementation_path",
         "implementationHash",
         "implementation_hash",
+    )
+    private val NATIVE_EVM_PROVER_PARITY_FIXTURE_KEYS = setOf(
+        "schema",
+        "domain",
+        "chain",
+        "proofBackend",
+        "proof_backend",
+        "backend",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "circuitArtifactHash",
+        "circuit_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
+        "verifierKeyHash",
+        "verifier_key_hash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+        "receiptProofHash",
+        "receipt_proof_hash",
+        "sourceProofHash",
+        "source_proof_hash",
+        "publicSignalWords",
+        "public_signal_words",
+        "calldataHash",
+        "calldata_hash",
+        "toriiSubmitPayloadHash",
+        "torii_submit_payload_hash",
+        "sdkResults",
+        "sdk_results",
+    )
+    private val NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS = setOf(
+        "receiptProofHash",
+        "receipt_proof_hash",
+        "sourceProofHash",
+        "source_proof_hash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+        "publicSignalWords",
+        "public_signal_words",
+        "calldataHash",
+        "calldata_hash",
+        "toriiSubmitPayloadHash",
+        "torii_submit_payload_hash",
+    )
+    private val NATIVE_EVM_PROVER_SELF_TEST_FIXTURE_KEYS = setOf(
+        "schema",
+        "domain",
+        "chain",
+        "proofBackend",
+        "proof_backend",
+        "backend",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "circuitArtifactHash",
+        "circuit_artifact_hash",
+        "provingKeyHash",
+        "proving_key_hash",
+        "verifierKeyHash",
+        "verifier_key_hash",
+        "destinationBindingHash",
+        "destination_binding_hash",
+        "requestHash",
+        "request_hash",
+        "witnessHash",
+        "witness_hash",
+        "sourceProofHash",
+        "source_proof_hash",
+        "proofHash",
+        "proof_hash",
+        "publicSignalWords",
+        "public_signal_words",
+        "calldataHash",
+        "calldata_hash",
+        "toriiSubmitPayloadHash",
+        "torii_submit_payload_hash",
+        "sdkResults",
+        "sdk_results",
+    )
+    private val NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS = setOf(
+        "requestHash",
+        "request_hash",
+        "witnessHash",
+        "witness_hash",
+        "sourceProofHash",
+        "source_proof_hash",
+        "proofHash",
+        "proof_hash",
+        "publicSignalWords",
+        "public_signal_words",
+        "calldataHash",
+        "calldata_hash",
+        "toriiSubmitPayloadHash",
+        "torii_submit_payload_hash",
     )
     private val SIGNAL_LABELS = listOf(
         "sccp:groth16-bn254:signal:message-id:v1",
@@ -188,7 +310,9 @@ object SccpEvm {
         val remoteProverRequired: Boolean = false,
         val browserImplementation: String = "pure-typescript",
         nativeSdkArtifacts: List<EthereumMainnetNativeEvmProverBundleSdkArtifact>,
-        auditHashes: List<String>,
+        auditHashes: Map<String, String>,
+        crossSdkFixtureParityArtifact: String? = null,
+        nativeProverSelfTestArtifact: String? = null,
         expectedDestinationBindingHash: String? = null,
         proofArtifact: String? = null,
         provingKey: String? = null,
@@ -209,9 +333,15 @@ object SccpEvm {
         val destinationBindingHash: String =
             normalizeNativeEvmProverBundleHex32(destinationBindingHash, "destinationBindingHash")
         val nativeSdkArtifacts: List<EthereumMainnetNativeEvmProverBundleSdkArtifact>
-        val auditHashes: List<String> = auditHashes.mapIndexed { index, hash ->
-            normalizeNativeEvmProverBundleHex32(hash, "auditHashes[$index]")
-        }
+        val crossSdkFixtureParityArtifact: String? =
+            crossSdkFixtureParityArtifact?.let {
+                normalizeNativeEvmProverArtifactPath(it, "crossSdkFixtureParityArtifact")
+            }
+        val nativeProverSelfTestArtifact: String? =
+            nativeProverSelfTestArtifact?.let {
+                normalizeNativeEvmProverArtifactPath(it, "nativeProverSelfTestArtifact")
+            }
+        val auditHashes: Map<String, String>
 
         init {
             require(schema == NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1) {
@@ -242,8 +372,18 @@ object SccpEvm {
                     "nativeProverBundle.destinationBindingHash must match destinationBinding"
                 }
             }
-            require(this.auditHashes.isNotEmpty()) {
+            require(auditHashes.isNotEmpty()) {
                 "nativeProverBundle.auditHashes must be non-empty"
+            }
+            auditHashes.keys
+                .filterNot { ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1.contains(it) }
+                .forEach { key -> throw IllegalArgumentException("auditHashes.$key is not expected") }
+            val normalizedAuditHashes = LinkedHashMap<String, String>()
+            ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1.forEach { key ->
+                val value = auditHashes[key]
+                    ?: throw IllegalArgumentException("auditHashes.$key is required")
+                normalizedAuditHashes[key] =
+                    normalizeNativeEvmProverBundleHex32(value, "auditHashes.$key")
             }
             val bySdk = LinkedHashMap<String, EthereumMainnetNativeEvmProverBundleSdkArtifact>()
             nativeSdkArtifacts.forEach { artifact ->
@@ -269,11 +409,12 @@ object SccpEvm {
                     "destinationBindingHash" to this.destinationBindingHash,
                 ) + bySdk.values.sortedBy { it.sdk }.map {
                     "nativeSdkArtifacts[${it.sdk}].implementationHash" to it.implementationHash
-                } + this.auditHashes.mapIndexed { index, hash ->
-                    "auditHashes[$index]" to hash
+                } + normalizedAuditHashes.entries.sortedBy { it.key }.map { (key, hash) ->
+                    "auditHashes.$key" to hash
                 },
             )
             this.nativeSdkArtifacts = bySdk.values.sortedBy { it.sdk }
+            this.auditHashes = normalizedAuditHashes.toMap()
         }
 
         @JvmOverloads
@@ -283,6 +424,8 @@ object SccpEvm {
             verifierKeyBytes: ByteArray,
             sdk: String? = null,
             implementationBytes: ByteArray? = null,
+            crossSdkFixtureParityBytes: ByteArray? = null,
+            nativeProverSelfTestBytes: ByteArray? = null,
         ): EthereumMainnetNativeEvmProverArtifacts {
             val proofArtifactHash = sha256Hex(proofArtifactBytes)
             require(proofArtifactHash == this.proofArtifactHash) {
@@ -296,9 +439,39 @@ object SccpEvm {
             require(verifierKeyHash == this.verifierKeyHash) {
                 "verifierKeyBytes sha256 must match nativeProverBundle.verifierKeyHash"
             }
+            require(crossSdkFixtureParityBytes != null) {
+                "crossSdkFixtureParityBytes are required for nativeProverBundle parity binding"
+            }
+            val crossSdkFixtureParityHash = sha256Hex(crossSdkFixtureParityBytes)
+            require(crossSdkFixtureParityHash == auditHashes["cross_sdk_fixture_parity"]) {
+                "crossSdkFixtureParityBytes sha256 must match nativeProverBundle.auditHashes.cross_sdk_fixture_parity"
+            }
+            require(nativeProverSelfTestBytes != null) {
+                "nativeProverSelfTestBytes are required for nativeProverBundle self-test binding"
+            }
+            val nativeProverSelfTestHash = sha256Hex(nativeProverSelfTestBytes)
+            require(nativeProverSelfTestHash == auditHashes["native_prover_self_test"]) {
+                "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test"
+            }
             rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes")
+            rejectNativeEvmProverForbiddenArtifactMarkers(
+                crossSdkFixtureParityBytes,
+                "crossSdkFixtureParityBytes",
+            )
+            rejectNativeEvmProverForbiddenArtifactMarkers(
+                nativeProverSelfTestBytes,
+                "nativeProverSelfTestBytes",
+            )
+            val crossSdkFixtureParity = EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes(
+                crossSdkFixtureParityBytes,
+                this,
+            )
+            val nativeProverSelfTest = EthereumMainnetNativeEvmProverSelfTestFixture.fromJsonBytes(
+                nativeProverSelfTestBytes,
+                this,
+            )
             require(!sdk.isNullOrEmpty()) {
                 "sdk must be a non-empty string for nativeProverBundle implementation binding"
             }
@@ -319,9 +492,42 @@ object SccpEvm {
                 proofArtifactHash = proofArtifactHash,
                 provingKeyHash = provingKeyHash,
                 verifierKeyHash = verifierKeyHash,
+                crossSdkFixtureParityHash = crossSdkFixtureParityHash,
+                crossSdkFixtureParity = crossSdkFixtureParity,
+                nativeProverSelfTestHash = nativeProverSelfTestHash,
+                nativeProverSelfTest = nativeProverSelfTest,
                 sdk = sdk,
                 implementation = implementation,
                 implementationHash = implementationHash,
+            )
+        }
+
+        fun verifiedArtifacts(
+            sdk: String,
+            artifactResolver: NativeEvmProverArtifactResolver,
+        ): EthereumMainnetNativeEvmProverArtifacts {
+            val proofArtifactPath =
+                proofArtifact ?: throw IllegalArgumentException("proofArtifact is required")
+            val provingKeyPath =
+                provingKey ?: throw IllegalArgumentException("provingKey is required")
+            val verifierKeyPath =
+                verifierKey ?: throw IllegalArgumentException("verifierKey is required")
+            val parityPath = crossSdkFixtureParityArtifact
+                ?: throw IllegalArgumentException("crossSdkFixtureParityArtifact is required")
+            val selfTestPath = nativeProverSelfTestArtifact
+                ?: throw IllegalArgumentException("nativeProverSelfTestArtifact is required")
+            val artifact = nativeSdkArtifacts.firstOrNull { it.sdk == sdk }
+                ?: throw IllegalArgumentException("nativeProverBundle has no artifact row for sdk: $sdk")
+            val implementationPath = artifact.implementationArtifact
+                ?: throw IllegalArgumentException("implementationArtifact is required")
+            return verifiedArtifacts(
+                proofArtifactBytes = artifactResolver.resolveArtifact(proofArtifactPath),
+                provingKeyBytes = artifactResolver.resolveArtifact(provingKeyPath),
+                verifierKeyBytes = artifactResolver.resolveArtifact(verifierKeyPath),
+                sdk = sdk,
+                implementationBytes = artifactResolver.resolveArtifact(implementationPath),
+                crossSdkFixtureParityBytes = artifactResolver.resolveArtifact(parityPath),
+                nativeProverSelfTestBytes = artifactResolver.resolveArtifact(selfTestPath),
             )
         }
 
@@ -487,7 +693,27 @@ object SccpEvm {
                         proofArtifactHash,
                         provingKeyHash,
                     ),
-                    auditHashes = manifestStringList(
+                    crossSdkFixtureParityArtifact = manifestString(
+                        manifestField(
+                            manifest,
+                            "crossSdkFixtureParityArtifact",
+                            "crossSdkFixtureParityArtifact",
+                            "cross_sdk_fixture_parity_artifact",
+                        ),
+                        "crossSdkFixtureParityArtifact",
+                    ),
+                    nativeProverSelfTestArtifact = manifestString(
+                        manifestField(
+                            manifest,
+                            "nativeProverSelfTestArtifact",
+                            "nativeProverSelfTestArtifact",
+                            "native_prover_self_test_artifact",
+                            "selfTestArtifact",
+                            "self_test_artifact",
+                        ),
+                        "nativeProverSelfTestArtifact",
+                    ),
+                    auditHashes = manifestStringMap(
                         manifestField(manifest, "auditHashes", "auditHashes", "audit_hashes"),
                         "auditHashes",
                     ),
@@ -586,12 +812,625 @@ object SccpEvm {
         }
     }
 
+    /** One SDK row in an Ethereum mainnet native EVM prover parity fixture. */
+    class EthereumMainnetNativeEvmProverParitySdkResult(
+        receiptProofHash: String,
+        sourceProofHash: String,
+        destinationBindingHash: String,
+        publicSignalWords: List<String>,
+        calldataHash: String,
+        toriiSubmitPayloadHash: String,
+    ) {
+        val receiptProofHash: String =
+            normalizeNativeEvmProverBundleHex32(receiptProofHash, "receiptProofHash")
+        val sourceProofHash: String =
+            normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash")
+        val destinationBindingHash: String =
+            normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash")
+        val publicSignalWords: List<String>
+        val calldataHash: String =
+            normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash")
+        val toriiSubmitPayloadHash: String =
+            normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash")
+
+        init {
+            require(publicSignalWords.size == 9) { "publicSignalWords must contain 9 words" }
+            this.publicSignalWords =
+                publicSignalWords.mapIndexed { index, word ->
+                    normalizeNativeEvmProverParityHex32(word, "publicSignalWords[$index]")
+                }
+        }
+
+        override fun equals(other: Any?): Boolean =
+            other is EthereumMainnetNativeEvmProverParitySdkResult &&
+                receiptProofHash == other.receiptProofHash &&
+                sourceProofHash == other.sourceProofHash &&
+                destinationBindingHash == other.destinationBindingHash &&
+                publicSignalWords == other.publicSignalWords &&
+                calldataHash == other.calldataHash &&
+                toriiSubmitPayloadHash == other.toriiSubmitPayloadHash
+
+        override fun hashCode(): Int =
+            listOf(
+                receiptProofHash,
+                sourceProofHash,
+                destinationBindingHash,
+                publicSignalWords,
+                calldataHash,
+                toriiSubmitPayloadHash,
+            ).hashCode()
+    }
+
+    /** Cross-SDK output parity fixture for an Ethereum mainnet native EVM prover bundle. */
+    class EthereumMainnetNativeEvmProverParityFixture(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        schema: String = ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        domain: Int = DOMAIN_ETH,
+        chain: String = "eth",
+        proofBackend: String = GROTH16_BN254_PROOF_BACKEND_V1,
+        proofArtifactHash: String,
+        provingKeyHash: String,
+        verifierKeyHash: String,
+        destinationBindingHash: String,
+        receiptProofHash: String,
+        sourceProofHash: String,
+        publicSignalWords: List<String>,
+        calldataHash: String,
+        toriiSubmitPayloadHash: String,
+        sdkResults: Map<String, EthereumMainnetNativeEvmProverParitySdkResult>,
+    ) {
+        val schema: String = schema
+        val domain: Int = domain
+        val chain: String = chain
+        val proofBackend: String = proofBackend
+        val proofArtifactHash: String =
+            normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash")
+        val provingKeyHash: String =
+            normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash")
+        val verifierKeyHash: String =
+            normalizeNativeEvmProverBundleHex32(verifierKeyHash, "verifierKeyHash")
+        val destinationBindingHash: String =
+            normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash")
+        val receiptProofHash: String =
+            normalizeNativeEvmProverBundleHex32(receiptProofHash, "receiptProofHash")
+        val sourceProofHash: String =
+            normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash")
+        val publicSignalWords: List<String>
+        val calldataHash: String =
+            normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash")
+        val toriiSubmitPayloadHash: String =
+            normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash")
+        val sdkResults: Map<String, EthereumMainnetNativeEvmProverParitySdkResult>
+
+        init {
+            require(schema == ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1) {
+                "nativeProverParityFixture.schema is not supported"
+            }
+            require(domain == DOMAIN_ETH && domain == nativeProverBundle.domain) {
+                "nativeProverParityFixture.domain must match nativeProverBundle"
+            }
+            require(chain == nativeProverBundle.chain) {
+                "nativeProverParityFixture.chain must match nativeProverBundle"
+            }
+            require(proofBackend == nativeProverBundle.proofBackend) {
+                "nativeProverParityFixture.proofBackend must match nativeProverBundle"
+            }
+            require(this.proofArtifactHash == nativeProverBundle.proofArtifactHash) {
+                "nativeProverParityFixture.proofArtifactHash must match nativeProverBundle"
+            }
+            require(this.provingKeyHash == nativeProverBundle.provingKeyHash) {
+                "nativeProverParityFixture.provingKeyHash must match nativeProverBundle"
+            }
+            require(this.verifierKeyHash == nativeProverBundle.verifierKeyHash) {
+                "nativeProverParityFixture.verifierKeyHash must match nativeProverBundle"
+            }
+            require(this.destinationBindingHash == nativeProverBundle.destinationBindingHash) {
+                "nativeProverParityFixture.destinationBindingHash must match nativeProverBundle"
+            }
+            require(publicSignalWords.size == 9) { "publicSignalWords must contain 9 words" }
+            this.publicSignalWords =
+                publicSignalWords.mapIndexed { index, word ->
+                    normalizeNativeEvmProverParityHex32(word, "publicSignalWords[$index]")
+                }
+            require(sdkResults.keys == ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keys) {
+                "sdkResults must contain exactly the required SDKs"
+            }
+            sdkResults.forEach { (sdk, result) ->
+                require(result.receiptProofHash == this.receiptProofHash) {
+                    "sdkResults.$sdk.receiptProofHash must match receiptProofHash"
+                }
+                require(result.sourceProofHash == this.sourceProofHash) {
+                    "sdkResults.$sdk.sourceProofHash must match sourceProofHash"
+                }
+                require(result.destinationBindingHash == this.destinationBindingHash) {
+                    "sdkResults.$sdk.destinationBindingHash must match destinationBindingHash"
+                }
+                require(result.publicSignalWords == this.publicSignalWords) {
+                    "sdkResults.$sdk.publicSignalWords must match publicSignalWords"
+                }
+                require(result.calldataHash == this.calldataHash) {
+                    "sdkResults.$sdk.calldataHash must match calldataHash"
+                }
+                require(result.toriiSubmitPayloadHash == this.toriiSubmitPayloadHash) {
+                    "sdkResults.$sdk.toriiSubmitPayloadHash must match toriiSubmitPayloadHash"
+                }
+            }
+            this.sdkResults = sdkResults.toSortedMap()
+        }
+
+        companion object {
+            @JvmStatic
+            fun fromJson(
+                json: String,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverParityFixture {
+                val parsed = try {
+                    JsonParser.parse(json)
+                } catch (ex: IllegalStateException) {
+                    throw IllegalArgumentException(
+                        "nativeProverParityFixture JSON is invalid: ${ex.message}",
+                        ex,
+                    )
+                }
+                return fromMap(expectManifestObject(parsed, "nativeProverParityFixture"), nativeProverBundle)
+            }
+
+            @JvmStatic
+            fun fromJsonBytes(
+                payload: ByteArray,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverParityFixture =
+                fromJson(String(payload, StandardCharsets.UTF_8), nativeProverBundle)
+
+            @JvmStatic
+            fun fromMap(
+                fixture: Map<String, Any?>,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverParityFixture {
+                requireManifestKeys(
+                    fixture,
+                    "nativeProverParityFixture",
+                    NATIVE_EVM_PROVER_PARITY_FIXTURE_KEYS,
+                )
+                val publicSignalWords = manifestStringList(
+                    manifestField(
+                        fixture,
+                        "publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words",
+                    ),
+                    "publicSignalWords",
+                )
+                val sdkResultsInput =
+                    expectManifestObject(
+                        manifestField(fixture, "sdkResults", "sdkResults", "sdk_results"),
+                        "sdkResults",
+                    )
+                val sdkResults = sdkResultsInput.keys.sorted().associateWith { sdk ->
+                    val result = expectManifestObject(sdkResultsInput[sdk], "sdkResults.$sdk")
+                    requireManifestKeys(
+                        result,
+                        "sdkResults.$sdk",
+                        NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS,
+                    )
+                    EthereumMainnetNativeEvmProverParitySdkResult(
+                        receiptProofHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.receiptProofHash", "receiptProofHash", "receipt_proof_hash"),
+                            "sdkResults.$sdk.receiptProofHash",
+                        ),
+                        sourceProofHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.sourceProofHash", "sourceProofHash", "source_proof_hash"),
+                            "sdkResults.$sdk.sourceProofHash",
+                        ),
+                        destinationBindingHash = manifestString(
+                            manifestField(
+                                result,
+                                "sdkResults.$sdk.destinationBindingHash",
+                                "destinationBindingHash",
+                                "destination_binding_hash",
+                            ),
+                            "sdkResults.$sdk.destinationBindingHash",
+                        ),
+                        publicSignalWords = manifestStringList(
+                            manifestField(
+                                result,
+                                "sdkResults.$sdk.publicSignalWords",
+                                "publicSignalWords",
+                                "public_signal_words",
+                            ),
+                            "sdkResults.$sdk.publicSignalWords",
+                        ),
+                        calldataHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.calldataHash", "calldataHash", "calldata_hash"),
+                            "sdkResults.$sdk.calldataHash",
+                        ),
+                        toriiSubmitPayloadHash = manifestString(
+                            manifestField(
+                                result,
+                                "sdkResults.$sdk.toriiSubmitPayloadHash",
+                                "toriiSubmitPayloadHash",
+                                "torii_submit_payload_hash",
+                            ),
+                            "sdkResults.$sdk.toriiSubmitPayloadHash",
+                        ),
+                    )
+                }
+                return EthereumMainnetNativeEvmProverParityFixture(
+                    nativeProverBundle = nativeProverBundle,
+                    schema = manifestString(manifestField(fixture, "schema", "schema"), "schema"),
+                    domain = manifestDomain(manifestField(fixture, "domain", "domain"), "domain"),
+                    chain = manifestString(manifestField(fixture, "chain", "chain"), "chain"),
+                    proofBackend = manifestString(
+                        manifestField(fixture, "proofBackend", "proofBackend", "proof_backend", "backend"),
+                        "proofBackend",
+                    ),
+                    proofArtifactHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "proofArtifactHash",
+                            "proofArtifactHash",
+                            "proof_artifact_hash",
+                            "proverArtifactHash",
+                            "prover_artifact_hash",
+                            "circuitArtifactHash",
+                            "circuit_artifact_hash",
+                        ),
+                        "proofArtifactHash",
+                    ),
+                    provingKeyHash = manifestString(
+                        manifestField(fixture, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+                        "provingKeyHash",
+                    ),
+                    verifierKeyHash = manifestString(
+                        manifestField(fixture, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+                        "verifierKeyHash",
+                    ),
+                    destinationBindingHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "destinationBindingHash",
+                            "destinationBindingHash",
+                            "destination_binding_hash",
+                        ),
+                        "destinationBindingHash",
+                    ),
+                    receiptProofHash = manifestString(
+                        manifestField(fixture, "receiptProofHash", "receiptProofHash", "receipt_proof_hash"),
+                        "receiptProofHash",
+                    ),
+                    sourceProofHash = manifestString(
+                        manifestField(fixture, "sourceProofHash", "sourceProofHash", "source_proof_hash"),
+                        "sourceProofHash",
+                    ),
+                    publicSignalWords = publicSignalWords,
+                    calldataHash = manifestString(
+                        manifestField(fixture, "calldataHash", "calldataHash", "calldata_hash"),
+                        "calldataHash",
+                    ),
+                    toriiSubmitPayloadHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "toriiSubmitPayloadHash",
+                            "toriiSubmitPayloadHash",
+                            "torii_submit_payload_hash",
+                        ),
+                        "toriiSubmitPayloadHash",
+                    ),
+                    sdkResults = sdkResults,
+                )
+            }
+        }
+    }
+
+    data class EthereumMainnetNativeEvmProverSelfTestSdkResult(
+        val requestHash: String,
+        val witnessHash: String,
+        val sourceProofHash: String,
+        val proofHash: String,
+        val publicSignalWords: List<String>,
+        val calldataHash: String,
+        val toriiSubmitPayloadHash: String,
+    ) {
+        init {
+            normalizeNativeEvmProverBundleHex32(requestHash, "requestHash")
+            normalizeNativeEvmProverBundleHex32(witnessHash, "witnessHash")
+            normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash")
+            normalizeNativeEvmProverBundleHex32(proofHash, "proofHash")
+            require(publicSignalWords.size == 9) { "publicSignalWords must contain 9 words" }
+            publicSignalWords.forEachIndexed { index, word ->
+                normalizeNativeEvmProverParityHex32(word, "publicSignalWords[$index]")
+            }
+            normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash")
+            normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash")
+        }
+    }
+
+    class EthereumMainnetNativeEvmProverSelfTestFixture(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        schema: String = ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+        domain: Int = DOMAIN_ETH,
+        chain: String = "eth",
+        proofBackend: String = GROTH16_BN254_PROOF_BACKEND_V1,
+        proofArtifactHash: String,
+        provingKeyHash: String,
+        verifierKeyHash: String,
+        destinationBindingHash: String,
+        requestHash: String,
+        witnessHash: String,
+        sourceProofHash: String,
+        proofHash: String,
+        publicSignalWords: List<String>,
+        calldataHash: String,
+        toriiSubmitPayloadHash: String,
+        sdkResults: Map<String, EthereumMainnetNativeEvmProverSelfTestSdkResult>,
+    ) {
+        val schema: String = schema
+        val domain: Int = domain
+        val chain: String = chain
+        val proofBackend: String = proofBackend
+        val proofArtifactHash: String =
+            normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash")
+        val provingKeyHash: String =
+            normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash")
+        val verifierKeyHash: String =
+            normalizeNativeEvmProverBundleHex32(verifierKeyHash, "verifierKeyHash")
+        val destinationBindingHash: String =
+            normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash")
+        val requestHash: String =
+            normalizeNativeEvmProverBundleHex32(requestHash, "requestHash")
+        val witnessHash: String =
+            normalizeNativeEvmProverBundleHex32(witnessHash, "witnessHash")
+        val sourceProofHash: String =
+            normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash")
+        val proofHash: String =
+            normalizeNativeEvmProverBundleHex32(proofHash, "proofHash")
+        val publicSignalWords: List<String>
+        val calldataHash: String =
+            normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash")
+        val toriiSubmitPayloadHash: String =
+            normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash")
+        val sdkResults: Map<String, EthereumMainnetNativeEvmProverSelfTestSdkResult>
+
+        init {
+            require(schema == ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1) {
+                "nativeProverSelfTestFixture.schema is not supported"
+            }
+            require(domain == DOMAIN_ETH && domain == nativeProverBundle.domain) {
+                "nativeProverSelfTestFixture.domain must match nativeProverBundle"
+            }
+            require(chain == nativeProverBundle.chain) {
+                "nativeProverSelfTestFixture.chain must match nativeProverBundle"
+            }
+            require(proofBackend == nativeProverBundle.proofBackend) {
+                "nativeProverSelfTestFixture.proofBackend must match nativeProverBundle"
+            }
+            require(this.proofArtifactHash == nativeProverBundle.proofArtifactHash) {
+                "nativeProverSelfTestFixture.proofArtifactHash must match nativeProverBundle"
+            }
+            require(this.provingKeyHash == nativeProverBundle.provingKeyHash) {
+                "nativeProverSelfTestFixture.provingKeyHash must match nativeProverBundle"
+            }
+            require(this.verifierKeyHash == nativeProverBundle.verifierKeyHash) {
+                "nativeProverSelfTestFixture.verifierKeyHash must match nativeProverBundle"
+            }
+            require(this.destinationBindingHash == nativeProverBundle.destinationBindingHash) {
+                "nativeProverSelfTestFixture.destinationBindingHash must match nativeProverBundle"
+            }
+            require(publicSignalWords.size == 9) { "publicSignalWords must contain 9 words" }
+            this.publicSignalWords =
+                publicSignalWords.mapIndexed { index, word ->
+                    normalizeNativeEvmProverParityHex32(word, "publicSignalWords[$index]")
+                }
+            require(sdkResults.keys == ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keys) {
+                "sdkResults must contain exactly the required SDKs"
+            }
+            sdkResults.forEach { (sdk, result) ->
+                require(result.requestHash == this.requestHash) {
+                    "sdkResults.$sdk.requestHash must match requestHash"
+                }
+                require(result.witnessHash == this.witnessHash) {
+                    "sdkResults.$sdk.witnessHash must match witnessHash"
+                }
+                require(result.sourceProofHash == this.sourceProofHash) {
+                    "sdkResults.$sdk.sourceProofHash must match sourceProofHash"
+                }
+                require(result.proofHash == this.proofHash) {
+                    "sdkResults.$sdk.proofHash must match proofHash"
+                }
+                require(result.publicSignalWords == this.publicSignalWords) {
+                    "sdkResults.$sdk.publicSignalWords must match publicSignalWords"
+                }
+                require(result.calldataHash == this.calldataHash) {
+                    "sdkResults.$sdk.calldataHash must match calldataHash"
+                }
+                require(result.toriiSubmitPayloadHash == this.toriiSubmitPayloadHash) {
+                    "sdkResults.$sdk.toriiSubmitPayloadHash must match toriiSubmitPayloadHash"
+                }
+            }
+            this.sdkResults = sdkResults.toSortedMap()
+        }
+
+        companion object {
+            @JvmStatic
+            fun fromJson(
+                json: String,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverSelfTestFixture {
+                val parsed = try {
+                    JsonParser.parse(json)
+                } catch (ex: IllegalStateException) {
+                    throw IllegalArgumentException(
+                        "nativeProverSelfTestFixture JSON is invalid: ${ex.message}",
+                        ex,
+                    )
+                }
+                return fromMap(expectManifestObject(parsed, "nativeProverSelfTestFixture"), nativeProverBundle)
+            }
+
+            @JvmStatic
+            fun fromJsonBytes(
+                payload: ByteArray,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverSelfTestFixture =
+                fromJson(String(payload, StandardCharsets.UTF_8), nativeProverBundle)
+
+            @JvmStatic
+            fun fromMap(
+                fixture: Map<String, Any?>,
+                nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+            ): EthereumMainnetNativeEvmProverSelfTestFixture {
+                requireManifestKeys(
+                    fixture,
+                    "nativeProverSelfTestFixture",
+                    NATIVE_EVM_PROVER_SELF_TEST_FIXTURE_KEYS,
+                )
+                val publicSignalWords = manifestStringList(
+                    manifestField(
+                        fixture,
+                        "publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words",
+                    ),
+                    "publicSignalWords",
+                )
+                val sdkResultsInput =
+                    expectManifestObject(
+                        manifestField(fixture, "sdkResults", "sdkResults", "sdk_results"),
+                        "sdkResults",
+                    )
+                val sdkResults = sdkResultsInput.keys.sorted().associateWith { sdk ->
+                    val result = expectManifestObject(sdkResultsInput[sdk], "sdkResults.$sdk")
+                    requireManifestKeys(
+                        result,
+                        "sdkResults.$sdk",
+                        NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS,
+                    )
+                    EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                        requestHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.requestHash", "requestHash", "request_hash"),
+                            "sdkResults.$sdk.requestHash",
+                        ),
+                        witnessHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.witnessHash", "witnessHash", "witness_hash"),
+                            "sdkResults.$sdk.witnessHash",
+                        ),
+                        sourceProofHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.sourceProofHash", "sourceProofHash", "source_proof_hash"),
+                            "sdkResults.$sdk.sourceProofHash",
+                        ),
+                        proofHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.proofHash", "proofHash", "proof_hash"),
+                            "sdkResults.$sdk.proofHash",
+                        ),
+                        publicSignalWords = manifestStringList(
+                            manifestField(
+                                result,
+                                "sdkResults.$sdk.publicSignalWords",
+                                "publicSignalWords",
+                                "public_signal_words",
+                            ),
+                            "sdkResults.$sdk.publicSignalWords",
+                        ),
+                        calldataHash = manifestString(
+                            manifestField(result, "sdkResults.$sdk.calldataHash", "calldataHash", "calldata_hash"),
+                            "sdkResults.$sdk.calldataHash",
+                        ),
+                        toriiSubmitPayloadHash = manifestString(
+                            manifestField(
+                                result,
+                                "sdkResults.$sdk.toriiSubmitPayloadHash",
+                                "toriiSubmitPayloadHash",
+                                "torii_submit_payload_hash",
+                            ),
+                            "sdkResults.$sdk.toriiSubmitPayloadHash",
+                        ),
+                    )
+                }
+                return EthereumMainnetNativeEvmProverSelfTestFixture(
+                    nativeProverBundle = nativeProverBundle,
+                    schema = manifestString(manifestField(fixture, "schema", "schema"), "schema"),
+                    domain = manifestDomain(manifestField(fixture, "domain", "domain"), "domain"),
+                    chain = manifestString(manifestField(fixture, "chain", "chain"), "chain"),
+                    proofBackend = manifestString(
+                        manifestField(fixture, "proofBackend", "proofBackend", "proof_backend", "backend"),
+                        "proofBackend",
+                    ),
+                    proofArtifactHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "proofArtifactHash",
+                            "proofArtifactHash",
+                            "proof_artifact_hash",
+                            "proverArtifactHash",
+                            "prover_artifact_hash",
+                            "circuitArtifactHash",
+                            "circuit_artifact_hash",
+                        ),
+                        "proofArtifactHash",
+                    ),
+                    provingKeyHash = manifestString(
+                        manifestField(fixture, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+                        "provingKeyHash",
+                    ),
+                    verifierKeyHash = manifestString(
+                        manifestField(fixture, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+                        "verifierKeyHash",
+                    ),
+                    destinationBindingHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "destinationBindingHash",
+                            "destinationBindingHash",
+                            "destination_binding_hash",
+                        ),
+                        "destinationBindingHash",
+                    ),
+                    requestHash = manifestString(
+                        manifestField(fixture, "requestHash", "requestHash", "request_hash"),
+                        "requestHash",
+                    ),
+                    witnessHash = manifestString(
+                        manifestField(fixture, "witnessHash", "witnessHash", "witness_hash"),
+                        "witnessHash",
+                    ),
+                    sourceProofHash = manifestString(
+                        manifestField(fixture, "sourceProofHash", "sourceProofHash", "source_proof_hash"),
+                        "sourceProofHash",
+                    ),
+                    proofHash = manifestString(
+                        manifestField(fixture, "proofHash", "proofHash", "proof_hash"),
+                        "proofHash",
+                    ),
+                    publicSignalWords = publicSignalWords,
+                    calldataHash = manifestString(
+                        manifestField(fixture, "calldataHash", "calldataHash", "calldata_hash"),
+                        "calldataHash",
+                    ),
+                    toriiSubmitPayloadHash = manifestString(
+                        manifestField(
+                            fixture,
+                            "toriiSubmitPayloadHash",
+                            "toriiSubmitPayloadHash",
+                            "torii_submit_payload_hash",
+                        ),
+                        "toriiSubmitPayloadHash",
+                    ),
+                    sdkResults = sdkResults,
+                )
+            }
+        }
+    }
+
     data class EthereumMainnetNativeEvmProverArtifacts(
         val hashAlgorithm: String,
         val nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
         val proofArtifactHash: String,
         val provingKeyHash: String,
         val verifierKeyHash: String,
+        val crossSdkFixtureParityHash: String? = null,
+        val crossSdkFixtureParity: EthereumMainnetNativeEvmProverParityFixture? = null,
+        val nativeProverSelfTestHash: String? = null,
+        val nativeProverSelfTest: EthereumMainnetNativeEvmProverSelfTestFixture? = null,
         val sdk: String? = null,
         val implementation: String? = null,
         val implementationHash: String? = null,
@@ -634,6 +1473,13 @@ object SccpEvm {
     private fun manifestString(value: Any?, label: String): String =
         value as? String ?: throw IllegalArgumentException("$label must be a string")
 
+    private fun manifestStringList(value: Any?, label: String): List<String> {
+        val list = value as? List<*> ?: throw IllegalArgumentException("$label must be an array")
+        return list.mapIndexed { index, item ->
+            manifestString(item, "$label[$index]")
+        }
+    }
+
     private fun manifestBoolean(value: Any?, label: String): Boolean =
         value as? Boolean ?: throw IllegalArgumentException("$label must be a boolean")
 
@@ -657,11 +1503,11 @@ object SccpEvm {
             else -> throw IllegalArgumentException("$label must be an integer")
         }
 
-    private fun manifestStringList(value: Any?, label: String): List<String> {
-        val list = value as? List<*> ?: throw IllegalArgumentException("$label must be an array")
-        require(list.isNotEmpty()) { "$label must be non-empty" }
-        return list.mapIndexed { index, item ->
-            manifestString(item, "$label[$index]")
+    private fun manifestStringMap(value: Any?, label: String): Map<String, String> {
+        val map = expectManifestObject(value, label)
+        require(map.isNotEmpty()) { "$label must be non-empty" }
+        return map.keys.sorted().associateWith { key ->
+            manifestString(map[key], "$label.$key")
         }
     }
 
@@ -1416,6 +2262,14 @@ object SccpEvm {
 
     private fun normalizeHex32(value: String, field: String): String =
         "0x" + hexLower(hex32Bytes(value, field))
+
+    private fun normalizeNativeEvmProverParityHex32(value: String, field: String): String {
+        val normalized = normalizeHex32(value, field)
+        require(value == normalized) {
+            "$field must be canonical lowercase 0x-prefixed 32-byte hex"
+        }
+        return normalized
+    }
 
     private fun normalizeNativeEvmProverArtifactPath(value: String, field: String): String {
         require(value.isNotEmpty()) { "$field must be a non-empty relative POSIX path" }
@@ -3469,6 +4323,15 @@ fun interface EthereumMainnetOutboundSubmitter {
     fun submit(submission: EvmSccpSubmission): Any?
 }
 
+/** App-linked native prover self-test runner for Ethereum mainnet outbound proofs. */
+fun interface EthereumMainnetNativeProverSelfTest {
+    fun run(
+        fixture: SccpEvm.EthereumMainnetNativeEvmProverSelfTestFixture,
+        expectedResult: SccpEvm.EthereumMainnetNativeEvmProverSelfTestSdkResult,
+        artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts,
+    ): SccpEvm.EthereumMainnetNativeEvmProverSelfTestSdkResult
+}
+
 /** Locally collected Ethereum mainnet inbound evidence before source-proof generation. */
 data class EthereumMainnetInboundEvidence(
     val sourceDomain: Int = SccpEvm.DOMAIN_ETH,
@@ -3653,12 +4516,45 @@ class EthereumMainnetSccp(
     private val inboundProver: EthereumMainnetInboundProver? = null,
     private val inboundSubmitter: EthereumMainnetInboundSubmitter? = null,
     private val outboundSubmitter: EthereumMainnetOutboundSubmitter? = null,
+    private val nativeProverSelfTest: EthereumMainnetNativeProverSelfTest? = null,
     private val nativeProverBundle: SccpEvm.EthereumMainnetNativeEvmProverBundle? = null,
     private val nativeProverArtifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts? = null,
     private val sourceBridgeEmitterAddress: String? = null,
 ) {
     private val effectiveNativeProverBundle =
         nativeProverArtifacts?.nativeProverBundle ?: nativeProverBundle
+
+    companion object {
+        fun fromNativeProverBundle(
+            witnessProvider: EvmSccpWitnessProvider? = null,
+            proofEngine: EvmSccpProofEngine? = null,
+            executionProvider: EthereumMainnetExecutionProvider? = null,
+            consensusProvider: EthereumMainnetConsensusProvider? = null,
+            inboundProver: EthereumMainnetInboundProver? = null,
+            inboundSubmitter: EthereumMainnetInboundSubmitter? = null,
+            outboundSubmitter: EthereumMainnetOutboundSubmitter? = null,
+            nativeProverSelfTest: EthereumMainnetNativeProverSelfTest? = null,
+            nativeProverBundle: SccpEvm.EthereumMainnetNativeEvmProverBundle,
+            sdk: String,
+            artifactResolver: SccpEvm.NativeEvmProverArtifactResolver,
+            sourceBridgeEmitterAddress: String? = null,
+        ): EthereumMainnetSccp {
+            val verifiedArtifacts = nativeProverBundle.verifiedArtifacts(sdk, artifactResolver)
+            return EthereumMainnetSccp(
+                witnessProvider = witnessProvider,
+                proofEngine = proofEngine,
+                executionProvider = executionProvider,
+                consensusProvider = consensusProvider,
+                inboundProver = inboundProver,
+                inboundSubmitter = inboundSubmitter,
+                outboundSubmitter = outboundSubmitter,
+                nativeProverSelfTest = nativeProverSelfTest,
+                nativeProverBundle = verifiedArtifacts.nativeProverBundle,
+                nativeProverArtifacts = verifiedArtifacts,
+                sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            )
+        }
+    }
 
     fun validateExecutionProviderMainnet(provider: EthereumMainnetExecutionProvider? = executionProvider): Any? {
         val selectedProvider = provider
@@ -3995,6 +4891,7 @@ class EthereumMainnetSccp(
     fun proveOutboundToEthereum(input: EvmSccpProofRequestInput): EvmSccpProofResult {
         val request = buildOutboundProofRequest(input)
         requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request)
+        requireNativeProverSelfTest(nativeProverArtifacts, nativeProverSelfTest)
         val engine = proofEngine
             ?: throw IllegalStateException("Ethereum mainnet SCCP Groth16 prover is not linked")
         return SccpEthereumMainnet.wrapProofResult(
@@ -4022,6 +4919,22 @@ class EthereumMainnetSccp(
         require(artifacts.verifierKeyHash == artifacts.nativeProverBundle.verifierKeyHash) {
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
         }
+        require(
+            artifacts.crossSdkFixtureParityHash ==
+                artifacts.nativeProverBundle.auditHashes["cross_sdk_fixture_parity"] &&
+                artifacts.crossSdkFixtureParity?.destinationBindingHash ==
+                artifacts.nativeProverBundle.destinationBindingHash,
+        ) {
+            "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle"
+        }
+        require(
+            artifacts.nativeProverSelfTestHash ==
+                artifacts.nativeProverBundle.auditHashes["native_prover_self_test"] &&
+                artifacts.nativeProverSelfTest?.destinationBindingHash ==
+                artifacts.nativeProverBundle.destinationBindingHash,
+        ) {
+            "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle"
+        }
         val sdk = artifacts.sdk
         val implementation = artifacts.implementation
         val implementationHash = artifacts.implementationHash
@@ -4032,6 +4945,27 @@ class EthereumMainnetSccp(
             ?: throw IllegalArgumentException("nativeProverBundle has no artifact row for sdk: $sdk")
         require(implementation == artifact.implementation && implementationHash == artifact.implementationHash) {
             "nativeProverArtifacts implementation binding must match nativeProverBundle"
+        }
+    }
+
+    private fun requireNativeProverSelfTest(
+        artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts?,
+        nativeProverSelfTest: EthereumMainnetNativeProverSelfTest?,
+    ) {
+        require(artifacts != null) {
+            "nativeProverArtifacts are required"
+        }
+        val sdk = artifacts.sdk
+            ?: throw IllegalArgumentException("nativeProverArtifacts sdk is required")
+        val fixture = artifacts.nativeProverSelfTest
+            ?: throw IllegalArgumentException("nativeProverArtifacts nativeProverSelfTest is required")
+        val expectedResult = fixture.sdkResults[sdk]
+            ?: throw IllegalArgumentException("nativeProverSelfTest sdkResults must include $sdk")
+        val runner = nativeProverSelfTest
+            ?: throw IllegalArgumentException("nativeProverSelfTest runner is required")
+        val result = runner.run(fixture, expectedResult, artifacts)
+        require(result == expectedResult) {
+            "nativeProverSelfTest result must match nativeProverBundle fixture"
         }
     }
 
@@ -4053,6 +4987,22 @@ class EthereumMainnetSccp(
         }
         require(artifacts.verifierKeyHash == artifacts.nativeProverBundle.verifierKeyHash) {
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
+        }
+        require(
+            artifacts.crossSdkFixtureParityHash ==
+                artifacts.nativeProverBundle.auditHashes["cross_sdk_fixture_parity"] &&
+                artifacts.crossSdkFixtureParity?.destinationBindingHash ==
+                artifacts.nativeProverBundle.destinationBindingHash,
+        ) {
+            "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle"
+        }
+        require(
+            artifacts.nativeProverSelfTestHash ==
+                artifacts.nativeProverBundle.auditHashes["native_prover_self_test"] &&
+                artifacts.nativeProverSelfTest?.destinationBindingHash ==
+                artifacts.nativeProverBundle.destinationBindingHash,
+        ) {
+            "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle"
         }
         val sdk = artifacts.sdk
         val implementation = artifacts.implementation

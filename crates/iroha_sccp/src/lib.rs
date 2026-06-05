@@ -665,6 +665,7 @@ const SCCP_EVM_MAX_RECEIPT_VALUE_BYTES: usize = 16 * 1024;
 const SCCP_EVM_MAX_LOG_TOPICS: usize = 4;
 const SCCP_EVM_MAX_HEADER_RLP_BYTES: usize = 16 * 1024;
 const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES: usize = 512;
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES: usize = 342;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: usize = SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES;
 const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: usize = 48;
@@ -9167,41 +9168,54 @@ pub fn canonical_sccp_message_transparent_public_inputs_bytes(
 }
 
 pub fn canonical_sccp_merkle_proof_bytes(proof: &SccpMerkleProofV1) -> Vec<u8> {
+    canonical_sccp_merkle_proof_bytes_checked(proof).unwrap_or_default()
+}
+
+pub fn canonical_sccp_merkle_proof_bytes_checked(proof: &SccpMerkleProofV1) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    push_u32(
-        &mut out,
-        u32::try_from(proof.steps.len()).expect("merkle proof step count fits into u32"),
-    );
+    push_u32_len_checked(&mut out, proof.steps.len())?;
     for step in &proof.steps {
         out.extend_from_slice(&step.sibling_hash);
         push_u8(&mut out, u8::from(step.sibling_is_left));
     }
-    out
+    Some(out)
 }
 
 pub fn canonical_nexus_sccp_message_bundle_bytes(bundle: &NexusSccpMessageProofV1) -> Vec<u8> {
+    canonical_nexus_sccp_message_bundle_bytes_checked(bundle).unwrap_or_default()
+}
+
+pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<Vec<u8>> {
     let commitment = canonical_commitment_bytes(&bundle.commitment);
-    let merkle_proof = canonical_sccp_merkle_proof_bytes(&bundle.merkle_proof);
+    let merkle_proof = canonical_sccp_merkle_proof_bytes_checked(&bundle.merkle_proof)?;
     let payload = canonical_sccp_payload_bytes(&bundle.payload);
 
     let mut out = Vec::new();
     push_u8(&mut out, bundle.version);
     out.extend_from_slice(&bundle.commitment_root);
-    push_vec(&mut out, &commitment);
-    push_vec(&mut out, &merkle_proof);
-    push_vec(&mut out, &payload);
-    push_vec(&mut out, &bundle.finality_proof);
-    out
+    push_vec_checked(&mut out, &commitment)?;
+    push_vec_checked(&mut out, &merkle_proof)?;
+    push_vec_checked(&mut out, &payload)?;
+    push_vec_checked(&mut out, &bundle.finality_proof)?;
+    Some(out)
 }
 
 pub fn canonical_sccp_source_chain_proof_envelope_bytes(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Vec<u8> {
+    canonical_sccp_source_chain_proof_envelope_bytes_checked(proof).unwrap_or_default()
+}
+
+pub fn canonical_sccp_source_chain_proof_envelope_bytes_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     push_u8(&mut out, proof.version);
     push_u32(&mut out, proof.source_domain);
     push_u32(&mut out, proof.target_domain);
-    push_vec(&mut out, proof.source_chain.as_bytes());
+    push_vec_checked(&mut out, proof.source_chain.as_bytes())?;
     push_u8(
         &mut out,
         sccp_source_proof_plan_code(proof.source_proof_plan),
@@ -9218,17 +9232,13 @@ pub fn canonical_sccp_source_chain_proof_envelope_bytes(
     out.extend_from_slice(&proof.finality_block_hash);
     out.extend_from_slice(&proof.finalized_header_hash);
     out.extend_from_slice(&proof.receipt_or_message_root);
-    push_vec(&mut out, &proof.consensus_proof);
-    push_vec(&mut out, &proof.message_inclusion_proof);
-    push_u32(
-        &mut out,
-        u32::try_from(proof.inclusion_branch.len())
-            .expect("SCCP source proof inclusion branch length fits into u32"),
-    );
+    push_vec_checked(&mut out, &proof.consensus_proof)?;
+    push_vec_checked(&mut out, &proof.message_inclusion_proof)?;
+    push_u32_len_checked(&mut out, proof.inclusion_branch.len())?;
     for step in &proof.inclusion_branch {
-        push_vec(&mut out, step);
+        push_vec_checked(&mut out, step)?;
     }
-    out
+    Some(out)
 }
 
 pub fn canonical_sccp_source_consensus_proof_bytes(proof: &SccpSourceConsensusProofV1) -> Vec<u8> {
@@ -13371,10 +13381,17 @@ pub fn canonical_sccp_source_message_inclusion_proof_bytes(
 }
 
 pub fn sccp_source_chain_proof_envelope_hash(proof: &SccpSourceChainProofEnvelopeV1) -> H256 {
-    prefixed_blake2b(
+    sccp_source_chain_proof_envelope_hash_checked(proof)
+        .unwrap_or_else(|| prefixed_blake2b(b"sccp:source-proof-envelope:v1", &[]))
+}
+
+pub fn sccp_source_chain_proof_envelope_hash_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> Option<H256> {
+    Some(prefixed_blake2b(
         b"sccp:source-proof-envelope:v1",
-        &canonical_sccp_source_chain_proof_envelope_bytes(proof),
-    )
+        &canonical_sccp_source_chain_proof_envelope_bytes_checked(proof)?,
+    ))
 }
 
 fn keccak256_bytes(payload: &[u8]) -> H256 {
@@ -15699,7 +15716,7 @@ pub fn build_sccp_ton_internal_message_submission_payload(
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpTonInternalMessageSubmissionPayloadV1> {
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     let message_body_boc = build_sccp_ton_message_body_boc(
         manifest,
         destination_binding,
@@ -17342,7 +17359,7 @@ fn build_sccp_local_admission_submission_payload(
         return None;
     }
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     if !sccp_native_recursive_payload_bytes_are_packagable(&bundle_bytes) {
         return None;
     }
@@ -17426,7 +17443,7 @@ fn build_sccp_platform_submission_payload(
     }
     let canonical_public_inputs =
         canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     if !sccp_transparent_public_inputs_match_manifest(manifest, public_inputs) {
         return None;
     }
@@ -18046,18 +18063,18 @@ fn canonical_sccp_message_transparent_statement_bytes(
         &mut statement,
         sccp_verifier_backend_family_code(manifest.verifier_backend.family),
     );
-    push_vec(&mut statement, chain.as_bytes());
-    push_vec(&mut statement, manifest.proof_family.as_bytes());
-    push_vec(&mut statement, manifest.verifier_backend.key.as_bytes());
-    push_vec(&mut statement, manifest.message_backend.as_bytes());
-    push_vec(&mut statement, manifest.registry_backend.as_bytes());
-    push_vec(&mut statement, manifest.manifest_seed.as_bytes());
+    push_vec_checked(&mut statement, chain.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.proof_family.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.verifier_backend.key.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.message_backend.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.registry_backend.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.manifest_seed.as_bytes())?;
     statement.extend_from_slice(&manifest.destination_binding.binding_hash);
-    push_vec(
+    push_vec_checked(
         &mut statement,
         manifest.counterparty_account_codec_key.as_bytes(),
-    );
-    push_vec(&mut statement, payload_kind.as_bytes());
+    )?;
+    push_vec_checked(&mut statement, payload_kind.as_bytes())?;
     statement.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
         public_inputs,
     ));
@@ -18624,7 +18641,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     if !sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle) {
         return None;
     }
-    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     finality_context.extend_from_slice(&transfer.nonce.to_le_bytes());
     let finality_block_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1,
@@ -18658,8 +18675,8 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
-) -> Vec<u8> {
-    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+) -> Option<Vec<u8>> {
+    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     proof_context.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
         public_inputs,
     ));
@@ -18676,7 +18693,7 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     proof_bytes.extend_from_slice(&public_inputs.finality_block_hash);
     proof_bytes.extend_from_slice(&statement_hash);
     proof_bytes.extend_from_slice(&proof_hash);
-    proof_bytes
+    Some(proof_bytes)
 }
 
 fn sccp_taira_tron_xor_diagnostic_submission_package(
@@ -18686,13 +18703,14 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     let source_verifier_material_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1,
         &canonical_sccp_message_transparent_public_inputs_bytes(public_inputs),
     );
     let source_adapter_engine_deployment_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1,
-        &canonical_nexus_sccp_message_bundle_bytes(bundle),
+        &bundle_bytes,
     );
     let platform_payload =
         SccpPlatformSubmissionPayloadV1::LocalAdmission(SccpLocalAdmissionSubmissionPayloadV1 {
@@ -18701,7 +18719,7 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
             public_inputs_bytes: canonical_sccp_message_transparent_public_inputs_bytes(
                 public_inputs,
             ),
-            bundle_bytes: canonical_nexus_sccp_message_bundle_bytes(bundle),
+            bundle_bytes,
             statement_hash,
             source_verifier_material_hash,
             source_adapter_engine_deployment_hash,
@@ -18733,7 +18751,7 @@ pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
     let statement_hash =
         sccp_taira_tron_xor_diagnostic_statement_hash(bundle, &manifest, &public_inputs)?;
     let proof_bytes =
-        sccp_taira_tron_xor_diagnostic_proof_bytes(bundle, statement_hash, &public_inputs);
+        sccp_taira_tron_xor_diagnostic_proof_bytes(bundle, statement_hash, &public_inputs)?;
     let submission_package = sccp_taira_tron_xor_diagnostic_submission_package(
         &manifest,
         bundle,
@@ -19956,6 +19974,12 @@ fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+fn push_u32_len_checked(out: &mut Vec<u8>, len: usize) -> Option<()> {
+    let len = u32::try_from(len).ok()?;
+    push_u32(out, len);
+    Some(())
+}
+
 fn push_i32(out: &mut Vec<u8>, value: i32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
@@ -19974,6 +19998,12 @@ fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
         u32::try_from(value.len()).expect("SCCP vector length fits into u32"),
     );
     out.extend_from_slice(value);
+}
+
+fn push_vec_checked(out: &mut Vec<u8>, value: &[u8]) -> Option<()> {
+    push_u32_len_checked(out, value.len())?;
+    out.extend_from_slice(value);
+    Some(())
 }
 
 fn push_protobuf_key(out: &mut Vec<u8>, field_number: u32, wire_type: u8) {
@@ -31300,16 +31330,16 @@ fn runtime_finality_from_nexus_finality(
 
 fn runtime_finality_from_source_chain_proof(
     proof: &SccpSourceChainProofEnvelopeV1,
-) -> SccpRuntimeFinalityProofV1 {
-    SccpRuntimeFinalityProofV1 {
+) -> Option<SccpRuntimeFinalityProofV1> {
+    Some(SccpRuntimeFinalityProofV1 {
         version: 1,
         epoch: 0,
         height: proof.finality_height,
         block_hash: proof.finality_block_hash,
         commitment_root: proof.commitment_root,
-        validator_set_hash: sccp_source_chain_proof_envelope_hash(proof),
+        validator_set_hash: sccp_source_chain_proof_envelope_hash_checked(proof)?,
         signature_count: 0,
-    }
+    })
 }
 
 pub fn sccp_runtime_envelope_from_message_bundle(
@@ -31333,7 +31363,7 @@ pub fn sccp_runtime_envelope_from_message_bundle(
         ) {
             return None;
         }
-        runtime_finality_from_source_chain_proof(&source_proof)
+        runtime_finality_from_source_chain_proof(&source_proof)?
     };
     Some(SccpRuntimeProofEnvelopeV1 {
         version: 1,
@@ -31380,7 +31410,7 @@ pub fn sccp_runtime_envelope_from_message_bundle_with_source_verifier_material_a
         commitment: runtime_commitment_from_hub(&bundle.commitment),
         merkle_proof: runtime_merkle_proof_from_hub(&bundle.merkle_proof),
         payload: runtime_payload_from_sccp_payload(&bundle.payload),
-        finality_proof: runtime_finality_from_source_chain_proof(&source_proof),
+        finality_proof: runtime_finality_from_source_chain_proof(&source_proof)?,
     })
 }
 
@@ -35289,6 +35319,30 @@ mod tests {
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
 
+    #[test]
+    fn sccp_checked_length_writer_rejects_u32_overflow() {
+        let mut out = Vec::new();
+        push_u32_len_checked(&mut out, 3).expect("small length is encodable");
+        assert_eq!(out, 3u32.to_le_bytes());
+
+        out.clear();
+        push_vec_checked(&mut out, b"abc").expect("small vector is encodable");
+        assert_eq!(out, [3, 0, 0, 0, b'a', b'b', b'c']);
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            out.clear();
+            assert!(
+                push_u32_len_checked(&mut out, (u32::MAX as usize) + 1).is_none(),
+                "SCCP canonical transcript lengths must fail closed above u32::MAX",
+            );
+            assert!(
+                out.is_empty(),
+                "overflow rejection must not leave a partial length prefix",
+            );
+        }
+    }
+
     fn sample_taira_tron_xor_diagnostic_bundle(
         route_id: &[u8],
         asset_id: &[u8],
@@ -35320,6 +35374,58 @@ mod tests {
             payload,
             finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
         }
+    }
+
+    fn sample_checked_source_chain_proof_envelope() -> SccpSourceChainProofEnvelopeV1 {
+        SccpSourceChainProofEnvelopeV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_ETH,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_chain: "ethereum".to_owned(),
+            source_proof_plan: SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
+            finality_model: SccpProofFinalityModelV1::EthereumBeaconExecution,
+            message_id: [0x11; 32],
+            payload_hash: [0x22; 32],
+            source_event_digest: [0x33; 32],
+            commitment_root: [0x44; 32],
+            finality_height: 12_345,
+            finality_block_hash: [0x55; 32],
+            finalized_header_hash: [0x66; 32],
+            receipt_or_message_root: [0x77; 32],
+            consensus_proof: vec![0x88; 3],
+            message_inclusion_proof: vec![0x99; 5],
+            inclusion_branch: vec![vec![0xAA; 32]],
+        }
+    }
+
+    #[test]
+    fn sccp_checked_bundle_encoder_matches_legacy_canonical_bytes() {
+        let bundle = sample_taira_tron_xor_diagnostic_bundle(
+            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
+            SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes(),
+        );
+
+        assert_eq!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
+                .expect("sample bundle is length-canonical"),
+            canonical_nexus_sccp_message_bundle_bytes(&bundle),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_envelope_encoder_matches_legacy_canonical_bytes() {
+        let envelope = sample_checked_source_chain_proof_envelope();
+
+        assert_eq!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&envelope)
+                .expect("sample source envelope is length-canonical"),
+            canonical_sccp_source_chain_proof_envelope_bytes(&envelope),
+        );
+        assert_eq!(
+            sccp_source_chain_proof_envelope_hash_checked(&envelope)
+                .expect("sample source envelope hash is length-canonical"),
+            sccp_source_chain_proof_envelope_hash(&envelope),
+        );
     }
 
     #[test]

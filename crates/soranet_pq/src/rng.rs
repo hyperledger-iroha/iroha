@@ -1,7 +1,7 @@
 use blake3::Hasher;
 use rand::rngs::OsRng;
 use rand_chacha::ChaCha20Rng;
-use rand_core::{CryptoRng, RngCore, SeedableRng, TryRngCore};
+use rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -72,9 +72,17 @@ impl HedgedRngSeed {
     /// # Errors
     /// Returns [`RngError`] when the OS RNG cannot supply seed material.
     pub fn from_os() -> Result<Self, RngError> {
-        let mut buf = [0_u8; 32];
         let mut os = OsRng;
-        os.try_fill_bytes(&mut buf).map_err(|_| RngError)?;
+        Self::from_rng(&mut os)
+    }
+
+    /// Draw a fresh seed from a caller-supplied cryptographic RNG.
+    ///
+    /// # Errors
+    /// Returns [`RngError`] when the supplied RNG cannot provide seed material.
+    pub fn from_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, RngError> {
+        let mut buf = [0_u8; 32];
+        rng.try_fill_bytes(&mut buf).map_err(|_| RngError)?;
         Ok(Self { seed: buf })
     }
 
@@ -127,7 +135,23 @@ pub fn deterministic_chacha20_rng(
 /// # Errors
 /// Returns [`RngError`] when the initial OS seed draw fails.
 pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCha20Rng, RngError> {
-    HedgedRngSeed::from_os().map(|seed| hedged_chacha20_rng(seed, personalization))
+    let mut os = OsRng;
+    hedged_chacha20_rng_from_rng(personalization, &mut os)
+}
+
+/// Construct a hedged RNG from caller-supplied seed entropy.
+///
+/// This helper is for production embedders and tests that need the same
+/// fail-closed seed boundary as [`hedged_chacha20_rng_from_os`] without tying
+/// the required seed draw to the process OS RNG.
+///
+/// # Errors
+/// Returns [`RngError`] when the required seed draw fails.
+pub fn hedged_chacha20_rng_from_rng<R: TryCryptoRng + ?Sized>(
+    personalization: &[u8],
+    rng: &mut R,
+) -> Result<HedgedChaCha20Rng, RngError> {
+    HedgedRngSeed::from_rng(rng).map(|seed| hedged_chacha20_rng(seed, personalization))
 }
 
 fn build_rng(
@@ -156,8 +180,41 @@ fn build_rng(
 #[cfg(test)]
 mod tests {
     use rand::RngCore;
+    use rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingSeedRng;
+
+    #[derive(Debug)]
+    struct FailingSeedRngError;
+
+    impl core::fmt::Display for FailingSeedRngError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("failing hedged seed RNG")
+        }
+    }
+
+    impl std::error::Error for FailingSeedRngError {}
+
+    impl TryRngCore for FailingSeedRng {
+        type Error = FailingSeedRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingSeedRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingSeedRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingSeedRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingSeedRng {}
 
     #[test]
     fn personalization_affects_stream() {
@@ -296,6 +353,17 @@ mod tests {
             rng.entropy_status(),
             HedgedEntropyStatus::MixedOsEntropy | HedgedEntropyStatus::OsEntropyUnavailable
         ));
+    }
+
+    #[test]
+    fn injected_seed_rng_failure_is_reported() {
+        let mut rng = FailingSeedRng;
+
+        assert!(matches!(HedgedRngSeed::from_rng(&mut rng), Err(RngError)));
+        assert_eq!(
+            hedged_chacha20_rng_from_rng(b"failing-seed", &mut rng).map(|_| ()),
+            Err(RngError)
+        );
     }
 
     #[test]

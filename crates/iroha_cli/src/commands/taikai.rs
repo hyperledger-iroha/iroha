@@ -34,7 +34,11 @@ use norito::{
     NoritoSerialize,
     json::{self, JsonSerialize, Map, Value},
 };
-use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{
+    Rng, SeedableRng,
+    rand_core::TryCryptoRng,
+    rngs::{OsRng, StdRng},
+};
 use sorafs_car::taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata};
 use std::{
     borrow::Cow,
@@ -811,10 +815,13 @@ fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
 }
 
 fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
-    let mut rng = StdRng::try_from_os_rng()
-        .map_err(|err| eyre!("failed to seed Taikai CEK HKDF salt RNG from OS entropy: {err}"))?;
+    random_cek_hkdf_salt_with_rng(&mut OsRng)
+}
+
+fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32]> {
     let mut salt = [0u8; 32];
-    rng.fill_bytes(&mut salt);
+    rng.try_fill_bytes(&mut salt)
+        .map_err(|err| eyre!("failed to generate Taikai CEK HKDF salt random bytes: {err}"))?;
     Ok(salt)
 }
 
@@ -2358,7 +2365,39 @@ impl ExtensionMatcher {
 mod tests {
     use super::*;
     use iroha::data_model::taikai::TaikaiTrackKind;
+    use rand::RngCore as _;
     use std::{fs, path::Path};
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing Taikai CEK salt RNG")
+        }
+    }
+
+    impl std::error::Error for FailingTryRngError {}
+
+    struct FailingTryRng;
+
+    impl rand::rand_core::TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn hex_parser_accepts_32_byte_values() {
@@ -2512,6 +2551,14 @@ mod tests {
     fn cek_hkdf_salt_random_path_reads_os_entropy() {
         let salt = build_cek_hkdf_salt(None).expect("OS RNG should seed CEK salt RNG");
         assert_eq!(salt.len(), 32);
+    }
+
+    #[test]
+    fn cek_hkdf_salt_random_path_reports_rng_failure() {
+        let err = random_cek_hkdf_salt_with_rng(&mut FailingTryRng)
+            .expect_err("RNG failure should surface");
+        assert!(err.to_string().contains("Taikai CEK HKDF salt"));
+        assert!(err.to_string().contains("failing Taikai CEK salt RNG"));
     }
 
     #[test]

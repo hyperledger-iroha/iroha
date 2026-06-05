@@ -246,6 +246,16 @@ def _native_evm_prover_payload_sources(
     for field in ("proof_artifact", "proving_key", "verifier_key"):
         if field in payload:
             add_path(payload[field], field)
+    if "cross_sdk_fixture_parity_artifact" in payload:
+        add_path(
+            payload["cross_sdk_fixture_parity_artifact"],
+            "cross_sdk_fixture_parity_artifact",
+        )
+    if "native_prover_self_test_artifact" in payload:
+        add_path(
+            payload["native_prover_self_test_artifact"],
+            "native_prover_self_test_artifact",
+        )
 
     native_sdk_artifacts = payload.get("native_sdk_artifacts")
     if isinstance(native_sdk_artifacts, list):

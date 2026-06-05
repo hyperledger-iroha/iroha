@@ -455,11 +455,10 @@ impl ProofAttachment {
     /// format.
     #[must_use]
     pub fn structural_error(&self) -> Option<(&'static str, &'static str)> {
-        if let Some(field) = self.backend_consistency_error() {
-            Some((field, "must match attachment backend"))
-        } else {
-            self.field_content_error()
-        }
+        self.backend_consistency_error().map_or_else(
+            || self.field_content_error(),
+            |field| Some((field, "must match attachment backend")),
+        )
     }
 
     fn field_content_error(&self) -> Option<(&'static str, &'static str)> {

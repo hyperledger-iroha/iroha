@@ -7120,6 +7120,73 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     }
 }
 
+fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equatable {
+    var authority: String
+    var privateKey: String
+    var chunkerProfileId: UInt32
+    var chunkerNamespace: String
+    var chunkerName: String
+    var chunkerSemver: String
+    var chunkerMultihashCode: UInt32
+    var pinPolicy: ToriiSoraFsPinPolicy
+    var manifestDigestHex: String
+    var chunkDigestSha3_256Hex: String
+    var contentLength: UInt64
+    var submittedEpoch: UInt64
+    var alias: ToriiSoraFsPinAlias?
+    var successorOfHex: String?
+
+    init(_ request: ToriiSoraFsPinRegisterRequest) throws {
+        guard let authority = request.authority,
+              let privateKey = request.privateKey,
+              let chunker = request.chunker,
+              let chunkerProfileId = chunker.profileId,
+              let chunkerNamespace = chunker.namespace,
+              let chunkerName = chunker.name,
+              let chunkerSemver = chunker.semver,
+              let chunkerMultihashCode = chunker.multihashCode,
+              let pinPolicy = request.pinPolicy,
+              let manifestDigestHex = request.manifestDigestHex,
+              let chunkDigestSha3_256Hex = request.chunkDigestSha3_256Hex,
+              let contentLength = request.contentLength,
+              let submittedEpoch = request.submittedEpoch else {
+            throw ToriiClientError.invalidPayload("normalized SoraFS pin request is incomplete.")
+        }
+
+        self.authority = authority
+        self.privateKey = privateKey
+        self.chunkerProfileId = chunkerProfileId
+        self.chunkerNamespace = chunkerNamespace
+        self.chunkerName = chunkerName
+        self.chunkerSemver = chunkerSemver
+        self.chunkerMultihashCode = chunkerMultihashCode
+        self.pinPolicy = pinPolicy
+        self.manifestDigestHex = manifestDigestHex
+        self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
+        self.contentLength = contentLength
+        self.submittedEpoch = submittedEpoch
+        self.alias = request.alias
+        self.successorOfHex = request.successorOfHex
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case chunkerProfileId = "chunker_profile_id"
+        case chunkerNamespace = "chunker_namespace"
+        case chunkerName = "chunker_name"
+        case chunkerSemver = "chunker_semver"
+        case chunkerMultihashCode = "chunker_multihash_code"
+        case pinPolicy = "pin_policy"
+        case manifestDigestHex = "manifest_digest_hex"
+        case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
+        case contentLength = "content_length"
+        case submittedEpoch = "submitted_epoch"
+        case alias
+        case successorOfHex = "successor_of_hex"
+    }
+}
+
 public struct ToriiSoraFsPinRegisterResponse: Codable, Sendable, Equatable {
     public var manifestDigestHex: String?
     public var chunkerHandle: String?
@@ -15055,7 +15122,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest) async throws -> ToriiSoraFsPinRegisterResponse {
         let normalized = try requestBody.normalized()
-        let body = try JSONEncoder().encode(normalized)
+        let body = try JSONEncoder().encode(ToriiSoraFsPinRegisterWireRequest(normalized))
         let request = try makeRequest(path: "/v1/sorafs/pin/register",
                                       method: .post,
                                       body: body,

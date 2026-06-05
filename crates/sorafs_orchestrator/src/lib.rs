@@ -2301,10 +2301,11 @@ impl LocalProxyRuntime {
         self.config.proxy_mode.clone()
     }
 
-    fn manifest(&self) -> Option<BrowserExtensionManifest> {
-        self.handle
-            .as_ref()
-            .and_then(LocalQuicProxyHandle::browser_manifest)
+    fn manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
+        match self.handle.as_ref() {
+            Some(handle) => handle.browser_manifest(),
+            None => Ok(None),
+        }
     }
 }
 
@@ -2416,10 +2417,12 @@ impl Orchestrator {
         guard.handle.clone()
     }
 
-    async fn proxy_manifest(&self) -> Option<BrowserExtensionManifest> {
-        let runtime = self.proxy_runtime.as_ref()?;
+    async fn proxy_manifest(&self) -> Result<Option<BrowserExtensionManifest>, OrchestratorError> {
+        let Some(runtime) = self.proxy_runtime.as_ref() else {
+            return Ok(None);
+        };
         let guard = runtime.lock().await;
-        guard.manifest()
+        Ok(guard.manifest()?)
     }
 
     /// Updates the local proxy runtime mode, restarting the proxy if necessary.
@@ -2793,9 +2796,9 @@ impl Orchestrator {
                 .await
         };
 
-        let proxy_manifest = self.proxy_manifest().await;
         let session = match result {
             Ok(outcome) => {
+                let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
@@ -2945,9 +2948,9 @@ impl Orchestrator {
             .await
         };
 
-        let proxy_manifest = self.proxy_manifest().await;
         let session = match result {
             Ok(outcome) => {
+                let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
@@ -2998,7 +3001,7 @@ async fn apply_proxy_mode(
     let (previous_mode, label, config, previous_handle) = {
         let mut guard = runtime.lock().await;
         if guard.config.proxy_mode == mode {
-            return Ok(guard.manifest());
+            return Ok(guard.manifest()?);
         }
         let label = guard.telemetry_label();
         let previous_mode = guard.config.proxy_mode.clone();
@@ -3014,7 +3017,7 @@ async fn apply_proxy_mode(
 
     match spawn_local_quic_proxy(config.clone()) {
         Ok(handle) => {
-            let manifest = handle.browser_manifest();
+            let manifest = handle.browser_manifest()?;
             {
                 let mut guard = runtime.lock().await;
                 guard.config = config;
@@ -5854,6 +5857,11 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
+    use iroha_data_model::soranet::privacy_metrics::{
+        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
+        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventThrottleV1,
+        SoranetPrivacyEventVerifiedBytesV1, SoranetPrivacyThrottleScopeV1,
+    };
     use iroha_logger::{telemetry::Channel, test_logger};
     use iroha_telemetry::metrics::global_or_default;
     use norito::json::{self, Map, Value};

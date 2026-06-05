@@ -2,6 +2,1679 @@
 
 Last updated: 2026-06-05
 
+## 2026-06-05 SCCP ETH Groth16 domain proof-word guards
+
+- Extended the EVM SCCP contract smoke test to require explicit verifier
+  rejection for overflowing source-domain words, overflowing target-domain
+  public-input words, and same source/target domain proof words before pairing
+  verification.
+- Pinned those revert reasons and stable smoke variable markers in strict
+  release bundle verification, alongside the existing malformed proof, point,
+  replay, and destination-binding guards.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 Sumeragi prepare phase entry provenance proof
+
+- Added `PreparePhaseEntryOnlyByProposal` to the main Sumeragi TLA model,
+  proving that first entry into `Prepare` can only be an honest proposal
+  handoff from `Propose`, with live vote and certificate state clean and the
+  proposal's RBC start-or-preserve effects applied.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "PreparePhaseEntryOnlyByProposalStep|PreparePhaseEntryOnlyByProposal|prepare-phase entry provenance|Sumeragi prepare phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`120`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH Groth16 destination-binding replay guard
+
+- Extended the EVM SCCP contract smoke test so an otherwise valid
+  Ethereum-mainnet Groth16 proof is rejected when verified against a different
+  non-zero destination binding hash or submitted to a second wrapper deployment
+  with the same verifier/key material.
+- Pinned the new wrong-binding and cross-wrapper replay markers in strict
+  release bundle verification, and documented that destination binding is a
+  Groth16 public signal rather than side metadata.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 Sumeragi RBC corruption entry provenance proof
+
+- Added `RbcCorruptionEntryOnlyByFault` to the main Sumeragi TLA model,
+  proving that first entry into `Corrupted` can only be a Byzantine fault
+  against an initialized/chunk/ready RBC state with matching header, digest,
+  chunk, and READY evidence while preserving all non-digest consensus and RBC
+  counters.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcCorruptionEntryOnlyByFaultStep|RbcCorruptionEntryOnlyByFault|RBC corruption entry provenance|Sumeragi RBC corruption entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`119`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover self-test execution gate
+
+- Ethereum mainnet outbound proof facades now execute the manifest-bound native
+  EVM prover self-test before invoking production proof callbacks. JS/browser,
+  Swift, Kotlin/JVM, Java Android, and C# expose SDK-owned self-test hooks or
+  runner interfaces, compare the returned SDK row against the verified
+  `native_prover_self_test_artifact`, and reject missing or drifting runners
+  before local proof execution.
+- Release readiness and strict bundle verification now require the runtime
+  hook markers in SDK source, tests, JS `dist`, and TypeScript declarations, in
+  addition to the self-test artifact hash and fixture checks.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_bundle`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_evm_prover or native_no_wasm"`
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi RBC INIT entry provenance proof
+
+- Added `RbcInitEntryOnlyByProposalOrInit` to the main Sumeragi TLA model,
+  proving that first entry into `Init` can only be a proposal starting RBC from
+  `Idle` or an explicit RBC INIT repair from `Idle`, `Withheld`, or
+  `Corrupted`, with header/digest evidence installed and chunk/READY counters
+  reset.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcInitEntryOnlyByProposalOrInitStep|RbcInitEntryOnlyByProposalOrInit|RBC INIT entry provenance|Sumeragi RBC INIT entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`118`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC chunk completion entry provenance proof
+
+- Added `RbcChunkCompletionEntryOnlyByChunk` to the main Sumeragi TLA model,
+  proving that first entry into `ChunksComplete` can only be an RBC CHUNK
+  transition from INIT, CHUNKING, or post-GST withheld recovery state with
+  header evidence, valid post-state digest evidence, and chunk count reaching
+  full coverage.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkCompletionEntryOnlyByChunkStep|RbcChunkCompletionEntryOnlyByChunk|RBC chunk-completion entry provenance|Sumeragi RBC chunk completion entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`117`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC READY quorum entry provenance proof
+
+- Added `RbcReadyQuorumEntryOnlyByReady` to the main Sumeragi TLA model,
+  proving that first entry into `ReadyQuorum` can only be an RBC READY
+  transition from chunk-complete or READY-partial state, with completed
+  chunk/header/digest evidence and the post-state READY count crossing commit
+  quorum.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcReadyQuorumEntryOnlyByReadyStep|RbcReadyQuorumEntryOnlyByReady|RBC READY quorum-entry provenance|Sumeragi RBC READY quorum entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`116`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC delivery entry provenance proof
+
+- Added `RbcDeliveryEntryOnlyByDeliver` to the main Sumeragi TLA model,
+  proving that first entry into the RBC `Delivered` state can only be the RBC
+  DELIVER transition with complete READY/chunk/header/digest evidence, and that
+  the entry is classified into either the finality-installing branch or the
+  pending branch that preserves pre-finality commit artifacts.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliveryEntryOnlyByDeliverStep|RbcDeliveryEntryOnlyByDeliver|RBC delivery-entry provenance|Sumeragi RBC delivery entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`115`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP canonical transcript length fail-closed admission
+
+- `iroha_sccp` now exposes checked canonical encoders for SCCP Merkle proofs
+  and Nexus SCCP message bundles, with shared checked `u32` length-prefix
+  writers for dynamic transcript fields.
+- Production SCCP packaging paths that already fail closed now use those
+  checked encoders: TON internal-message payloads, native/local admission
+  payloads, platform submission payloads, TAIRA TRON XOR diagnostic proof
+  construction, and transparent statement hashing all return `None` on
+  oversized dynamic transcript material instead of reaching panic-only length
+  conversions.
+- SCCP source-chain proof envelope encoding now has the same checked transcript
+  boundary, and runtime proof-envelope conversion uses the checked envelope hash
+  so oversized source-proof branch material rejects before runtime finality
+  export instead of hashing a compatibility fallback transcript.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_sccp sccp_checked --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_sccp runtime_envelope --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_sccp taira_tron_xor_diagnostic --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_INCREMENTAL=0 cargo clippy -p iroha_sccp --lib --no-deps -- -D warnings`
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`
+  - `git diff --exit-code -- Cargo.lock scripts/export_norito_fixtures/Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_sccp/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (no matches)
+
+## 2026-06-05 SCCP ETH native prover self-test artifact gate
+
+- Ethereum mainnet native EVM prover bundle manifests now require a
+  `native_prover_self_test` audit hash and a
+  `native_prover_self_test_artifact` JSON fixture alongside the existing
+  cross-SDK parity fixture.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# verified-artifact paths
+  hash, forbidden-marker scan, parse, and carry the self-test vector locally;
+  the Ethereum mainnet proof/calldata/submission gates reject descriptors whose
+  self-test hash or destination binding no longer matches the signed bundle.
+- Release readiness, release bundle generation, and strict bundle verification
+  copy and rehash the self-test artifact, reject tampered or drifting SDK rows,
+  and keep the no-WASM/no-remote-prover inventory bound to that payload.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_bundle`
+    (`3` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_evm_prover or native_no_wasm"`
+    (`13` tests passed)
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi live-progress timeout reset provenance proof
+
+- Added `LiveProgressResetOnlyByTimeout` to the main Sumeragi TLA model,
+  proving that reset-to-zero of live prepare, commit, stake, or view-quorum
+  evidence progress can only happen on the timeout transition, with the
+  NewView-vote reset branch scoped to timeout `NewView` handoff so proposal
+  handoff remains the distinct quorum path.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "LiveProgressResetOnlyByTimeoutStep|LiveProgressResetOnlyByTimeout|live-progress timeout-reset provenance|Sumeragi live-progress timeout reset" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`114`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-artifact source provenance proof
+
+- Added `CommitArtifactsOnlyChangeByFinalitySource` to the main Sumeragi TLA
+  model, proving that any commit-view or commit-certificate witness change is
+  sourced by one exact finality branch: honest commit vote, Byzantine commit
+  vote, or RBC delivery.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitArtifactsOnlyChangeByFinalitySourceStep|CommitArtifactsOnlyChangeByFinalitySource|commit-artifact finality-source provenance|Sumeragi commit-artifact source provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`113`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SoraNet PQ injected hedged seed RNG boundary
+
+- SoraNet PQ hedged RNG seed construction now exposes a caller-supplied
+  `TryCryptoRng` path, while the OS helper delegates through the same checked
+  required-seed draw.
+- ML-DSA keypair generation/signing and ML-KEM keypair generation/encapsulation
+  now expose injected-RNG helpers and route their OS-backed helpers through
+  those fail-closed seed boundaries before deriving PQ key, signature, or
+  ciphertext material.
+- Added focused failing-RNG regressions for the hedged seed helper, ML-DSA
+  keypair/signing, and ML-KEM keypair/encapsulation paths.
+- Validation: `rustfmt --edition 2024 --check crates/soranet_pq/src/rng.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs`;
+  `git diff --check -- crates/soranet_pq/src/rng.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`;
+  `CARGO_INCREMENTAL=0 cargo test -p soranet_pq from_rng --lib -- --nocapture`
+  (`4` tests passed);
+  `CARGO_INCREMENTAL=0 cargo test -p soranet_pq injected_seed_rng_failure_is_reported --lib -- --nocapture`
+  (`1` test passed);
+  `CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --lib --no-deps -- -D warnings`.
+
+## 2026-06-05 Torii Connect session checked RNG boundary
+
+- Torii Connect session creation now generates app, wallet, management, and
+  relay bearer tokens through checked `TryCryptoRng` fills and returns an
+  internal Connect-session randomness error instead of panicking if entropy is
+  unavailable.
+- Added a focused failing-RNG regression proving token generation fails before
+  a Connect session response is emitted.
+- Validation: `rustfmt --edition 2024 --check crates/iroha_torii/src/routing.rs`;
+  `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --features connect connect_session --lib -- --nocapture`
+  (`9` tests passed; a later SCCP cleanup removes the dependency warning this
+  run emitted);
+  `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --features connect --lib --no-deps -- -D warnings`;
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+  (`9` passed);
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+  (passed).
+
+## 2026-06-05 SCCP ETH native SDK bundle factory helpers
+
+- Swift, Kotlin/JVM, and Java Android now expose
+  `EthereumMainnetSccp.fromNativeProverBundle(...)` helpers that resolve a
+  signed Ethereum mainnet native prover bundle through app-owned local artifact
+  storage, verify the proof/proving/verifier/parity/implementation bytes, and
+  construct a facade already bound to the verified native artifacts.
+- The C# static API now exposes
+  `ProveOutboundToEthereumFromNativeProverBundleAsync(...)`,
+  `BuildEthereumCalldataFromNativeProverBundle(...)`, and
+  `SubmitOutboundToEthereumFromNativeProverBundleAsync(...)`, which verify the
+  native bundle through a local resolver before delegating into the existing
+  artifact-bound proof, calldata, and submission paths.
+- Added native fixture coverage proving the factory paths bind
+  `proofArtifactHash` and `provingKeyHash` into the outbound proof request
+  before prover callbacks run, fail closed when the parity fixture cannot be
+  resolved, and keep the C# submitter callback from running when resolver-backed
+  artifact verification fails.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+
+## 2026-06-05 SCCP ETH browser native-prover bundle factory
+
+- Added `EthereumMainnetSccp.fromNativeProverBundle(...)` to the JS/browser
+  facade. The async factory resolves the signed native prover bundle through an
+  app-owned local artifact resolver, verifies proof/proving/verifier/parity and
+  implementation bytes, rejects mixed pre-supplied `nativeProverArtifacts`, and
+  returns a facade already bound to the verified artifacts.
+- The package declarations now expose
+  `EthereumMainnetSccpNativeProverBundleOptions`, and package-dist tests prove
+  the published `dist` entry point can build an artifact-bound outbound proof
+  request through the factory without WASM or a remote prover.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+
+## 2026-06-05 Torii operator auth checked RNG boundary
+
+- Torii operator-auth WebAuthn registration and login challenge bytes now use
+  checked `TryCryptoRng` fills and return
+  `operator_auth_random_bytes_failed` before inserting challenge state when
+  entropy fails.
+- Operator WebAuthn session-token issuance now also uses the checked RNG path
+  and returns the same internal operator-auth error before inserting session
+  state if entropy is unavailable.
+- Added focused failing-RNG regressions for registration challenges, login
+  challenges, and session token issuance.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/operator_auth.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+    (`8` tests passed; a later SCCP cleanup removes the dependency warning
+    this run emitted)
+  - `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; a later SCCP cleanup removes the dependency warning this run
+    emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+    (`9` passed across current Torii RNG-failure regressions)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi GST observation provenance proof
+
+- Added `GstOnlyChangesByElapsed` to the main Sumeragi TLA model, proving that
+  the GST observation flag changes only by the explicit pre-GST `GstElapsed`
+  action, which preserves every other consensus, certificate, and RBC field.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "GstOnlyChangesByElapsedStep|GstOnlyChangesByElapsed|GST observation provenance|Sumeragi GST provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`112`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi phase-transition provenance proof
+
+- Added `PhaseOnlyChangesByProtocol` to the main Sumeragi TLA model, proving
+  that top-level consensus phase changes only by proposal-to-prepare handoff,
+  prepare-quorum commit-vote handoff, NewView-quorum proposal handoff,
+  timeout-to-NewView reset, or finality through honest commit vote, Byzantine
+  commit vote, or RBC delivery.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "PhaseStartsPrepareByProposalStep|PhaseStartsCommitVoteByPrepareQuorumStep|PhaseStartsProposeByNewViewQuorumStep|PhaseStartsNewViewByTimeoutStep|PhaseFinalizesByHonestCommitVoteStep|PhaseFinalizesByByzantineCommitVoteStep|PhaseFinalizesByRbcDeliverStep|PhaseOnlyChangesByProtocol|phase-transition provenance|Sumeragi phase provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`111`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC evidence provenance proof
+
+- Added `RbcEvidenceOnlyChangesByProtocolOrFault` to the main Sumeragi TLA
+  model, proving that RBC evidence fields (`headerSeen`, `digestValid`,
+  CHUNK count, and READY vote count) change only through proposal startup,
+  explicit RBC INIT/CHUNK/READY progress, or Byzantine fault corruption.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcEvidenceInitByProposalStep|RbcEvidenceRepairByInitStep|RbcEvidenceAdvancedByChunkStep|RbcEvidenceAdvancedByReadyStep|RbcEvidenceCorruptedByFaultStep|RbcEvidenceOnlyChangesByProtocolOrFault|RBC evidence protocol/fault provenance|RBC evidence provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`110`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC state provenance proof
+
+- Added `RbcStateOnlyChangesByProtocolOrFault` to the main Sumeragi TLA model,
+  proving that top-level RBC state changes only through proposal startup,
+  explicit RBC INIT/CHUNK/READY/DELIVER progress, or Byzantine fault
+  corruption.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcStateInitByProposalStep|RbcStateRepairByInitStep|RbcStateAdvanceByChunkStep|RbcStateAdvanceByReadyStep|RbcStateDeliverByDeliverStep|RbcStateCorruptedByFaultStep|RbcStateOnlyChangesByProtocolOrFault|RBC state protocol/fault provenance|RBC state provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`109`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-vote stake-counter provenance proof
+
+- Added `CommitVoteCountersChangeOnlyByVoteOrTimeoutStep` to the main Sumeragi
+  TLA model, proving that live commit-vote counters and signed stake change
+  only by honest/Byzantine commit-vote increments or timeout reset.
+- Wired `CommitVoteCountersOnlyChangeByVoteOrTimeout` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVoteCountersIncrementStep|ByzantineCommitVoteCountersIncrementStep|CommitVoteCountersResetByTimeoutStep|CommitVoteCountersChangeOnlyByVoteOrTimeoutStep|CommitVoteCountersOnlyChangeByVoteOrTimeout|commit-vote/stake counter provenance|commit-vote stake-counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`108`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi prepare-vote counter provenance proof
+
+- Added `PrepareVotesChangeOnlyByVoteOrTimeoutStep` to the main Sumeragi TLA
+  model, proving that the prepare-vote counter changes only by an honest
+  prepare vote increment or timeout reset.
+- Refactored the `NewViewVotesOnlyChangeByVoteOrReset` proof into explicit
+  branch predicates after TLC exposed that the proposal-handoff reset branch
+  was accidentally scoped with timeout-only RBC preservation conjuncts.
+- Wired `PrepareVotesOnlyChangeByVoteOrTimeout` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVotesIncrementByVoteStep|NewViewVotesResetByProposalStep|NewViewVotesResetByTimeoutStep|PrepareVotesIncrementByVoteStep|PrepareVotesResetByTimeoutStep|PrepareVotesChangeOnlyByVoteOrTimeoutStep|PrepareVotesOnlyChangeByVoteOrTimeout|prepare-vote counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`107`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi NewView vote-counter provenance proof
+
+- Added `NewViewVotesChangeOnlyByVoteOrResetStep` to the main Sumeragi TLA
+  model, proving that the transient NewView vote counter changes only by an
+  honest NewView vote increment, proposal handoff reset, or timeout reset.
+- Wired `NewViewVotesOnlyChangeByVoteOrReset` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVotesChangeOnlyByVoteOrResetStep|NewViewVotesOnlyChangeByVoteOrReset|NewView vote-counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`106`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi view-evidence quorum-timeout provenance proof
+
+- Added `ViewEvidenceChangesOnlyByQuorumOrTimeoutStep` to the main Sumeragi
+  TLA model, proving that the latched view-change quorum witness changes only
+  by exact NewView quorum installation or timeout clearing.
+- Wired `ViewEvidenceOnlyChangesByQuorumOrTimeout` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "ViewEvidenceChangesOnlyByQuorumOrTimeoutStep|ViewEvidenceOnlyChangesByQuorumOrTimeout|view-evidence quorum/timeout provenance|view-evidence quorum-timeout provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`105`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover artifact resolver helpers
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle APIs
+  now expose resolver-based verification helpers. Apps pass an app-owned local
+  artifact resolver, and the SDK loads the manifest-declared proof artifact,
+  proving key, verifier key, `cross_sdk_fixture_parity_artifact`, and selected
+  SDK implementation bytes before running the existing SHA-256, forbidden-marker,
+  verifier-key, destination-binding, and parity-vector checks.
+- The JS package export and TypeScript declarations include
+  `verifyEthereumMainnetNativeEvmProverArtifactsFromBundle`; the native SDKs
+  mirror that product path through bundle-level `verifiedArtifacts` /
+  `VerifiedArtifacts` overloads. In-memory resolver regressions now cover the
+  happy path and fail-closed missing parity bytes across the SDK fixtures.
+- The release-readiness SDK marker inventory now pins the resolver interfaces,
+  bundle path roles, and resolver regressions across source, JS `dist`, and
+  TypeScript declarations.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`96` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi view-advance timeout provenance proof
+
+- Added `ViewAdvanceOnlyComesFromTimeoutStep` to the main Sumeragi TLA model,
+  proving that any active-view increment is sourced by a timeout transition and
+  carries the exact fresh-`NewView` reset shape.
+- Wired `ViewAdvanceOnlyComesFromTimeout` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "ViewAdvanceOnlyComesFromTimeoutStep|ViewAdvanceOnlyComesFromTimeout|view-advance timeout provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`104`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi timeout no-progress preemption proof
+
+- Added `TimeoutTickStepNeverPreemptsProgressStep` to the main Sumeragi TLA
+  model, proving that any timeout transition is guarded by the same
+  stalled-progress condition as `TimeoutTickEnabled`.
+- Wired `TimeoutTickStepNeverPreemptsProgress` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "TimeoutTickStepNeverPreemptsProgressStep|TimeoutTickStepNeverPreemptsProgress|timeout no-progress preemption" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`103`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover parity-bound artifact descriptors
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# verified native prover
+  artifact descriptors now require the local
+  `cross_sdk_fixture_parity_artifact` bytes in addition to the proof artifact,
+  proving key, verifier key, SDK id, and implementation bytes.
+- Each SDK hashes those parity fixture bytes against
+  `audit_hashes.cross_sdk_fixture_parity`, rejects forbidden dependency
+  markers in the parity payload, parses the JSON locally, and stores the
+  normalized parity vector on the verified descriptor. The Ethereum mainnet
+  proof and submission gates now also reject hand-built descriptors that omit
+  the parity hash or parsed fixture.
+- Added adversarial coverage for missing and tampered parity bytes in the JS,
+  Swift, Kotlin/JVM, Java Android, and C# verifier tests.
+- The release-readiness SDK marker inventory now checks for parity-byte,
+  parity-hash, and parsed-fixture markers in each primary SDK verifier, so a
+  future verifier that only binds proof/key/implementation bytes is no longer
+  accepted as SDK-owned readiness evidence.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` from
+    `javascript/iroha_js` (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_native_evm_parity_fixture pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift`
+    (`5` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_release_readiness_report.py`
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 SCCP ETH sync-committee fixture warning cleanup
+
+- The Ethereum mainnet sync-committee supermajority count is now compiled only
+  for tests and `test-fixtures`, matching its actual use in deterministic SCCP
+  fixture/proof builders and removing the dependency warning emitted by Torii
+  and FHE validation builds.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo check -p iroha_sccp --lib`
+    (passed without the previous unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` passed without the previous SCCP dependency warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_sccp --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Soracloud FHE key-switch basis admission binding
+
+- `FheParamSetV1` now carries the role-separated registered BFV key-switch
+  decomposition-chain digest beside the parameter digest and evaluator RNS-chain
+  digest. Shared Soracloud fixtures include the digest produced by the
+  registered RAM-LFE profile.
+- Soracloud registered BFV descriptor validation now rejects a parameter set
+  whose key-switch decomposition-chain digest drifts from the crypto helper,
+  and FHE input-admission statement hashes bind that digest through a nested
+  canonical Norito tuple to stay within the supported tuple arity.
+- The input-admission public-input schema bytes now describe the nested
+  statement layout, so verifier artifacts are bound to the key-switch basis
+  commitment as well as the statement hash public input.
+- Production bounded-noise admission circuit/prover rollout, broader BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model fhe_input_admission_statement_hash_encodes_canonical_tuple --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_param_set_fixture_is_canonical -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle_fixture_is_canonical -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_core soracloud_registered_bfv_parameters --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model proof_attachment_decode_rejects_blank_backend_fields --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model proof_attachment_json_rejects_backend_mismatches --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; a later SCCP cleanup removes the dependency warning this run
+    emitted)
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check`
+    (passed)
+  - `git diff --check -- ...`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...`
+    (no matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` passed after the current operator-auth test changes and SCCP warning
+    cleanup)
+
+## 2026-06-05 Soracloud bounded-noise Bootstrap runtime coverage
+
+- The registered bounded-noise BFV test material now includes a two-round
+  Bootstrap refresh key and matching bounded-noise transcript metadata, so core
+  runtime tests exercise the same registered RNS refresh bridge used by
+  Soracloud bounded-noise Bootstrap jobs.
+- Added a Soracloud runtime regression that runs two-round bounded-noise
+  `Bootstrap`, proves the refreshed ciphertexts differ from the inputs, decrypts
+  both output slots back to the expected plaintext, and checks the
+  key-authorized centered-noise output bound returned by the runtime metadata
+  path.
+- This is coverage for the current encrypted-zero refresh bridge. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core run_soracloud_fhe_job_records_bounded_noise_add_output_state --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'`
+    (passed)
+
+## 2026-06-05 BFV multi-round Bootstrap helper boundary
+
+- `iroha_crypto` now exposes scalar and exact-RNS multi-round Bootstrap refresh
+  helpers for both exact and bounded-noise ciphertexts. Each helper validates
+  the requested refresh count against the bootstrap key before applying the
+  first round, so direct crypto callers cannot accidentally rely on partial
+  refresh work for zero-round or over-capacity requests.
+- Soracloud exact and bounded-noise Bootstrap job execution now call those
+  crypto helpers instead of carrying a local refresh loop, and the shared BFV
+  operation-vector fixture checks use the same helper boundary.
+- This still uses the first-release encrypted-zero refresh bridge. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_crypto bootstrap_refresh --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bootstrap_ --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV registered key-switch decomposition chain
+
+- `iroha_crypto` now exposes the registered BFV key-switch decomposition RNS
+  chain as a first-class helper, selecting the smallest production evaluator
+  chain prefix that covers the RAM-LFE ciphertext modulus and decomposition
+  base for target-limb key switching.
+- Added a role-separated digest for that decomposition chain so future
+  governance/admission code can bind the source basis independently from the
+  full evaluator RNS chain.
+- Soracloud bounded-noise runtime now calls the crypto helper directly for
+  Multiply and packed `RotateLeft`, removing the previous core-local selector.
+- Production bounded-noise admission circuit/prover rollout, broader BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo test -p iroha_crypto registered_key_switch_decomposition_chain --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo test -p iroha_core target_limb --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Torii MCP checked RNG boundary
+
+- Torii MCP async job IDs now generate public job IDs through checked
+  `TryCryptoRng` fills and return a JSON-RPC internal `random_bytes` error
+  before inserting async job state when entropy fails.
+- Connect session creation now generates fallback SIDs through checked RNG
+  fills and returns a tool body error instead of panicking if entropy is
+  unavailable.
+- Added focused failing-RNG regressions for MCP async job ID generation and
+  Connect SID fallback generation.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/mcp.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii reports_ --lib -- --nocapture`
+    (`74` tests passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning in dependencies)
+  - `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Soracloud bounded-noise target-limb runtime bridge
+
+- Soracloud bounded-noise FHE execution now derives a registered key-switch
+  decomposition chain from the production evaluator RNS chain and routes
+  bounded Multiply plus packed `RotateLeft` through the target-limb
+  basis-extension bridge instead of the same-chain key-switch bridge.
+- Added regressions proving the registered RAM-LFE runtime chooses a strict
+  target-limb prefix for key-switch decomposition, bounded-noise Multiply
+  decrypts to the expected products, and bounded-noise packed `RotateLeft`
+  decrypts to the expected packed-slot rotation through bounded Galois material.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and security-complete bootstrapping material
+  remain pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target-limb cargo test -p iroha_core target_limb --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target-limb cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 SoraFS local proxy checked RNG boundary
+
+- Local QUIC proxy browser-manifest previews and handshake acknowledgements now
+  generate session IDs and cache-tag salts through checked `TryCryptoRng` fills
+  and return `ProxyError::RandomBytes` instead of panicking on OS entropy
+  failure.
+- Orchestrator proxy manifest materialization now propagates the proxy error and
+  only runs on successful fetches, so a manifest entropy failure cannot mask a
+  fetch failure.
+- Added focused failing-RNG regressions for proxy session IDs and cache salts,
+  and restored the `local-quic-proxy` lib-test compile path by importing the
+  privacy-event fixture types used by that feature-gated test corridor.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo test -p sorafs_orchestrator --features local-quic-proxy --lib reports_rng_failure -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo test -p sorafs_orchestrator --features local-quic-proxy --lib manifest_template_populates_expected_fields -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo clippy -p sorafs_orchestrator --features local-quic-proxy --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo clippy -p sorafs_orchestrator --lib --no-deps -- -D warnings`
+
+## 2026-06-05 Sumeragi post-finality GST-only movement proof
+
+- Added `CommittedOnlyGstObservationCanMoveStep` to the main Sumeragi TLA
+  model, proving that after finality all consensus/progress/fault actions are
+  disabled and any remaining post-finality state change is exactly `GstElapsed`
+  observing GST.
+- Wired `CommittedOnlyGstObservationCanChange` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedOnlyGstObservationCanMoveStep|CommittedOnlyGstObservationCanChange|post-finality GST-only movement|committed post-finality GST-only movement" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`99`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST full-quiescence proof
+
+- Added `CommittedGstStateStableStep` to the main Sumeragi TLA model, proving
+  that once finality is reached and GST has already been observed, every model
+  variable is stable across real or stuttering steps.
+- Wired `CommittedGstStateNeverChanges` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstStateStableStep|CommittedGstStateNeverChanges|committed GST full-quiescence|committed\\+GST full-state quiescence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`100`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST disabled-action proof
+
+- Added `CommittedGstDisablesEveryAction` to the main Sumeragi TLA model,
+  proving that the committed+GST terminal state disables every explicit
+  protocol action guard, including Byzantine commit voting, RBC progress,
+  timeout/fault, and GST observation.
+- Wired `CommittedGstNeverEnablesActions` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstDisablesEveryAction|CommittedGstNeverEnablesActions|committed GST disabled-action|committed\\+GST disabled action guards" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`101`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST Next-rejection proof
+
+- Added `CommittedGstRejectsNextStep` to the main Sumeragi TLA model, proving
+  that the committed+GST terminal state rejects `Next` itself and therefore
+  leaves only the stuttering branch of `[Next]_vars`.
+- Wired `CommittedGstOnlyAllowsStuttering` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstRejectsNextStep|CommittedGstOnlyAllowsStuttering|committed GST Next-rejection|committed\+GST Next rejection" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`102`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source quorum-gate proof
+
+- Added `FinalityLatchSourceQuorumGatesHoldStep` to the main Sumeragi TLA
+  model, proving that every finality-latch source is backed by its finalizing
+  `CanCommit(...)` gate, prepare quorum, honest-support threshold, stake quorum,
+  active-view evidence, and RBC delivery evidence.
+- Wired `FinalityLatchSourceQuorumGatesAlwaysHold` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceQuorumGatesHoldStep|FinalityLatchSourceQuorumGatesAlwaysHold|finality-latch source quorum-gate|source quorum-gate proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`98`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source-effect exactness proof
+
+- Added `FinalityLatchSourceEffectsAreExactStep` to the main Sumeragi TLA
+  model, proving that the finality-latch source actions are mutually exclusive
+  on the latch-flip transition and install exact source-specific vote, stake,
+  commit-certificate, commit-view, RBC delivery, and preserved evidence deltas.
+- Wired `FinalityLatchSourceEffectsAlwaysExact` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceEffectsAreExactStep|FinalityLatchSourceEffectsAlwaysExact|finality-latch source-effect exactness|source-effect exactness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`97`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source classification proof
+
+- Added `FinalityLatchSourceIsCommitOrDeliveryStep` to the main Sumeragi TLA
+  model, proving that a finality-latch transition comes only from an honest
+  commit vote, a Byzantine commit vote, or RBC delivery while preserving GST
+  state.
+- Wired `FinalityLatchOnlyComesFromCommitOrDelivery` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceIsCommitOrDeliveryStep|FinalityLatchOnlyComesFromCommitOrDelivery|finality-latch source classification|finality source classification proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`96`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality NewView handoff isolation proof
+
+- Added `FinalityLatchNeverCarriesNewViewHandoffStep` to the main Sumeragi TLA
+  model, proving that a finality-latch transition is never a `NewView` handoff,
+  carries no live NewView vote counter, and preserves existing view-quorum
+  evidence.
+- Wired `FinalityLatchNeverCarriesNewViewHandoff` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchNeverCarriesNewViewHandoffStep|FinalityLatchNeverCarriesNewViewHandoff|finality-latch NewView handoff isolation|finality NewView handoff isolation proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`95`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-view latch-install proof
+
+- Added `CommitViewWitnessInstallsWithFinalityLatchStep` to the main Sumeragi
+  TLA model, proving that every finality-latch transition installs the
+  commit-view witness as the active finality view, including the view-zero case
+  where installation preserves the witness value.
+- Wired `CommitViewWitnessAlwaysInstallsWithFinalityLatch` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessInstallsWithFinalityLatchStep|CommitViewWitnessAlwaysInstallsWithFinalityLatch|finality-latch commit-view witness installation|commit-view latch-install proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`94`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi nonzero commit-view witness proof
+
+- Added `CommitViewWitnessChangesOnlyOnNonzeroFinalityStep` to the main
+  Sumeragi TLA model, proving that the latched commit-view witness changes
+  exactly on nonzero-view finality transitions, where it is installed as the
+  active view while view-zero finality is allowed to leave the witness value at
+  zero.
+- Wired `CommitViewWitnessOnlyChangesOnNonzeroFinality` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessChangesOnlyOnNonzeroFinalityStep|CommitViewWitnessOnlyChangesOnNonzeroFinality|nonzero finality commit-view witness installation|nonzero commit-view witness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`93`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Soracloud FHE input OpenVerify shape guard
+
+- Soracloud FHE input-admission proof validation now runs the shared
+  `OpenVerifyEnvelope::validate_for_admission` guard after decoding the
+  proof attachment envelope, so non-portable circuit identifiers, zero
+  verifier-key hashes, empty inner proof payloads, oversized metadata, pending
+  backend tags, and future shared envelope policy failures reject before
+  verifier lookup or state persistence.
+- Added a regression covering malformed Soracloud input-admission envelopes
+  with a non-portable circuit id, zero verifier-key hash, and empty inner proof
+  bytes. The existing bounded-noise missing-verifier regression still reaches
+  verifier lookup for a well-formed envelope, proving the added guard preserves
+  the valid-shape path.
+- Production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Sumeragi finality-latch certificate-witness proof
+
+- Added `CommitCertificateWitnessesInstallWithFinalityLatchStep` to the main
+  Sumeragi TLA model, proving that the latched commit-certificate vote and
+  stake witnesses install exactly with the abstract finality latch, changing
+  from absent witnesses to the post-state live counters that satisfy quorum.
+- Wired `CommitCertificateWitnessesAlwaysInstallWithFinalityLatch` through the
+  fast, deep, and TLC-fast Sumeragi configs and documented the property in the
+  formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitCertificateWitnessesInstallWithFinalityLatchStep|CommitCertificateWitnessesAlwaysInstallWithFinalityLatch|finality-latch commit-certificate witness installation|finality-latch certificate-witness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`92`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Taikai CEK salt checked RNG boundary
+
+- Taikai CEK rotation receipt HKDF salts now draw directly from a checked
+  `TryCryptoRng` byte-fill helper when `--hkdf-salt` is omitted, instead of
+  seeding `StdRng` and drawing from the infallible PRNG surface.
+- Added a failing-RNG regression proving entropy failures return a labelled
+  CLI error before a receipt salt is produced.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_cli/src/commands/taikai.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-salt cargo test -p iroha_cli cek_hkdf_salt_random_path_reports_rng_failure -- --nocapture`
+    (`1` Taikai test passed in each of the `iroha`, `iroha3`, and
+    `iroha_cli` binary test targets; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-salt cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Sumeragi finality-latch live-gate crossing proof
+
+- Added `FinalityLatchChangeMatchesLiveCommitGateCrossingStep` to the main
+  Sumeragi TLA model, proving that the abstract finality latch changes exactly
+  when the live `CanCommit(...)` gate crosses from false to true across a
+  transition.
+- Wired `FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing` through the
+  fast, deep, and TLC-fast Sumeragi configs and documented the property in the
+  formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchChangeMatchesLiveCommitGateCrossingStep|FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing|finality-latch/live-commit-gate crossing equivalence|finality-latch live-gate crossing proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`91`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP native EVM cross-SDK parity vector gate
+
+- The Ethereum mainnet native EVM prover bundle now requires a
+  `cross_sdk_fixture_parity_artifact` JSON file whose SHA-256 must match the
+  named `audit_hashes.cross_sdk_fixture_parity` evidence hash.
+- Readiness generation and strict release-bundle verification parse that vector
+  and require it to bind the active Ethereum mainnet proof/proving/verifier
+  artifact hashes, destination-binding hash, receipt-proof hash, source-proof
+  hash, nine public signal words, calldata hash, and Torii submit-payload hash
+  across every required SDK row (`javascript`, `swift`, `kotlin`,
+  `java-android`, and `dotnet`).
+- Release-bundle generation now copies the parity-vector artifact into the
+  public native prover attachment set, and the strict verifier rejects missing
+  vector paths, tampered vector bytes, malformed or duplicate-key JSON, and
+  per-SDK drift even if the manifest is rehashed.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle
+  parsers now accept and expose the same `cross_sdk_fixture_parity_artifact`
+  path, so release-valid signed manifests remain loadable by the SDK product
+  path.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now also parse the
+  parity fixture JSON locally, enforcing the schema, Ethereum domain/chain,
+  Groth16 backend, bundle artifact hashes, destination-binding hash, nine
+  public signal words, and per-SDK result equality before SDKs compare release
+  vectors against app-linked prover outputs.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`96` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_native_evm_parity_fixture pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`10` tests passed)
+  - `dotnet --version` (not available in this environment, so the C# suite
+    could not be executed here)
+
+## 2026-06-05 Sumeragi finality-latch transition proof
+
+- Added `FinalityLatchChangeEntersCommittedPhaseStep` to the main Sumeragi TLA
+  model, proving that any abstract finality-latch change is a monotonic
+  false-to-true transition from `CommitVote` into `Committed` while preserving
+  the active view.
+- Wired `FinalityLatchChangeOnlyEntersCommittedPhase` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchChangeEntersCommittedPhaseStep|FinalityLatchChangeOnlyEntersCommittedPhase|finality-latch committed-transition monotonicity|finality-latch transition proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`90`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed-phase latch-entry proof
+
+- Added `CommittedPhaseEntryMatchesFinalityLatchStep` to the main Sumeragi TLA
+  model, proving that entering the terminal `Committed` phase and flipping the
+  abstract finality latch are the same transition event.
+- Wired `CommittedPhaseEntryAlwaysMatchesFinalityLatch` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesFinalityLatchStep|CommittedPhaseEntryAlwaysMatchesFinalityLatch|committed-phase/finality-latch entry coupling|committed-phase latch-entry proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`89`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 BFV-RNS target-limb key-switch integration
+
+- Added `BfvRnsModulusChain::basis_extend_polynomial_target_limbs`, a
+  deterministic target-limb basis-extension helper that interprets source RNS
+  coefficients as canonical representatives modulo the source-chain product,
+  computes the CRT quotient correction exactly with integer arithmetic, and
+  reduces directly into target limbs without requiring the target product to
+  cover the source product.
+- Routed `key_switch_rns_exact_with_basis_extension` through the deterministic
+  target-limb helper, keeping the post-extension canonical digit verifier in
+  place before bounded-noise relinearization/Galois key-switch products run.
+  The rounded RNS multiplication, Galois, and packed `RotateLeft` bridge
+  entry points now exercise that target-limb key-switch boundary.
+- Added a regression proving the old reconstructable exact basis extension
+  rejects a narrower target chain while the new target-limb helper preserves
+  each target residue and remains visibly lossy if reconstructed from the
+  narrow target alone; the key-switch digit regression now also proves
+  target-limb extension matches the digit-specific extension for normal and
+  wider source chains.
+- Production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_target_limb_basis_extension_accepts_narrower_target_product --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_basis_extension_preserves_source_product_coefficients --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_key_switch_digit_polynomials_survive_basis_extension --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi committed-phase entry proof
+
+- Added `CommittedPhaseEntryInstallsCompleteStackStep` to the main Sumeragi
+  TLA model, proving that any transition into the terminal `Committed` phase
+  comes from `CommitVote` and sets the abstract finality latch with the full
+  post-state certificate stack.
+- Wired `CommittedPhaseOnlyEntersWithCompleteStack` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryInstallsCompleteStackStep|CommittedPhaseOnlyEntersWithCompleteStack|committed-phase complete-stack entry|committed-phase entry proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`88`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Rust SDK SM2 checked OS generation
+
+- The high-level Rust SDK `Sm2KeyPair::generate_with_distid(...)` helper now
+  uses `Sm2PrivateKey::try_random_from_os(...)`, so OS entropy and scalar
+  generation failures propagate as `ParseError` instead of going through the
+  infallible compatibility RNG shim.
+- Removed the obsolete SM2 random return-type normalization shim from
+  `crates/iroha/src/sm.rs`.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha generate_with_distid_uses_checked_os_rng -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning in dependencies)
+
+## 2026-06-05 Sumeragi finality latch/artifact coupling proof
+
+- Added `FinalityLatchAndArtifactsCoupledStep` to the main Sumeragi TLA model,
+  proving that the abstract finality latch changes iff the latched commit-view
+  or commit-certificate witnesses change on the same real or stuttering step.
+- Wired `FinalityLatchAndArtifactsAlwaysChangeTogether` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchAndArtifactsCoupledStep|FinalityLatchAndArtifactsAlwaysChangeTogether|finality-latch/commit-artifact coupling|finality latch/artifact coupling" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`87`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality-latch complete-stack proof
+
+- Added `FinalityLatchSetInstallsCompleteStackStep` to the main Sumeragi TLA
+  model, proving that any transition that flips the abstract finality latch
+  from false to true enters `Committed` with the full post-state finality
+  certificate stack: prepare quorum, live commit quorum, honest support, stake
+  quorum, latched commit certificate, RBC delivery evidence, and commit-view
+  witness.
+- Wired `FinalityLatchOnlySetsCompleteStack` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSetInstallsCompleteStackStep|FinalityLatchOnlySetsCompleteStack|finality-latch complete-stack" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`86`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-artifact install boundary proof
+
+- Added `CommitArtifactsInstallOnlyAtFinalityStep` to the main Sumeragi TLA
+  model, proving that any change to the latched commit-view or
+  commit-certificate witnesses can happen only on the `CommitVote` to
+  `Committed` finality transition.
+- Wired `CommitArtifactsOnlyInstallAtFinality` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitArtifactsInstallOnlyAtFinalityStep|CommitArtifactsOnlyInstallAtFinality|commit-artifact finality-only installation|commit-artifact install boundary" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`85`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 JS-host SM2 checked OS key generation
+
+- Added `Sm2PrivateKey::try_random_from_os(...)` so SM2 callers that do not
+  own a modern RNG dependency can still use checked OS entropy.
+- The JavaScript host `sm2_keypair` binding now routes through that checked
+  helper and reports entropy/key-generation failures through the existing N-API
+  error path.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/sm.rs crates/iroha_js_host/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_crypto sm2_try_random_from_os_roundtrip --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_js_host`
+    (passed; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha_js_host --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings in dependencies)
+
+## 2026-06-05 SCCP native EVM audit evidence map
+
+- Hardened the Ethereum mainnet native EVM prover bundle readiness gate so
+  `audit_hashes` must be a named object with `circuit_security_audit`,
+  `native_implementation_audit`, `reproducible_build_attestation`,
+  `cross_sdk_fixture_parity`, and `no_wasm_no_remote_scan`.
+- The release-readiness report and strict release-bundle verifier now reject
+  unlabeled audit hash lists, missing or unexpected audit fields, noncanonical
+  named hashes, duplicate audit hashes, and audit hashes that reuse proof,
+  key, destination-binding, or SDK implementation artifact hashes.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle
+  parsers now use the same named audit evidence map, so release-valid manifests
+  and SDK-loaded manifests have the same field shape and role-separation labels.
+  The JS declarations also require all five named audit fields when callers
+  build a native prover bundle manifest in TypeScript.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`95` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; emitted unrelated
+    `ToriiClientTests.swift` warnings)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_unlabeled_native_evm_prover_audits pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_unlabeled_native_evm_prover_audits pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts`
+    (`12` tests passed)
+  - `dotnet --version` (not available in this environment, so the C# suite
+    could not be executed here)
+
+## 2026-06-05 Sumeragi committed-state stability proof
+
+- Added `CommittedConsensusStateStableStep` to the main Sumeragi TLA model,
+  proving that after finality the consensus phase/view, live vote counters,
+  commit-certificate witnesses, NewView handoff state, RBC evidence, and
+  finality latch remain stable across every real or stuttering step; only the
+  separate GST observation flag is outside this stability witness.
+- Wired `CommittedConsensusStateNeverChanges` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedConsensusStateStableStep|CommittedConsensusStateNeverChanges|committed consensus-state stability|committed-state stability" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`84`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
 ## 2026-06-05 Sumeragi commit-evidence monotonicity proof
 
 - Added `CommitEvidenceMonotonicStep` to the main Sumeragi TLA model, proving
@@ -11,7 +1684,21 @@ Last updated: 2026-06-05
   Sumeragi configs and documented the temporal property in the formal README
   and roadmap proof corridor.
 - Validation:
-  - Pending focused formal checks.
+  - `rg -n "CommitEvidenceMonotonicStep|CommitEvidenceNeverRegresses|commit-evidence monotonicity|commit-certificate vote and stake" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`83`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
 
 ## 2026-06-05 SCCP SDK native EVM submission artifact gate
 
@@ -244,6 +1931,37 @@ Last updated: 2026-06-05
   - C# test execution was not run because `dotnet` is not installed in this
     environment (`dotnet --version` failed with `command not found`).
 
+## 2026-06-05 Soracloud bounded-noise FHE input admission
+
+- Core FHE input admission now accepts `BoundedNoise` proof envelopes after
+  the same fail-closed pipeline used by exact inputs: rounded BFV bound
+  capacity validation, payload-shape validation, mode-bound statement-hash
+  matching, OpenVerify envelope public-input checks, active canonical
+  verifying-key lookup, quota accounting, and backend proof verification.
+- Test proof builders now derive mode-specific statement hashes and STARK
+  public inputs, so bounded metadata cannot reuse exact input-admission
+  statements.
+- Added regressions proving bounded-noise admission reaches the registered
+  verifier gate when no verifier is active, and that a registered STARK-backed
+  bounded admission proof persists the proven noise bound with
+  `fhe_bound_mode = BoundedNoise`.
+- Production bounded-noise admission circuit/prover rollout, approximate
+  BFV-RNS basis extension, and full bootstrapping circuit/key material remain
+  pending.
+- During focused validation, the unused Kagemusha record-backed recursive
+  aggregation helper wrappers in `iroha_core::zk` were gated to `cfg(test)`;
+  production Pallas/open-envelope paths continue to call the shared
+  optional-height implementation directly.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo test -p iroha_core --features zk-stark mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof --lib -- --nocapture`
+    (`1` test passed; first attempt was blocked by `/tmp` disk exhaustion
+    before generated Codex target-dir cleanup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` dependency warning)
+
 ## 2026-06-05 Soracloud bounded-noise FHE runtime dispatch
 
 - Soracloud FHE job execution now maps bounded-noise refresh policies to
@@ -255,9 +1973,9 @@ Last updated: 2026-06-05
   legacy/exact rows and reject bounded rows.
 - Added a public bounded-noise metadata preflight in `iroha_crypto` so runtime
   admission can reject rounded BFV bounds that exceed decoding capacity without
-  requiring the secret key. Public bounded input-admission proofs, approximate
-  BFV-RNS basis extension, and full bootstrapping circuit/key material remain
-  pending.
+  requiring the secret key. Approximate BFV-RNS basis extension, full
+  bootstrapping circuit/key material, and the production bounded-noise
+  admission circuit/prover rollout remain pending.
 - Validation:
   - `cargo fmt -p iroha_crypto -p iroha_core -p iroha_data_model -p iroha_torii`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_crypto bounded_noise_bfv_roundtrip_reports_centered_noise --lib -- --nocapture`
@@ -439,8 +2157,10 @@ Last updated: 2026-06-05
   legacy helper defaults to `ExactResidualMultiple`, so old proofs cannot be
   replayed as bounded-noise statements by changing metadata outside the hash.
   Core persists exact bound semantics for exact evaluator outputs and verified
-  exact input-admission proofs, and rejects bounded-noise admission proofs or
-  persisted bounded-noise inputs before the exact evaluator can consume them.
+  exact input-admission proofs. At this slice, bounded-noise admission proofs
+  and persisted bounded-noise inputs were rejected before the exact evaluator
+  could consume them; the newer bounded-noise admission verifier and runtime
+  dispatch slices above supersede that temporary fail-closed behavior.
 - Updated non-proof Soracloud state-mutation paths and Torii fixtures to carry
   no FHE bound mode explicitly, keeping proofless client FHE mutations
   metadata-free and unavailable as FHE job inputs.
@@ -451,7 +2171,7 @@ Last updated: 2026-06-05
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_data_model service_state_entry_validate_rejects_fhe_bound_mode_without_fhe_bound --lib -- --nocapture`
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof --lib -- --nocapture`
-    (`1` test passed)
+    (`1` test passed; superseded by the bounded-noise verifier coverage above)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input --lib -- --nocapture`
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`
@@ -1145,9 +2865,9 @@ Last updated: 2026-06-05
 - JS/browser, Swift, Kotlin/JVM, Java Android, and C# now verify local
   Ethereum mainnet native EVM prover artifact bytes against the signed bundle
   descriptor's SHA-256 hashes before reporting artifact readiness. The helpers
-  bind proof artifact, proving key, verifier key, and optional per-SDK native
-  implementation bytes, and reject tampered bytes or implementation bytes
-  supplied without a matching SDK row.
+  bind proof artifact, proving key, verifier key, per-SDK native
+  implementation bytes, and the cross-SDK parity fixture bytes, and reject
+  tampered bytes or implementation bytes supplied without a matching SDK row.
 - The JS package root, generated `dist` files, and TypeScript declarations now
   export the browser verifier. The release-readiness inventory and strict
   release-bundle verifier now require SDK-owned artifact verifier markers and

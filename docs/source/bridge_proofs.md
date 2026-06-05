@@ -830,16 +830,42 @@ Readiness generation and public release-bundle generation also reject duplicate
 JSON keys in the signed native prover manifest before schema, hash, or payload
 path checks run, so reviewed bundle fields cannot rely on last-key-wins JSON
 parsing.
-The
-proof-artifact hash, proving-key hash, verifier-key hash, destination-binding
-hash, and per-SDK implementation hashes are also role-separated, so one
-manifest hash cannot stand in for another. The SDK parsers enforce that same
-role separation before app prover callbacks can observe descriptor hashes.
-Bundle `audit_hashes` are treated as a separate evidence role: they must be
-canonical, unique, and must not reuse the proof-artifact hash, proving-key hash,
-verifier-key hash, destination-binding hash, or any per-SDK implementation
-hash. Replayed audit hashes are rejected in the SDK parser path, not only by
-release tooling. JS/browser, Swift, Kotlin/JVM, Java Android, and .NET verified
+The proof-artifact hash, proving-key hash, verifier-key hash,
+destination-binding hash, and per-SDK implementation hashes are also
+role-separated, so one manifest hash cannot stand in for another. The SDK
+parsers enforce that same role separation before app prover callbacks can
+observe descriptor hashes. Bundle `audit_hashes` are treated as named evidence
+roles: the manifest must provide `circuit_security_audit`,
+`native_implementation_audit`, `reproducible_build_attestation`,
+`cross_sdk_fixture_parity`, `native_prover_self_test`, and
+`no_wasm_no_remote_scan`, and each value must be canonical, unique, and separate
+from the proof-artifact hash, proving-key hash, verifier-key hash,
+destination-binding hash, and per-SDK implementation hashes. The
+`cross_sdk_fixture_parity` value must also be the SHA-256 of a
+manifest-declared `cross_sdk_fixture_parity_artifact` JSON file. That fixture
+binds the active Ethereum mainnet artifact hashes, receipt-proof hash,
+source-proof hash, nine public signal words, destination-binding hash,
+calldata hash, and Torii submit-payload hash, and every required SDK row
+(`javascript`, `swift`, `kotlin`, `java-android`, and `dotnet`) must repeat the
+same values. The `native_prover_self_test` value must likewise be the SHA-256
+of a manifest-declared `native_prover_self_test_artifact` JSON file. That
+self-test fixture binds the same bundle hashes and destination binding plus the
+request hash, witness hash, source-proof hash, native proof hash, nine public
+signal words, calldata hash, and Torii submit-payload hash that each SDK must
+produce for the release self-test vector. Product facades run the app-linked
+native prover self-test hook after verifying bundle artifacts and before
+production proof callbacks, then compare the normalized result to the
+manifest-bound SDK row. Replayed audit hashes, cross-SDK vector drift, missing
+self-test hooks, and self-test vector drift are rejected by SDK code, release
+tooling, and strict public bundle verification before the lane can be
+advertised.
+JS/browser, Swift, Kotlin/JVM, Java Android, and .NET signed manifest parsers
+expose the same `cross_sdk_fixture_parity_artifact` and
+`native_prover_self_test_artifact` paths so SDK product code can locate the
+release-bundled vectors; those SDKs also parse both JSON files locally, require
+the same schema/domain/backend/hash bindings, require exactly nine canonical
+public signal words, and reject per-SDK result drift before apps compare local
+prover outputs. Verified
 artifact descriptors must also bind the bundle verifier-key hash, a non-empty
 SDK id, the manifest's expected implementation label, and the SHA-256 hash of
 that SDK's implementation bytes before app prover callbacks can run. When a
@@ -1196,12 +1222,36 @@ callback, while .NET/C# exposes an artifact-bound
 `ProveOutboundToEthereumAsync` overload that applies the verified bundle
 before calling the native prover interface. A descriptor is not considered
 verified unless it also carries the verifier-key hash, the SDK implementation
-row, and a matching implementation-byte hash from the signed native prover
-bundle. The same verified descriptor gate also runs when Ethereum mainnet
-calldata is built or submitted: JS/browser, Swift, Kotlin/JVM, Java Android,
-and C# refuse the easy product path unless the wrapped proof result is bound to
-matching native prover artifacts, while the older generic EVM helpers remain
-available only for callers that choose those explicit APIs.
+row, a matching implementation-byte hash from the signed native prover bundle,
+and the bytes for the bundle's `cross_sdk_fixture_parity_artifact` and
+`native_prover_self_test_artifact`; each SDK hashes those files against
+`audit_hashes.cross_sdk_fixture_parity` and
+`audit_hashes.native_prover_self_test`, parses the fixtures locally, and carries
+the normalized parity and self-test vectors in the verified descriptor. The
+self-test fixture also binds the request, witness, source-proof, proof,
+calldata, Torii payload, destination-binding, bundle-hash, and public-signal
+outputs that every native SDK must reproduce. The outbound Ethereum mainnet
+facades now require an SDK-owned native prover self-test runner for that vector,
+fail before production proof execution when the runner is absent, and reject
+any runner output that drifts from the verified descriptor. JS/browser, Swift,
+Kotlin/JVM, Java Android, and C# also expose bundle-resolver helpers that accept
+an app-owned local artifact resolver, load the manifest-declared proof artifact,
+proving key, verifier key, cross-SDK parity fixture, native prover self-test
+fixture, and selected SDK implementation bytes, and then run the same
+hash/vector checks without a WASM or remote-prover dependency. JS/browser,
+Swift, Kotlin/JVM, and Java Android
+provide `EthereumMainnetSccp.fromNativeProverBundle(...)` helpers that verify
+those local bundle resources and return Ethereum mainnet facades already bound
+to the verified native artifacts; the C# static API exposes
+`ProveOutboundToEthereumFromNativeProverBundleAsync(...)`,
+`BuildEthereumCalldataFromNativeProverBundle(...)`, and
+`SubmitOutboundToEthereumFromNativeProverBundleAsync(...)` for the same
+resolver-backed proof, calldata, and submission path. The same verified
+descriptor gate also runs when Ethereum mainnet calldata is built or submitted:
+JS/browser, Swift, Kotlin/JVM, Java Android, and C# refuse the easy product path
+unless the wrapped proof result is bound to matching native prover artifacts,
+while the older generic EVM helpers remain available only for callers that
+choose those explicit APIs.
 The signed native prover bundle manifest parsers in JS/browser, Swift,
 Kotlin/JVM, Java Android, and C# also reject duplicate JSON object keys before
 building descriptor objects, including escaped-key aliases, so app-side bundle

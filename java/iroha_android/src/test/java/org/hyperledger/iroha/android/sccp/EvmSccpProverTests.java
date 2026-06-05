@@ -1223,6 +1223,56 @@ public final class EvmSccpProverTests {
             && "artifacts/eth-mainnet/java-android-implementation.bin"
                 .equals(row.implementationArtifact()))
         : "Ethereum native prover bundle parser must preserve implementationArtifact";
+    final EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture parityFixture =
+        EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+            sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle),
+            nativeProverBundle);
+    assert EvmSccpProver.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1.equals(
+            parityFixture.schema())
+        : "Ethereum native prover parity fixture parser must preserve schema";
+    assert binding.hash.equals(parityFixture.destinationBindingHash())
+        : "Ethereum native prover parity fixture must bind destinationBindingHash";
+    assert parityFixture.publicSignalWords().size() == 9
+        : "Ethereum native prover parity fixture must preserve public signal words";
+    assert parityFixture
+        .toriiSubmitPayloadHash()
+        .equals(parityFixture.sdkResults().get("java-android").toriiSubmitPayloadHash())
+        : "Ethereum native prover parity fixture must bind Java Android output";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+          sampleEthereumNativeEvmProverParityFixtureJson(
+              nativeProverBundle, "0x" + repeat("96", 32)),
+          nativeProverBundle);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sdkResults.java-android.calldataHash");
+    }
+    assert threw : "Ethereum native prover parity fixture must reject SDK drift";
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture selfTestFixture =
+        EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+            sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle),
+            nativeProverBundle);
+    assert EvmSccpProver.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1.equals(
+            selfTestFixture.schema())
+        : "Ethereum native prover self-test fixture parser must preserve schema";
+    assert binding.hash.equals(selfTestFixture.destinationBindingHash())
+        : "Ethereum native prover self-test fixture must bind destinationBindingHash";
+    assert selfTestFixture.publicSignalWords().size() == 9
+        : "Ethereum native prover self-test fixture must preserve public signal words";
+    assert selfTestFixture
+        .proofHash()
+        .equals(selfTestFixture.sdkResults().get("java-android").proofHash())
+        : "Ethereum native prover self-test fixture must bind Java Android output";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+          sampleEthereumNativeEvmProverSelfTestFixtureJson(
+              nativeProverBundle, "0x" + repeat("96", 32)),
+          nativeProverBundle);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sdkResults.java-android.proofHash");
+    }
+    assert threw : "Ethereum native prover self-test fixture must reject SDK drift";
     threw = false;
     try {
       EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
@@ -1329,7 +1379,7 @@ public final class EvmSccpProverTests {
           binding.hash);
     } catch (final IllegalArgumentException ex) {
       threw =
-          ex.getMessage().contains("auditHashes[0]")
+          ex.getMessage().contains("auditHashes.circuit_security_audit")
               && ex.getMessage().contains("canonical lowercase");
     }
     assert threw : "Ethereum native prover bundle parser must reject noncanonical audit hashes";
@@ -1341,7 +1391,7 @@ public final class EvmSccpProverTests {
           binding.hash);
     } catch (final IllegalArgumentException ex) {
       threw =
-          ex.getMessage().contains("auditHashes[0]")
+          ex.getMessage().contains("auditHashes.circuit_security_audit")
               && ex.getMessage().contains("proofArtifactHash")
               && ex.getMessage().contains("role-separated");
     }
@@ -1417,25 +1467,73 @@ public final class EvmSccpProverTests {
               entry.getValue(),
               proofArtifactHash,
               provingKeyHash,
+              "artifacts/eth-mainnet/" + entry.getKey() + "-implementation.bin",
               "java-android".equals(entry.getKey())
                   ? implementationHash
                   : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
     }
-    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle verifiedBundle =
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle draftVerifiedBundle =
         new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            EvmSccpProver.NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+            EvmSccpProver.ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+            EvmSccpProver.DOMAIN_ETH,
+            "eth",
+            EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+            "artifacts/eth-mainnet/proof-artifact.bin",
             proofArtifactHash,
+            "artifacts/eth-mainnet/proving-key.bin",
             provingKeyHash,
+            "artifacts/eth-mainnet/verifier-key.bin",
             verifierKeyHash,
             artifactBinding.hash,
+            true,
+            false,
+            "pure-typescript",
+            "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            "artifacts/eth-mainnet/native-prover-self-test.json",
             verifiedSdkArtifacts,
-            Collections.singletonList("0x" + repeat("a1", 32)));
+            sampleEthereumNativeAuditHashes());
+    final byte[] parityFixtureBytes =
+        sampleEthereumNativeEvmProverParityFixtureJson(draftVerifiedBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final String parityFixtureHash = sha256Hex(parityFixtureBytes);
+    final byte[] selfTestFixtureBytes =
+        sampleEthereumNativeEvmProverSelfTestFixtureJson(draftVerifiedBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final String selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
+    final Map<String, String> verifiedAuditHashes = sampleEthereumNativeAuditHashes();
+    verifiedAuditHashes.put("cross_sdk_fixture_parity", parityFixtureHash);
+    verifiedAuditHashes.put("native_prover_self_test", selfTestFixtureHash);
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle verifiedBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            EvmSccpProver.NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+            EvmSccpProver.ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+            EvmSccpProver.DOMAIN_ETH,
+            "eth",
+            EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+            "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash,
+            "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash,
+            "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash,
+            artifactBinding.hash,
+            true,
+            false,
+            "pure-typescript",
+            "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            "artifacts/eth-mainnet/native-prover-self-test.json",
+            verifiedSdkArtifacts,
+            verifiedAuditHashes);
     final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts =
         verifiedBundle.verifiedArtifacts(
             proofArtifactBytes,
             provingKeyBytes,
             verifierKeyBytes,
             "java-android",
-            implementationBytes);
+            implementationBytes,
+            parityFixtureBytes,
+            selfTestFixtureBytes);
     assert EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1.equals(
             verifiedArtifacts.hashAlgorithm())
         : "Android native prover artifact verifier must report sha256";
@@ -1445,10 +1543,80 @@ public final class EvmSccpProverTests {
         : "Android native prover artifact verifier must bind proving key bytes";
     assert verifierKeyHash.equals(verifiedArtifacts.verifierKeyHash())
         : "Android native prover artifact verifier must bind verifier key bytes";
+    assert parityFixtureHash.equals(verifiedArtifacts.crossSdkFixtureParityHash())
+        : "Android native prover artifact verifier must bind parity fixture bytes";
+    assert ("0x" + repeat("d3", 32)).equals(verifiedArtifacts.crossSdkFixtureParity().calldataHash())
+        : "Android native prover artifact verifier must parse parity fixture bytes";
+    assert selfTestFixtureHash.equals(verifiedArtifacts.nativeProverSelfTestHash())
+        : "Android native prover artifact verifier must bind self-test fixture bytes";
+    assert ("0x" + repeat("e4", 32)).equals(verifiedArtifacts.nativeProverSelfTest().proofHash())
+        : "Android native prover artifact verifier must parse self-test fixture bytes";
     assert "native-java".equals(verifiedArtifacts.implementation())
         : "Android native prover artifact verifier must select java implementation";
     assert implementationHash.equals(verifiedArtifacts.implementationHash())
         : "Android native prover artifact verifier must bind implementation bytes";
+    final Map<String, byte[]> artifactBytesByPath = new LinkedHashMap<>();
+    artifactBytesByPath.put(verifiedBundle.proofArtifact(), proofArtifactBytes);
+    artifactBytesByPath.put(verifiedBundle.provingKey(), provingKeyBytes);
+    artifactBytesByPath.put(verifiedBundle.verifierKey(), verifierKeyBytes);
+    artifactBytesByPath.put(verifiedBundle.crossSdkFixtureParityArtifact(), parityFixtureBytes);
+    artifactBytesByPath.put(verifiedBundle.nativeProverSelfTestArtifact(), selfTestFixtureBytes);
+    String javaImplementationArtifact = null;
+    for (final EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact row :
+        verifiedBundle.nativeSdkArtifacts()) {
+      if ("java-android".equals(row.sdk())) {
+        javaImplementationArtifact = row.implementationArtifact();
+        break;
+      }
+    }
+    if (javaImplementationArtifact == null) {
+      throw new AssertionError("missing java-android implementation artifact");
+    }
+    artifactBytesByPath.put(javaImplementationArtifact, implementationBytes);
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts resolverVerifiedArtifacts =
+        verifiedBundle.verifiedArtifacts(
+            "java-android",
+            path -> {
+              final byte[] bytes = artifactBytesByPath.get(path);
+              if (bytes == null) {
+                throw new IllegalArgumentException(path);
+              }
+              return bytes;
+            });
+    assert implementationHash.equals(resolverVerifiedArtifacts.implementationHash())
+        : "Android native prover artifact resolver must bind implementation bytes";
+    assert parityFixtureHash.equals(resolverVerifiedArtifacts.crossSdkFixtureParityHash())
+        : "Android native prover artifact resolver must bind parity fixture bytes";
+    assert selfTestFixtureHash.equals(resolverVerifiedArtifacts.nativeProverSelfTestHash())
+        : "Android native prover artifact resolver must bind self-test fixture bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          "java-android",
+          path -> {
+            if (verifiedBundle.crossSdkFixtureParityArtifact().equals(path)) {
+              throw new IllegalArgumentException("crossSdkFixtureParityArtifact");
+            }
+            return artifactBytesByPath.get(path);
+          });
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("crossSdkFixtureParityArtifact");
+    }
+    assert threw : "Android native prover artifact resolver must fail closed on missing parity bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          "java-android",
+          path -> {
+            if (verifiedBundle.nativeProverSelfTestArtifact().equals(path)) {
+              throw new IllegalArgumentException("nativeProverSelfTestArtifact");
+            }
+            return artifactBytesByPath.get(path);
+          });
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTestArtifact");
+    }
+    assert threw : "Android native prover artifact resolver must fail closed on missing self-test bytes";
     final boolean[] missingArtifactsProverCalled = new boolean[] {false};
     threw = false;
     try {
@@ -1467,6 +1635,7 @@ public final class EvmSccpProverTests {
         : "Ethereum outbound prover callback must not run without verified artifacts";
     final EvmSccpProver.ProofRequest[] artifactBoundRequest =
         new EvmSccpProver.ProofRequest[] {null};
+    final boolean[] artifactBoundSelfTestCalled = new boolean[] {false};
     final EvmSccpProver.ProofResult artifactBoundResult =
         new EthereumMainnetSccp(
                 null,
@@ -1485,14 +1654,145 @@ public final class EvmSccpProverTests {
                 null,
                 null,
                 verifiedArtifacts,
+                (fixture, expected, artifacts) -> {
+                  artifactBoundSelfTestCalled[0] = true;
+                  assert ("0x" + repeat("e4", 32)).equals(fixture.proofHash())
+                      : "native prover self-test fixture must reach callback";
+                  assert selfTestFixtureHash.equals(artifacts.nativeProverSelfTestHash())
+                      : "native prover self-test callback must see verified artifacts";
+                  return expected;
+                },
                 null)
             .proveOutboundToEthereum(artifactInput);
+    assert artifactBoundSelfTestCalled[0]
+        : "Ethereum outbound proof must run native self-test before proof callback";
     assert proofArtifactHash.equals(artifactBoundRequest[0].proofArtifactHash())
         : "Ethereum artifact-bound prover callback must see proofArtifactHash";
     assert proofArtifactHash.equals(artifactBoundResult.proofArtifactHash())
         : "Ethereum artifact-bound proof result must carry proofArtifactHash";
     assert provingKeyHash.equals(artifactBoundResult.provingKeyHash())
         : "Ethereum artifact-bound proof result must carry provingKeyHash";
+    final boolean[] missingSelfTestHookProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                missingSelfTestHookProverCalled[0] = true;
+                return proofBytes;
+              },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              verifiedArtifacts,
+              null)
+          .proveOutboundToEthereum(artifactInput);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTest runner");
+    }
+    assert threw : "Ethereum outbound proof must require native self-test runner";
+    assert !missingSelfTestHookProverCalled[0]
+        : "Ethereum outbound prover callback must not run without native self-test runner";
+    final boolean[] driftingSelfTestHookProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                driftingSelfTestHookProverCalled[0] = true;
+                return proofBytes;
+              },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              verifiedArtifacts,
+              (fixture, expected, artifacts) ->
+                  new EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                      expected.requestHash(),
+                      expected.witnessHash(),
+                      expected.sourceProofHash(),
+                      "0x" + repeat("97", 32),
+                      expected.publicSignalWords(),
+                      expected.calldataHash(),
+                      expected.toriiSubmitPayloadHash()),
+              null)
+          .proveOutboundToEthereum(artifactInput);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTest result");
+    }
+    assert threw : "Ethereum outbound proof must reject drifting native self-test output";
+    assert !driftingSelfTestHookProverCalled[0]
+        : "Ethereum outbound prover callback must not run after self-test drift";
+    final EvmSccpProver.ProofRequest[] factoryBoundRequest =
+        new EvmSccpProver.ProofRequest[] {null};
+    final EvmSccpProver.ProofResult factoryBoundResult =
+        EthereumMainnetSccp.fromNativeProverBundle(
+                null,
+                proofRequest -> {
+                  factoryBoundRequest[0] = proofRequest;
+                  return proofBytes;
+                },
+                null,
+                null,
+                null,
+                null,
+                null,
+                (fixture, expected, artifacts) -> expected,
+                verifiedBundle,
+                "java-android",
+                path -> {
+                  final byte[] bytes = artifactBytesByPath.get(path);
+                  if (bytes == null) {
+                    throw new IllegalArgumentException(path);
+                  }
+                  return bytes;
+                },
+                null)
+            .proveOutboundToEthereum(artifactInput);
+    assert proofArtifactHash.equals(factoryBoundRequest[0].proofArtifactHash())
+        : "Android bundle factory must bind proofArtifactHash before callback";
+    assert provingKeyHash.equals(factoryBoundRequest[0].provingKeyHash())
+        : "Android bundle factory must bind provingKeyHash before callback";
+    assert proofArtifactHash.equals(factoryBoundResult.proofArtifactHash())
+        : "Android bundle factory proof result must carry proofArtifactHash";
+    assert provingKeyHash.equals(factoryBoundResult.provingKeyHash())
+        : "Android bundle factory proof result must carry provingKeyHash";
+    threw = false;
+    try {
+      EthereumMainnetSccp.fromNativeProverBundle(
+          verifiedBundle,
+          "java-android",
+          path -> {
+            if (verifiedBundle.crossSdkFixtureParityArtifact().equals(path)) {
+              throw new IllegalArgumentException("crossSdkFixtureParityArtifact");
+            }
+            return artifactBytesByPath.get(path);
+          });
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("crossSdkFixtureParityArtifact");
+    }
+    assert threw : "Android bundle factory must fail closed on missing parity bytes";
+    threw = false;
+    try {
+      EthereumMainnetSccp.fromNativeProverBundle(
+          verifiedBundle,
+          "java-android",
+          path -> {
+            if (verifiedBundle.nativeProverSelfTestArtifact().equals(path)) {
+              throw new IllegalArgumentException("nativeProverSelfTestArtifact");
+            }
+            return artifactBytesByPath.get(path);
+          });
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTestArtifact");
+    }
+    assert threw : "Android bundle factory must fail closed on missing self-test bytes";
     final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts implementationUnboundArtifacts =
         new EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts(
             EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
@@ -1500,6 +1800,10 @@ public final class EvmSccpProverTests {
             proofArtifactHash,
             provingKeyHash,
             verifierKeyHash,
+            parityFixtureHash,
+            verifiedArtifacts.crossSdkFixtureParity(),
+            selfTestFixtureHash,
+            verifiedArtifacts.nativeProverSelfTest(),
             "java-android",
             "native-java",
             null);
@@ -1537,6 +1841,10 @@ public final class EvmSccpProverTests {
             proofArtifactHash,
             provingKeyHash,
             "0x" + repeat("ef", 32),
+            parityFixtureHash,
+            verifiedArtifacts.crossSdkFixtureParity(),
+            selfTestFixtureHash,
+            verifiedArtifacts.nativeProverSelfTest(),
             "java-android",
             "native-java",
             implementationHash);
@@ -1575,7 +1883,13 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(
-          proofArtifactBytes, provingKeyBytes, verifierKeyBytes, null, implementationBytes);
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          null,
+          implementationBytes,
+          parityFixtureBytes,
+          selfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("sdk must be a non-empty string");
     }
@@ -1583,7 +1897,13 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(
-          proofArtifactBytes, provingKeyBytes, verifierKeyBytes, "java-android", null);
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          null,
+          parityFixtureBytes,
+          selfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("implementationBytes are required");
     }
@@ -1595,11 +1915,65 @@ public final class EvmSccpProverTests {
           provingKeyBytes,
           verifierKeyBytes,
           "java-android",
-          "tampered".getBytes(StandardCharsets.UTF_8));
+          "tampered".getBytes(StandardCharsets.UTF_8),
+          parityFixtureBytes,
+          selfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("implementationBytes sha256");
     }
     assert threw : "Android native prover artifact verifier must reject tampered implementations";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("crossSdkFixtureParityBytes");
+    }
+    assert threw : "Android native prover artifact verifier must require parity fixture bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          parityFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTestBytes");
+    }
+    assert threw : "Android native prover artifact verifier must require self-test fixture bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          "{}".getBytes(StandardCharsets.UTF_8));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("crossSdkFixtureParityBytes sha256");
+    }
+    assert threw : "Android native prover artifact verifier must reject tampered parity fixture bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          parityFixtureBytes,
+          "{}".getBytes(StandardCharsets.UTF_8));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTestBytes sha256");
+    }
+    assert threw : "Android native prover artifact verifier must reject tampered self-test fixture bytes";
     final byte[] flaggedArtifactBytes = new byte[] {0x77, 0x61, 0x73, 0x6d};
     final String flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
     final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
@@ -1618,6 +1992,23 @@ public final class EvmSccpProverTests {
                   ? implementationHash
                   : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
     }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle draftFlaggedBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            flaggedArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.hash,
+            flaggedSdkArtifacts,
+            sampleEthereumNativeAuditHashes());
+    final byte[] flaggedParityFixtureBytes =
+        sampleEthereumNativeEvmProverParityFixtureJson(draftFlaggedBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] flaggedSelfTestFixtureBytes =
+        sampleEthereumNativeEvmProverSelfTestFixtureJson(draftFlaggedBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final Map<String, String> flaggedAuditHashes = sampleEthereumNativeAuditHashes();
+    flaggedAuditHashes.put("cross_sdk_fixture_parity", sha256Hex(flaggedParityFixtureBytes));
+    flaggedAuditHashes.put("native_prover_self_test", sha256Hex(flaggedSelfTestFixtureBytes));
     final EvmSccpProver.EthereumMainnetNativeEvmProverBundle flaggedBundle =
         new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
             flaggedArtifactHash,
@@ -1625,10 +2016,17 @@ public final class EvmSccpProverTests {
             verifierKeyHash,
             artifactBinding.hash,
             flaggedSdkArtifacts,
-            Collections.singletonList("0x" + repeat("a1", 32)));
+            flaggedAuditHashes);
     threw = false;
     try {
-      flaggedBundle.verifiedArtifacts(flaggedArtifactBytes, provingKeyBytes, verifierKeyBytes);
+      flaggedBundle.verifiedArtifacts(
+          flaggedArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          null,
+          null,
+          flaggedParityFixtureBytes,
+          flaggedSelfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("proofArtifactBytes contains forbidden");
     }
@@ -7156,7 +7554,18 @@ public final class EvmSccpProverTests {
         remoteProverRequired,
         "pure-typescript",
         artifacts,
-        Arrays.asList("0x" + repeat("a1", 32), "0x" + repeat("a2", 32)));
+        sampleEthereumNativeAuditHashes());
+  }
+
+  private static Map<String, String> sampleEthereumNativeAuditHashes() {
+    final LinkedHashMap<String, String> auditHashes = new LinkedHashMap<>();
+    auditHashes.put("circuit_security_audit", "0x" + repeat("a1", 32));
+    auditHashes.put("native_implementation_audit", "0x" + repeat("a2", 32));
+    auditHashes.put("reproducible_build_attestation", "0x" + repeat("a3", 32));
+    auditHashes.put("cross_sdk_fixture_parity", "0x" + repeat("a4", 32));
+    auditHashes.put("native_prover_self_test", "0x" + repeat("a5", 32));
+    auditHashes.put("no_wasm_no_remote_scan", "0x" + repeat("a6", 32));
+    return auditHashes;
   }
 
   private static EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts
@@ -7186,19 +7595,38 @@ public final class EvmSccpProverTests {
                   ? implementationHash
                   : "0x" + repeat(String.format("%02x", index), 32)));
     }
-    return new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle draftBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
             proofArtifactHash,
             provingKeyHash,
             verifierKeyHash,
             destinationBindingHash,
             artifacts,
-            Collections.singletonList("0x" + repeat("a1", 32)))
-        .verifiedArtifacts(
-            proofArtifactBytes,
-            provingKeyBytes,
-            verifierKeyBytes,
-            "java-android",
-            implementationBytes);
+            sampleEthereumNativeAuditHashes());
+    final byte[] parityFixtureBytes =
+        sampleEthereumNativeEvmProverParityFixtureJson(draftBundle).getBytes(StandardCharsets.UTF_8);
+    final byte[] selfTestFixtureBytes =
+        sampleEthereumNativeEvmProverSelfTestFixtureJson(draftBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final Map<String, String> auditHashes = sampleEthereumNativeAuditHashes();
+    auditHashes.put("cross_sdk_fixture_parity", sha256Hex(parityFixtureBytes));
+    auditHashes.put("native_prover_self_test", sha256Hex(selfTestFixtureBytes));
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle bundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            destinationBindingHash,
+            artifacts,
+            auditHashes);
+    return bundle.verifiedArtifacts(
+        proofArtifactBytes,
+        provingKeyBytes,
+        verifierKeyBytes,
+        "java-android",
+        implementationBytes,
+        parityFixtureBytes,
+        selfTestFixtureBytes);
   }
 
   private static String sampleEthereumNativeEvmProverBundleJson(
@@ -7294,11 +7722,223 @@ public final class EvmSccpProverTests {
         + "\"native_sdk_artifacts\":["
         + artifacts
         + "],"
-        + "\"audit_hashes\":[\"0x"
+        + "\"cross_sdk_fixture_parity_artifact\":\"artifacts/eth-mainnet/cross-sdk-fixture-parity.json\","
+        + "\"native_prover_self_test_artifact\":\"artifacts/eth-mainnet/native-prover-self-test.json\","
+        + "\"audit_hashes\":{"
+        + "\"circuit_security_audit\":\"0x"
         + repeat("a1", 32)
-        + "\",\"0x"
+        + "\",\"native_implementation_audit\":\"0x"
         + repeat("a2", 32)
-        + "\"]"
+        + "\",\"reproducible_build_attestation\":\"0x"
+        + repeat("a3", 32)
+        + "\",\"cross_sdk_fixture_parity\":\"0x"
+        + repeat("a4", 32)
+        + "\",\"native_prover_self_test\":\"0x"
+        + repeat("a5", 32)
+        + "\",\"no_wasm_no_remote_scan\":\"0x"
+        + repeat("a6", 32)
+        + "\"}"
+        + "}";
+  }
+
+  private static String sampleEthereumNativeEvmProverParityFixtureJson(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    return sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle, null);
+  }
+
+  private static String sampleEthereumNativeEvmProverParityFixtureJson(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String javaAndroidCalldataHash) {
+    final String defaultCalldataHash = "0x" + repeat("d3", 32);
+    final StringBuilder publicSignalWords = new StringBuilder();
+    for (int index = 0; index < 9; index++) {
+      if (publicSignalWords.length() > 0) {
+        publicSignalWords.append(',');
+      }
+      publicSignalWords
+          .append("\"0x")
+          .append(repeat(String.format("%02x", index + 0x10), 32))
+          .append("\"");
+    }
+    final StringBuilder sdkResults = new StringBuilder();
+    for (final String sdk :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet()) {
+      if (sdkResults.length() > 0) {
+        sdkResults.append(',');
+      }
+      final String calldataHash =
+          "java-android".equals(sdk) && javaAndroidCalldataHash != null
+              ? javaAndroidCalldataHash
+              : defaultCalldataHash;
+      sdkResults
+          .append("\"")
+          .append(sdk)
+          .append("\":{")
+          .append("\"receipt_proof_hash\":\"0x")
+          .append(repeat("d1", 32))
+          .append("\",")
+          .append("\"source_proof_hash\":\"0x")
+          .append(repeat("d2", 32))
+          .append("\",")
+          .append("\"destination_binding_hash\":\"")
+          .append(nativeProverBundle.destinationBindingHash())
+          .append("\",")
+          .append("\"public_signal_words\":[")
+          .append(publicSignalWords)
+          .append("],")
+          .append("\"calldata_hash\":\"")
+          .append(calldataHash)
+          .append("\",")
+          .append("\"torii_submit_payload_hash\":\"0x")
+          .append(repeat("d4", 32))
+          .append("\"}");
+    }
+    return "{"
+        + "\"schema\":\""
+        + EvmSccpProver.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1
+        + "\","
+        + "\"domain\":"
+        + EvmSccpProver.DOMAIN_ETH
+        + ","
+        + "\"chain\":\"eth\","
+        + "\"proof_backend\":\""
+        + EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1
+        + "\","
+        + "\"proof_artifact_hash\":\""
+        + nativeProverBundle.proofArtifactHash()
+        + "\","
+        + "\"proving_key_hash\":\""
+        + nativeProverBundle.provingKeyHash()
+        + "\","
+        + "\"verifier_key_hash\":\""
+        + nativeProverBundle.verifierKeyHash()
+        + "\","
+        + "\"destination_binding_hash\":\""
+        + nativeProverBundle.destinationBindingHash()
+        + "\","
+        + "\"receipt_proof_hash\":\"0x"
+        + repeat("d1", 32)
+        + "\","
+        + "\"source_proof_hash\":\"0x"
+        + repeat("d2", 32)
+        + "\","
+        + "\"public_signal_words\":["
+        + publicSignalWords
+        + "],"
+        + "\"calldata_hash\":\""
+        + defaultCalldataHash
+        + "\","
+        + "\"torii_submit_payload_hash\":\"0x"
+        + repeat("d4", 32)
+        + "\","
+        + "\"sdk_results\":{"
+        + sdkResults
+        + "}"
+        + "}";
+  }
+
+  private static String sampleEthereumNativeEvmProverSelfTestFixtureJson(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    return sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle, null);
+  }
+
+  private static String sampleEthereumNativeEvmProverSelfTestFixtureJson(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String javaAndroidProofHash) {
+    final String defaultProofHash = "0x" + repeat("e4", 32);
+    final StringBuilder publicSignalWords = new StringBuilder();
+    for (int index = 0; index < 9; index++) {
+      if (publicSignalWords.length() > 0) {
+        publicSignalWords.append(',');
+      }
+      publicSignalWords
+          .append("\"0x")
+          .append(repeat(String.format("%02x", index + 0x20), 32))
+          .append("\"");
+    }
+    final StringBuilder sdkResults = new StringBuilder();
+    for (final String sdk :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet()) {
+      if (sdkResults.length() > 0) {
+        sdkResults.append(',');
+      }
+      final String proofHash =
+          "java-android".equals(sdk) && javaAndroidProofHash != null
+              ? javaAndroidProofHash
+              : defaultProofHash;
+      sdkResults
+          .append("\"")
+          .append(sdk)
+          .append("\":{")
+          .append("\"request_hash\":\"0x")
+          .append(repeat("e1", 32))
+          .append("\",")
+          .append("\"witness_hash\":\"0x")
+          .append(repeat("e2", 32))
+          .append("\",")
+          .append("\"source_proof_hash\":\"0x")
+          .append(repeat("e3", 32))
+          .append("\",")
+          .append("\"proof_hash\":\"")
+          .append(proofHash)
+          .append("\",")
+          .append("\"public_signal_words\":[")
+          .append(publicSignalWords)
+          .append("],")
+          .append("\"calldata_hash\":\"0x")
+          .append(repeat("e5", 32))
+          .append("\",")
+          .append("\"torii_submit_payload_hash\":\"0x")
+          .append(repeat("e6", 32))
+          .append("\"}");
+    }
+    return "{"
+        + "\"schema\":\""
+        + EvmSccpProver.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1
+        + "\","
+        + "\"domain\":"
+        + EvmSccpProver.DOMAIN_ETH
+        + ","
+        + "\"chain\":\"eth\","
+        + "\"proof_backend\":\""
+        + EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1
+        + "\","
+        + "\"proof_artifact_hash\":\""
+        + nativeProverBundle.proofArtifactHash()
+        + "\","
+        + "\"proving_key_hash\":\""
+        + nativeProverBundle.provingKeyHash()
+        + "\","
+        + "\"verifier_key_hash\":\""
+        + nativeProverBundle.verifierKeyHash()
+        + "\","
+        + "\"destination_binding_hash\":\""
+        + nativeProverBundle.destinationBindingHash()
+        + "\","
+        + "\"request_hash\":\"0x"
+        + repeat("e1", 32)
+        + "\","
+        + "\"witness_hash\":\"0x"
+        + repeat("e2", 32)
+        + "\","
+        + "\"source_proof_hash\":\"0x"
+        + repeat("e3", 32)
+        + "\","
+        + "\"proof_hash\":\""
+        + defaultProofHash
+        + "\","
+        + "\"public_signal_words\":["
+        + publicSignalWords
+        + "],"
+        + "\"calldata_hash\":\"0x"
+        + repeat("e5", 32)
+        + "\","
+        + "\"torii_submit_payload_hash\":\"0x"
+        + repeat("e6", 32)
+        + "\","
+        + "\"sdk_results\":{"
+        + sdkResults
+        + "}"
         + "}";
   }
 

@@ -27,17 +27,17 @@
 //! negacyclic product bounds used by the deterministic evaluator bridge, while
 //! separate guards keep product-ring arithmetic from being used as
 //! ciphertext-modulus arithmetic unless the chain is wide enough. The full
-//! bounded-noise BFV-RNS evaluator and basis-extension key-switching path is
-//! still pending, but an exact CRT basis-extension bridge, RNS key-switch digit
+//! bounded-noise BFV-RNS evaluator integration is still pending, but exact CRT
+//! and deterministic target-limb basis-extension bridges, RNS key-switch digit
 //! decomposition and digit-specific basis extension, centered RNS raw-product
 //! reconstruction for rounded multiplication, rounded plaintext scaling,
 //! small-noise public-key encryption, decryption, bounded-noise scalar
 //! operation propagation, and a scalar exact-product
 //! multiplication/relinearization bridge with packed Galois rotation schedules
-//! plus RNS Galois/packed-rotation, basis-extension key-switch, and
-//! bounded-noise outer-slot rotation/bootstrap-refresh bridges are available
-//! for explicitly bounded runtime metadata. Full approximate BFV-RNS basis
-//! extension and security-complete bootstrapping remain pending.
+//! plus RNS Galois/packed-rotation, target-limb basis-extension key-switch,
+//! and bounded-noise outer-slot rotation/bootstrap-refresh bridges are
+//! available for explicitly bounded runtime metadata. Security-complete
+//! bootstrapping remains pending.
 
 use std::{fmt, string::String, vec::Vec};
 
@@ -65,6 +65,8 @@ const BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.bounded_noise_refresh_transcript_digest.v1";
 const BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.rns_modulus_chain_digest.v1";
+const BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.rns_key_switch_decomposition_chain_digest.v1";
 const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = 64;
 const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
 const BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS: u16 = 1;
@@ -689,9 +691,9 @@ impl BfvRnsModulusChain {
     /// This is an exact CRT basis-extension bridge: coefficients are
     /// reconstructed from the source chain, then reduced into each target limb.
     /// The target chain product must cover the source chain product so the
-    /// converted polynomial can be reconstructed without aliasing. It is a
-    /// deterministic building block for the future BFV-RNS key-switch path, not
-    /// the final approximate basis-extension algorithm.
+    /// converted polynomial can be reconstructed without aliasing. It remains a
+    /// deterministic reconstructable bridge; key-switch paths that only need
+    /// target residues use [`Self::basis_extend_polynomial_target_limbs`].
     ///
     /// # Errors
     /// Returns [`BfvError`] when either chain is malformed for the parameter
@@ -725,6 +727,114 @@ impl BfvRnsModulusChain {
                     .collect::<Result<Vec<_>, BfvError>>()
             })
             .collect::<Result<Vec<_>, BfvError>>()?;
+        Ok(BfvRnsPolynomial { residues_by_limb })
+    }
+
+    /// Extend an RNS polynomial directly into target-chain limbs.
+    ///
+    /// This is the deterministic target-limb basis-extension boundary needed by
+    /// the BFV-RNS evaluator: coefficients are interpreted as canonical
+    /// representatives modulo the source-chain product, a CRT quotient
+    /// correction is computed exactly with integer arithmetic, and each target
+    /// limb receives the corresponding residue. Unlike
+    /// [`Self::basis_extend_polynomial`], the target chain does not need to
+    /// cover the source-chain product because callers are asking only for
+    /// target residues, not for later reconstruction of the full source
+    /// representative from the target chain alone.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when either chain is malformed for the parameter
+    /// set, the source polynomial shape is invalid, a CRT inverse is missing,
+    /// or deterministic quotient-correction arithmetic exceeds supported
+    /// bounds.
+    pub fn basis_extend_polynomial_target_limbs(
+        &self,
+        params: &BfvParameters,
+        polynomial: &BfvRnsPolynomial,
+        target_chain: &BfvRnsModulusChain,
+    ) -> Result<BfvRnsPolynomial, BfvError> {
+        self.validate_for_parameters(params)?;
+        target_chain.validate_for_parameters(params)?;
+        validate_rns_polynomial(params, self, polynomial)?;
+
+        let source_product = self.product()?;
+        let source_limb_data = self
+            .moduli
+            .iter()
+            .map(|&source_modulus| {
+                let source_basis = source_product / u128::from(source_modulus);
+                let source_basis_mod_source = reduce_u128_to_u64_mod(source_basis, source_modulus)?;
+                let inverse = mod_inv_prime_u64(source_basis_mod_source, source_modulus)
+                    .ok_or_else(|| {
+                        BfvError::InvalidParameters(format!(
+                            "BFV RNS basis-extension source limb {source_modulus} is not invertible"
+                        ))
+                    })?;
+                Ok((source_modulus, source_basis, inverse))
+            })
+            .collect::<Result<Vec<_>, BfvError>>()?;
+
+        let mut residues_by_limb =
+            vec![Vec::with_capacity(params.degree()); target_chain.moduli.len()];
+        for coefficient_index in 0..params.degree() {
+            let mut quotient = 0_u128;
+            let mut remainder = 0_u128;
+            let mut crt_digits = Vec::with_capacity(source_limb_data.len());
+
+            for (source_limb_index, &(source_modulus, source_basis, inverse)) in
+                source_limb_data.iter().enumerate()
+            {
+                let residue = polynomial.residues_by_limb[source_limb_index][coefficient_index];
+                let crt_digit = mul_mod_u64(residue, inverse, source_modulus);
+                let term = source_basis
+                    .checked_mul(u128::from(crt_digit))
+                    .ok_or_else(|| {
+                        BfvError::InvalidParameters(
+                            "BFV RNS basis-extension CRT term exceeds u128".to_owned(),
+                        )
+                    })?;
+
+                if remainder >= source_product - term {
+                    remainder -= source_product - term;
+                    quotient = quotient.checked_add(1).ok_or_else(|| {
+                        BfvError::InvalidParameters(
+                            "BFV RNS basis-extension quotient exceeds u128".to_owned(),
+                        )
+                    })?;
+                } else {
+                    remainder += term;
+                }
+                crt_digits.push((crt_digit, source_basis));
+            }
+
+            for (target_limb_index, &target_modulus) in target_chain.moduli.iter().enumerate() {
+                let mut target_residue = 0_u64;
+                for &(crt_digit, source_basis) in &crt_digits {
+                    let digit_mod_target =
+                        reduce_u128_to_u64_mod(u128::from(crt_digit), target_modulus)?;
+                    let basis_mod_target = reduce_u128_to_u64_mod(source_basis, target_modulus)?;
+                    target_residue = add_mod_u64(
+                        target_residue,
+                        mul_mod_u64(digit_mod_target, basis_mod_target, target_modulus),
+                        target_modulus,
+                    );
+                }
+                let quotient_mod_target = reduce_u128_to_u64_mod(quotient, target_modulus)?;
+                let source_product_mod_target =
+                    reduce_u128_to_u64_mod(source_product, target_modulus)?;
+                let correction = mul_mod_u64(
+                    quotient_mod_target,
+                    source_product_mod_target,
+                    target_modulus,
+                );
+                residues_by_limb[target_limb_index].push(sub_mod_u64(
+                    target_residue,
+                    correction,
+                    target_modulus,
+                ));
+            }
+        }
+
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
 
@@ -1777,6 +1887,44 @@ pub fn registered_bfv_rns_modulus_chain_digest(params: &BfvParameters) -> Result
     chain.digest_for_parameters(params)
 }
 
+/// Return the registered BFV RNS chain used for key-switch decomposition.
+///
+/// The returned chain is the smallest prefix of the registered evaluator chain
+/// that can still cover the ciphertext modulus and key-switch decomposition
+/// base. Target-limb key-switch bridges decompose in this source chain and
+/// extend the resulting digit polynomials into the full evaluator chain.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not registered, the
+/// registered evaluator chain is malformed, or no prefix covers the required
+/// key-switch decomposition product.
+pub fn registered_bfv_key_switch_decomposition_chain(
+    params: &BfvParameters,
+) -> Result<BfvRnsModulusChain, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)
+}
+
+/// Return the stable digest for the registered key-switch decomposition chain.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not registered, the
+/// decomposition chain fails validation, or canonical encoding fails.
+pub fn registered_bfv_key_switch_decomposition_chain_digest(
+    params: &BfvParameters,
+) -> Result<Hash, BfvError> {
+    let chain = registered_bfv_key_switch_decomposition_chain(params)?;
+    let bytes = norito::to_bytes(&chain).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "RNS key-switch decomposition-chain encoding failed: {err}"
+        ))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN,
+        bytes.as_slice(),
+    ]))
+}
+
 /// Return the stable digest for a registered BFV parameter set.
 ///
 /// # Errors
@@ -2342,12 +2490,12 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
     )
 }
 
-/// Apply a rounded BFV Galois automorphism through an exact basis-extension RNS bridge.
+/// Apply a rounded BFV Galois automorphism through a target-limb RNS bridge.
 ///
 /// The transformed secret component is decomposed in `decomposition_chain`,
-/// exactly basis-extended into `evaluator_chain`, and then consumed by the RNS
-/// key-switch products. This keeps the final BFV-RNS basis-extension boundary
-/// explicit while preserving deterministic exact reconstruction semantics.
+/// target-limb basis-extended into `evaluator_chain`, and then consumed by the
+/// RNS key-switch products. This keeps the BFV-RNS basis-extension boundary
+/// explicit while preserving deterministic exact scalar semantics.
 ///
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, either RNS
@@ -2776,12 +2924,12 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ex
     })
 }
 
-/// Rotate a rounded BFV packed ciphertext left through exact basis-extension RNS bridges.
+/// Rotate a rounded BFV packed ciphertext left through target-limb RNS bridges.
 ///
 /// This is the basis-extension counterpart of
 /// [`rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact`].
 /// Each scheduled Galois switch decomposes in `decomposition_chain`,
-/// basis-extends into `evaluator_chain`, then uses the same guarded RNS
+/// target-limb basis-extends into `evaluator_chain`, then uses the same guarded RNS
 /// plaintext-selector products and accumulator additions as the exact RNS
 /// packed rotation bridge.
 ///
@@ -3323,6 +3471,35 @@ pub fn bootstrap_ciphertext_round(
     )
 }
 
+/// Refresh a ciphertext with consecutive public bootstrap-key rounds.
+///
+/// The requested round count is validated against the key before the first
+/// refresh is applied, so callers cannot accidentally rely on a partial
+/// multi-round refresh when the request exceeds the key capacity.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or requested round count
+/// does not match the parameter set.
+pub fn bootstrap_ciphertext_rounds(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    refresh_rounds: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    validate_bootstrap_refresh_round_count(bootstrap_key, refresh_rounds, "BFV bootstrap refresh")?;
+    let mut refreshed = ciphertext.clone();
+    for round_index in 0..refresh_rounds {
+        refreshed = add_ciphertexts(
+            params,
+            &refreshed,
+            bootstrap_round_refresh(bootstrap_key, round_index)?,
+        )?;
+    }
+    Ok(refreshed)
+}
+
 /// Refresh a rounded BFV ciphertext with round zero from a bounded-noise bootstrap key.
 ///
 /// # Errors
@@ -3354,6 +3531,39 @@ pub fn bootstrap_ciphertext_bounded_noise_round(
         ciphertext,
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
+}
+
+/// Refresh a rounded BFV ciphertext with consecutive bounded-noise bootstrap rounds.
+///
+/// The requested round count is validated against the key before the first
+/// refresh is applied, so callers cannot accidentally rely on a partial
+/// multi-round refresh when the request exceeds the key capacity.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, or requested round count
+/// does not match the parameter set.
+pub fn bootstrap_ciphertext_bounded_noise_rounds(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    refresh_rounds: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    validate_bootstrap_refresh_round_count(
+        bootstrap_key,
+        refresh_rounds,
+        "BFV bounded-noise bootstrap refresh",
+    )?;
+    let mut refreshed = ciphertext.clone();
+    for round_index in 0..refresh_rounds {
+        refreshed = add_ciphertexts(
+            params,
+            &refreshed,
+            bootstrap_round_refresh(bootstrap_key, round_index)?,
+        )?;
+    }
+    Ok(refreshed)
 }
 
 /// Refresh a ciphertext with round zero from a public bootstrap key through an
@@ -3399,6 +3609,39 @@ pub fn bootstrap_ciphertext_rns_exact_round(
     )
 }
 
+/// Refresh a ciphertext with consecutive public bootstrap-key rounds through
+/// an exact RNS corridor.
+///
+/// The requested round count is validated against the key before the first
+/// refresh is applied, so callers cannot accidentally rely on a partial
+/// multi-round refresh when the request exceeds the key capacity.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, requested round count, or
+/// RNS chain does not match the parameter set.
+pub fn bootstrap_ciphertext_rns_exact_rounds(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    refresh_rounds: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    validate_bootstrap_refresh_round_count(bootstrap_key, refresh_rounds, "BFV bootstrap refresh")?;
+    let mut refreshed = ciphertext.clone();
+    for round_index in 0..refresh_rounds {
+        refreshed = add_ciphertexts_rns_exact(
+            params,
+            rns_chain,
+            &refreshed,
+            bootstrap_round_refresh(bootstrap_key, round_index)?,
+        )?;
+    }
+    Ok(refreshed)
+}
+
 /// Refresh a rounded BFV ciphertext with round zero through an exact RNS corridor.
 ///
 /// # Errors
@@ -3441,6 +3684,43 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact_round(
         ciphertext,
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
+}
+
+/// Refresh a rounded BFV ciphertext with consecutive bounded-noise bootstrap
+/// rounds through an exact RNS corridor.
+///
+/// The requested round count is validated against the key before the first
+/// refresh is applied, so callers cannot accidentally rely on a partial
+/// multi-round refresh when the request exceeds the key capacity.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input, refresh key, requested round count, or
+/// RNS chain does not match the parameter set.
+pub fn bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+    params: &BfvParameters,
+    rns_chain: &BfvRnsModulusChain,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+    refresh_rounds: u16,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)?;
+    validate_bootstrap_key(params, bootstrap_key)?;
+    validate_bootstrap_refresh_round_count(
+        bootstrap_key,
+        refresh_rounds,
+        "BFV bounded-noise bootstrap refresh",
+    )?;
+    let mut refreshed = ciphertext.clone();
+    for round_index in 0..refresh_rounds {
+        refreshed = add_ciphertexts_rns_exact(
+            params,
+            rns_chain,
+            &refreshed,
+            bootstrap_round_refresh(bootstrap_key, round_index)?,
+        )?;
+    }
+    Ok(refreshed)
 }
 
 /// Derive a deterministic public slot-rotation key from a BFV public key.
@@ -5712,10 +5992,10 @@ pub fn multiply_ciphertexts_bounded_noise_rns_exact(
     )
 }
 
-/// Multiply two rounded BFV ciphertexts through an exact basis-extension RNS bridge.
+/// Multiply two rounded BFV ciphertexts through a target-limb RNS bridge.
 ///
 /// Raw products are evaluated and scale-rounded through `evaluator_chain`.
-/// The quadratic component is decomposed in `decomposition_chain`, exactly
+/// The quadratic component is decomposed in `decomposition_chain`, target-limb
 /// basis-extended into `evaluator_chain`, and then consumed by bounded-noise
 /// relinearization key material. This is the deterministic bridge shape for
 /// the pending approximate BFV-RNS basis-extension implementation.
@@ -6313,6 +6593,25 @@ fn bootstrap_round_refresh(
         })
 }
 
+fn validate_bootstrap_refresh_round_count(
+    bootstrap_key: &BfvBootstrapKey,
+    refresh_rounds: u16,
+    context: &str,
+) -> Result<(), BfvError> {
+    if refresh_rounds == 0 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{context} requires at least one round"
+        )));
+    }
+    if refresh_rounds > bootstrap_key.max_refresh_rounds {
+        return Err(BfvError::InvalidParameters(format!(
+            "{context} rounds {refresh_rounds} exceeds bootstrap key max_refresh_rounds {}",
+            bootstrap_key.max_refresh_rounds
+        )));
+    }
+    Ok(())
+}
+
 fn validate_bfv_rns_modulus_chain(
     chain: &BfvRnsModulusChain,
     params: &BfvParameters,
@@ -6414,6 +6713,46 @@ fn validate_rns_key_switch_decomposition_chain(
         )));
     }
     Ok(())
+}
+
+fn registered_bfv_key_switch_decomposition_chain_for_evaluator(
+    params: &BfvParameters,
+    evaluator_chain: &BfvRnsModulusChain,
+) -> Result<BfvRnsModulusChain, BfvError> {
+    validate_rns_exact_evaluator_chain(params, evaluator_chain)?;
+    let required_product =
+        u128::from(params.ciphertext_modulus).max(u128::from(params.decomposition_base()));
+    let mut product = 1_u128;
+    let mut prefix_len = 0_usize;
+    for &modulus in &evaluator_chain.moduli {
+        product = product.checked_mul(u128::from(modulus)).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV key-switch decomposition-chain product exceeds u128".to_owned(),
+            )
+        })?;
+        prefix_len = prefix_len.checked_add(1).ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV key-switch decomposition-chain length exceeds deterministic bounds".to_owned(),
+            )
+        })?;
+        if product >= required_product {
+            break;
+        }
+    }
+    if product < required_product {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV key-switch decomposition-chain product {product} does not cover required product {required_product}"
+        )));
+    }
+    let chain = BfvRnsModulusChain {
+        moduli: evaluator_chain.moduli[..prefix_len].to_vec(),
+    };
+    validate_rns_key_switch_decomposition_chain(
+        params,
+        &chain,
+        "registered BFV key-switch decomposition",
+    )?;
+    Ok(chain)
 }
 
 fn checked_rns_modulus_product(moduli: &[u64]) -> Result<u128, BfvError> {
@@ -7429,11 +7768,7 @@ fn key_switch_rns_exact_with_basis_extension(
     let evaluator_digits = source_digits
         .iter()
         .map(|digit| {
-            decomposition_chain.basis_extend_key_switch_digit_polynomial(
-                params,
-                digit,
-                evaluator_chain,
-            )
+            decomposition_chain.basis_extend_polynomial_target_limbs(params, digit, evaluator_chain)
         })
         .collect::<Result<Vec<_>, BfvError>>()?;
     validate_rns_key_switch_digit_polynomials(
@@ -9134,6 +9469,9 @@ mod tests {
                 .expect("first bounded-noise bootstrap refresh");
         let second = bootstrap_ciphertext_bounded_noise_round(&params, &bootstrap_key, &first, 1)
             .expect("second bounded-noise bootstrap refresh");
+        let multi_round =
+            bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &ciphertext, 2)
+                .expect("multi-round bounded-noise bootstrap refresh");
         let rns_second = bootstrap_ciphertext_bounded_noise_rns_exact_round(
             &params,
             &rns_chain,
@@ -9142,7 +9480,17 @@ mod tests {
             1,
         )
         .expect("RNS bounded-noise bootstrap refresh");
+        let rns_multi_round = bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+            &params,
+            &rns_chain,
+            &bootstrap_key,
+            &ciphertext,
+            2,
+        )
+        .expect("RNS multi-round bounded-noise bootstrap refresh");
         assert_eq!(rns_second, second);
+        assert_eq!(multi_round, second);
+        assert_eq!(rns_multi_round, second);
         assert_ne!(second, ciphertext);
 
         let output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound(
@@ -9169,6 +9517,25 @@ mod tests {
             3,
         )
         .expect_err("over-key-capacity bounded-noise bootstrap rounds must be rejected");
+        assert!(
+            err.to_string().contains("max_refresh_rounds"),
+            "unexpected error: {err}"
+        );
+        let err =
+            bootstrap_ciphertext_bounded_noise_rounds(&params, &bootstrap_key, &ciphertext, 0)
+                .expect_err("zero-round bounded-noise refresh must be rejected");
+        assert!(
+            err.to_string().contains("at least one round"),
+            "unexpected error: {err}"
+        );
+        let err = bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+            &params,
+            &rns_chain,
+            &bootstrap_key,
+            &ciphertext,
+            3,
+        )
+        .expect_err("over-key-capacity RNS bounded-noise refresh must be rejected");
         assert!(
             err.to_string().contains("max_refresh_rounds"),
             "unexpected error: {err}"
@@ -10833,13 +11200,28 @@ mod tests {
             .expect("first refresh");
         let second =
             bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 1).expect("second refresh");
+        let multi_round = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 2)
+            .expect("multi-round bootstrap refresh");
         let repeated_first = bootstrap_ciphertext_round(&params, &bootstrap_key, &first, 0)
             .expect("repeated first refresh");
         let err = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 2)
             .expect_err("out-of-range bootstrap rounds must be rejected");
 
+        assert_eq!(multi_round, second);
         assert_ne!(second, repeated_first);
         assert!(err.to_string().contains("round 2"));
+        let err = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 0)
+            .expect_err("zero-round multi-round bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("at least one round"),
+            "unexpected error: {err}"
+        );
+        let err = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 3)
+            .expect_err("over-key-capacity multi-round bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("max_refresh_rounds"),
+            "unexpected error: {err}"
+        );
         assert_eq!(
             decrypt(&params, &secret_key, &second).expect("decrypt second refresh")[0],
             91
@@ -11101,24 +11483,39 @@ mod tests {
             b"bfv-bootstrap-rns-input-ciphertext",
         )
         .expect("encrypt");
-        let bootstrap_key = bootstrap_key_from_seed(
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
             &params,
             &public_key,
             "bootstrap-refresh-key",
+            2,
             b"bfv-bootstrap-rns-zero-refresh",
         )
         .expect("bootstrap key");
 
-        let scalar = bootstrap_ciphertext_round(&params, &bootstrap_key, &ciphertext, 0)
-            .expect("scalar refresh");
+        let scalar = bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 2)
+            .expect("scalar multi-round refresh");
         let rns =
-            bootstrap_ciphertext_rns_exact_round(&params, &chain, &bootstrap_key, &ciphertext, 0)
-                .expect("RNS exact refresh");
+            bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 2)
+                .expect("RNS exact multi-round refresh");
 
         assert_eq!(rns, scalar);
         assert_eq!(
             decrypt(&params, &secret_key, &rns).expect("decrypt RNS refresh")[0],
             77
+        );
+        let err =
+            bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 0)
+                .expect_err("zero-round RNS bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("at least one round"),
+            "unexpected error: {err}"
+        );
+        let err =
+            bootstrap_ciphertext_rns_exact_rounds(&params, &chain, &bootstrap_key, &ciphertext, 3)
+                .expect_err("over-key-capacity RNS bootstrap refresh must be rejected");
+        assert!(
+            err.to_string().contains("max_refresh_rounds"),
+            "unexpected error: {err}"
         );
     }
 
@@ -13136,6 +13533,75 @@ mod tests {
     }
 
     #[test]
+    fn registered_key_switch_decomposition_chain_uses_minimal_ram_lfe_prefix() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluator_chain =
+            registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain validates");
+        let decomposition_chain = registered_bfv_key_switch_decomposition_chain(&params)
+            .expect("registered decomposition chain validates");
+
+        assert_eq!(
+            decomposition_chain.moduli.as_slice(),
+            &RAM_LFE_BFV_RNS_MODULI_V1[..4],
+            "registered RAM-LFE decomposition chain should use the minimal valid prefix"
+        );
+        assert!(
+            decomposition_chain.moduli.len() < evaluator_chain.moduli.len(),
+            "key-switch decomposition should remain a strict target-limb source chain"
+        );
+        decomposition_chain
+            .validate_for_parameters(&params)
+            .expect("decomposition chain covers BFV parameters");
+        let required_product =
+            u128::from(params.ciphertext_modulus).max(u128::from(params.decomposition_base()));
+        let decomposition_product = decomposition_chain
+            .product()
+            .expect("decomposition product fits");
+        assert!(decomposition_product >= required_product);
+        let shorter_product = checked_rns_modulus_product(
+            &decomposition_chain.moduli[..decomposition_chain.moduli.len() - 1],
+        )
+        .expect("shorter prefix product fits");
+        assert!(
+            shorter_product < required_product,
+            "dropping the last selected limb should no longer cover the key-switch product"
+        );
+    }
+
+    #[test]
+    fn registered_key_switch_decomposition_chain_digest_is_role_separated() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let decomposition_chain = registered_bfv_key_switch_decomposition_chain(&params)
+            .expect("registered decomposition chain validates");
+        let encoded_chain =
+            norito::to_bytes(&decomposition_chain).expect("encode decomposition chain");
+        let expected_digest = Hash::new_from_chunks(&[
+            BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN,
+            encoded_chain.as_slice(),
+        ]);
+
+        assert_eq!(
+            registered_bfv_key_switch_decomposition_chain_digest(&params)
+                .expect("registered decomposition digest"),
+            expected_digest
+        );
+        assert_ne!(
+            expected_digest,
+            registered_bfv_rns_modulus_chain_digest(&params).expect("registered RNS digest"),
+            "key-switch decomposition digest must not collide with the evaluator-chain role"
+        );
+
+        let mut unregistered = params;
+        unregistered.decomposition_base_log = unregistered.decomposition_base_log.saturating_add(1);
+        let err = registered_bfv_key_switch_decomposition_chain_digest(&unregistered)
+            .expect_err("unregistered parameters must not expose a decomposition digest");
+        assert!(
+            err.to_string().contains("not registered"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn bfv_evaluation_budget_plans_balanced_multiplication_depth() {
         assert_eq!(bfv_balanced_multiplication_depth(1).expect("one input"), 0);
         assert_eq!(bfv_balanced_multiplication_depth(2).expect("two inputs"), 1);
@@ -13715,6 +14181,70 @@ mod tests {
     }
 
     #[test]
+    fn rns_target_limb_basis_extension_accepts_narrower_target_product() {
+        let params = rns_exact_params();
+        let source_chain = rns_exact_chain();
+        let target_chain = BfvRnsModulusChain {
+            moduli: vec![73, 89],
+        };
+        let source_product = source_chain.product().expect("source product");
+        let target_product = target_chain.product().expect("target product");
+        assert!(
+            source_product > target_product,
+            "regression must cover target limbs that cannot reconstruct source representatives"
+        );
+        let source_coefficients = vec![source_product - 1, target_product + 17];
+        let source_rns = BfvRnsPolynomial {
+            residues_by_limb: source_chain
+                .moduli
+                .iter()
+                .map(|&modulus| {
+                    source_coefficients
+                        .iter()
+                        .map(|&coefficient| {
+                            u64::try_from(coefficient % u128::from(modulus))
+                                .expect("residue fits u64")
+                        })
+                        .collect()
+                })
+                .collect(),
+        };
+
+        let err = source_chain
+            .basis_extend_polynomial(&params, &source_rns, &target_chain)
+            .expect_err("exact reconstructable basis extension must reject a narrow target");
+        assert!(
+            err.to_string().contains("target product"),
+            "unexpected error: {err}"
+        );
+
+        let extended = source_chain
+            .basis_extend_polynomial_target_limbs(&params, &source_rns, &target_chain)
+            .expect("target-limb basis extension accepts a narrow target");
+        for (target_limb, &modulus) in extended.residues_by_limb.iter().zip(&target_chain.moduli) {
+            let expected = source_coefficients
+                .iter()
+                .map(|&coefficient| {
+                    u64::try_from(coefficient % u128::from(modulus)).expect("residue fits u64")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(target_limb, &expected);
+        }
+        let reconstructed = target_chain
+            .reconstruct_polynomial(&params, &extended)
+            .expect("reconstruct target-limb residues");
+        let expected_mod_target = source_coefficients
+            .iter()
+            .map(|&coefficient| coefficient % target_product)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstructed, expected_mod_target);
+        assert_ne!(
+            reconstructed, source_coefficients,
+            "narrow target reconstruction must remain visibly lossy"
+        );
+    }
+
+    #[test]
     fn rns_key_switch_digit_polynomials_survive_basis_extension() {
         let params = rns_exact_params();
         let source_chain = BfvRnsModulusChain {
@@ -13745,6 +14275,14 @@ mod tests {
             })
             .collect::<Result<Vec<_>, BfvError>>()
             .expect("basis-extend key-switch digits");
+        let target_digits_from_target_limbs = source_digits
+            .iter()
+            .map(|digit| {
+                source_chain.basis_extend_polynomial_target_limbs(&params, digit, &target_chain)
+            })
+            .collect::<Result<Vec<_>, BfvError>>()
+            .expect("target-limb basis extension preserves key-switch digits");
+        assert_eq!(target_digits_from_target_limbs, target_digits);
         validate_rns_key_switch_digit_polynomials(
             &params,
             &target_chain,
@@ -13826,7 +14364,19 @@ mod tests {
             })
             .collect::<Result<Vec<_>, BfvError>>()
             .expect("digit basis extension accepts a narrower target product");
+        let target_limb_digits_from_wide = wide_source_digits
+            .iter()
+            .map(|digit| {
+                wide_source_chain.basis_extend_polynomial_target_limbs(
+                    &params,
+                    digit,
+                    &target_chain,
+                )
+            })
+            .collect::<Result<Vec<_>, BfvError>>()
+            .expect("target-limb basis extension accepts a narrower target product");
         assert_eq!(target_digits_from_wide, target_digits);
+        assert_eq!(target_limb_digits_from_wide, target_digits);
         let rns_from_wide_basis_extension = key_switch_rns_exact_with_basis_extension(
             &params,
             &wide_source_chain,
