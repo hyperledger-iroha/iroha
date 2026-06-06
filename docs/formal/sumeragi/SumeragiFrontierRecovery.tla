@@ -1455,6 +1455,23 @@ FuturePromotionInstallsFreshSecondSlot ==
      /\ ~futurePromotionReady
      /\ FuturePromotionResetsActiveProgress
 
+FuturePromotionReadyClearsCurrentWrapper ==
+  futurePromotionReady
+  => /\ frontierSlot = 0
+     /\ ~pending
+     /\ ~committed
+     /\ ~dropped
+     /\ dropReason = "None"
+     /\ ~quorumRescheduleArmed
+     /\ quorumWindowAge = 0
+     /\ futurePresent
+     /\ futureContiguous
+     /\ FutureVoteBacked
+     /\ futureEvidenceObserved
+     /\ ~futurePromoted
+     /\ lastProgressKind = "FutureReanchor"
+     /\ progressAge = 0
+
 TerminalFrontierOutcomesAreExclusive ==
   /\ committed =>
        /\ ~pending

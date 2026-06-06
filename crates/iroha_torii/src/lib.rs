@@ -13058,9 +13058,9 @@ fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug)]
 enum ToriiAccountReadVisibility {
     Signed(AccountId),
-    Header(AccountId),
     None,
 }
 
@@ -13068,7 +13068,7 @@ enum ToriiAccountReadVisibility {
 impl ToriiAccountReadVisibility {
     fn caller(&self) -> Option<&AccountId> {
         match self {
-            Self::Signed(account_id) | Self::Header(account_id) => Some(account_id),
+            Self::Signed(account_id) => Some(account_id),
             Self::None => None,
         }
     }
@@ -13093,7 +13093,7 @@ fn torii_visibility_account_from_headers(
     method: &Method,
     uri: &Uri,
     body: &[u8],
-    endpoint: &'static str,
+    _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
     if torii_signed_visibility_headers_present(headers) {
         return crate::app_auth::verify_canonical_request(
@@ -13106,25 +13106,16 @@ fn torii_visibility_account_from_headers(
         });
     }
 
-    let Some(account_header) = headers.get(HEADER_ACCOUNT) else {
-        return Ok(ToriiAccountReadVisibility::None);
-    };
+    if headers.get(HEADER_ACCOUNT).is_some() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "X-Iroha-Account requires canonical request signing for caller-scoped reads"
+                    .to_owned(),
+            ),
+        ));
+    }
 
-    let account_literal = account_header.to_str().map_err(|_| {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-            "invalid X-Iroha-Account value".to_owned(),
-        ))
-    })?;
-
-    // TODO: Require canonical request signatures for all caller-scoped reads once the
-    // remaining app-api clients consistently attach signed read headers.
-    routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        account_literal,
-        &app.telemetry_handle(),
-        endpoint,
-    )
-    .map(|(account_id, _)| ToriiAccountReadVisibility::Header(account_id))
+    Ok(ToriiAccountReadVisibility::None)
 }
 
 #[cfg(feature = "app_api")]
@@ -17759,7 +17750,78 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn torii_partition_routes_by_visibility_allows_bound_private_dataspaces_for_header_caller()
+    async fn torii_visibility_account_from_headers_rejects_unsigned_account_header() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{authority}/transactions")
+            .parse()
+            .expect("valid URI");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            authority.to_string().parse().expect("account header"),
+        );
+
+        let err = torii_visibility_account_from_headers(
+            &app,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
+        )
+        .expect_err("bare account headers must not create caller identity");
+
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)) => {
+                assert!(
+                    message.contains("requires canonical request signing"),
+                    "unexpected rejection message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_visibility_account_from_headers_accepts_signed_caller() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{authority}/transactions")
+            .parse()
+            .expect("valid URI");
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &authority,
+            &key_pair,
+            &method,
+            &uri,
+            &[],
+        );
+
+        let visibility = torii_visibility_account_from_headers(
+            &app,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
+        )
+        .expect("signed account headers should verify");
+
+        match visibility {
+            ToriiAccountReadVisibility::Signed(account) => assert_eq!(account, authority),
+            other => panic!("unexpected visibility: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_partition_routes_by_visibility_allows_bound_private_dataspaces_for_signed_caller()
      {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::partition-caller"));
@@ -17773,7 +17835,7 @@ mod torii_routed_read_tests {
         let (allowed_routes, denied_routes) = torii_partition_routes_by_visibility(
             &app,
             torii_all_dataspace_routes(app.as_ref()),
-            &ToriiAccountReadVisibility::Header(authority.clone()),
+            &ToriiAccountReadVisibility::Signed(authority.clone()),
         );
         let dataspaces = allowed_routes
             .into_iter()
@@ -42129,11 +42191,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("system clock")
             .as_millis() as u64;
         let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let nonce = format!(
-            "lib-test-{timestamp_ms}-{nonce_seq}-{}-{}",
-            method.as_str(),
-            uri.path()
-        );
+        let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
         let message =
             crate::canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
         let signature = Signature::new(key_pair.private_key(), &message);
@@ -48667,13 +48725,13 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     fn sample_commit_qc(
+        chain_id: &ChainId,
         block_hash: HashOf<BlockHeader>,
         post_state_root: iroha_crypto::Hash,
         height: u64,
         view: u64,
         epoch: u64,
     ) -> (Qc, Vec<u8>) {
-        let chain_id: ChainId = "chain".parse().expect("chain id");
         let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let vote = Vote {
@@ -48690,7 +48748,7 @@ pub(crate) mod tests_runtime_handlers {
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
+        let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         let sig_bytes = signature.payload().to_vec();
         let sig_refs = vec![sig_bytes.as_slice()];
@@ -49025,7 +49083,8 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) =
+            sample_commit_qc(app.state.chain_id_ref(), block_hash, expected_root, 1, 2, 0);
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
         Arc::get_mut(&mut app_mut.state)
@@ -49107,7 +49166,8 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) =
+            sample_commit_qc(app.state.chain_id_ref(), block_hash, expected_root, 1, 2, 0);
         let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
         let mut state =
             Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
@@ -49218,6 +49278,7 @@ pub(crate) mod tests_runtime_handlers {
         store_block(&app, block);
 
         let (qc, validator_pop) = sample_commit_qc(
+            app.state.chain_id_ref(),
             block_hash,
             expected_root,
             height,
@@ -49297,6 +49358,7 @@ pub(crate) mod tests_runtime_handlers {
         store_block(&app, block);
 
         let (qc, validator_pop) = sample_commit_qc(
+            app.state.chain_id_ref(),
             block_hash,
             expected_root,
             height,
@@ -59350,18 +59412,8 @@ mod tests {
             .expect("program id")
     }
 
-    fn sample_identifier_bfv_parameters(backend: RamLfeBackend) -> BfvParameters {
-        match backend {
-            RamLfeBackend::BfvProgrammedSha3_256V1 => ram_lfe_bfv_parameters_v1(),
-            RamLfeBackend::BfvAffineSha3_256V1 | RamLfeBackend::HkdfSha3_512PrfV1 => {
-                BfvParameters {
-                    polynomial_degree: 64,
-                    ciphertext_modulus: 1_u64 << 40,
-                    plaintext_modulus: 256,
-                    decomposition_base_log: 12,
-                }
-            }
-        }
+    fn sample_identifier_bfv_parameters(_backend: RamLfeBackend) -> BfvParameters {
+        ram_lfe_bfv_parameters_v1()
     }
 
     fn encrypted_identifier_ciphertext(
@@ -63629,8 +63681,8 @@ mod tests {
             core.zk.verify_timeout = Duration::ZERO;
         }
 
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let circuit_id = "stark/fri/sha256-goldilocks-v1:ivm-execution-v1";
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm-exec-v1-stark");
         let vk_box = sample_stark_vk_box(
             backend,
@@ -64175,14 +64227,28 @@ mod tests {
 
         let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-derive");
         let schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
             "halo2/ipa:ivm-execution-v1",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
             schema_hash,
-            [0u8; 32],
+            vk_commitment,
         );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.key = Some(vk_box);
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
 

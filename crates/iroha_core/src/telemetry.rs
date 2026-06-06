@@ -7555,6 +7555,13 @@ impl Telemetry {
         }
     }
 
+    /// Record an API-token-gated Torii endpoint hit without exposing token material.
+    pub fn inc_torii_api_token_hit(&self, endpoint: &str, token_state: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.inc_torii_api_token_hit(endpoint, token_state);
+        }
+    }
+
     /// Record metrics for the content gateway path.
     pub fn observe_torii_content_request(&self, outcome: &str, bytes: u64, duration: Duration) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -14052,7 +14059,24 @@ mod tests {
                 .get(),
             1
         );
+        telemetry.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
+        assert_eq!(
+            metrics
+                .torii_api_token_hits_total
+                .with_label_values(&["v1/sccp/capabilities", "present"])
+                .get(),
+            1
+        );
         telemetry.disable();
+        telemetry.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
+        assert_eq!(
+            metrics
+                .torii_api_token_hits_total
+                .with_label_values(&["v1/sccp/capabilities", "present"])
+                .get(),
+            1,
+            "disabled telemetry must not record additional API-token hits"
+        );
         telemetry.inc_torii_signature_limit_reject(10, 7, "single");
         assert_eq!(
             metrics.torii_signature_limit_total.get(),

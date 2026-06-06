@@ -10556,7 +10556,7 @@ fn iroha_da_commitments_prove_tool() -> ToolSpec {
         name: "iroha.da.commitments.prove".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.commitments.prove"),
         description:
-            "Compute DA commitment proof placeholder (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
+            "Compute a DA commitment Merkle proof (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/da/commitments/prove".to_owned(),
@@ -10640,7 +10640,7 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
         name: "iroha.da.pin_intents.prove".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.pin_intents.prove"),
         description:
-            "Fetch DA pin intent proof data (`/v1/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
+            "Fetch indexed DA pin intent location data (`/v1/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/da/pin_intents/prove".to_owned(),
@@ -10668,7 +10668,7 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
         name: "iroha.da.pin_intents.verify".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.pin_intents.verify"),
         description:
-            "Verify DA pin intent proof payload (`/v1/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
+            "Verify indexed DA pin intent location data (`/v1/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/da/pin_intents/verify".to_owned(),

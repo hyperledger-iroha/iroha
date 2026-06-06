@@ -10585,6 +10585,63 @@ mod advert_tests {
         plan
     }
 
+    fn paid_pin_record_for_manifest(
+        state: &SharedAppState,
+        manifest: &ManifestV1,
+    ) -> PinManifestRecord {
+        let digest = ManifestDigest::new(
+            manifest
+                .digest()
+                .expect("compute manifest digest for paid pin record lookup")
+                .into(),
+        );
+        state
+            .state
+            .view()
+            .world()
+            .pin_manifests()
+            .get(&digest)
+            .cloned()
+            .expect("paid pin record should be seeded")
+    }
+
+    fn signed_manifest_envelope_b64(record: &PinManifestRecord, seed: u8) -> String {
+        let keypair = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let mut sig_entry = Map::new();
+        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
+        sig_entry.insert(
+            "signer".into(),
+            Value::from(hex::encode(
+                keypair
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("fixture public key must be valid")
+                    .1,
+            )),
+        );
+        sig_entry.insert(
+            "signature".into(),
+            Value::from(hex::encode(signature.payload())),
+        );
+
+        let mut envelope = Map::new();
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode(record.digest.as_bytes())),
+        );
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode(record.chunk_digest_sha3_256)),
+        );
+        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
+        envelope.insert(
+            "signatures".into(),
+            Value::Array(vec![Value::Object(sig_entry)]),
+        );
+        BASE64_STANDARD.encode(norito::json::to_vec(&Value::Object(envelope)).expect("json"))
+    }
+
     fn storage_pin_request_for_payload(
         manifest: &ManifestV1,
         payload: &[u8],
@@ -15355,6 +15412,120 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn car_range_streams_verified_middle_chunk_window() {
+        let payload_len = sorafs_chunker::ChunkProfile::DEFAULT.max_size * 3 + 17;
+        let payload = (0..payload_len)
+            .map(|idx| (idx as u8).wrapping_mul(37).wrapping_add(11))
+            .collect::<Vec<_>>();
+        let context = token_test_context_with_payload(payload);
+        let manifest = context
+            .app
+            .sorafs_node
+            .manifest_metadata(&context.manifest_id_hex)
+            .expect("manifest");
+        assert!(
+            manifest.chunk_count() >= 3,
+            "fixture must produce at least three chunks"
+        );
+        let first_chunk = manifest.chunk(1).expect("second chunk metadata");
+        let second_chunk = manifest.chunk(2).expect("third chunk metadata");
+        let range_start = first_chunk.offset;
+        let range_end = second_chunk
+            .offset
+            .checked_add(u64::from(second_chunk.length))
+            .and_then(|value| value.checked_sub(1))
+            .expect("non-empty second chunk");
+        let requested_range = range_start..=range_end;
+        let expected_chunk_count = 2usize;
+        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::RANGE,
+            HeaderValue::from_str(&format!("bytes={range_start}-{range_end}"))
+                .expect("range header"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_DAG_SCOPE),
+            HeaderValue::from_static("block"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
+            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_NONCE),
+            HeaderValue::from_static("middle-window"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
+            header_value(&token_base64, "X-SoraFS-Stream-Token"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_NAME),
+            header_value("alias/test", "Sora-Name"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_PROOF),
+            alias_proof_header("alias/test"),
+        );
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            headers,
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8086))),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let (parts, body) = response.into_parts();
+        let headers = parts.headers;
+        let body_bytes = body::to_bytes(body, usize::MAX)
+            .await
+            .expect("collect middle CAR body");
+        let car_bytes = body_bytes.to_vec();
+
+        let manifest_v1 = manifest.load_manifest().expect("load manifest");
+        let chunk_profile =
+            chunk_profile_for_manifest(&manifest_v1).expect("resolve chunk profile");
+        let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
+            .expect("taikai hint");
+        let full_plan = manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
+        let report = CarVerifier::verify_block_car(
+            &manifest_v1,
+            &full_plan,
+            &car_bytes,
+            Some(requested_range.clone()),
+        )
+        .expect("middle CAR verification");
+
+        assert_eq!(report.payload_range, requested_range);
+        assert_eq!(report.chunk_indices, vec![1, 2]);
+        assert_eq!(
+            report.payload_bytes,
+            u64::from(first_chunk.length) + u64::from(second_chunk.length)
+        );
+        let expected_content_range = format!(
+            "bytes {range_start}-{range_end}/{}",
+            manifest.content_length()
+        );
+        assert_eq!(
+            headers
+                .get(header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_content_range.as_str())
+        );
+        let chunk_range_header = headers
+            .get(header::HeaderName::from_static(HEADER_SORA_CHUNK_RANGE))
+            .and_then(|value| value.to_str().ok())
+            .expect("chunk range header present");
+        assert!(
+            chunk_range_header.contains(&format!("chunks={expected_chunk_count}")),
+            "chunk range header must report only the served middle chunks"
+        );
+    }
+
+    #[tokio::test]
     async fn car_range_emits_gateway_headers() {
         let context = token_test_context();
         let manifest = context
@@ -16068,6 +16239,8 @@ mod advert_tests {
 
         let provider_bytes = fixture.provider_id();
         let provider_id_hex = hex::encode(provider_bytes);
+        let manifest_envelope_b64 =
+            signed_manifest_envelope_b64(&paid_pin_record_for_manifest(&state, &manifest), 0x4C);
 
         let make_headers = |nonce: &str| {
             let mut headers = HeaderMap::new();
@@ -16089,7 +16262,7 @@ mod advert_tests {
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-                HeaderValue::from_static("dummy-envelope"),
+                header_value(&manifest_envelope_b64, HEADER_SORA_MANIFEST_ENVELOPE),
             );
             headers
         };

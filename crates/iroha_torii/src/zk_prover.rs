@@ -1735,30 +1735,31 @@ mod tests {
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
         let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
         let vk_commitment = hash_vk(&vk);
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_commitment);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let proof = fixture.proof_box("halo2/ipa");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
         let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         norito::to_bytes(&attachment).expect("proof attachment bytes")
     }
 
     fn fixture_state() -> Arc<CoreState> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
         let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
         let vk_commitment = hash_vk(&vk);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
             1,
-            "tiny-add",
+            "tiny-add-public",
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            [0; 32],
+            fixture.schema_hash,
             vk_commitment,
         );
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -1772,7 +1773,7 @@ mod tests {
             .insert(vk_id.clone(), record);
         world
             .verifying_keys_by_circuit_mut_for_testing()
-            .insert(("tiny-add".into(), 1), vk_id);
+            .insert(("tiny-add-public".into(), 1), vk_id);
         let mut state = iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),

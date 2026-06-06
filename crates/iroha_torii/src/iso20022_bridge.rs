@@ -5224,9 +5224,14 @@ fn xml_signature_key_material_with_policy(
                 .map_err(|_| MsgError::ValidationFailed)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for certificate in &parsed_certificates {
+    for (index, certificate) in parsed_certificates.iter().enumerate() {
         ensure_xml_signature_supported_certificate_algorithm(certificate)?;
-        ensure_xml_signature_supported_critical_extensions(certificate)?;
+        let role = if index == 0 {
+            XmlSignatureCertificateRole::Leaf
+        } else {
+            XmlSignatureCertificateRole::Issuer
+        };
+        ensure_xml_signature_supported_critical_extensions(certificate, role)?;
     }
     let public_key = parsed_certificates[0]
         .public_key()
@@ -7151,11 +7156,18 @@ fn ensure_xml_signature_leaf_certificate_policy(
     ) {
         return Err(MsgError::ValidationFailed);
     }
+    let leaf_allows_signature_purpose = x509_certificate_allows_xml_signature_purpose(certificate)?;
     match certificate
         .key_usage()
         .map_err(|_| MsgError::ValidationFailed)?
     {
-        Some(key_usage) if key_usage.critical && key_usage.value.digital_signature() => Ok(()),
+        Some(key_usage)
+            if key_usage.critical
+                && key_usage.value.digital_signature()
+                && leaf_allows_signature_purpose =>
+        {
+            Ok(())
+        }
         _ => Err(MsgError::ValidationFailed),
     }
 }
@@ -7240,8 +7252,15 @@ fn ensure_xml_signature_issuer_path_len(
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum XmlSignatureCertificateRole {
+    Leaf,
+    Issuer,
+}
+
 fn ensure_xml_signature_supported_critical_extensions(
     certificate: &X509Certificate<'_>,
+    role: XmlSignatureCertificateRole,
 ) -> Result<(), MsgError> {
     ensure_no_unsupported_x509_policy_processing_extensions(certificate)?;
     for extension in certificate.extensions() {
@@ -7250,6 +7269,7 @@ fn ensure_xml_signature_supported_critical_extensions(
         }
         match extension.parsed_extension() {
             ParsedExtension::BasicConstraints(_) | ParsedExtension::KeyUsage(_) => {}
+            ParsedExtension::ExtendedKeyUsage(_) if role == XmlSignatureCertificateRole::Leaf => {}
             ParsedExtension::UnsupportedExtension { .. }
             | ParsedExtension::ParseError { .. }
             | ParsedExtension::Unparsed => return Err(MsgError::ValidationFailed),
@@ -15558,7 +15578,7 @@ mod tests {
         let cases = [
             "<IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerial>",
             "<IssuerSerialV2><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerialV2>",
-            "<xades:IssuerSerialV2><ds:X509IssuerName>CN=Wrong Root</ds:X509IssuerName><ds:X509SerialNumber>999</ds:X509SerialNumber></xades:IssuerSerialV2>",
+            r#"<xades:IssuerSerialV2 xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509IssuerName>CN=Wrong Root</ds:X509IssuerName><ds:X509SerialNumber>999</ds:X509SerialNumber></xades:IssuerSerialV2>"#,
             "<X509IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></X509IssuerSerial>",
         ];
 
@@ -20769,7 +20789,7 @@ mod tests {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
             .expect("enabled");
-        assert!(runtime.check_and_record_message("orig-cancel"));
+        record_original(&runtime, "orig-cancel", "pacs.008");
         runtime.mark_accepted("orig-cancel", "tx-cancel");
         let parsed = parse_message(
             "camt.056",

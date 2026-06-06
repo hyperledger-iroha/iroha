@@ -9489,6 +9489,10 @@ Frontier recovery invariants:
 - `FuturePromotionInstallsFreshSecondSlot`, which requires a freshly promoted
   second slot to be active, vote-backed, non-dropped, backed by consumed future
   evidence, and reset through the active-progress cleanup invariant.
+- `FuturePromotionReadyClearsCurrentWrapper`, which requires the
+  promotion-ready staging state to have cleared the current pending wrapper,
+  reset the quorum-reschedule timer, marked a future-reanchor progress event,
+  and kept concrete future evidence as the only promotion source.
 - `TerminalFrontierOutcomesAreExclusive`, which requires committed, dropped,
   and rotated frontier terminal outcomes to stay mutually exclusive, clear
   quorum-reschedule timers, and keep drop labels exactly aligned with dropped

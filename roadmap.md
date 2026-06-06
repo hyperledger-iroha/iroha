@@ -592,7 +592,12 @@ and completed history lives in [`status.md`](./status.md).
   HTTP handler-path profiles for signed stored-cursor continuations, account
   alias projections, account-asset predicates, asset holders, committed-history
   contract activity, and generic aggregates, plus localhost socket profiles for
-  the same workload set. The `iroha_cli --all-targets` strict clippy gate now
+  the same workload set. Caller-scoped account reads now also require canonical
+  request signatures or witnesses for private dataspace visibility, so bare
+  `X-Iroha-Account` headers no longer create caller identity, and the Torii
+  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
+  fixtures with current production admission rules. The
+  `iroha_cli --all-targets` strict clippy gate now
   covers the governance-instruction, IVM contract deploy, and Taikai helper
   targets with checked length/time arithmetic in the previously failing paths.
   The `iroha_crypto --all-targets` strict clippy gate is also green, covering
@@ -640,9 +645,15 @@ and completed history lives in [`status.md`](./status.md).
   and panic-only buffer assertions. The SoraFS paid-pin validation corridor is
   green across data-model SoraFS/DA-pin, Core pin-registry, Torii
   storage-pin/discovery, and gateway conformance filters as of 2026-06-04;
-  remaining breadth is historical fee-receipt/governance-pricing acceptance,
-  manifest-envelope/admission fail-closed coverage, streaming CAR ranges, and
-  SDK validation once Java is available. SoraNet relay handshake frame length-prefix
+  Torii DA commitment proof/verify routes are now also pinned with committed
+  block-backed Merkle proof round-trip coverage and OpenAPI/MCP contract text,
+  DA pin-intent proof/verify handlers are pinned against the live indexed
+  location store with tampered-location rejection and matching contract text,
+  and Torii SoraFS CAR range coverage now verifies a non-full middle-window
+  response spanning exactly two aligned chunks with `Content-Range` and
+  `X-Sora-Chunk-Range` metadata. Remaining breadth is SDK validation once Java
+  is available plus wider admission/manifest-envelope/full-corridor reruns not
+  covered by the current focused Torii SoraFS checks. SoraNet relay handshake frame length-prefix
   writes now use an explicit checked helper plus a compile-time `u16` maximum
   assertion so oversized relay hellos return `FrameTooLarge` instead of relying
   on a narrowing assertion. SoraNet constant-rate scheduler dequeue now handles
@@ -2401,6 +2412,7 @@ and completed history lives in [`status.md`](./status.md).
   canonical frontier recovery, small exhaustive frontier recovery,
   frontier future-promotion fresh second-slot installation,
   frontier terminal outcome exclusivity,
+  frontier promotion-ready wrapper cleanup,
   validation redrive labels, raw QC signer-bitmap population counting, and
   signer-index normalization, precommit vote-progress counting, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record

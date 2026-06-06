@@ -65,6 +65,7 @@ use iroha_data_model::{
         SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
         SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1, SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
@@ -841,46 +842,82 @@ fn validate_soracloud_fhe_envelope_shape(
     Ok(())
 }
 
-fn proof_attachment_envelope(
+struct SoracloudFheProofAttachmentDecodeContext {
+    proof_backend_mismatch: &'static str,
+    verifier_backend_mismatch: &'static str,
+    verifier_name_empty: &'static str,
+    unsupported_backend: &'static str,
+    invalid_attachment_prefix: &'static str,
+    open_verify_label: &'static str,
+    max_open_verify_bytes: usize,
+}
+
+const FHE_INPUT_ADMISSION_ATTACHMENT_CONTEXT: SoracloudFheProofAttachmentDecodeContext =
+    SoracloudFheProofAttachmentDecodeContext {
+        proof_backend_mismatch: "fhe input admission proof backend mismatch",
+        verifier_backend_mismatch: "fhe input admission verifier backend mismatch",
+        verifier_name_empty: "fhe input admission verifier name must not be empty",
+        unsupported_backend: "Soracloud FHE input admission requires a supported STARK/FRI v1 proof backend",
+        invalid_attachment_prefix: "invalid FHE input admission proof attachment",
+        open_verify_label: "FHE input admission OpenVerifyEnvelope",
+        max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+    };
+
+const FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT: SoracloudFheProofAttachmentDecodeContext =
+    SoracloudFheProofAttachmentDecodeContext {
+        proof_backend_mismatch: "fhe bootstrap-key proof backend mismatch",
+        verifier_backend_mismatch: "fhe bootstrap-key verifier backend mismatch",
+        verifier_name_empty: "fhe bootstrap-key verifier name must not be empty",
+        unsupported_backend: "Soracloud FHE bootstrap-key proof requires a supported STARK/FRI v1 proof backend",
+        invalid_attachment_prefix: "invalid FHE bootstrap-key proof attachment",
+        open_verify_label: "FHE bootstrap-key proof OpenVerifyEnvelope",
+        max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+    };
+
+fn proof_attachment_envelope_with_context(
     attachment: &ProofAttachment,
+    context: &SoracloudFheProofAttachmentDecodeContext,
 ) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
     if attachment.backend != attachment.proof.backend {
-        return Err(invalid_parameter(
-            "fhe input admission proof backend mismatch",
-        ));
+        return Err(invalid_parameter(context.proof_backend_mismatch));
     }
     if attachment.vk_ref.backend != attachment.backend {
-        return Err(invalid_parameter(
-            "fhe input admission verifier backend mismatch",
-        ));
+        return Err(invalid_parameter(context.verifier_backend_mismatch));
     }
     if attachment.vk_ref.name.trim().is_empty() {
-        return Err(invalid_parameter(
-            "fhe input admission verifier name must not be empty",
-        ));
+        return Err(invalid_parameter(context.verifier_name_empty));
     }
     if !crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-        return Err(invalid_parameter(
-            "Soracloud FHE input admission requires a supported STARK/FRI v1 proof backend",
-        ));
+        return Err(invalid_parameter(context.unsupported_backend));
     }
     if let Some((field, reason)) = attachment.structural_error() {
         return Err(invalid_parameter(format!(
-            "invalid FHE input admission proof attachment: {field} {reason}"
+            "{}: {field} {reason}",
+            context.invalid_attachment_prefix
         )));
     }
-    if attachment.proof.bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
+    if attachment.proof.bytes.len() > context.max_open_verify_bytes {
         return Err(invalid_parameter(format!(
-            "FHE input admission OpenVerifyEnvelope length {} exceeds maximum {}",
+            "{} length {} exceeds maximum {}",
+            context.open_verify_label,
             attachment.proof.bytes.len(),
-            SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
+            context.max_open_verify_bytes
         )));
     }
-    norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes).map_err(|err| {
-        invalid_parameter(format!(
-            "invalid FHE input admission OpenVerifyEnvelope: {err}"
-        ))
-    })
+    norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes)
+        .map_err(|err| invalid_parameter(format!("invalid {}: {err}", context.open_verify_label)))
+}
+
+fn proof_attachment_envelope(
+    attachment: &ProofAttachment,
+) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
+    proof_attachment_envelope_with_context(attachment, &FHE_INPUT_ADMISSION_ATTACHMENT_CONTEXT)
+}
+
+fn bootstrap_key_proof_attachment_envelope(
+    attachment: &ProofAttachment,
+) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
+    proof_attachment_envelope_with_context(attachment, &FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT)
 }
 
 fn validate_soracloud_fhe_input_admission_native_envelope_size(
@@ -1286,7 +1323,7 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
             "FHE bootstrap-key proof vk_ref must use the canonical v1 circuit id",
         ));
     }
-    let envelope = proof_attachment_envelope(attachment)?;
+    let envelope = bootstrap_key_proof_attachment_envelope(attachment)?;
     if envelope.backend != BackendTag::Stark {
         return Err(invalid_parameter(
             "FHE bootstrap-key proof envelope must declare STARK backend",
@@ -1519,7 +1556,7 @@ fn verify_soracloud_fhe_bootstrap_key_proof(
             "FHE bootstrap-key proof statement hash mismatch",
         ));
     }
-    let envelope = proof_attachment_envelope(&proof.proof)?;
+    let envelope = bootstrap_key_proof_attachment_envelope(&proof.proof)?;
     validate_soracloud_fhe_bootstrap_key_proof_envelope(
         &proof.proof,
         &envelope,
@@ -15878,6 +15915,59 @@ mod tests {
         .expect_err("statement hash mismatch must reject before verifier lookup");
         assert_invalid_parameter_contains(err, "statement hash mismatch");
         Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_envelope_uses_bootstrap_attachment_context() {
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let proof = sample_fhe_bootstrap_key_proof(statement_hash, [0x42; Hash::LENGTH]);
+        bootstrap_key_proof_attachment_envelope(&proof.proof)
+            .expect("sample bootstrap-key proof envelope must decode");
+
+        let mut unsupported_backend = proof.proof.clone();
+        unsupported_backend.backend = "stark/fri/debug-proof".into();
+        unsupported_backend.proof.backend = unsupported_backend.backend.clone();
+        unsupported_backend.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+            unsupported_backend.backend.as_str(),
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        );
+        let err = bootstrap_key_proof_attachment_envelope(&unsupported_backend)
+            .expect_err("bootstrap-key proof decoder must reject unsupported STARK labels");
+        assert_invalid_parameter_contains(err, "bootstrap-key proof requires");
+
+        let mut forged_envelope_hash = proof.proof.clone();
+        forged_envelope_hash.envelope_hash =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-envelope")));
+        let err = bootstrap_key_proof_attachment_envelope(&forged_envelope_hash)
+            .expect_err("bootstrap-key proof decoder must reject forged envelope hashes");
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => {
+                assert!(message.contains("invalid FHE bootstrap-key proof attachment"));
+                assert!(message.contains("envelope_hash must match proof bytes"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert_eq!(
+            FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT.max_open_verify_bytes,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
+        );
+        let oversized_outer = proof.proof.clone();
+        let oversized_context = SoracloudFheProofAttachmentDecodeContext {
+            max_open_verify_bytes: oversized_outer.proof.bytes.len() - 1,
+            ..FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT
+        };
+        let envelope = bootstrap_key_proof_attachment_envelope(&oversized_outer)
+            .expect("sample bootstrap-key proof envelope must fit the production cap");
+        drop(envelope);
+        let err = proof_attachment_envelope_with_context(&oversized_outer, &oversized_context)
+            .expect_err("bootstrap-key proof decoder must use bootstrap OpenVerify cap");
+        assert_invalid_parameter_contains(err, "FHE bootstrap-key proof OpenVerifyEnvelope length");
     }
 
     #[test]

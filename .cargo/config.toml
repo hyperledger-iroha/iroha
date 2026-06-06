@@ -1,0 +1,5 @@
+# Keep plain `cargo test` stable on WSL and memory-constrained VMs. Cargo
+# otherwise defaults build parallelism to the logical CPU count, which can make
+# large test builds exhaust the VM before rustc reports a recoverable OOM.
+[build]
+jobs = 2

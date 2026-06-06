@@ -3,6 +3,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
+    ops::{Deref, DerefMut},
     time::{Duration, Instant},
 };
 
@@ -189,22 +190,6 @@ pub(super) struct FrontierSlot {
     pub(super) quorum_progress: FrontierQuorumProgress,
     pub(super) timers: FrontierTimers,
     pub(super) repair_state: FrontierRepairState,
-    // TODO: remove these compatibility mirrors once the remaining slot helpers read the nested
-    // FSM fields directly instead of the legacy flat fields.
-    pub(super) view: u64,
-    pub(super) block_hash: HashOf<BlockHeader>,
-    pub(super) observed_at: Instant,
-    pub(super) last_updated_at: Instant,
-    pub(super) body_present: bool,
-    pub(super) block_created_seen: bool,
-    pub(super) exact_fetch_armed: bool,
-    pub(super) frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
-    pub(super) leader: Option<PeerId>,
-    pub(super) voters: BTreeSet<PeerId>,
-    pub(super) fetch_stage: FrontierBodyFetchStage,
-    pub(super) last_fetch_at: Option<Instant>,
-    pub(super) retry_window: Duration,
-    pub(super) pending_requesters: BTreeSet<PeerId>,
 }
 
 impl FrontierSlot {
@@ -290,23 +275,7 @@ impl FrontierSlot {
             quorum_progress: FrontierQuorumProgress::default(),
             timers,
             repair_state,
-            view,
-            block_hash,
-            observed_at: now,
-            last_updated_at: now,
-            body_present,
-            block_created_seen,
-            exact_fetch_armed,
-            frontier_info,
-            leader,
-            voters,
-            fetch_stage: FrontierBodyFetchStage::Leader,
-            last_fetch_at: None,
-            retry_window,
-            pending_requesters: BTreeSet::new(),
-        };
-        slot.sync_compat_fields();
-        slot
+        }
     }
 
     pub(super) fn lag_started_at(&self) -> Instant {
@@ -317,6 +286,26 @@ impl FrontierSlot {
 
     pub(super) fn body_missing(&self) -> bool {
         matches!(self.candidate.body_state, FrontierBodyState::Missing)
+    }
+
+    pub(super) fn body_present(&self) -> bool {
+        matches!(self.candidate.body_state, FrontierBodyState::Available)
+    }
+
+    pub(super) fn mark_body_available(&mut self, now: Instant) {
+        self.candidate.body_state = FrontierBodyState::Available;
+        if matches!(
+            self.candidate.validation_state,
+            FrontierValidationState::Unknown
+        ) {
+            self.candidate.validation_state = FrontierValidationState::Pending;
+        }
+        self.phase = FrontierSlotPhase::ValidateBody;
+        self.record_progress(now);
+    }
+
+    pub(super) fn take_pending_requesters(&mut self) -> BTreeSet<PeerId> {
+        std::mem::take(&mut self.repair_state.pending_requesters)
     }
 
     pub(super) fn note_local_vote_emitted(&mut self) {
@@ -364,23 +353,6 @@ impl FrontierSlot {
         self.repair_state.quorum_timeout_rebroadcasted = false;
         self.timers.deep_catchup_entered_at = Some(now);
         self.timers.last_updated_at = now;
-    }
-
-    pub(super) fn sync_compat_fields(&mut self) {
-        self.view = self.candidate.view;
-        self.block_hash = self.candidate.block_hash;
-        self.observed_at = self.timers.observed_at;
-        self.last_updated_at = self.timers.last_updated_at;
-        self.body_present = matches!(self.candidate.body_state, FrontierBodyState::Available);
-        self.block_created_seen = self.candidate.block_created_seen;
-        self.exact_fetch_armed = self.candidate.exact_fetch_armed;
-        self.frontier_info = self.candidate.frontier_info.clone();
-        self.leader = self.candidate.leader.clone();
-        self.voters = self.candidate.voters.clone();
-        self.fetch_stage = self.repair_state.fetch_stage;
-        self.last_fetch_at = self.timers.last_fetch_at;
-        self.retry_window = self.repair_state.retry_window;
-        self.pending_requesters = self.repair_state.pending_requesters.clone();
     }
 
     pub(super) fn step(
@@ -479,7 +451,6 @@ impl FrontierSlot {
                         self.note_lag_if_needed(now);
                     }
                 } else {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(requester) = requester {
@@ -497,7 +468,6 @@ impl FrontierSlot {
             } => {
                 let previous_body_missing = self.body_missing();
                 if !self.matches_candidate(block_hash, view) {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(sender) = sender {
@@ -585,7 +555,6 @@ impl FrontierSlot {
             }
             FrontierSlotEvent::OnCommitQcObserved { block_hash, view } => {
                 if !self.matches_candidate(block_hash, view) {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 self.owner_kind = SlotOwnerKind::ExactSlotRepair;
@@ -716,7 +685,6 @@ impl FrontierSlot {
                     };
                     self.note_lag_if_needed(now);
                 } else {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(requester) = requester {
@@ -844,8 +812,21 @@ impl FrontierSlot {
             }
         }
 
-        self.sync_compat_fields();
         actions
+    }
+}
+
+impl Deref for FrontierSlot {
+    type Target = FrontierCandidate;
+
+    fn deref(&self) -> &Self::Target {
+        &self.candidate
+    }
+}
+
+impl DerefMut for FrontierSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.candidate
     }
 }
 

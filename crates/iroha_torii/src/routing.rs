@@ -50103,8 +50103,8 @@ mod query_endpoint_tests {
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
         let backend: Ident = "halo2/ipa".into();
-        let circuit_id = "tiny-add";
-        let envelope_circuit_id = "halo2/ipa:tiny-add";
+        let circuit_id = "tiny-add-public";
+        let envelope_circuit_id = "halo2/ipa:tiny-add-public";
         let seed_fixture = halo2_fixture_envelope(envelope_circuit_id, [0; 32]);
         let vk_box = seed_fixture
             .vk_box(backend.clone())
