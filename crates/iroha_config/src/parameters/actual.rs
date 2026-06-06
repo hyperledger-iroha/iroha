@@ -8219,9 +8219,9 @@ pub struct SccpRouteManifest {
     pub taira_xor_token_address: String,
     /// TRON TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
-    /// TRON SCCP source bridge contract address.
+    /// SCCP source bridge contract address. The field name is legacy-compatible.
     pub sccp_tron_source_bridge_address: String,
-    /// TRON destination verifier contract address.
+    /// Destination verifier contract address. The field name is legacy-compatible.
     pub tron_verifier_address: String,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
